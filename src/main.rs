@@ -22,9 +22,7 @@ fn main() {
             .arg("-serial")
             .arg("stdio")
             .arg("-m")
-            .arg("512M")
-            .arg("-smp")
-            .arg("2");
+            .arg("512M");
     }
 
     let mut kvm = true;
@@ -34,6 +32,10 @@ fn main() {
         match arg.as_str() {
             "no-kvm" => kvm = false,
             "no-gui" => gui = false,
+            "debugger" => {
+                cmd.arg("-s").arg("-S");
+                println!("listening on port 1234 for debugger...");
+            }
             arg => panic!("Unknown argument {}", arg),
         }
     }
