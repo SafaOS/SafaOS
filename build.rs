@@ -162,10 +162,11 @@ fn make_ramdisk() {
 }
 
 fn cleanup() {
-    fs::remove_dir_all("iso_root").unwrap();
+    let _ = fs::remove_dir_all("iso_root");
 }
 /// TODO: spilt into more functions and make it work on other oses like windows
 fn main() {
+    cleanup();
     out(limine_make());
     setup_iso_root();
 
@@ -176,7 +177,6 @@ fn main() {
     out(compile_programs());
     make_ramdisk();
     make_iso();
-    cleanup();
     let iso_path = current_dir().unwrap().join(ISO_PATH);
     println!("cargo:rerun-if-changed={}", iso_path.display());
     println!("cargo:rerun-if-changed={}", "limine");
