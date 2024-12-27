@@ -1,3 +1,10 @@
+<div align="center">
+
+[![License](https://img.shields.io/github/license/SafaOS/SafaOS?color=red)](https://github.com/SafaOS/SafaOS/blob/main/LICENSE) [![Issues](https://img.shields.io/github/issues/SafaOS/SafaOS)](https://github.com/SafaOS/SafaOS/issues)
+
+
+</div>
+
 # SafaOS
 badly written open-source generic operating system made for fun written in rust!
 i am attempting to make something like ChromeOS with native wasm support
@@ -7,14 +14,16 @@ this is my first OS!
 **this project is written in rust and zig** which is inconvenience and expensive i know, but this was made for fun and learning purposes, even so our primary goal is the runtime results.
 **star the repo!**
 
-# building
+## building
 you need: 
+
 - bash
 - git
 - xorriso
 - make
 - cargo
 - zig
+
 simply run
 ```
 cargo build
@@ -25,6 +34,7 @@ this should make an iso with the name: `safaos.iso` if successful
 the main crate called `SafaOS` (let's call it OsHelper), which is a simple wrapper around qemu-system-x86_64 to run the iso
 
 you'll need:
+
 - qemu-system-x86_64
 
 and simply do
@@ -47,6 +57,7 @@ and then connect to port 1234 with a gdb client i recommend using `rust-lldb`
 
 ### additional information
 avalable arguments for the OsHelper are:
+
 - `no-kvm`: disables kvm
 - `no-gui`: disables gui
 - `debugger`: listens on port 1234 for a debugger
@@ -54,6 +65,7 @@ avalable arguments for the OsHelper are:
 ## testing
 there is an automated testing script called `test.sh` which is used to test SafaOS automatcally
 you need:
+
 - qemu-system-x86_64
 
 simply run
