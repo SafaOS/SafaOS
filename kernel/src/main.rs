@@ -4,6 +4,7 @@
 #![feature(allocator_api)]
 #![feature(try_trait_v2)]
 #![feature(pattern)]
+#![feature(box_vec_non_null)]
 
 #[cfg(feature = "test")]
 mod test;
@@ -177,8 +178,7 @@ pub extern "C" fn kinit() {
 #[no_mangle]
 fn kstart() -> ! {
     kinit();
-    serial!("failed context switching to kmain! ...\n");
-    khalt()
+    panic!("failed context switching to kmain! ...")
 }
 
 #[no_mangle]

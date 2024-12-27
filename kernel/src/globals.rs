@@ -1,4 +1,4 @@
-use core::{cell::UnsafeCell, mem::MaybeUninit};
+use core::mem::MaybeUninit;
 
 use lazy_static::lazy_static;
 use spin::Mutex;
@@ -6,22 +6,8 @@ use spin::Mutex;
 use crate::{
     limine,
     memory::buddy_allocator::BuddyAllocator,
-    threading::Scheduler,
     utils::{self, elf::Elf, Locked},
 };
-// TODO: figure out a safer way to Scheduler
-pub struct SchedulerWrapper(pub UnsafeCell<MaybeUninit<Scheduler>>);
-
-unsafe impl Sync for SchedulerWrapper {}
-pub static SCHEDULER: SchedulerWrapper = SchedulerWrapper(UnsafeCell::new(MaybeUninit::zeroed()));
-
-pub fn scheduler_inited() -> bool {
-    scheduler().current_process != core::ptr::null_mut()
-}
-#[inline(always)]
-pub fn scheduler() -> &'static mut Scheduler {
-    unsafe { (*SCHEDULER.0.get()).assume_init_mut() }
-}
 
 #[global_allocator]
 static GLOBAL_ALLOCATOR: Locked<MaybeUninit<BuddyAllocator>> =
