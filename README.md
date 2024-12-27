@@ -5,15 +5,11 @@
 [![License](https://img.shields.io/github/license/SafaOS/SafaOS?color=red)](https://github.com/SafaOS/SafaOS/blob/main/LICENSE) [![Issues](https://img.shields.io/github/issues/SafaOS/SafaOS)](https://github.com/SafaOS/SafaOS/issues) ![Stars](https://img.shields.io/github/stars/SafaOS/SafaOS?style=flat-square)
 </div>
 
-badly written open-source generic operating system made for fun written in rust!
-i am attempting to make something like ChromeOS with native wasm support
-this is my first OS!
-**previously known as NaviOS**
-
-**this project is written in rust and zig** which is inconvenience and expensive i know, but this was made for fun and learning purposes, even so our primary goal is the runtime results.
+An open-source non-Unix-like open-source OS, written from scratch in Zig and Rust for fun,
+the main language is Rust, Zig is used for lower-level userspace stuff (not used in the kernel at all) for now, as an alternative to C
 **star the repo!**
 
-## building
+## Building
 you need: 
 
 - bash
@@ -29,50 +25,50 @@ cargo build
 ```
 
 this should make an iso with the name: `safaos.iso` if successful
-## running with OSHelper
-the main crate called `SafaOS` (let's call it OsHelper), which is a simple wrapper around qemu-system-x86_64 to run the iso
-
+## Running with OSHelper
+the main crate called `SafaOS` (let's call it OsHelper), is a simple "helper" that builds the iso, and provides a wrapper around `qemu-system-x86_64` to run the iso.
 you'll need:
 
 - qemu-system-x86_64
 
-and simply do
 ```
 cargo run
 ```
-or to run without kvm do
+or to run without kvm
 ```
 cargo run -- no-kvm
 ```
-otherwise you have the iso feel free to do whatever you want with it
+otherwise you have the iso `safaos.iso` feel free to do whatever you want with it
 
-### debugging
-you can also use the OsHelper to debug, simply do
+### Debugging
+you can also use the OsHelper to debug:
 ```
 cargo run -- debugger no-kvm
 ```
-(doesn't work with kvm)
-and then connect to port 1234 with a gdb client i recommend using `rust-lldb`
+(doesn't work with kvm for now)
+and then connect to port 1234 with a gdb client i recommend using `rust-lldb`.
 
-### additional information
+### Additional Information
 avalable arguments for the OsHelper are:
 
 - `no-kvm`: disables kvm
 - `no-gui`: disables gui
 - `debugger`: listens on port 1234 for a debugger
 
-## testing
+## Testing
 there is an automated testing script called `test.sh` which is used to test SafaOS automatcally
-you need:
+you'll need:
 
 - qemu-system-x86_64
 
-simply run
 ```
 ./test.sh
 ```
 the script will return a non-zero exit code if any testing fails
 
-## current features:
+## Current Features
 there is a bunch of userspace programs written in zig in the `bin/` directory they are compiled with zig and then copied to the ramdisk as `sys:/bin/`, you can check them out for almost everything the OS is currently capable of, (also checkout the `Shell/`)
-currently using the [limine](https://limine-bootloader.org/) bootloader
+
+## Credits
+currently uses [limine](https://limine-bootloader.org/) bootloader
+special thanks to the developers of [MinOS](https://github.com/Dcraftbg/MinOS/), [TacOS](https://github.com/UnmappedStack/TacOS), and [BananaOS](https://github.com/Bananymous/banan-os) for helping develop this (this is my first ever OSDev project)
