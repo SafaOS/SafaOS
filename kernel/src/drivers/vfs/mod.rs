@@ -12,6 +12,7 @@ use crate::{
     },
 };
 pub mod devicefs;
+pub mod procfs;
 pub mod ramfs;
 
 use alloc::{
@@ -40,6 +41,8 @@ pub fn init() {
     // devices
     vfs.mount(b"dev", Box::new(devicefs::DeviceFS::new()))
         .unwrap();
+    // processes
+    vfs.mount(b"proc", Box::new(procfs::ProcFS::new())).unwrap();
     // ramdisk
     let mut ramdisk = limine::get_ramdisk();
     let mut ramfs = Box::new(ramfs::RamFS::new());
@@ -209,7 +212,8 @@ impl DirIter {
         let inode = unsafe { (*self.fs).get_inode(inode_id) };
 
         match inode {
-            Ok(Some(inode)) => DirEntry::get_from_inode(inode).ok(),
+            Ok(Some(inode)) => Some(DirEntry::get_from_inode(inode)),
+            Ok(None) => self.next(),
             _ => None,
         }
     }
