@@ -1,3 +1,5 @@
+use core::fmt::Debug;
+
 use alloc::vec::Vec;
 
 use crate::drivers::vfs::{DirIter, FileDescriptor, FS, VFS_STRUCT};
@@ -23,6 +25,24 @@ impl Resource {
 pub struct ResourceManager {
     resources: Vec<Resource>,
     next_ri: usize,
+}
+
+impl Debug for ResourceManager {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ResourceManager")
+            .field(
+                "resources",
+                &self
+                    .resources
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| !matches!(r, Resource::Null))
+                    .map(|(i, _)| i)
+                    .collect::<Vec<usize>>(),
+            )
+            .field("next_ri", &self.next_ri)
+            .finish()
+    }
 }
 
 impl ResourceManager {
@@ -106,4 +126,31 @@ impl ResourceManager {
 
         Some(&mut resources[ri])
     }
+}
+
+// TODO: lock? or should every resource handle it's own lock?
+/// gets a resource by `ri` and executes `then` on it
+/// returns `None` if `ri` doesn't exist
+/// returns `Some(R)` where `R` is the result of `then` if sucessful
+pub fn with_resource<DO, R>(ri: usize, then: DO) -> Option<R>
+where
+    DO: FnOnce(&mut Resource) -> R,
+{
+    super::with_current_state(|state| {
+        state
+            .resource_manager
+            .get_mut()
+            .get(ri)
+            .map(|resource| then(resource))
+    })
+}
+
+/// adds a resource to the current process
+pub fn add_resource(resource: Resource) -> usize {
+    super::with_current_state(move |state| state.resource_manager.lock().add_resource(resource))
+}
+
+/// removes a resource from the current process with `ri`
+pub fn remove_resource(ri: usize) -> Result<(), ()> {
+    super::with_current_state(move |state| state.resource_manager.lock().remove_resource(ri))
 }

@@ -11,19 +11,16 @@ use crate::{
         expose::{fstat, open, read, DirEntry},
         FSError, FSResult, InodeType, VFS_STRUCT,
     },
-    khalt, scheduler,
+    khalt,
     threading::processes::Process,
     utils::elf::{Elf, ElfError},
 };
 
-use super::{
-    processes::{ProcessInfo, ProcessState},
-    resources::Resource,
-};
+use super::processes::{ProcessInfo, ProcessState};
 
 #[no_mangle]
 pub fn thread_exit(code: usize) {
-    scheduler().current_process().terminate(code, 0);
+    super::with_current(|process| process.terminate(code, 0));
     // enables interrupts if they were disabled to give control back to the scheduler
     #[cfg(target_arch = "x86_64")]
     unsafe {
@@ -43,56 +40,50 @@ pub fn thread_yeild() {
 #[no_mangle]
 /// waits for `pid` to exit
 /// returns it's exit code after cleaning it up
-pub fn wait(pid: u64) -> usize {
+pub fn wait(pid: usize) -> usize {
     // loops through the processes until it finds the process with `pid` as a zombie
     loop {
-        let mut current = scheduler().head.as_mut();
-        let mut found = false;
-
         // cycles through the processes one by one untils it finds the process with `pid`
         // returns the exit code of the process if it's a zombie and cleans it up
         // if it's not a zombie it will be caught by the next above loop
-        loop {
-            if current
-                .next
-                .as_ref()
-                .is_some_and(|process| process.pid == pid)
-            {
-                // TODO: rethink returning only the exit code
-                // a bit of a hack to fight the borrow checker
-                let mut exit_code = None;
-
-                if let ProcessState::Zombie(ref state) = current.next.as_ref().unwrap().state {
-                    exit_code = Some(state.exit_code);
+        let found = super::find(
+            |process| process.pid == pid,
+            |process| {
+                if let ProcessState::Zombie(ref state) = process.state {
+                    let exit_code = state.exit_code;
+                    Some(exit_code)
+                } else {
+                    None
                 }
+            },
+        );
 
-                if let Some(exit_code) = exit_code {
-                    // cleans up the process
-                    current.next = current.next.as_mut().unwrap().next.take();
-                    scheduler().processes_count -= 1;
-                    return exit_code;
-                }
-
-                found = true;
-                break;
+        return match found {
+            Some(Some(exit_code)) => {
+                // cleans up the process
+                super::remove(|p| p.pid == pid);
+                exit_code
             }
-
-            if let Some(ref mut process) = current.next {
-                current = process;
-                thread_yeild()
-            } else {
-                break;
+            Some(None) => {
+                thread_yeild();
+                continue;
             }
-        }
-
-        if !found {
-            return 0;
-        }
-
-        thread_yeild();
+            None => 0,
+        };
     }
 }
 
+#[no_mangle]
+pub fn getinfo(pid: usize) -> Option<ProcessInfo> {
+    super::find(|p| p.pid == pid, |p| p.info())
+}
+
+pub fn getpids() -> Vec<usize> {
+    let mut pids = Vec::with_capacity(super::pcount());
+    super::for_each(|process| pids.push(process.pid));
+
+    pids
+}
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     #[repr(C)]
@@ -107,7 +98,7 @@ pub fn spawn(
     elf_bytes: &[u8],
     argv: &[&str],
     flags: SpawnFlags,
-) -> Result<u64, ElfError> {
+) -> Result<usize, ElfError> {
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
         getcwd().to_string()
     } else {
@@ -116,28 +107,25 @@ pub fn spawn(
 
     let elf = Elf::new(elf_bytes)?;
 
-    let mut process = Process::from_elf(elf, name, cwd, argv)?;
-    let pid = process.pid;
+    let current_pid = super::with_current(|p| p.pid);
+    let mut process = Process::from_elf(current_pid, elf, name, cwd, argv)?;
 
     let ProcessState::Alive(ref mut state) = process.state else {
         unreachable!()
     };
     // handles the flags
     if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        let clone = scheduler()
-            .current_process_state()
-            .resource_manager
-            .lock()
-            .clone_resources();
+        let clone =
+            super::with_current_state(|state| state.resource_manager.lock().clone_resources());
         state.resource_manager.lock().overwrite_resources(clone);
     }
 
-    scheduler().add_process(process);
+    let pid = super::add_process(process);
     Ok(pid)
 }
 
 /// spawns an elf process from a path
-pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Result<u64, FSError> {
+pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Result<usize, FSError> {
     let file = open(path)?;
 
     let mut stat = unsafe { DirEntry::zeroed() };
@@ -157,50 +145,77 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
 #[no_mangle]
 pub fn chdir(new_dir: &str) -> FSResult<()> {
     let new_dir = VFS_STRUCT.read().verify_path_dir(new_dir)?;
-    let cwd = &mut scheduler().current_process_state().current_dir;
-    *cwd = new_dir;
-    if !cwd.ends_with('/') {
-        cwd.push('/');
-    }
 
-    Ok(())
+    super::with_current_state(move |state| {
+        state.current_dir = new_dir;
+        // TODO: implement a Path type with abillity to append paths to prevent this, and also to
+        // prevent path's like ram:/dir/../dir/ from existing idiots
+        if !state.current_dir.ends_with('/') {
+            state.current_dir.push('/');
+        }
+        Ok(())
+    })
 }
 
 #[no_mangle]
-pub fn getcwd<'a>() -> &'a str {
-    &scheduler().current_process_state().current_dir
+pub fn getcwd() -> String {
+    super::with_current_state(|state| state.current_dir.clone())
 }
 
+/// attempts to terminate `process` as `terminator_pid` and returns `Some(Ok())` if it was able to terminate it
+/// returns `Err(terminator_parent_ppid)` if it wasn't able to terminate it
+/// returns `Err(0)` if `process_ppod` doesn't belong to a process
+/// it takes `process_ppid` as a process's parent pid (grandparent or even great-grandparent) and
+/// terminates the process if that parent is the terminator
+fn try_terminate(
+    process: &mut Process,
+    process_ppid: usize,
+    terminator_pid: usize,
+) -> Result<(), usize> {
+    super::find(
+        |p| p.pid == process_ppid,
+        |process_parent| {
+            if process_parent.pid == terminator_pid {
+                process.terminate(1, terminator_pid);
+                Ok(())
+            } else {
+                Err(process_parent.ppid)
+            }
+        },
+    )
+    .unwrap_or(Err(0))
+}
 #[no_mangle]
 /// can only Err if pid doesn't belong to process
-pub fn pkill(pid: u64) -> Result<(), ()> {
-    if pid < scheduler().current_process().pid {
-        return Err(());
-    }
-
-    let process = scheduler().find(pid).ok_or(())?;
-    let current_pid = scheduler().current_process().pid;
-
-    if process.ppid == current_pid || process.pid == current_pid {
-        process.terminate(1, current_pid);
-        return Ok(());
-    }
-
-    // loops through parents and checks if one of the great-grandparents is the current process
-    let mut ppid = process.ppid;
-
-    while ppid != 0 {
-        let process = scheduler().find(ppid).ok_or(())?;
-
-        if process.pid == current_pid {
-            process.terminate(1, current_pid);
-            return Ok(());
+pub fn pkill(pid: usize) -> Result<(), ()> {
+    super::with_current(|current| {
+        let current_pid = current.pid;
+        if pid < current_pid {
+            return Err(());
         }
 
-        ppid = process.ppid;
-    }
+        super::find(
+            |p| p.pid == pid,
+            |process| {
+                if process.ppid == current_pid || process.pid == current_pid {
+                    process.terminate(1, current_pid);
+                    return Ok(());
+                }
 
-    Err(())
+                // loops through parents and checks if one of the great-grandparents is the current process
+                let mut process_ppid = process.ppid;
+                while process_ppid != 0 {
+                    match try_terminate(process, process_ppid, current_pid) {
+                        Err(ppid) => process_ppid = ppid,
+                        Ok(()) => return Ok(()),
+                    }
+                }
+
+                Err(())
+            },
+        )
+        .ok_or(())?
+    })
 }
 
 #[no_mangle]
@@ -208,25 +223,18 @@ pub fn pkill(pid: u64) -> Result<(), ()> {
 /// collects `buffer.len()` processes
 /// if it didn't finish returns Err(())
 pub fn pcollect(info: &mut [ProcessInfo]) -> Result<(), ()> {
-    let mut current = &mut *scheduler().head;
-    let mut i = 1;
+    let mut i = 0;
 
-    if 0 >= info.len() {
-        return Err(());
-    }
-
-    info[0] = current.info();
-
-    while let Some(ref mut process) = current.next {
+    super::while_each(|process| {
         if i >= info.len() {
-            return Err(());
+            return false;
         }
 
         info[i] = process.info();
-
-        current = &mut *process;
         i += 1;
-    }
+        return true;
+    });
+
     Ok(())
 }
 
@@ -235,32 +243,5 @@ pub fn pcollect(info: &mut [ProcessInfo]) -> Result<(), ()> {
 /// returns the new program break ptr
 /// on fail returns null
 pub fn sbrk(amount: isize) -> *mut u8 {
-    scheduler()
-        .current_process_state()
-        .extend_data_by(amount)
-        .unwrap_or(core::ptr::null_mut())
-}
-// TODO: lock? or should every resource handle it's own lock?
-pub fn get_resource(ri: usize) -> Option<&'static mut Resource> {
-    scheduler()
-        .current_process_state()
-        .resource_manager
-        .get_mut()
-        .get(ri)
-}
-
-pub fn add_resource(resource: Resource) -> usize {
-    scheduler()
-        .current_process_state()
-        .resource_manager
-        .lock()
-        .add_resource(resource)
-}
-
-pub fn remove_resource(ri: usize) -> Result<(), ()> {
-    scheduler()
-        .current_process_state()
-        .resource_manager
-        .lock()
-        .remove_resource(ri)
+    super::with_current_state(|state| state.extend_data_by(amount)).unwrap_or(core::ptr::null_mut())
 }

@@ -1,7 +1,7 @@
 use crate::{
     limine::MEMORY_SIZE,
     memory::{frame_allocator, paging::PAGE_SIZE},
-    scheduler,
+    threading::{self},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +19,6 @@ pub fn info(sysinfo: &mut SysInfo) {
     *sysinfo = SysInfo {
         total_mem: *MEMORY_SIZE,
         used_mem,
-        processes_count: scheduler().processes_count,
+        processes_count: threading::pcount(),
     }
 }

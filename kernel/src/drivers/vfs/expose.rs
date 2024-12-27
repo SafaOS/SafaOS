@@ -2,23 +2,23 @@
 //! a resource index instead of a file descriptor aka ri
 use core::{fmt::Debug, usize};
 
-use crate::threading::{
-    expose::{add_resource, get_resource, remove_resource},
-    resources::Resource,
-};
+use crate::threading::resources::{self, with_resource, Resource};
 
-use super::{FSError, FSResult, Inode, InodeType, Path, FS, VFS_STRUCT};
+use super::{FSError, FSResult, FileDescriptor, Inode, InodeType, Path, FS, VFS_STRUCT};
+
 /// gets a FileDescriptor from a fd (file_descriptor id) may return Err(FSError::InvaildFileDescriptor)
-macro_rules! get_fd {
-    ($ri: expr) => {{
-        let Some(crate::threading::resources::Resource::File(ref mut file_descriptor)) =
-            crate::threading::expose::get_resource($ri)
-        else {
-            return Err(FSError::NotAFile);
-        };
-
-        file_descriptor
-    }};
+fn with_fd<T, R>(ri: usize, then: T) -> FSResult<R>
+where
+    T: FnOnce(&mut FileDescriptor) -> R,
+{
+    with_resource(ri, |resource| {
+        if let Resource::File(ref mut fd) = resource {
+            Ok(then(fd))
+        } else {
+            Err(FSError::NotAFile)
+        }
+    })
+    .ok_or(FSError::InvaildFileDescriptorOrRes)?
 }
 
 #[no_mangle]
@@ -27,37 +27,40 @@ pub fn open(path: Path) -> FSResult<usize> {
         .try_read()
         .ok_or(FSError::ResourceBusy)?
         .open(path)?;
-    Ok(add_resource(Resource::File(fd)))
+    Ok(resources::add_resource(Resource::File(fd)))
 }
 
 #[no_mangle]
 pub fn close(ri: usize) -> FSResult<()> {
-    let fd = get_fd!(ri);
-    VFS_STRUCT
-        .try_read()
-        .ok_or(FSError::ResourceBusy)?
-        .close(fd)?;
+    with_fd(ri, |fd| {
+        VFS_STRUCT
+            .try_read()
+            .ok_or(FSError::ResourceBusy)?
+            .close(fd)
+    })??;
 
-    _ = remove_resource(ri);
+    _ = resources::remove_resource(ri);
     Ok(())
 }
 
 #[no_mangle]
 pub fn read(ri: usize, buffer: &mut [u8]) -> FSResult<usize> {
-    let fd = get_fd!(ri);
-    VFS_STRUCT
-        .try_read()
-        .ok_or(FSError::ResourceBusy)?
-        .read(fd, buffer)
+    with_fd(ri, |fd| {
+        VFS_STRUCT
+            .try_read()
+            .ok_or(FSError::ResourceBusy)?
+            .read(fd, buffer)
+    })?
 }
 
 #[no_mangle]
 pub fn write(ri: usize, buffer: &[u8]) -> FSResult<usize> {
-    let fd = get_fd!(ri);
-    VFS_STRUCT
-        .try_read()
-        .ok_or(FSError::ResourceBusy)?
-        .write(fd, buffer)
+    with_fd(ri, |fd| {
+        VFS_STRUCT
+            .try_read()
+            .ok_or(FSError::ResourceBusy)?
+            .write(fd, buffer)
+    })?
 }
 
 #[no_mangle]
@@ -88,7 +91,7 @@ pub struct DirEntry {
 }
 
 impl DirEntry {
-    pub fn get_from_inode(inode: Inode) -> FSResult<Self> {
+    pub fn get_from_inode(inode: Inode) -> Self {
         let name = inode.name();
         let name_slice = name.as_bytes();
 
@@ -100,12 +103,12 @@ impl DirEntry {
 
         name[..name_length].copy_from_slice(name_slice);
 
-        Ok(Self {
+        Self {
             kind,
             size,
             name_length,
             name,
-        })
+        }
     }
 
     pub const unsafe fn zeroed() -> Self {
@@ -117,38 +120,42 @@ impl DirEntry {
 /// opens a diriter as a resource
 /// return the ri of the diriter
 pub fn diriter_open(fd_ri: usize) -> FSResult<usize> {
-    let fd = get_fd!(fd_ri);
-    let diriter = VFS_STRUCT
-        .try_read()
-        .ok_or(FSError::ResourceBusy)?
-        .diriter_open(fd)?;
+    let diriter = with_fd(fd_ri, |fd| {
+        VFS_STRUCT
+            .try_read()
+            .ok_or(FSError::ResourceBusy)?
+            .diriter_open(fd)
+    })??;
 
-    Ok(add_resource(Resource::DirIter(diriter)))
+    Ok(resources::add_resource(Resource::DirIter(diriter)))
 }
 
 pub fn diriter_next(dir_ri: usize, direntry: &mut DirEntry) -> FSResult<()> {
-    let Some(Resource::DirIter(diriter)) = get_resource(dir_ri) else {
-        return Err(FSError::InvaildFileDescriptorOrRes);
-    };
-
-    let next = diriter.next();
-    if let Some(entry) = next {
-        *direntry = entry.clone();
-    } else {
-        unsafe { *direntry = DirEntry::zeroed() }
-    }
-    Ok(())
+    resources::with_resource(dir_ri, |resource| {
+        if let Resource::DirIter(diriter) = resource {
+            let next = diriter.next();
+            if let Some(entry) = next {
+                *direntry = entry.clone();
+            } else {
+                unsafe { *direntry = DirEntry::zeroed() }
+            }
+            Ok(())
+        } else {
+            Err(FSError::InvaildFileDescriptorOrRes)
+        }
+    })
+    .ok_or(FSError::InvaildFileDescriptorOrRes)?
 }
 
 #[no_mangle]
 /// may only Err if dir_ri is invaild
 pub fn diriter_close(dir_ri: usize) -> FSResult<()> {
-    remove_resource(dir_ri).map_err(|_| FSError::InvaildFileDescriptorOrRes)
+    resources::remove_resource(dir_ri).map_err(|_| FSError::InvaildFileDescriptorOrRes)
 }
 
 #[no_mangle]
 pub fn fstat(ri: usize, direntry: &mut DirEntry) -> FSResult<()> {
-    let fd = get_fd!(ri);
-    *direntry = DirEntry::get_from_inode(fd.node.clone())?;
+    let node = with_fd(ri, |fd| fd.node.clone())?;
+    *direntry = DirEntry::get_from_inode(node);
     Ok(())
 }

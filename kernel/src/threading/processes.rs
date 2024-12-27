@@ -5,10 +5,9 @@ use super::{ARGV_START, STACK_END};
 
 use crate::memory::{align_up, copy_to_userspace, frame_allocator};
 use crate::utils::elf::{Elf, ElfError};
-use crate::{arch, debug, hddm, scheduler, PhysAddr};
+use crate::{arch, debug, hddm, PhysAddr};
 
 use crate::memory::paging::{self, EntryFlags, MapToError, Page, PAGE_SIZE};
-use alloc::boxed::Box;
 use alloc::string::String;
 use bitflags::bitflags;
 use spin::Mutex;
@@ -31,6 +30,7 @@ pub enum ProcessStatus {
     Zombie,
 }
 
+#[derive(Debug)]
 pub struct AliveProcessState {
     root_page_table: *mut PageTable,
     pub(super) resource_manager: Mutex<ResourceManager>,
@@ -114,11 +114,13 @@ impl AliveProcessState {
     }
 }
 
+#[derive(Debug)]
 pub struct ZombieProcessState {
     pub exit_code: usize,
     pub exit_addr: usize,
     pub exit_stack_addr: usize,
-    pub killed_by: u64,
+    /// the pid of the process that killed this process
+    pub killed_by: usize,
     pub last_resource_id: usize,
 
     pub data_start: usize,
@@ -128,8 +130,8 @@ pub struct ZombieProcessState {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ProcessInfo {
-    pub ppid: u64,
-    pub pid: u64,
+    pub ppid: usize,
+    pub pid: usize,
     pub name: [u8; 64],
     pub status: ProcessStatus,
 
@@ -138,33 +140,37 @@ pub struct ProcessInfo {
     pub exit_addr: usize,
     pub exit_stack_addr: usize,
 
-    pub killed_by: u64,
+    pub killed_by: usize,
     pub data_start: usize,
     pub data_break: usize,
 }
 
+#[derive(Debug)]
 pub enum ProcessState {
     Zombie(ZombieProcessState),
     Alive(AliveProcessState),
 }
 
+#[derive(Debug)]
 pub struct Process {
-    pub ppid: u64,
-    pub pid: u64,
+    pub ppid: usize,
+    pub pid: usize,
     pub name: [u8; 64],
     pub status: ProcessStatus,
     pub context: CPUStatus,
 
     pub state: ProcessState,
-    pub next: Option<Box<Self>>,
 }
+
+unsafe impl Send for Process {}
+unsafe impl Sync for Process {}
 
 impl Process {
     #[inline(always)]
     pub fn new(
         function: usize,
-        ppid: u64,
-        pid: u64,
+        ppid: usize,
+        pid: usize,
         name: &str,
         argv: &[&str],
         data_start: usize,
@@ -286,41 +292,13 @@ impl Process {
                 root_page_table_addr,
                 data_start,
             )),
-            next: None,
         })
     }
 
-    pub fn create(
-        function: usize,
-        name: &str,
-        argv: &[&str],
-        data_start: usize,
-        root_page_table_addr: usize,
-        current_work_dir: String,
-        flags: ProcessFlags,
-    ) -> Result<Self, MapToError> {
-        let pid = scheduler().next_pid;
-
-        let results = Self::new(
-            function,
-            scheduler().current_process().pid,
-            pid,
-            name,
-            argv,
-            data_start,
-            root_page_table_addr,
-            current_work_dir,
-            flags,
-        )?;
-        scheduler().next_pid += 1;
-
-        debug!(Process, "process with pid {} ({}) CREATED ...", pid, name);
-        Ok(results)
-    }
-
     #[inline(always)]
-    /// creates a userspace process from an elf
+    /// creates a userspace process from an elf, gives it pid 0 as a placeholder
     pub fn from_elf(
+        owner_pid: usize,
         elf: Elf,
         name: &str,
         current_work_dir: String,
@@ -331,8 +309,10 @@ impl Process {
         let data_break =
             unsafe { elf.load_exec(&mut *((page_table_addr | hddm()) as *mut PageTable))? };
 
-        let process = Self::create(
+        let process = Self::new(
             elf.header.entry_point,
+            owner_pid,
+            0,
             name,
             argv,
             data_break,
@@ -349,7 +329,7 @@ impl Process {
     /// makes a process a zombie
     /// does nothing if the process is already a zombie
     /// also moves the parentership of the process (it's children) to it's parent
-    pub fn terminate(&mut self, exit_code: usize, terminator: u64) {
+    pub fn terminate(&mut self, exit_code: usize, terminator: usize) {
         if let ProcessState::Alive(ref mut state) = &mut self.state {
             let root_page_table = unsafe { &mut (*state.root_page_table) };
             unsafe { root_page_table.free(4) };
@@ -367,7 +347,10 @@ impl Process {
 
             self.state = zombified;
             self.status = ProcessStatus::Zombie;
-            scheduler().move_parentership(self.pid, self.ppid);
+            // moves the parentership of all processes with `ppid` as `self.pid` to `self.ppid`
+            // prevents orphan processes from being left behind
+            // TODO: figure out if orphan processes should be killed
+            super::for_each_where(|p| p.ppid == self.pid, |p| p.ppid = self.ppid);
             debug!(Process, "process with pid {} TERMINATED ...", self.pid);
         }
     }

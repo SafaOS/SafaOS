@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[no_mangle]
-extern "C" fn syswait(pid: u64) -> usize {
+extern "C" fn syswait(pid: usize) -> usize {
     threading::expose::wait(pid)
 }
 
@@ -31,7 +31,7 @@ extern "C" fn sysspawn(
     elf_ptr: *const u8,
     elf_len: usize,
     config: Required<SpawnConfig>,
-    dest_pid: Optional<u64>,
+    dest_pid: Optional<usize>,
 ) -> ErrorStatus {
     let config = config.get()?;
     let (name, argv, flags) = config.as_rust();
@@ -52,7 +52,7 @@ extern "C" fn syspspawn(
     path_ptr: *const u8,
     path_len: usize,
     config: Required<SpawnConfig>,
-    dest_pid: Optional<u64>,
+    dest_pid: Optional<usize>,
 ) -> ErrorStatus {
     let config = config.get()?;
     let path = Slice::new(path_ptr, path_len)?.into_str();

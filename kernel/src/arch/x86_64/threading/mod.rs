@@ -2,7 +2,7 @@ use core::arch::global_asm;
 
 use bitflags::bitflags;
 
-use crate::{scheduler, scheduler_inited};
+use crate::threading::swtch;
 
 bitflags! {
     #[derive(Default, Debug, Clone, Copy)]
@@ -204,7 +204,7 @@ context_switch_stub:
 );
 
 extern "C" {
-    pub fn restore_cpu_status(status: &CPUStatus);
+    pub fn restore_cpu_status(status: &CPUStatus) -> !;
 }
 
 extern "x86-interrupt" {
@@ -220,15 +220,9 @@ pub extern "C" fn context_switch(mut capture: CPUStatus, frame: super::interrupt
     capture.ss = frame.stack_segment;
     capture.rflags = frame.flags;
 
-    if scheduler_inited() {
-        // actual context switching:
-        unsafe {
-            capture = scheduler().switch(capture);
-        }
-    }
-
-    super::interrupts::apic::send_eoi();
     unsafe {
+        capture = swtch(capture);
+        super::interrupts::apic::send_eoi();
         restore_cpu_status(&capture);
     }
 }

@@ -85,13 +85,6 @@ pub unsafe fn write_ioapic_val_to_reg(ioapic_addr: VirtAddr, reg: u8, val: u32) 
     *((ioapic_addr + 0x10) as *mut u32) = val;
 }
 
-// pub unsafe fn read_ioapic_reg(ioapic_addr: VirtAddr, reg: u8) -> u32 {
-//     // writing to ioregsel
-//     *(ioapic_addr as *mut u32) = reg as u32;
-//     // reading from iowin
-//     *((ioapic_addr + 0x10) as *const u32)
-// }
-
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct IOREDTBL {
@@ -116,18 +109,6 @@ impl IOREDTBL {
         (combined as u32, (combined >> 31) as u32)
     }
 }
-
-// pub unsafe fn get_ioapic_irq(ioapic_addr: VirtAddr, n: u8) -> IOREDTBL {
-//     let offset1 = 0x10 + n * 2;
-//     let offset2 = offset1 + 1;
-//
-//     let (lower, higher) = (
-//         read_ioapic_reg(ioapic_addr, offset1),
-//         read_ioapic_reg(ioapic_addr, offset2),
-//     );
-//
-//     IOREDTBL::from_regs(lower, higher)
-// }
 
 pub unsafe fn write_ioapic_irq(ioapic_addr: VirtAddr, n: u8, table: IOREDTBL) {
     let offset1 = 0x10 + n * 2;

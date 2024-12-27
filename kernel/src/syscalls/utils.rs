@@ -33,7 +33,7 @@ extern "C" fn syschdir(path_ptr: *const u8, path_len: usize) -> ErrorStatus {
 #[no_mangle]
 extern "C" fn sysgetcwd(path_ptr: *mut u8, len: usize, dest_len: Optional<usize>) -> ErrorStatus {
     let path = SliceMut::new(path_ptr, len)?.into_slice();
-    let got = threading::expose::getcwd().as_bytes();
+    let got = threading::expose::getcwd().into_bytes();
 
     if got.len() > len {
         return ErrorStatus::Generic;
