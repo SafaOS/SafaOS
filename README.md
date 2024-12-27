@@ -1,11 +1,10 @@
 <div align="center">
+<img src="https://repository-images.githubusercontent.com/825143915/95735661-0205-4029-97d5-fcfa347c8067" width="45%" height="45%>
 
+#
 [![License](https://img.shields.io/github/license/SafaOS/SafaOS?color=red)](https://github.com/SafaOS/SafaOS/blob/main/LICENSE) [![Issues](https://img.shields.io/github/issues/SafaOS/SafaOS)](https://github.com/SafaOS/SafaOS/issues) ![Stars](https://img.shields.io/github/stars/SafaOS/SafaOS?style=flat-square)
-
-
 </div>
 
-# SafaOS
 badly written open-source generic operating system made for fun written in rust!
 i am attempting to make something like ChromeOS with native wasm support
 this is my first OS!
