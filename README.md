@@ -20,7 +20,7 @@ simply run
 cargo build
 ```
 
-this should make an iso with the: `safaos.iso` if successful
+this should make an iso with the name: `safaos.iso` if successful
 ## running with OSHelper
 the main crate called `SafaOS` (let's call it OsHelper), which is a simple wrapper around qemu-system-x86_64 to run the iso
 
