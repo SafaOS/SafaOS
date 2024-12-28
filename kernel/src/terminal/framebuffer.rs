@@ -206,8 +206,8 @@ impl FrameBufferTTY<'_> {
                 self.handle_set_graphics_mode(&params);
             }
 
-            AnsiSequence::CursorUp(count) => self.offset_cursor(0, count as isize),
-            AnsiSequence::CursorDown(count) => self.offset_cursor(0, -(count as isize)),
+            AnsiSequence::CursorUp(count) => self.offset_cursor(0, -(count as isize)),
+            AnsiSequence::CursorDown(count) => self.offset_cursor(0, count as isize),
             AnsiSequence::CursorForward(count) => self.offset_cursor(count as isize, 0),
             AnsiSequence::CursorBackward(count) => self.offset_cursor(-(count as isize), 0),
             AnsiSequence::CursorPos(x, y) => self.set_cursor(x as usize, y as usize),
