@@ -67,7 +67,7 @@ impl FrameBufferTTY<'_> {
         )
     }
 
-    fn draw_raster(&mut self, raster: RasterizedChar, fg_color: RGB, _bg_color: RGB) {
+    fn draw_raster(&mut self, raster: RasterizedChar, fg_color: RGB, bg_color: RGB) {
         let framebuffer = self.framebuffer.read();
         let stride = framebuffer.info.stride;
         let cursor = framebuffer.get_cursor();
@@ -87,15 +87,9 @@ impl FrameBufferTTY<'_> {
 
         for (row, rows) in raster.raster().iter().enumerate() {
             for (col, byte) in rows.iter().enumerate() {
-                let (red, green, blue) = fg_color.tuple();
-                let (red, green, blue) = (
-                    red * (*byte > 0) as u8,
-                    green * (*byte > 0) as u8,
-                    blue * (*byte > 0) as u8,
-                );
-                let fg_color = RGB::new(red, green, blue);
+                let color = if *byte > 0 { fg_color } else { bg_color };
 
-                framebuffer.set_pixel(x + col, y + row, fg_color);
+                framebuffer.set_pixel(x + col, y + row, color);
             }
         }
 
