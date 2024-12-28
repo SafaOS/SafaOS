@@ -4,7 +4,10 @@ const RASTER_WIDTH: usize = get_raster_width(FONT_WEIGHT, RASTER_HEIGHT);
 
 use core::fmt::Write;
 
-use ansi_parser::{AnsiParser, AnsiSequence, Output};
+use crate::utils::{
+    ansi::{self, AnsiSequence},
+    either::Either,
+};
 use lazy_static::lazy_static;
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
@@ -15,7 +18,7 @@ use super::TTYInterface;
 use crate::{
     drivers::framebuffer::{FrameBuffer, FRAMEBUFFER_DRIVER},
     utils::{
-        display::{BLACK, BLUE, CYAN, GREEN, MAGENTA, RED, RGB, WHITE, YELLOW},
+        display::{BLACK, BLUE, CYAN, GRAY, GREEN, MAGENTA, RED, RGB, WHITE, YELLOW},
         Locked,
     },
 };
@@ -130,42 +133,56 @@ impl FrameBufferTTY<'_> {
             self.bg_color = RGB::new(0, 0, 0);
             return;
         }
+        let mut params = params.iter().copied();
 
-        match params.len() {
-            1 => {
-                let color = match params[0] {
-                    0 => {
-                        self.fg_color = RGB::new(255, 255, 255);
-                        self.bg_color = RGB::new(0, 0, 0);
-                        return;
-                    }
-                    30 => BLACK,
-                    31 => RED,
-                    32 => GREEN,
-                    33 => YELLOW,
-                    34 => BLUE,
-                    35 => MAGENTA,
-                    36 => CYAN,
-                    37 => WHITE,
-                    _ => return,
-                };
-
-                self.fg_color = color;
-            }
-            5 => {
-                let kind = &params[0..2];
-                match kind {
-                    [38, 2] => {
-                        self.fg_color = RGB::new(params[2], params[3], params[4]);
-                    }
-                    [48, 2] => {
-                        self.bg_color = RGB::new(params[2], params[3], params[4]);
-                    }
-
-                    _ => {}
+        while let Some(param) = params.next() {
+            match param {
+                0 => {
+                    self.fg_color = RGB::new(255, 255, 255);
+                    self.bg_color = RGB::new(0, 0, 0);
+                    return;
                 }
+
+                30 => self.fg_color = BLACK,
+                31 => self.fg_color = RED,
+                32 => self.fg_color = GREEN,
+                33 => self.fg_color = YELLOW,
+                34 => self.fg_color = BLUE,
+                35 => self.fg_color = MAGENTA,
+                36 => self.fg_color = CYAN,
+                37 => self.fg_color = WHITE,
+                90 => self.fg_color = GRAY,
+
+                40 => self.bg_color = BLACK,
+                41 => self.bg_color = RED,
+                42 => self.bg_color = GREEN,
+                43 => self.bg_color = YELLOW,
+                44 => self.bg_color = BLUE,
+                45 => self.bg_color = MAGENTA,
+                46 => self.bg_color = CYAN,
+                47 => self.bg_color = WHITE,
+
+                38 => {
+                    if Some(2) == params.next() {
+                        let red = params.next().unwrap_or_default();
+                        let green = params.next().unwrap_or_default();
+                        let blue = params.next().unwrap_or_default();
+
+                        self.fg_color = RGB::new(red, green, blue);
+                    }
+                }
+
+                48 => {
+                    if Some(2) == params.next() {
+                        let red = params.next().unwrap_or_default();
+                        let green = params.next().unwrap_or_default();
+                        let blue = params.next().unwrap_or_default();
+
+                        self.bg_color = RGB::new(red, green, blue);
+                    }
+                }
+                _ => (),
             }
-            _ => {}
         }
     }
 
@@ -180,20 +197,19 @@ impl FrameBufferTTY<'_> {
             AnsiSequence::CursorForward(count) => self.offset_cursor(count as isize, 0),
             AnsiSequence::CursorBackward(count) => self.offset_cursor(-(count as isize), 0),
             AnsiSequence::CursorPos(x, y) => self.set_cursor(x as usize, y as usize),
-            AnsiSequence::EraseDisplay => self.clear(),
 
-            _ => {}
+            AnsiSequence::EraseDisplay => self.clear(),
         }
     }
 
     fn write_str_unsynced(&mut self, s: &str) {
-        s.ansi_parse().for_each(|output| match output {
-            Output::TextBlock(text) => {
+        ansi::AnsiiParser::new(s).for_each(|output| match output {
+            Either::Left(escape) => self.handle_escape_sequence(escape),
+            Either::Right(text) => {
                 for c in text.chars() {
                     self.putc_unsynced(c);
                 }
             }
-            Output::Escape(escape) => self.handle_escape_sequence(escape),
         });
     }
 }

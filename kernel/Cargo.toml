@@ -15,7 +15,7 @@ macros = { path = "../macros" }
 int-enum = "1.1"
 heapless = "0.8.0"
 limine = "0.3.0"
-ansi-parser = { version = "0.9.1", default-features = false }
+
 [dev-dependencies]
 cc = "1.1.1"
 

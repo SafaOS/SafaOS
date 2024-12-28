@@ -1,5 +1,7 @@
 pub mod alloc;
+pub mod ansi;
 pub mod display;
+pub mod either;
 pub mod elf;
 pub mod errors;
 pub mod expose;
