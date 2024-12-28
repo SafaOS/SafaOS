@@ -17,11 +17,11 @@ use spin::RwLock;
 use super::TTYInterface;
 use crate::{
     drivers::framebuffer::{FrameBuffer, FRAMEBUFFER_DRIVER},
-    utils::{
-        display::{BLACK, BLUE, CYAN, GRAY, GREEN, MAGENTA, RED, RGB, WHITE, YELLOW},
-        Locked,
-    },
+    utils::{display::RGB, Locked},
 };
+
+const DEFAULT_FG_COLOR: RGB = RGB::WHITE;
+const DEFAULT_BG_COLOR: RGB = RGB::BLACK;
 
 pub struct FrameBufferTTY<'a> {
     framebuffer: &'a RwLock<FrameBuffer>,
@@ -44,8 +44,8 @@ impl FrameBufferTTY<'_> {
             framebuffer: &FRAMEBUFFER_DRIVER,
             cursor_x: 0,
             cursor_y: 0,
-            fg_color: RGB::new(255, 255, 255),
-            bg_color: RGB::new(0, 0, 0),
+            fg_color: DEFAULT_FG_COLOR,
+            bg_color: DEFAULT_BG_COLOR,
         }
     }
     #[inline(always)]
@@ -87,7 +87,7 @@ impl FrameBufferTTY<'_> {
 
         for (row, rows) in raster.raster().iter().enumerate() {
             for (col, byte) in rows.iter().enumerate() {
-                let color = if *byte > 0 { fg_color } else { bg_color };
+                let color = fg_color.with_alpha(*byte, bg_color);
 
                 framebuffer.set_pixel(x + col, y + row, color);
             }
@@ -123,8 +123,8 @@ impl FrameBufferTTY<'_> {
 
     fn handle_set_graphics_mode(&mut self, params: &[u8]) {
         if params.is_empty() {
-            self.fg_color = RGB::new(255, 255, 255);
-            self.bg_color = RGB::new(0, 0, 0);
+            self.fg_color = DEFAULT_FG_COLOR;
+            self.bg_color = DEFAULT_BG_COLOR;
             return;
         }
         let mut params = params.iter().copied();
@@ -132,29 +132,49 @@ impl FrameBufferTTY<'_> {
         while let Some(param) = params.next() {
             match param {
                 0 => {
-                    self.fg_color = RGB::new(255, 255, 255);
-                    self.bg_color = RGB::new(0, 0, 0);
-                    return;
+                    self.fg_color = DEFAULT_FG_COLOR;
+                    self.bg_color = DEFAULT_BG_COLOR;
                 }
 
-                30 => self.fg_color = BLACK,
-                31 => self.fg_color = RED,
-                32 => self.fg_color = GREEN,
-                33 => self.fg_color = YELLOW,
-                34 => self.fg_color = BLUE,
-                35 => self.fg_color = MAGENTA,
-                36 => self.fg_color = CYAN,
-                37 => self.fg_color = WHITE,
-                90 => self.fg_color = GRAY,
+                // 30-37 foreground colors
+                30 => self.fg_color = RGB::BLACK,
+                31 => self.fg_color = RGB::RED,
+                32 => self.fg_color = RGB::GREEN,
+                33 => self.fg_color = RGB::YELLOW,
+                34 => self.fg_color = RGB::BLUE,
+                35 => self.fg_color = RGB::MAGENTA,
+                36 => self.fg_color = RGB::CYAN,
+                37 => self.fg_color = RGB::WHITE,
 
-                40 => self.bg_color = BLACK,
-                41 => self.bg_color = RED,
-                42 => self.bg_color = GREEN,
-                43 => self.bg_color = YELLOW,
-                44 => self.bg_color = BLUE,
-                45 => self.bg_color = MAGENTA,
-                46 => self.bg_color = CYAN,
-                47 => self.bg_color = WHITE,
+                // 90-97 bright foreground colors
+                90 => self.fg_color = RGB::BRIGHT_BLACK,
+                91 => self.fg_color = RGB::BRIGHT_RED,
+                92 => self.fg_color = RGB::BRIGHT_GREEN,
+                93 => self.fg_color = RGB::BRIGHT_YELLOW,
+                94 => self.fg_color = RGB::BRIGHT_BLUE,
+                95 => self.fg_color = RGB::BRIGHT_MAGENTA,
+                96 => self.fg_color = RGB::BRIGHT_CYAN,
+                97 => self.fg_color = RGB::BRIGHT_WHITE,
+
+                // 40-47 background colors
+                40 => self.bg_color = RGB::BLACK,
+                41 => self.bg_color = RGB::RED,
+                42 => self.bg_color = RGB::GREEN,
+                43 => self.bg_color = RGB::YELLOW,
+                44 => self.bg_color = RGB::BLUE,
+                45 => self.bg_color = RGB::MAGENTA,
+                46 => self.bg_color = RGB::CYAN,
+                47 => self.bg_color = RGB::WHITE,
+
+                // 100-107 bright background colors
+                100 => self.bg_color = RGB::BRIGHT_BLACK,
+                101 => self.bg_color = RGB::BRIGHT_RED,
+                102 => self.bg_color = RGB::BRIGHT_GREEN,
+                103 => self.bg_color = RGB::BRIGHT_YELLOW,
+                104 => self.bg_color = RGB::BRIGHT_BLUE,
+                105 => self.bg_color = RGB::BRIGHT_MAGENTA,
+                106 => self.bg_color = RGB::BRIGHT_CYAN,
+                107 => self.bg_color = RGB::BRIGHT_WHITE,
 
                 38 => {
                     if Some(2) == params.next() {
