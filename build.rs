@@ -16,6 +16,7 @@ const RAMDISK_CONTENT: &[(&str, &str)] = &[
     ("bin/zig-out/bin/", "bin"),
     ("Shell/zig-out/bin/Shell", "bin/Shell"),
     ("TestBot/zig-out/bin/TestBot", "bin/TestBot"),
+    ("ramdisk-include/", ""),
 ];
 
 fn limine_make() -> Output {
@@ -179,9 +180,9 @@ fn main() {
     make_iso();
     let iso_path = current_dir().unwrap().join(ISO_PATH);
     println!("cargo:rerun-if-changed={}", iso_path.display());
-    println!("cargo:rerun-if-changed={}", "limine");
-    println!("cargo:rerun-if-changed={}", "programs/build");
-    println!("cargo:rerun-if-changed={}", "programs");
+    println!("cargo:rerun-if-changed=limine");
+    println!("cargo:rerun-if-changed=programs/build");
+    println!("cargo:rerun-if-changed=programs");
 
     // pass the disk image paths as env variables to the `main.rs`
     println!("cargo:rustc-env=ISO_PATH={}", iso_path.display());
