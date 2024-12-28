@@ -87,7 +87,7 @@ impl PageString {
     }
 
     pub fn pop(&mut self) -> Option<char> {
-        let char = self.as_str().chars().rev().next()?;
+        let char = self.as_str().chars().next_back()?;
         self.inner.truncate(self.len() - char.len_utf8());
         Some(char)
     }

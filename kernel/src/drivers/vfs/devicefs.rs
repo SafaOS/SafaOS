@@ -48,7 +48,7 @@ pub struct DeviceInode {
 }
 
 impl DeviceInode {
-    pub fn new(inodeid: usize) -> Inode {
+    pub fn create(inodeid: usize) -> Inode {
         Arc::new(Mutex::new(Self { inodeid }))
     }
 
@@ -110,7 +110,7 @@ impl FS for DeviceFS {
 
         for (i, _) in DEVICE_MANAGER.lock().devices().iter().enumerate() {
             if i == inode_id - 1 {
-                return Ok(Some(DeviceInode::new(inode_id)));
+                return Ok(Some(DeviceInode::create(inode_id)));
             }
         }
 

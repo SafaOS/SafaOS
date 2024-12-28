@@ -3,7 +3,7 @@ pub mod gdt;
 pub mod interrupts;
 pub mod power;
 pub mod serial;
-pub(self) mod syscalls;
+mod syscalls;
 pub mod threading;
 
 use core::arch::asm;

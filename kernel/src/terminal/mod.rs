@@ -53,6 +53,7 @@ bitflags! {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct TTY<'a> {
     pub stdout_buffer: PageString,
     pub stdin_buffer: PageString,
@@ -106,7 +107,7 @@ impl<'a> TTY<'a> {
     pub fn disable_input(&mut self) {
         if self.settings.contains(TTYSettings::RECIVE_INPUT) {
             self.settings &= !TTYSettings::RECIVE_INPUT;
-            _ = self.interface.inner.lock().backspace();
+            self.interface.inner.lock().backspace();
         }
     }
 

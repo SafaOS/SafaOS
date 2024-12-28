@@ -1,5 +1,3 @@
-use core::usize;
-
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -147,7 +145,7 @@ impl InodeOps for Mutex<RamInode> {
         match self.lock().data {
             RamInodeData::Children(ref data) => Ok(DirIter::new(
                 fs,
-                data.into_iter().map(|(_, inodeid)| *inodeid).collect(),
+                data.iter().map(|(_, inodeid)| *inodeid).collect(),
             )),
 
             RamInodeData::HardLink(ref inode) => inode.open_diriter(fs),
@@ -186,7 +184,7 @@ impl FS for RamFS {
     #[inline]
     fn get_inode(&self, inode_id: usize) -> FSResult<Option<Inode>> {
         let node = self.inodes.get(inode_id);
-        Ok(node.map(|node| node.clone()))
+        Ok(node.cloned())
     }
 
     fn open(&self, path: Path) -> FSResult<FileDescriptor> {

@@ -37,11 +37,9 @@ impl Keyboard {
         }
 
         // the 'lock' in capslock
-        if code == KeyCode::CapsLock {
-            if self.code_is_pressed(code) {
-                self.remove_pressed_keycode(code);
-                return;
-            }
+        if code == KeyCode::CapsLock && self.code_is_pressed(code) {
+            self.remove_pressed_keycode(code);
+            return;
         }
 
         let key = self.process_keycode(code);
@@ -92,14 +90,11 @@ impl Keyboard {
 
     pub fn is_pressed(&self, key: Key) -> bool {
         for ckey in &self.current_keys {
-            if ckey.code == key.code {
-                if ckey.flags == key.flags {
-                    return true;
-                }
+            if ckey.code == key.code && ckey.flags == key.flags {
+                return true;
             }
         }
-
-        return false;
+        false
     }
 
     pub fn code_is_pressed(&self, code: KeyCode) -> bool {

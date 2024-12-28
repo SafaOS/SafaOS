@@ -22,11 +22,11 @@ macro_rules! create_idt {
             let mut table = EMPTY_TABLE;
             $(
                 let index: usize = $indx as usize;
-                let handler: u64 = $handler as u64;
+                let handler: usize = $handler as usize;
                 let attributes: u8 = $attributes;
                 let ist: u8 = {
                     #[allow(unused_variables)]
-                    let ist_value = -1;
+                    let ist_value: i8 = -1;
                     $(let ist_value = $ist as i8;)?
                     (ist_value + 1) as u8
                 };

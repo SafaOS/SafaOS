@@ -23,8 +23,8 @@ impl Block {
     #[inline]
     /// unsafe because there may be no next block causing UB
     /// use BuddyAllocator::next instead
-    pub unsafe fn next<'a, 'b>(&'a self) -> &'b mut Block {
-        let end = (self as *const Self).byte_add(self.size as usize);
+    pub unsafe fn next<'b>(&self) -> &'b mut Block {
+        let end = (self as *const Self).byte_add(self.size);
         &mut *end.cast_mut()
     }
 
@@ -35,7 +35,7 @@ impl Block {
     /// returns the right buddy
     /// self is still vaild and it points to the left buddy
     /// both self and buddy is free after this
-    pub fn divide<'a, 'b>(&'a mut self) -> &'b mut Block {
+    pub fn divide<'b>(&mut self) -> &'b mut Block {
         self.free = true;
         self.size >>= 1;
 
@@ -49,7 +49,7 @@ impl Block {
     /// divides self until it's size is `size`
     /// returns the right most buddy
     /// returns None if it is already fit
-    pub fn spilt_to_fit<'a, 'b>(&'a mut self, size: usize) -> Option<&'b mut Block> {
+    pub fn spilt_to_fit<'b>(&mut self, size: usize) -> Option<&'b mut Block> {
         let mut buddy = None;
 
         while (self.size / 2) >= size && (self.size / 2) > size_of::<Block>() {
@@ -101,7 +101,7 @@ impl BuddyAllocator<'_> {
     /// unsafe because size has to be a power of 2, has to contain Block header size and
     /// self.heap_end .. self.heap_end + size shall be mapped and not used by anything
     /// adds a free block with size `size` to the end of the allocator
-    pub unsafe fn add_free<'a, 'b>(&'a mut self, size: usize) -> &'b mut Block {
+    pub unsafe fn add_free<'b>(&mut self, size: usize) -> &'b mut Block {
         let new_block = self.heap_end as *mut Block;
         unsafe {
             (*new_block).free = true;
@@ -113,7 +113,7 @@ impl BuddyAllocator<'_> {
         }
     }
 
-    pub fn expand_heap_by<'a, 'b>(&'a mut self, size: usize) -> Option<&'b mut Block> {
+    pub fn expand_heap_by<'b>(&mut self, size: usize) -> Option<&'b mut Block> {
         debug!(BuddyAllocator, "expanding the heap by {:#x}", size);
         let iter = IterPage {
             start: Page::containing_address(self.heap_end),
@@ -141,7 +141,7 @@ impl BuddyAllocator<'_> {
 
         let diff = start - possible_start;
         let size = align_down_to_power_of_2(size - diff);
-        let end = start + size as usize;
+        let end = start + size;
 
         debug!(
             BuddyAllocator,
@@ -163,8 +163,8 @@ impl BuddyAllocator<'_> {
 
     #[inline]
     /// safe wrapper around Block::next
-    pub fn next<'a, 'b>(heap_end: usize, block: &'a Block) -> Option<&'b mut Block> {
-        if (block as *const _ as usize + block.size as usize) >= heap_end {
+    pub fn next<'b>(heap_end: usize, block: &Block) -> Option<&'b mut Block> {
+        if (block as *const _ as usize + block.size) >= heap_end {
             None
         } else {
             unsafe { Some(block.next()) }
@@ -173,13 +173,13 @@ impl BuddyAllocator<'_> {
 
     /// same as `spilt_to_fit_same` on `block`, however it also sets tail if the block was the previous
     /// tail
-    pub fn spilt_to_fit<'a, 'b>(
+    pub fn spilt_to_fit<'b>(
         tail: &mut &mut Block,
-        block: &'a mut Block,
+        block: &mut Block,
         size: usize,
     ) -> &'b mut Block {
         if let Some(used) = block.spilt_to_fit(size) {
-            if block as *mut _ as usize == *tail as *mut _ as usize {
+            if core::ptr::eq(block, *tail) {
                 *tail = unsafe { &mut *(used as *mut _) };
             }
 
@@ -189,7 +189,7 @@ impl BuddyAllocator<'_> {
         }
     }
 
-    pub fn find_free_block<'a, 'b>(&'a mut self, size: usize) -> Option<&'b mut Block> {
+    pub fn find_free_block<'b>(&mut self, size: usize) -> Option<&'b mut Block> {
         let mut block = &mut *self.head;
         let mut best_block: Option<*mut Block> = None;
 
@@ -221,7 +221,7 @@ impl BuddyAllocator<'_> {
 
         let results = unsafe { &mut *best_block? };
         Self::spilt_to_fit(&mut self.tail, results, size);
-        return Some(results);
+        Some(results)
     }
 
     /// coalescence buddies returns wether or not it coalescenced anything

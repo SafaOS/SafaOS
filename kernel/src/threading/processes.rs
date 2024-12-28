@@ -196,17 +196,13 @@ impl Process {
             super::alloc_ring0_stack(page_table)?;
             super::alloc_argv(page_table)?;
 
-            if argv.len() != 0 {
+            if !argv.is_empty() {
                 let mut start_addr = ARGV_START;
                 const USIZE_BYTES: usize = size_of::<usize>();
                 let argc = argv.len();
 
                 // argc
-                copy_to_userspace(
-                    page_table,
-                    start_addr,
-                    &core::mem::transmute::<_, [u8; USIZE_BYTES]>(argc),
-                );
+                copy_to_userspace(page_table, start_addr, &argc.to_ne_bytes());
 
                 // argv*
                 start_addr += USIZE_BYTES;
@@ -215,16 +211,12 @@ impl Process {
                     let arg = arg.as_bytes();
                     let len = arg.len();
 
-                    copy_to_userspace(
-                        page_table,
-                        start_addr,
-                        &core::mem::transmute::<_, [u8; USIZE_BYTES]>(len),
-                    );
+                    copy_to_userspace(page_table, start_addr, &len.to_ne_bytes());
                     start_addr += USIZE_BYTES;
 
                     copy_to_userspace(page_table, start_addr, arg);
                     // null-terminate arg
-                    copy_to_userspace(page_table, start_addr + len, &[b'\0']);
+                    copy_to_userspace(page_table, start_addr + len, b"\0");
                     start_addr += len + 1;
                 }
 
@@ -232,11 +224,7 @@ impl Process {
                 let mut current_argv_ptr = ARGV_START + USIZE_BYTES /* after argc */;
                 // argv**
                 for arg in argv {
-                    copy_to_userspace(
-                        page_table,
-                        start_addr,
-                        &core::mem::transmute::<_, [u8; USIZE_BYTES]>(current_argv_ptr),
-                    );
+                    copy_to_userspace(page_table, start_addr, &current_argv_ptr.to_ne_bytes());
                     start_addr += USIZE_BYTES;
 
                     current_argv_ptr += USIZE_BYTES; // skip the len

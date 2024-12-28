@@ -1,6 +1,6 @@
 //! exposed functions of VFS they manually uses
 //! a resource index instead of a file descriptor aka ri
-use core::{fmt::Debug, usize};
+use core::fmt::Debug;
 
 use crate::threading::resources::{self, with_resource, Resource};
 

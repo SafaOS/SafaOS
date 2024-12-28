@@ -1,5 +1,3 @@
-use core::ffi::CStr;
-
 use alloc::slice;
 use lazy_static::lazy_static;
 use limine::file::File;
@@ -51,7 +49,7 @@ static MMAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 const RAMDISK_MODULE: InternalModule = InternalModule::new()
-    .with_path(unsafe { CStr::from_bytes_with_nul_unchecked(b"ramdisk.tar\0") })
+    .with_path(c"ramdisk.tar")
     .with_flags(ModuleFlags::REQUIRED);
 
 #[used]

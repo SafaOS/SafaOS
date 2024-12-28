@@ -220,12 +220,9 @@ impl<'a> Elf<'a> {
 
     #[inline]
     pub fn string_table(&self) -> Option<&SectionHeader> {
-        for section in self.sections {
-            if self.section_names_table_index(section.name_index) == ".strtab" {
-                return Some(section);
-            }
-        }
-        None
+        self.sections
+            .iter()
+            .find(|&section| self.section_names_table_index(section.name_index) == ".strtab")
     }
 
     pub fn string_table_index(&self, name_index: u32) -> &str {
@@ -259,7 +256,7 @@ impl<'a> Elf<'a> {
             }
         }
 
-        return None;
+        None
     }
 
     pub fn sym_from_value_range(&self, value: VirtAddr) -> Option<Sym> {
@@ -269,7 +266,7 @@ impl<'a> Elf<'a> {
             }
         }
 
-        return None;
+        None
     }
 
     /// creates an elf from a u8 ptr that lives as long as `bytes`

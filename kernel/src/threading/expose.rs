@@ -2,6 +2,7 @@ use core::arch::asm;
 
 use alloc::{
     string::{String, ToString},
+    vec,
     vec::Vec,
 };
 use bitflags::bitflags;
@@ -134,9 +135,10 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
     if stat.kind != InodeType::File {
         return Err(FSError::NotAFile);
     }
-    let mut buffer = Vec::with_capacity(stat.size);
-    buffer.resize(stat.size, 0);
-    read(file, &mut buffer).map_err(|e| e.into())?;
+
+    let mut buffer = vec![0; stat.size];
+
+    read(file, &mut buffer)?;
     spawn(name, &buffer, argv, flags).map_err(|_| FSError::NotExecuteable)
 }
 
@@ -232,7 +234,7 @@ pub fn pcollect(info: &mut [ProcessInfo]) -> Result<(), ()> {
 
         info[i] = process.info();
         i += 1;
-        return true;
+        true
     });
 
     Ok(())

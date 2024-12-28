@@ -11,13 +11,9 @@ impl Keyboard {
             return Key::new(KeyCode::NULL, KeyFlags::empty());
         }
 
-        let break_code;
-
-        if self.current_unencoded_key[self.latest_unencoded_byte] & 128 == 128 {
+        let break_code = self.current_unencoded_key[self.latest_unencoded_byte] & 128 == 128;
+        if break_code {
             self.current_unencoded_key[self.latest_unencoded_byte] -= 0x80;
-            break_code = true;
-        } else {
-            break_code = false;
         }
 
         let key: u64 = unsafe { core::mem::transmute(self.current_unencoded_key) };

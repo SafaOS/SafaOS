@@ -159,7 +159,7 @@ lazy_static! {
 
 pub const KERNEL_CODE_SEG: u8 = (1 * 8) | 0;
 pub const KERNEL_DATA_SEG: u8 = (2 * 8) | 0;
-pub const TSS_SEG: u8 = 3 * 8 | 3;
+pub const TSS_SEG: u8 = (3 * 8) | 3;
 
 pub const USER_CODE_SEG: u8 = (5 * 8) | 3;
 pub const USER_DATA_SEG: u8 = (6 * 8) | 3;

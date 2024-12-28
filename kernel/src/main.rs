@@ -44,13 +44,13 @@ macro_rules! print {
 #[macro_export]
 macro_rules! println {
     () => (print!("\n"));
-    ($($arg:tt)*) => (crate::print!("{}\n", format_args!($($arg)*)));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
 }
 
 #[macro_export]
 macro_rules! serial {
     ($($arg:tt)*) => {
-        crate::arch::x86_64::serial::_serial(format_args!($($arg)*))
+        $crate::arch::x86_64::serial::_serial(format_args!($($arg)*))
     };
 }
 
@@ -74,11 +74,11 @@ use core::panic::PanicInfo;
 #[macro_export]
 macro_rules! cross_println {
     ($($arg:tt)*) => {
-        crate::serial!($($arg)*);
-        crate::serial!("\n");
+        $crate::serial!($($arg)*);
+        $crate::serial!("\n");
 
 
-        crate::println!(r"{}", format_args!($($arg)*));
+        $crate::println!(r"{}", format_args!($($arg)*));
     };
 }
 
@@ -89,7 +89,7 @@ macro_rules! debug {
     ($mod: path, $($arg:tt)*) => {
         // makes sure $mod is a vaild type
         let _ = core::marker::PhantomData::<$mod>;
-        crate::serial!("\x1B[38;2;0;155;200m[DEBUG]\x1B[38;2;255;155;0m {}: \x1B[0m{}\n", stringify!($mod), format_args!($($arg)*));
+        $crate::serial!("\x1B[38;2;0;155;200m[DEBUG]\x1B[38;2;255;155;0m {}: \x1B[0m{}\n", stringify!($mod), format_args!($($arg)*));
     };
 }
 
@@ -207,8 +207,7 @@ fn kmain() -> ! {
 // whenever a key is pressed this function should be called
 // this executes a few other kernel-functions
 pub fn __navi_key_pressed(key: Key) {
-    FRAMEBUFFER_TERMINAL.try_write().and_then(|mut writer| {
+    if let Some(mut writer) = FRAMEBUFFER_TERMINAL.try_write() {
         writer.handle_key(key);
-        Some(())
-    });
+    };
 }

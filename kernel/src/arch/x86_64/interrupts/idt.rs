@@ -1,5 +1,7 @@
 use super::handlers::IDT;
 use lazy_static::lazy_static;
+
+#[allow(clippy::upper_case_acronyms)]
 pub type IDTT = [GateDescriptor; 256];
 
 #[repr(C, packed)]
@@ -21,7 +23,7 @@ pub struct GateDescriptor {
 }
 
 impl GateDescriptor {
-    pub const fn new(handler: u64, attributes: u8) -> Self {
+    pub const fn new(handler: usize, attributes: u8) -> Self {
         let offset = handler;
         Self {
             offset0: offset as u16,
@@ -50,6 +52,6 @@ impl GateDescriptor {
 lazy_static! {
     pub static ref IDTDesc: IDTDescriptor = IDTDescriptor {
         limit: (size_of::<IDTT>() - 1) as u16,
-        base: (&*IDT).as_ptr() as usize
+        base: IDT.as_ptr() as usize
     };
 }

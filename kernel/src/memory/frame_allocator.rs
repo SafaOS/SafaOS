@@ -70,13 +70,11 @@ impl RegionAllocator {
         let mut best_region: Option<&limine::memory_map::Entry> = None;
 
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE {
-                if entry.length as usize >= bytes {
-                    if best_region.is_none() || best_region.is_some_and(|x| x.length > entry.length)
-                    {
-                        best_region = Some(entry);
-                    }
-                }
+            if entry.entry_type == limine::memory_map::EntryType::USABLE
+                && entry.length as usize >= bytes
+                && (best_region.is_none() || best_region.is_some_and(|x| x.length > entry.length))
+            {
+                best_region = Some(entry);
             }
         }
 

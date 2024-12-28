@@ -1,6 +1,5 @@
 use std::env::args;
 
-use ovmf_prebuilt;
 // code for running qemu and testing, kernel src avalible at kernel
 
 fn main() {
@@ -28,7 +27,7 @@ fn main() {
     let mut kvm = true;
     let mut gui = true;
 
-    while let Some(arg) = args.next() {
+    for arg in args {
         match arg.as_str() {
             "no-kvm" => kvm = false,
             "no-gui" => gui = false,

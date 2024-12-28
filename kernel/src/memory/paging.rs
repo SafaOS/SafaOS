@@ -65,7 +65,7 @@ impl Entry {
         if self.flags().contains(EntryFlags::PRESENT) {
             // FIXME: real hardware problem here
             // TODO: figure out more info about the max physical address width
-            return Some(Frame::containing_address(self.0 & 0x000FF_FFFF_FFFF000));
+            return Some(Frame::containing_address(self.0 & 0x000F_FFFF_FFFF_F000));
         }
         None
     }

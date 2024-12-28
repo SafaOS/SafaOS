@@ -73,23 +73,29 @@ impl FrameBuffer {
     /// shifts the buffer by `pixels` pixels
     /// can be used to achive scrolling
     pub fn shift_buffer(&mut self, pixels: isize) {
-        if pixels < 0 {
-            let amount = (-pixels as usize) * self.info.bytes_per_pixel;
-            if amount > self.buffer_display_index {
-                self.buffer_display_index = 0;
-                return;
-            }
+        match pixels.cmp(&0) {
+            core::cmp::Ordering::Less => {
+                let amount = (-pixels as usize) * self.info.bytes_per_pixel;
+                if amount > self.buffer_display_index {
+                    self.buffer_display_index = 0;
+                    return;
+                }
 
-            self.buffer_display_index -= amount as usize;
-        } else if pixels > 0 {
-            let amount = pixels as usize * self.info.bytes_per_pixel;
-            if amount + self.buffer_display_index >= self.buffer.len() - self.video_buffer.len() {
-                self.buffer_display_index = self.buffer.len() - self.video_buffer.len();
-                return;
+                self.buffer_display_index -= amount;
             }
+            core::cmp::Ordering::Greater => {
+                let amount = pixels as usize * self.info.bytes_per_pixel;
+                if amount + self.buffer_display_index >= self.buffer.len() - self.video_buffer.len()
+                {
+                    self.buffer_display_index = self.buffer.len() - self.video_buffer.len();
+                    return;
+                }
 
-            self.buffer_display_index += amount;
+                self.buffer_display_index += amount;
+            }
+            core::cmp::Ordering::Equal => {}
         }
+
         self.sync_pixels();
     }
 

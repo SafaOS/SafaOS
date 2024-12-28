@@ -93,7 +93,7 @@ unsafe impl GlobalAlloc for Locked<PageAllocator> {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
         self.inner
             .lock()
-            .allocmut((layout.size() + PAGE_SIZE - 1) / PAGE_SIZE)
+            .allocmut(layout.size().div_ceil(PAGE_SIZE))
             .unwrap_or(core::ptr::null_mut())
     }
 

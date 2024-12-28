@@ -57,7 +57,7 @@ impl Inode {
 
     #[inline]
     pub fn size(&self) -> usize {
-        let str = unsafe { &str::from_utf8_unchecked(&self.size) }.trim_end_matches('\0');
+        let str = unsafe { str::from_utf8_unchecked(&self.size) }.trim_end_matches('\0');
 
         u32::from_str_radix(str, 8).unwrap() as usize
     }
@@ -79,7 +79,7 @@ impl Inode {
 
     #[inline]
     pub unsafe fn next(this: *const Self) -> *const Inode {
-        let filesize = (&*this).size();
+        let filesize = (*this).size();
 
         let at = (filesize + 511) / 512;
         let next = (at + 1) * 512;

@@ -20,7 +20,7 @@ pub struct SpawnConfig {
 }
 
 impl SpawnConfig {
-    pub fn as_rust<'a>(&'a self) -> (&'a str, &'a [&'a str], SpawnFlags) {
+    pub fn as_rust(&self) -> (&str, &[&str], SpawnFlags) {
         (self.name.into_str(), self.argv.into_str_slice(), self.flags)
     }
 }
@@ -36,7 +36,7 @@ extern "C" fn sysspawn(
     let config = config.get()?;
     let (name, argv, flags) = config.as_rust();
     let elf_bytes = Slice::new(elf_ptr, elf_len)?.into_slice();
-    match threading::expose::spawn(&name, elf_bytes, argv, flags) {
+    match threading::expose::spawn(name, elf_bytes, argv, flags) {
         Err(err) => err.into(),
         Ok(pid) => {
             if let Some(dest_pid) = dest_pid.into_option() {

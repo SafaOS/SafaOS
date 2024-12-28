@@ -1,8 +1,6 @@
 // TODO: define write and read behaviour, especially write
 pub mod expose;
 
-use core::usize;
-
 use crate::{
     debug, limine,
     threading::expose::getcwd,
@@ -18,7 +16,7 @@ pub mod ramfs;
 use alloc::{
     borrow::ToOwned,
     boxed::Box,
-    collections::btree_map::BTreeMap,
+    collections::btree_map::{BTreeMap, Entry},
     string::{String, ToString},
     sync::Arc,
     vec::Vec,
@@ -65,7 +63,7 @@ pub struct FileDescriptor {
 }
 
 impl FileDescriptor {
-    pub fn new<'a>(mountpoint: *mut dyn FS, node: Inode) -> Self {
+    pub fn new(mountpoint: *mut dyn FS, node: Inode) -> Self {
         Self {
             mountpoint,
             node,
@@ -219,6 +217,7 @@ impl DirIter {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub trait FS: Send + Sync {
     /// returns the name of the fs
     /// for example, `TmpFS` name is "tmpfs"
@@ -257,8 +256,8 @@ pub trait FS: Send + Sync {
         }
 
         while let Some(depth) = path.next() {
-            if depth == "" {
-                if path.next() == None {
+            if depth.is_empty() {
+                if path.next().is_none() {
                     break;
                 } else {
                     return Err(FSError::InvaildPath);
@@ -281,7 +280,7 @@ pub trait FS: Send + Sync {
             current_inode = self.get_inode(inodeid)?.unwrap();
         }
 
-        return Ok(current_inode.clone());
+        Ok(current_inode.clone())
     }
 
     /// goes trough path to get the inode it refers to
@@ -344,8 +343,9 @@ pub trait FS: Send + Sync {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct VFS {
-    pub drivers: BTreeMap<Vec<u8>, Box<dyn FS>>,
+    drivers: BTreeMap<Vec<u8>, Box<dyn FS>>,
 }
 
 impl VFS {
@@ -360,41 +360,45 @@ impl VFS {
     pub fn mount(&mut self, name: &[u8], value: Box<dyn FS>) -> Result<(), ()> {
         let name = name.to_vec();
 
-        if self.drivers.contains_key(&name) {
-            Err(())
-        } else {
-            self.drivers.insert(name, value);
+        if let Entry::Vacant(entry) = self.drivers.entry(name) {
+            entry.insert(value);
             Ok(())
+        } else {
+            Err(())
         }
     }
 
     /// gets a drive from `self` named "`name`"
     /// or "`name`:" muttabily
-    pub(self) fn get_with_name_mut(&mut self, name: &[u8]) -> Option<&mut Box<dyn FS>> {
+    pub(self) fn get_with_name_mut(&mut self, name: &[u8]) -> Option<&mut (dyn FS + '_)> {
         let mut name = name;
 
         if name.ends_with(b":") {
             name = &name[..name.len() - 1];
         }
 
-        self.drivers.get_mut(name)
+        if let Some(x) = self.drivers.get_mut(name) {
+            Some(&mut **x)
+        } else {
+            None
+        }
     }
 
     /// gets a drive from `self` named "`name`"
     /// or "`name`:" imuttabily
-    pub(self) fn get_with_name(&self, name: &[u8]) -> Option<&Box<dyn FS>> {
+    pub(self) fn get_with_name(&self, name: &[u8]) -> Option<&dyn FS> {
         let mut name = name;
 
         if name.ends_with(b":") {
             name = &name[..name.len() - 1];
         }
 
-        self.drivers.get(name)
+        self.drivers.get(name).map(|x| &**x)
     }
     /// gets the drive name from `path` then gets the drive
     /// path must be absolute starting with DRIVE_NAME:/
     /// also handles relative path
-    pub(self) fn get_from_path_mut(&mut self, path: Path) -> FSResult<(&mut Box<dyn FS>, String)> {
+    pub(self) fn get_from_path_mut(&mut self, path: Path) -> FSResult<(&mut dyn FS, String)> {
         let mut spilt_path = path.split(&['/', '\\']);
 
         let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
@@ -404,13 +408,13 @@ impl VFS {
             path
         };
 
-        return self.get_from_path_checked_mut(full_path);
+        self.get_from_path_checked_mut(full_path)
     }
 
     /// gets the drive name from `path` then gets the drive
     /// path must be absolute starting with DRIVE_NAME:/
     /// also handles relative path
-    pub(self) fn get_from_path(&self, path: Path) -> FSResult<(&Box<dyn FS>, String)> {
+    pub(self) fn get_from_path(&self, path: Path) -> FSResult<(&dyn FS, String)> {
         let mut spilt_path = path.split(&['/', '\\']);
 
         let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
@@ -420,14 +424,14 @@ impl VFS {
             path
         };
 
-        return self.get_from_path_checked(full_path);
+        self.get_from_path_checked(full_path)
     }
 
     /// get_from_path but path cannot be realtive to cwd
     pub(self) fn get_from_path_checked_mut(
         &mut self,
         path: Path,
-    ) -> FSResult<(&mut Box<dyn FS>, String)> {
+    ) -> FSResult<(&mut dyn FS, String)> {
         let mut spilt_path = path.split(&['/', '\\']);
 
         let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
@@ -443,7 +447,7 @@ impl VFS {
     }
 
     /// get_from_path but path cannot be realtive to cwd
-    pub(self) fn get_from_path_checked(&self, path: Path) -> FSResult<(&Box<dyn FS>, String)> {
+    pub(self) fn get_from_path_checked(&self, path: Path) -> FSResult<(&dyn FS, String)> {
         let mut spilt_path = path.split(&['/', '\\']);
 
         let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;

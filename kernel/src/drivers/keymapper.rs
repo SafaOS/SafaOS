@@ -291,6 +291,6 @@ impl Key {
             return mapping.result;
         }
 
-        return '\0';
+        '\0'
     }
 }

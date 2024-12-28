@@ -1,5 +1,6 @@
 use core::fmt::Display;
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy)]
 pub struct RGB(u32);
 impl RGB {
@@ -39,15 +40,15 @@ impl From<RGB> for u32 {
     }
 }
 
-impl Into<RGB> for u32 {
-    fn into(self) -> RGB {
-        RGB(self)
+impl From<u32> for RGB {
+    fn from(u: u32) -> Self {
+        RGB(u)
     }
 }
 
-impl Into<RGB> for [u8; 3] {
-    fn into(self) -> RGB {
-        RGB::new(self[0], self[1], self[2])
+impl From<[u8; 3]> for RGB {
+    fn from(rgb: [u8; 3]) -> Self {
+        RGB::new(rgb[0], rgb[1], rgb[2])
     }
 }
 
@@ -57,9 +58,9 @@ impl From<RGB> for [u8; 3] {
     }
 }
 
-impl Into<RGB> for (u8, u8, u8) {
-    fn into(self) -> RGB {
-        RGB::new(self.0, self.1, self.2)
+impl From<(u8, u8, u8)> for RGB {
+    fn from(rgb: (u8, u8, u8)) -> Self {
+        RGB::new(rgb.0, rgb.1, rgb.2)
     }
 }
 

@@ -136,13 +136,7 @@ pub fn with_resource<DO, R>(ri: usize, then: DO) -> Option<R>
 where
     DO: FnOnce(&mut Resource) -> R,
 {
-    super::with_current_state(|state| {
-        state
-            .resource_manager
-            .get_mut()
-            .get(ri)
-            .map(|resource| then(resource))
-    })
+    super::with_current_state(|state| state.resource_manager.get_mut().get(ri).map(then))
 }
 
 /// adds a resource to the current process

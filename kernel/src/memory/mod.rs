@@ -53,7 +53,6 @@ unsafe fn init_heap(heap_start: usize) -> Result<(), MapToError> {
         heap_start + INIT_HEAP_SIZE
     );
     let page_range = {
-        let heap_start = heap_start;
         let heap_end = heap_start + INIT_HEAP_SIZE;
         let heap_start_page = Page::containing_address(heap_start);
         let heap_end_page = Page::containing_address(heap_end);
@@ -93,7 +92,7 @@ pub fn init(heap_start: usize) {
 
 #[inline(always)]
 pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8]) {
-    let pages_required = ((obj.len() + PAGE_SIZE - 1) / PAGE_SIZE) + 1;
+    let pages_required = obj.len().div_ceil(PAGE_SIZE) + 1;
     let mut copied = 0;
     let mut to_copy = obj.len();
 

@@ -128,7 +128,7 @@ impl FrameBufferTTY<'_> {
     }
 
     fn handle_set_graphics_mode(&mut self, params: &[u8]) {
-        if params.len() == 0 {
+        if params.is_empty() {
             self.fg_color = RGB::new(255, 255, 255);
             self.bg_color = RGB::new(0, 0, 0);
             return;

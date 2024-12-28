@@ -78,10 +78,10 @@ impl PreAnsiSequence {
     /// returns None if the string is not a valid ansi sequence
     /// returns the last index of the sequence and the parsed sequence if successful
     fn parse_seq(chars: &str) -> Option<(usize, AnsiSequence)> {
-        let mut chars = chars.chars().enumerate();
+        let chars = chars.chars().enumerate();
         let mut pre_ansi = PreAnsiSequence::new();
 
-        while let Some((i, c)) = chars.next() {
+        for (i, c) in chars {
             let parsed = pre_ansi.add_char(c)?;
 
             if let Either::Right(ansi) = parsed {

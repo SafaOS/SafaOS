@@ -34,8 +34,8 @@ impl Display for TrapFrame {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let sym = KERNEL_ELF.sym_from_value_range(self.insturaction as usize);
 
-        let name = if sym.is_some() {
-            KERNEL_ELF.string_table_index(sym.unwrap().name_index)
+        let name = if let Some(sym) = sym {
+            KERNEL_ELF.string_table_index(sym.name_index)
         } else {
             "??"
         };
@@ -62,8 +62,8 @@ impl Display for InterruptFrame {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let sym = KERNEL_ELF.sym_from_value_range(self.insturaction as usize);
 
-        let name = if sym.is_some() {
-            KERNEL_ELF.string_table_index(sym.unwrap().name_index)
+        let name = if let Some(sym) = sym {
+            KERNEL_ELF.string_table_index(sym.name_index)
         } else {
             "??"
         };

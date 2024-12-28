@@ -16,7 +16,7 @@ pub struct RootProcessInode;
 
 impl super::InodeOps for ProcInode {
     fn inodeid(&self) -> usize {
-        self.0.pid as usize + 1
+        self.0.pid + 1
     }
 
     fn kind(&self) -> super::InodeType {
@@ -56,10 +56,7 @@ impl super::InodeOps for RootProcessInode {
     }
 
     fn open_diriter(&self, fs: *mut dyn super::FS) -> FSResult<DirIter> {
-        let inodeids = getpids()
-            .iter()
-            .map(|pid| (pid + 1) as usize)
-            .collect::<Vec<_>>();
+        let inodeids = getpids().iter().map(|pid| pid + 1).collect::<Vec<_>>();
 
         Ok(DirIter::new(fs, inodeids.into_boxed_slice()))
     }
@@ -91,6 +88,6 @@ impl super::FS for ProcFS {
         }
 
         let pid = inode_id - 1;
-        Ok(getinfo(pid).map(|process| ProcInode::new(process)))
+        Ok(getinfo(pid).map(ProcInode::new))
     }
 }

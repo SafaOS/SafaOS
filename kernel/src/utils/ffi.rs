@@ -1,6 +1,5 @@
+//! safe FFI types to make it easier to interact with userspace
 use super::errors::{ErrorStatus, ErrorStatusResult};
-
-///! safe FFI types to make it easier to interact with userspace
 
 /// a Nullable refrence to a value
 /// if null it is a None if Some it is a valid reference
@@ -24,14 +23,6 @@ impl<'a, T> Optional<T> {
     pub fn is_none(&self) -> bool {
         self.value.is_null()
     }
-
-    // pub fn unwrap(self) -> &'a mut T {
-    //     if self.is_none() {
-    //         panic!("called `Option::unwrap()` on a `None` value")
-    //     }
-    //
-    //     unsafe { self.unwrap_unchecked() }
-    // }
 
     pub unsafe fn unwrap_unchecked(self) -> &'a mut T {
         &mut *self.value
@@ -102,9 +93,9 @@ impl<'a, T> Slice<T> {
     }
 }
 
-impl<'a, T> Into<&'a [T]> for Slice<T> {
-    fn into(self) -> &'a [T] {
-        self.into_slice()
+impl<'a, T> From<Slice<T>> for &'a [T] {
+    fn from(slice: Slice<T>) -> &'a [T] {
+        slice.into_slice()
     }
 }
 
@@ -140,9 +131,9 @@ impl<'a, T> SliceMut<T> {
     }
 }
 
-impl<'a, T> Into<&'a mut [T]> for SliceMut<T> {
-    fn into(self) -> &'a mut [T] {
-        self.into_slice()
+impl<'a, T> From<SliceMut<T>> for &'a mut [T] {
+    fn from(slice: SliceMut<T>) -> &'a mut [T] {
+        slice.into_slice()
     }
 }
 
@@ -162,15 +153,15 @@ impl Slice<u8> {
     }
 }
 
-impl<'a> Into<&'a str> for Slice<u8> {
-    fn into(self) -> &'a str {
-        self.into_str()
+impl<'a> From<Slice<u8>> for &'a str {
+    fn from(slice: Slice<u8>) -> &'a str {
+        slice.into_str()
     }
 }
 
-impl<'a> Into<&'a str> for SliceMut<u8> {
-    fn into(self) -> &'a str {
-        self.into_str()
+impl<'a> From<SliceMut<u8>> for &'a str {
+    fn from(slice: SliceMut<u8>) -> &'a str {
+        slice.into_str()
     }
 }
 

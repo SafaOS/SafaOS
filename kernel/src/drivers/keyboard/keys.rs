@@ -1,3 +1,4 @@
+#![allow(clippy::mixed_case_hex_literals)]
 use core::fmt::{Display, LowerHex, UpperHex};
 use int_enum::IntEnum;
 

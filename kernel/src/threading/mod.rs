@@ -19,7 +19,7 @@ use processes::{
     AliveProcessState, Process, ProcessFlags, ProcessInfo, ProcessState, ProcessStatus,
 };
 
-use alloc::{string::String, sync::Arc};
+use alloc::{rc::Rc, string::String};
 use spin::RwLock;
 
 use crate::{
@@ -88,9 +88,9 @@ pub fn alloc_ring0_stack(page_table: &mut PageTable) -> Result<(), MapToError> {
 }
 
 // a process is independent of the scheduler we don't want to lock it
-// TODO: remove the Arc, i am aware that it is useless and pollutes the heap bringing disadvantages
+// TODO: remove the Rc, i am aware that it is useless and pollutes the heap bringing disadvantages
 // but if i remove it now things will break because they need write access to the process and the scheduler at the same time and to have access to the process they need read lock on the scheduler, an Arc helps make this temporary
-pub type ProcessItem = Arc<UnsafeCell<Process>>;
+pub type ProcessItem = Rc<UnsafeCell<Process>>;
 
 pub struct Scheduler {
     processes: LinkedList<ProcessItem>,
@@ -155,7 +155,7 @@ impl Scheduler {
             }
         }
 
-        return self.current().context;
+        self.current().context
     }
 
     /// appends a process to the end of the scheduler Processes list
@@ -165,10 +165,10 @@ impl Scheduler {
         process.pid = pid;
         process.status = ProcessStatus::Waiting;
         self.next_pid += 1;
-        self.processes.push(Arc::new(UnsafeCell::new(process)));
+        self.processes.push(Rc::new(UnsafeCell::new(process)));
 
         debug!(Scheduler, "process with pid {} CREATED ...", pid);
-        return pid;
+        pid
     }
 
     /// finds a process where executing `condition` on returns true, then executes `then` on it
@@ -285,8 +285,7 @@ where
             .current()
             .unwrap_unchecked()
             .clone();
-        let result = then(&mut *process.get());
-        result
+        then(&mut *process.get())
     }
 }
 
