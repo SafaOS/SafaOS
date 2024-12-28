@@ -38,33 +38,30 @@ impl RegionAllocator {
         let mmap = crate::limine::mmap_request();
         // figuring out how much frames we have
         let mut last_usable_entry = None;
-        let mut first_usable_entry = None;
+        let mut usable_frames = 0;
+        let mut unusable_frames = 0;
 
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE {
-                if first_usable_entry.is_none() {
-                    first_usable_entry = Some(entry);
-                }
+            if entry.entry_type == limine::memory_map::EntryType::USABLE
+                || entry.entry_type == limine::memory_map::EntryType::BOOTLOADER_RECLAIMABLE
+            {
+                usable_frames += entry.length as usize / PAGE_SIZE;
                 last_usable_entry = Some(entry);
+            } else {
+                unusable_frames += entry.length as usize / PAGE_SIZE;
             }
         }
 
-        let last_usable_entry = last_usable_entry.unwrap();
-
-        let frame_count = align_down(
-            (last_usable_entry.base + last_usable_entry.length) as usize,
-            PAGE_SIZE,
-        ) / PAGE_SIZE;
-
+        let managed_frames = usable_frames + unusable_frames;
         debug!(
             RegionAllocator,
-            "{} usable bytes found",
-            frame_count * PAGE_SIZE
+            "about {} usable bytes found",
+            usable_frames * PAGE_SIZE
         );
 
         // frame_count is the number of bits
-        // aligns to 8 to make sure we can get a vaild number of bytes for our frame
-        let bytes = align_up(frame_count, 8) / 8;
+        // aligns to 8 to make sure we can get a vaild number of bytes for our frame bitmap
+        let bytes = align_up(managed_frames, 8) / 8;
 
         // finds a place the bitmap can live in
         let mut best_region: Option<&limine::memory_map::Entry> = None;
@@ -102,9 +99,13 @@ impl RegionAllocator {
         let mut this = Self { bitmap };
 
         debug!(RegionAllocator, "bitmap allocation successful!");
+
+        let last_usable_entry = last_usable_entry.unwrap();
         // sets all unusable frames as used
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE {
+            if entry.entry_type == limine::memory_map::EntryType::USABLE
+                || entry.entry_type == limine::memory_map::EntryType::BOOTLOADER_RECLAIMABLE
+            {
                 this.set_unused_from(entry.base as PhysAddr, entry.length as usize);
             }
 
@@ -114,6 +115,11 @@ impl RegionAllocator {
         }
 
         this.set_used_from(bitmap_base, bitmap_length);
+        debug!(
+            RegionAllocator,
+            "memory used at frame allocator init: {} MiB",
+            this.memoy_mapped() * PAGE_SIZE / 1024 / 1024
+        );
         this
     }
 
@@ -175,7 +181,7 @@ impl RegionAllocator {
     pub fn deallocate_frame(&mut self, frame: Frame) {
         self.set_unused(frame.start_address);
     }
-
+    /// returns the number of pages mapped
     pub fn memoy_mapped(&self) -> usize {
         self.bitmap
             .iter()
