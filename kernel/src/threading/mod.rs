@@ -225,25 +225,16 @@ impl Scheduler {
         self.processes.len() > 0
     }
 }
-#[inline(always)]
-/// returns wether or not the scheduler has been initialized and is ready to be used
-pub fn scheduler_ready() -> bool {
-    SCHEDULER
-        .try_lock()
-        .is_some_and(|scheduler| scheduler.inited())
-}
 
 #[inline(always)]
 /// peforms a context switch using the scheduler, switching to the next process context
-/// a warpper around `SCHEDULER.write().switch(context)` it also checks if the scheduler is ready
 /// to be used
 pub fn swtch(context: CPUStatus) -> CPUStatus {
-    unsafe { asm!("cli") }
-    if !scheduler_ready() {
-        return context;
+    if let Some(mut scheduler) = SCHEDULER.try_lock().filter(|s| s.inited()) {
+        unsafe { scheduler.switch(context) }
+    } else {
+        context
     }
-
-    unsafe { SCHEDULER.lock().switch(context) }
 }
 
 lazy_static! {
