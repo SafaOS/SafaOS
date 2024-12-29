@@ -1,5 +1,4 @@
 use crate::{
-    limine::MEMORY_SIZE,
     memory::{frame_allocator, paging::PAGE_SIZE},
     threading::{self},
 };
@@ -14,10 +13,10 @@ pub struct SysInfo {
 
 #[no_mangle]
 pub fn info(sysinfo: &mut SysInfo) {
-    let used_mem = frame_allocator::memory_mapped() * PAGE_SIZE;
+    let used_mem = frame_allocator::mapped_frames() * PAGE_SIZE;
 
     *sysinfo = SysInfo {
-        total_mem: *MEMORY_SIZE,
+        total_mem: frame_allocator::usable_frames() * PAGE_SIZE,
         used_mem,
         processes_count: threading::pcount(),
     }

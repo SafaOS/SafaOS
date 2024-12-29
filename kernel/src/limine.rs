@@ -83,14 +83,6 @@ pub fn mmap_request() -> &'static MemoryMapResponse {
 }
 
 lazy_static! {
-    pub static ref MEMORY_SIZE: usize = {
-        let mut physical_memory_size = 0;
-
-        for entry in mmap_request().entries() {
-            physical_memory_size += entry.length as usize;
-        }
-        physical_memory_size
-    };
     pub static ref MEMORY_END: usize = {
         let mut largest_addr = 0;
         for entry in mmap_request().entries() {

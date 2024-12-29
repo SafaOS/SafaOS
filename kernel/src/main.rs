@@ -30,7 +30,6 @@ use globals::*;
 
 use limine::get_phy_offset;
 use limine::get_phy_offset_end;
-use limine::MEMORY_SIZE;
 pub use memory::PhysAddr;
 pub use memory::VirtAddr;
 use terminal::FRAMEBUFFER_TERMINAL;
@@ -154,10 +153,9 @@ pub extern "C" fn kinit() {
     }
 
     serial!(
-        "phy_offset: 0x{:x}..0x{:x}\nmemory size: 0x{:x}\n",
+        "phy_offset: {:#x}..{:#x}\n",
         phy_offset,
         limine::get_phy_offset_end(),
-        *MEMORY_SIZE
     );
 
     memory::sorcery::init_page_table();

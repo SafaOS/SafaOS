@@ -28,7 +28,9 @@ pub type Bitmap = &'static mut [u8];
 #[derive(Debug)]
 pub struct RegionAllocator {
     /// keeps track of which frame is used or not
-    pub bitmap: Bitmap,
+    bitmap: Bitmap,
+    usable_frames: usize,
+    unusable_frames: usize,
 }
 
 impl RegionAllocator {
@@ -96,7 +98,11 @@ impl RegionAllocator {
 
         debug_assert!(bitmap[0] == 0xFF);
 
-        let mut this = Self { bitmap };
+        let mut this = Self {
+            bitmap,
+            usable_frames,
+            unusable_frames,
+        };
 
         debug!(RegionAllocator, "bitmap allocation successful!");
 
@@ -118,7 +124,7 @@ impl RegionAllocator {
         debug!(
             RegionAllocator,
             "memory used at frame allocator init: {} MiB",
-            this.memoy_mapped() * PAGE_SIZE / 1024 / 1024
+            this.mapped_frames() * PAGE_SIZE / 1024 / 1024
         );
         this
     }
@@ -182,10 +188,15 @@ impl RegionAllocator {
         self.set_unused(frame.start_address);
     }
     /// returns the number of pages mapped
-    pub fn memoy_mapped(&self) -> usize {
+    pub fn mapped_frames(&self) -> usize {
         self.bitmap
             .iter()
             .fold(0, |acc, x| acc + x.count_ones() as usize)
+            - self.unusable_frames
+    }
+
+    pub fn usable_frames(&self) -> usize {
+        self.usable_frames
     }
 }
 lazy_static! {
@@ -203,6 +214,11 @@ pub fn deallocate_frame(frame: Frame) {
 
 /// returns the number of mapped frames
 #[inline(always)]
-pub fn memory_mapped() -> usize {
-    REGION_ALLOCATOR.lock().memoy_mapped()
+pub fn mapped_frames() -> usize {
+    REGION_ALLOCATOR.lock().mapped_frames()
+}
+
+#[inline(always)]
+pub fn usable_frames() -> usize {
+    REGION_ALLOCATOR.lock().usable_frames()
 }
