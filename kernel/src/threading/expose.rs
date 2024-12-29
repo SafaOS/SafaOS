@@ -164,60 +164,55 @@ pub fn getcwd() -> String {
     super::with_current_state(|state| state.current_dir.clone())
 }
 
-/// attempts to terminate `process` as `terminator_pid` and returns `Some(Ok())` if it was able to terminate it
-/// returns `Err(terminator_parent_ppid)` if it wasn't able to terminate it
-/// returns `Err(0)` if `process_ppod` doesn't belong to a process
-/// it takes `process_ppid` as a process's parent pid (grandparent or even great-grandparent) and
-/// terminates the process if that parent is the terminator
-fn try_terminate(
-    process: &mut Process,
-    process_ppid: usize,
-    terminator_pid: usize,
-) -> Result<(), usize> {
-    super::find(
-        |p| p.pid == process_ppid,
-        |process_parent| {
-            if process_parent.pid == terminator_pid {
-                process.terminate(1, terminator_pid);
-                Ok(())
-            } else {
-                Err(process_parent.ppid)
-            }
-        },
-    )
-    .unwrap_or(Err(0))
+fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: usize) -> bool {
+    if process_ppid == terminator_pid || process_pid == terminator_pid {
+        return true;
+    }
+
+    while process_ppid != 0 {
+        if process_ppid == terminator_pid {
+            return true;
+        }
+
+        process_ppid = super::find(|p| p.pid == process_ppid, |process| process.ppid).unwrap_or(0);
+    }
+
+    false
 }
+
+fn terminate(process_pid: usize, terminator_pid: usize) {
+    super::for_each(|process| {
+        if process.pid == process_pid {
+            process.terminate(1, terminator_pid);
+        }
+    });
+
+    // moves the parentership of all processes with `ppid` as `self.pid` to `self.ppid`
+    // prevents orphan processes from being left behind
+    // TODO: figure out if orphan processes should be killed
+    super::for_each(|p| {
+        if p.ppid == process_pid {
+            p.ppid = terminator_pid;
+        }
+    });
+}
+
 #[no_mangle]
 /// can only Err if pid doesn't belong to process
 pub fn pkill(pid: usize) -> Result<(), ()> {
-    super::with_current(|current| {
-        let current_pid = current.pid;
-        if pid < current_pid {
-            return Err(());
-        }
+    let current_pid = super::with_current(|current| current.pid);
+    if pid < current_pid {
+        return Err(());
+    }
 
-        super::find(
-            |p| p.pid == pid,
-            |process| {
-                if process.ppid == current_pid || process.pid == current_pid {
-                    process.terminate(1, current_pid);
-                    return Ok(());
-                }
+    let (process_ppid, process_pid) =
+        super::find(|p| p.pid == pid, |process| (process.ppid, process.pid)).ok_or(())?;
 
-                // loops through parents and checks if one of the great-grandparents is the current process
-                let mut process_ppid = process.ppid;
-                while process_ppid != 0 {
-                    match try_terminate(process, process_ppid, current_pid) {
-                        Err(ppid) => process_ppid = ppid,
-                        Ok(()) => return Ok(()),
-                    }
-                }
-
-                Err(())
-            },
-        )
-        .ok_or(())?
-    })
+    if can_terminate(process_ppid, process_pid, current_pid) {
+        terminate(process_pid, current_pid);
+        return Ok(());
+    }
+    Err(())
 }
 
 #[no_mangle]
