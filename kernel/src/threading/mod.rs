@@ -87,11 +87,8 @@ pub fn alloc_ring0_stack(page_table: &mut PageTable) -> Result<(), MapToError> {
     alloc_map!(page_table, RING0_STACK_START, STACK_SIZE);
 }
 
-// a process is independent of the scheduler we don't want to lock it
-pub type ProcessItem = Process;
-
 pub struct Scheduler {
-    processes: LinkedList<ProcessItem>,
+    processes: LinkedList<Process>,
     next_pid: usize,
 }
 

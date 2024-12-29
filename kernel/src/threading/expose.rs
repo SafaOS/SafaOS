@@ -173,7 +173,6 @@ fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: us
         if process_ppid == terminator_pid {
             return true;
         }
-
         process_ppid = super::find(|p| p.pid == process_ppid, |process| process.ppid).unwrap_or(0);
     }
 
@@ -187,7 +186,7 @@ fn terminate(process_pid: usize, terminator_pid: usize) {
         }
     });
 
-    // moves the parentership of all processes with `ppid` as `self.pid` to `self.ppid`
+    // moves the parentership of all processes with `ppid` as `process_pid` to `terminator_pid`
     // prevents orphan processes from being left behind
     // TODO: figure out if orphan processes should be killed
     super::for_each(|p| {
@@ -207,7 +206,6 @@ pub fn pkill(pid: usize) -> Result<(), ()> {
 
     let (process_ppid, process_pid) =
         super::find(|p| p.pid == pid, |process| (process.ppid, process.pid)).ok_or(())?;
-
     if can_terminate(process_ppid, process_pid, current_pid) {
         terminate(process_pid, current_pid);
         return Ok(());
