@@ -19,7 +19,7 @@ use processes::{
     AliveProcessState, Process, ProcessFlags, ProcessInfo, ProcessState, ProcessStatus,
 };
 
-use alloc::{rc::Rc, string::String};
+use alloc::string::String;
 use spin::RwLock;
 
 use crate::{
@@ -88,9 +88,7 @@ pub fn alloc_ring0_stack(page_table: &mut PageTable) -> Result<(), MapToError> {
 }
 
 // a process is independent of the scheduler we don't want to lock it
-// TODO: remove the Rc, i am aware that it is useless and pollutes the heap bringing disadvantages
-// but if i remove it now things will break because they need write access to the process and the scheduler at the same time and to have access to the process they need read lock on the scheduler, an Arc helps make this temporary
-pub type ProcessItem = Rc<UnsafeCell<Process>>;
+pub type ProcessItem = UnsafeCell<Process>;
 
 pub struct Scheduler {
     processes: LinkedList<ProcessItem>,
@@ -136,7 +134,11 @@ impl Scheduler {
         unsafe { restore_cpu_status(&context) }
     }
 
-    pub fn current(&self) -> &mut Process {
+    /// gets a mutable reference to the current process
+    /// # Safety
+    /// safe as long as it gets executed in the current process, which is almost always the case, except
+    /// during initialization, context switching, etc.
+    fn current<'b>(&self) -> &'b mut Process {
         unsafe { &mut *self.processes.current().unwrap_unchecked().get() }
     }
 
@@ -165,7 +167,7 @@ impl Scheduler {
         process.pid = pid;
         process.status = ProcessStatus::Waiting;
         self.next_pid += 1;
-        self.processes.push(Rc::new(UnsafeCell::new(process)));
+        self.processes.push(UnsafeCell::new(process));
 
         debug!(Scheduler, "process with pid {} CREATED ...", pid);
         pid
@@ -173,14 +175,16 @@ impl Scheduler {
 
     /// finds a process where executing `condition` on returns true, then executes `then` on it
     /// returns the result of `then` if a process was found
-    pub fn find<C>(&self, condition: C) -> Option<ProcessItem>
+    fn find<C, T, R>(&self, condition: C, mut then: T) -> Option<R>
     where
         C: Fn(&Process) -> bool,
+        T: FnMut(&mut Process) -> R,
     {
         for process in self.processes.clone_iter() {
             unsafe {
-                if condition(&*process.get()) {
-                    return Some(process.clone());
+                let process = &mut *process.get();
+                if condition(process) {
+                    return Some(then(process));
                 }
             }
         }
@@ -273,20 +277,17 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
-/// wrapper around `SCHEDULER.read().with_current`
+/// does `then` on the current process
+/// returns the result of `then`
+/// # Safety
+/// safe as long as it gets executed in the current process, which is almost always the case, except
+/// during initialization or context switching etc.
 fn with_current<T, R>(then: T) -> R
 where
     T: FnOnce(&mut Process) -> R,
 {
-    unsafe {
-        let process = SCHEDULER
-            .read()
-            .processes
-            .current()
-            .unwrap_unchecked()
-            .clone();
-        then(&mut *process.get())
-    }
+    let process = SCHEDULER.read().current();
+    then(process)
 }
 
 /// wrapper around `SCHEDULER.read().with_current_state`
@@ -301,17 +302,12 @@ where
 }
 
 /// finds a process where executing `condition` on returns true, then executes `then` on it
-/// gets a write lock on the process while executing `then`
-/// gets a temporary read lock on the process while executing `condition` and another one on the scheduler that is released before `then` is executed
-fn find<C, T, R>(condition: C, mut then: T) -> Option<R>
+fn find<C, T, R>(condition: C, then: T) -> Option<R>
 where
     C: Fn(&Process) -> bool,
     T: FnMut(&mut Process) -> R,
 {
-    let process = SCHEDULER.read().find(condition)?;
-    let process = unsafe { &mut *process.get() };
-    let result = then(process);
-    Some(result)
+    SCHEDULER.read().find(condition, then)
 }
 
 /// wrapper around `SCHEDULER.read().for_each`

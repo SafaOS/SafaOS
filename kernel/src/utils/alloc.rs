@@ -202,6 +202,7 @@ impl<T> LinkedList<T> {
             self.current = prev;
         }
 
+        self.len -= 1;
         let results = Box::from_non_null(node);
         results.inner
     }
