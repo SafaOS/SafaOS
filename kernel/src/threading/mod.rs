@@ -13,14 +13,14 @@ pub const ENVIROMENT_START: usize = 0x00007E0000000000;
 pub const ARGV_START: usize = ENVIROMENT_START + 0xA000000000;
 pub const ARGV_SIZE: usize = PAGE_SIZE * 4;
 
-use core::{arch::asm, cell::UnsafeCell};
+use core::arch::asm;
 use lazy_static::lazy_static;
 use processes::{
     AliveProcessState, Process, ProcessFlags, ProcessInfo, ProcessState, ProcessStatus,
 };
 
-use alloc::{rc::Rc, string::String};
-use spin::RwLock;
+use alloc::string::String;
+use spin::Mutex;
 
 use crate::{
     arch::threading::{restore_cpu_status, CPUStatus},
@@ -87,13 +87,8 @@ pub fn alloc_ring0_stack(page_table: &mut PageTable) -> Result<(), MapToError> {
     alloc_map!(page_table, RING0_STACK_START, STACK_SIZE);
 }
 
-// a process is independent of the scheduler we don't want to lock it
-// TODO: remove the Rc, i am aware that it is useless and pollutes the heap bringing disadvantages
-// but if i remove it now things will break because they need write access to the process and the scheduler at the same time and to have access to the process they need read lock on the scheduler, an Arc helps make this temporary
-pub type ProcessItem = Rc<UnsafeCell<Process>>;
-
 pub struct Scheduler {
-    processes: LinkedList<ProcessItem>,
+    processes: LinkedList<Process>,
     next_pid: usize,
 }
 
@@ -126,18 +121,19 @@ impl Scheduler {
             ProcessFlags::empty(),
         )
         .unwrap();
-        SCHEDULER.write().add_process(process);
+        add_process(process);
 
         // getting the context of the first process
         // like this so the scheduler read lock is released
-        let context = SCHEDULER.read().current().context;
+        let context = with_current(|process| process.context);
 
         debug!(Scheduler, "INITED ...");
         unsafe { restore_cpu_status(&context) }
     }
 
-    pub fn current(&self) -> &mut Process {
-        unsafe { &mut *self.processes.current().unwrap_unchecked().get() }
+    /// gets a mutable reference to the current process
+    fn current(&mut self) -> &mut Process {
+        unsafe { self.processes.current_mut().unwrap_unchecked() }
     }
 
     /// context switches into next process, takes current context outputs new context
@@ -148,7 +144,6 @@ impl Scheduler {
         self.current().status = ProcessStatus::Waiting;
 
         for process in self.processes.continue_iter() {
-            let process = &mut *process.get();
             if process.status == ProcessStatus::Waiting {
                 process.status = ProcessStatus::Running;
                 break;
@@ -165,7 +160,7 @@ impl Scheduler {
         process.pid = pid;
         process.status = ProcessStatus::Waiting;
         self.next_pid += 1;
-        self.processes.push(Rc::new(UnsafeCell::new(process)));
+        self.processes.push(process);
 
         debug!(Scheduler, "process with pid {} CREATED ...", pid);
         pid
@@ -173,15 +168,14 @@ impl Scheduler {
 
     /// finds a process where executing `condition` on returns true, then executes `then` on it
     /// returns the result of `then` if a process was found
-    pub fn find<C>(&self, condition: C) -> Option<ProcessItem>
+    fn find<C, T, R>(&self, condition: C, mut then: T) -> Option<R>
     where
         C: Fn(&Process) -> bool,
+        T: FnMut(&Process) -> R,
     {
         for process in self.processes.clone_iter() {
-            unsafe {
-                if condition(&*process.get()) {
-                    return Some(process.clone());
-                }
+            if condition(process) {
+                return Some(then(process));
             }
         }
 
@@ -189,39 +183,24 @@ impl Scheduler {
     }
 
     /// iterates through all processes and executes `then` on each of them
-    pub fn for_each<T>(&self, mut then: T)
+    /// executed on all processes
+    pub fn for_each<T>(&mut self, mut then: T)
     where
         T: FnMut(&mut Process),
     {
-        for process in self.processes.clone_iter() {
-            unsafe {
-                then(&mut *process.get());
-            }
-        }
-    }
-
-    /// iterates through all processes and executes `then` on each of them only if `condition` on the process returns true
-    pub fn for_each_where<C, T>(&self, condition: C, mut then: T)
-    where
-        C: Fn(&Process) -> bool,
-        T: FnMut(&mut Process),
-    {
-        for process in self.processes.clone_iter() {
-            let process = unsafe { &mut *process.get() };
-            if condition(process) {
-                then(process);
-            }
+        for process in self.processes.clone_iter_mut() {
+            then(process);
         }
     }
 
     /// iterates through all processes and executes `then` on each of them
     /// if then returns false it breaks the loop
-    pub fn while_each<T>(&self, mut then: T)
+    /// executed on all processes
+    pub fn while_each<T>(&mut self, mut then: T)
     where
         T: FnMut(&mut Process) -> bool,
     {
-        for process in self.processes.clone_iter() {
-            let process = unsafe { &mut *process.get() };
+        for process in self.processes.clone_iter_mut() {
             if !then(process) {
                 break;
             }
@@ -230,11 +209,9 @@ impl Scheduler {
 
     /// attempt to remove a process where executing `condition` on returns true, returns the removed process info
     pub fn remove(&mut self, condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
-        unsafe {
-            self.processes
-                .remove_where(|process| condition(&*process.get()))
-                .map(|process| (*process.get()).info())
-        }
+        self.processes
+            .remove_where(|process| condition(process))
+            .map(|process| process.info())
     }
 
     #[inline(always)]
@@ -248,48 +225,31 @@ impl Scheduler {
         self.processes.len() > 0
     }
 }
-#[inline(always)]
-/// returns wether or not the scheduler has been initialized and is ready to be used
-pub fn scheduler_ready() -> bool {
-    SCHEDULER
-        .try_write()
-        .is_some_and(|scheduler| scheduler.inited())
-}
 
 #[inline(always)]
 /// peforms a context switch using the scheduler, switching to the next process context
-/// a warpper around `SCHEDULER.write().switch(context)` it also checks if the scheduler is ready
 /// to be used
 pub fn swtch(context: CPUStatus) -> CPUStatus {
-    unsafe { asm!("cli") }
-    if !scheduler_ready() {
-        return context;
+    if let Some(mut scheduler) = SCHEDULER.try_lock().filter(|s| s.inited()) {
+        unsafe { scheduler.switch(context) }
+    } else {
+        context
     }
-
-    unsafe { SCHEDULER.write().switch(context) }
 }
 
 lazy_static! {
-    static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
+    static ref SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 }
 
-/// wrapper around `SCHEDULER.read().with_current`
+/// acquires lock on scheduler and executes `then` on the current process
 fn with_current<T, R>(then: T) -> R
 where
     T: FnOnce(&mut Process) -> R,
 {
-    unsafe {
-        let process = SCHEDULER
-            .read()
-            .processes
-            .current()
-            .unwrap_unchecked()
-            .clone();
-        then(&mut *process.get())
-    }
+    then(SCHEDULER.lock().current())
 }
 
-/// wrapper around `SCHEDULER.read().with_current_state`
+/// acquires lock on scheduler and executes `then` on the current process state
 fn with_current_state<T, R>(then: T) -> R
 where
     T: FnOnce(&mut AliveProcessState) -> R,
@@ -300,56 +260,45 @@ where
     })
 }
 
-/// finds a process where executing `condition` on returns true, then executes `then` on it
-/// gets a write lock on the process while executing `then`
-/// gets a temporary read lock on the process while executing `condition` and another one on the scheduler that is released before `then` is executed
-fn find<C, T, R>(condition: C, mut then: T) -> Option<R>
+/// acquires lock on scheduler and finds a process where executing `condition` on returns true, then executes `then` on it
+/// returns the result of `then` if a process was found
+fn find<C, T, R>(condition: C, then: T) -> Option<R>
 where
     C: Fn(&Process) -> bool,
-    T: FnMut(&mut Process) -> R,
+    T: FnMut(&Process) -> R,
 {
-    let process = SCHEDULER.read().find(condition)?;
-    let process = unsafe { &mut *process.get() };
-    let result = then(process);
-    Some(result)
+    SCHEDULER.lock().find(condition, then)
 }
 
-/// wrapper around `SCHEDULER.read().for_each`
-pub fn for_each<T>(then: T)
+/// acquires lock on scheduler
+/// executes `then` on each process
+fn for_each<T>(then: T)
 where
     T: FnMut(&mut Process),
 {
-    SCHEDULER.read().for_each(then)
+    SCHEDULER.lock().for_each(then)
 }
 
-/// wrapper around `SCHEDULER.read().for_each_where`
-fn for_each_where<C, T>(condition: C, then: T)
-where
-    C: Fn(&Process) -> bool,
-    T: FnMut(&mut Process),
-{
-    SCHEDULER.read().for_each_where(condition, then)
-}
-
-/// wrapper around `SCHEDULER.read().while_each`
+/// acquires lock on scheduler
+/// executes `then` on each process until it returns false
 fn while_each<T>(then: T)
 where
     T: FnMut(&mut Process) -> bool,
 {
-    SCHEDULER.read().while_each(then)
+    SCHEDULER.lock().while_each(then)
 }
 
-/// wrapper around `SCHEDULER.read().processes_count`
+/// acquires lock on scheduler and returns the number of processes
 pub fn pcount() -> usize {
-    SCHEDULER.read().processes_count()
+    SCHEDULER.lock().processes_count()
 }
 
-/// wrapper around `SCHEDULER.write().add_process`
+/// acquires lock on scheduler and adds a process to it
 fn add_process(process: Process) -> usize {
-    SCHEDULER.write().add_process(process)
+    SCHEDULER.lock().add_process(process)
 }
 
-/// wrapper around `SCHEDULER.write().remove`
+/// acquires lock on scheduler and removes a process from it where `condition` on the process returns true
 fn remove(condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
-    SCHEDULER.write().remove(condition)
+    SCHEDULER.lock().remove(condition)
 }

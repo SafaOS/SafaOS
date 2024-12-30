@@ -44,9 +44,7 @@ impl RegionAllocator {
         let mut unusable_frames = 0;
 
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE
-                || entry.entry_type == limine::memory_map::EntryType::BOOTLOADER_RECLAIMABLE
-            {
+            if entry.entry_type == limine::memory_map::EntryType::USABLE {
                 usable_frames += entry.length as usize / PAGE_SIZE;
                 last_usable_entry = Some(entry);
             } else {
@@ -109,9 +107,7 @@ impl RegionAllocator {
         let last_usable_entry = last_usable_entry.unwrap();
         // sets all unusable frames as used
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE
-                || entry.entry_type == limine::memory_map::EntryType::BOOTLOADER_RECLAIMABLE
-            {
+            if entry.entry_type == limine::memory_map::EntryType::USABLE {
                 this.set_unused_from(entry.base as PhysAddr, entry.length as usize);
             }
 
@@ -121,11 +117,6 @@ impl RegionAllocator {
         }
 
         this.set_used_from(bitmap_base, bitmap_length);
-        debug!(
-            RegionAllocator,
-            "memory used at frame allocator init: {} MiB",
-            this.mapped_frames() * PAGE_SIZE / 1024 / 1024
-        );
         this
     }
 

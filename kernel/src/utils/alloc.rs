@@ -202,6 +202,7 @@ impl<T> LinkedList<T> {
             self.current = prev;
         }
 
+        self.len -= 1;
         let results = Box::from_non_null(node);
         results.inner
     }
@@ -210,13 +211,13 @@ impl<T> LinkedList<T> {
     /// returns the removed element
     pub fn remove_where<C>(&mut self, condition: C) -> Option<T>
     where
-        C: Fn(&T) -> bool,
+        C: Fn(&mut T) -> bool,
     {
         let mut current_node = self.head;
 
         while let Some(node) = current_node {
             unsafe {
-                if condition(&(*node.as_ptr()).inner) {
+                if condition(&mut (*node.as_ptr()).inner) {
                     return Some(self.remove_node(node));
                 }
                 current_node = (*node.as_ptr()).next;
@@ -251,9 +252,15 @@ impl<T> LinkedList<T> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn current(&self) -> Option<&T> {
         let current = self.current?;
         unsafe { Some(&(*current.as_ptr()).inner) }
+    }
+
+    pub fn current_mut(&mut self) -> Option<&mut T> {
+        let current = self.current?;
+        unsafe { Some(&mut (*current.as_ptr()).inner) }
     }
 
     /// returns an iterator that 'continues' the list which means calling `next` on the iterator
@@ -274,6 +281,23 @@ impl<T> LinkedList<T> {
         };
 
         LinkedListCloneIter {
+            list,
+            marker: PhantomData,
+        }
+    }
+
+    /// returns an iterator that acts like a clone of the list
+    /// iterating over the list will yield the same values as iterating over the original list
+    pub fn clone_iter_mut(&mut self) -> LinkedListCloneIterMut<T> {
+        let list = Self {
+            head: self.head,
+            tail: self.tail,
+            current: self.head,
+            prev: self.prev,
+            len: self.len,
+        };
+
+        LinkedListCloneIterMut {
             list,
             marker: PhantomData,
         }
@@ -303,6 +327,25 @@ impl<'a, T> Iterator for LinkedListCloneIter<'a, T> {
     }
 }
 
+/// This `struct` is created by the [`LinkedList::clone_iter_mut`] method
+/// this does not muttate the original list it is a clone of the original list
+pub struct LinkedListCloneIterMut<'a, T: 'a> {
+    list: LinkedList<T>,
+    marker: PhantomData<&'a mut LinkedList<T>>,
+}
+
+impl<'a, T> Iterator for LinkedListCloneIterMut<'a, T> {
+    type Item = &'a mut T;
+    fn next(&mut self) -> Option<Self::Item> {
+        let it = self.list.current?;
+        // TODO: this is a hack to prevent the iterator from being used after it has been finished
+        if self.list.next().is_none() {
+            self.list.current = None;
+        }
+
+        unsafe { Some(&mut (*it.as_ptr()).inner) }
+    }
+}
 /// This `struct` is created by the [`LinkedList::iter_mut`] method
 /// it provides a wrap_around iterator over the elements of a `LinkedList`. which means it warps around
 /// when it reaches the end of the list.to the head of the list for now

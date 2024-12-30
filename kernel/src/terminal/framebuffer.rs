@@ -97,8 +97,14 @@ impl FrameBufferTTY<'_> {
     }
 
     fn remove_char(&mut self) {
+        if self.cursor_x == 0 && self.cursor_y > 0 {
+            self.cursor_x = (self.framebuffer.read().width() / RASTER_WIDTH) - 1;
+            self.cursor_y -= 1;
+        } else if self.cursor_x > 0 {
+            self.cursor_x -= 1;
+        }
+
         let mut framebuffer = self.framebuffer.write();
-        self.cursor_x -= 1;
         let (x, y) = self.get_pixel_at();
 
         for row in 0..RASTER_HEIGHT.val() {

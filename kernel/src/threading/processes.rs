@@ -335,10 +335,7 @@ impl Process {
 
             self.state = zombified;
             self.status = ProcessStatus::Zombie;
-            // moves the parentership of all processes with `ppid` as `self.pid` to `self.ppid`
-            // prevents orphan processes from being left behind
-            // TODO: figure out if orphan processes should be killed
-            super::for_each_where(|p| p.ppid == self.pid, |p| p.ppid = self.ppid);
+
             debug!(Process, "process with pid {} TERMINATED ...", self.pid);
         }
     }
