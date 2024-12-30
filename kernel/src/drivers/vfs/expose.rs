@@ -122,7 +122,7 @@ impl DirEntry {
 pub fn diriter_open(fd_ri: usize) -> FSResult<usize> {
     let diriter = with_fd(fd_ri, |fd| {
         VFS_STRUCT
-            .try_read()
+            .try_write()
             .ok_or(FSError::ResourceBusy)?
             .diriter_open(fd)
     })??;

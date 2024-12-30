@@ -133,7 +133,7 @@ impl FS for DeviceFS {
         file_descriptor.node.read(buffer, 0, 0)
     }
 
-    fn diriter_open(&self, _fd: &mut FileDescriptor) -> FSResult<DirIter> {
+    fn diriter_open(&mut self, _fd: &mut FileDescriptor) -> FSResult<DirIter> {
         let length = DEVICE_MANAGER.lock().devices().len();
 
         let mut inodeids = Vec::with_capacity(length);

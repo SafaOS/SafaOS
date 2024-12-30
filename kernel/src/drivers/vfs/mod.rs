@@ -338,7 +338,7 @@ pub trait FS: Send + Sync {
     }
 
     /// opens an iterator of directroy entires, fd must be a directory
-    fn diriter_open(&self, fd: &mut FileDescriptor) -> FSResult<DirIter> {
+    fn diriter_open(&mut self, fd: &mut FileDescriptor) -> FSResult<DirIter> {
         fd.node.open_diriter(fd.mountpoint)
     }
 }
@@ -539,7 +539,7 @@ impl FS for VFS {
         unsafe { (*file_descriptor.mountpoint).close(file_descriptor) }
     }
 
-    fn diriter_open(&self, fd: &mut FileDescriptor) -> FSResult<DirIter> {
+    fn diriter_open(&mut self, fd: &mut FileDescriptor) -> FSResult<DirIter> {
         unsafe { (*fd.mountpoint).diriter_open(fd) }
     }
 }
