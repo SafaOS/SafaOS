@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
 
 use crate::drivers::vfs::{DirIter, FileDescriptor};
@@ -14,7 +14,7 @@ pub enum Resource {
     DirIter(DirIter),
 }
 
-type ResourceItem = Arc<Mutex<Resource>>;
+type ResourceItem = Mutex<Resource>;
 pub struct ResourceManager {
     resources: Vec<ResourceItem>,
     next_ri: usize,
@@ -48,18 +48,19 @@ impl ResourceManager {
     fn add_resource(&mut self, resource: Resource) -> usize {
         let resources = &mut self.resources[self.next_ri..];
 
-        for (ri, res) in resources.iter().enumerate() {
-            if let Some(mut free) = res.try_lock().filter(|res| matches!(**res, Resource::Null)) {
+        for (ri, res) in resources.iter_mut().enumerate() {
+            let res = res.get_mut();
+            if matches!(*res, Resource::Null) {
                 let ri = self.next_ri + ri;
 
                 self.next_ri = ri;
-                *free = resource;
+                *res = resource;
 
                 return ri;
             }
         }
 
-        self.resources.push(Arc::new(Mutex::new(resource)));
+        self.resources.push(Mutex::new(resource));
 
         let ri = self.resources.len() - 1;
         self.next_ri = ri;
@@ -74,7 +75,7 @@ impl ResourceManager {
         }
 
         loop {
-            if let Some(mut resource) = self.resources[ri].try_lock() {
+            if let Some(resource) = self.resources.get_mut(ri).map(|r| r.get_mut()) {
                 *resource = Resource::Null;
                 break;
             }
@@ -102,19 +103,19 @@ impl ResourceManager {
 
         for resource in &self.resources {
             let clone_resource = resource.lock().clone();
-            clone_resources.push(Arc::new(Mutex::new(clone_resource)));
+            clone_resources.push(Mutex::new(clone_resource));
         }
 
         clone_resources
     }
     /// gets a reference to the resource with index `ri`
     /// returns `None` if `ri` is invaild
-    fn get(&self, ri: usize) -> Option<ResourceItem> {
+    fn get(&self, ri: usize) -> Option<MutexGuard<Resource>> {
         if ri >= self.resources.len() {
             return None;
         }
 
-        Some(self.resources[ri].clone())
+        Some(self.resources[ri].lock())
     }
 }
 /// gets a resource with ri `ri` then executes then on it
@@ -122,13 +123,15 @@ pub fn get_resource<DO, R>(ri: usize, then: DO) -> Option<R>
 where
     DO: FnOnce(MutexGuard<Resource>) -> R,
 {
-    let owned = super::with_current(|current| current.state().resource_manager().unwrap().get(ri))?;
-    let lock = owned.lock();
-    if matches!(*lock, Resource::Null) {
-        None
-    } else {
-        Some(then(lock))
-    }
+    super::with_current(|current| {
+        current
+            .state()
+            .resource_manager()
+            .unwrap()
+            .get(ri)
+            .filter(|r| !matches!(**r, Resource::Null))
+            .map(then)
+    })
 }
 
 /// adds a resource to the current process
