@@ -5,11 +5,12 @@ pub const PAGE_SIZE: usize = 4096;
 use crate::{
     hddm,
     memory::{translate, PhysAddr},
+    serial,
 };
 use bitflags::bitflags;
 use core::{
     arch::asm,
-    ops::{Index, IndexMut},
+    ops::{Deref, DerefMut, Index, IndexMut},
 };
 
 use crate::memory::frame_allocator::Frame;
@@ -279,7 +280,7 @@ impl PageTable {
 }
 
 /// allocates a pml4 and returns its physical address
-pub fn allocate_pml4() -> Result<PhysAddr, MapToError> {
+fn allocate_pml4<'a>() -> Result<&'a mut PageTable, MapToError> {
     let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
     let virt_start_addr = frame.start_address | hddm();
@@ -288,5 +289,84 @@ pub fn allocate_pml4() -> Result<PhysAddr, MapToError> {
     table.zeroize();
     table.copy_higher_half();
 
-    Ok(frame.start_address)
+    Ok(table)
+}
+
+/// A wrapper around a Physically allocated page table
+/// when the PhysPageTable is dropped it will free the whole page table so be careful with it
+#[derive(Debug)]
+pub struct PhysPageTable {
+    inner: *mut PageTable,
+}
+
+impl Deref for PhysPageTable {
+    type Target = PageTable;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.inner }
+    }
+}
+
+impl DerefMut for PhysPageTable {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.inner }
+    }
+}
+
+impl PhysPageTable {
+    pub fn create() -> Result<Self, MapToError> {
+        let page_table = allocate_pml4()?;
+        Ok(Self {
+            inner: page_table as *mut PageTable,
+        })
+    }
+
+    /// creates a new PhysPageTable from the current pml4 table
+    /// takes ownership of the current pml4 table meaning it will free it when the PhysPageTable is dropped
+    pub unsafe fn from_current() -> Self {
+        let page_table = current_root_table() as *mut PageTable;
+        Self { inner: page_table }
+    }
+
+    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
+    /// returns Err if any of the frames couldn't be allocated
+    /// the mapped pages are zeroed
+    pub fn alloc_map(
+        &mut self,
+        from: VirtAddr,
+        to: VirtAddr,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        let from_page = Page::containing_address(from);
+        let to_page = Page::containing_address(to);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+            let virt_addr = frame.start_address | hddm();
+            self.map_to(page, frame, flags)?;
+
+            unsafe {
+                core::ptr::write_bytes(virt_addr as *mut u8, 0, PAGE_SIZE);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the root pml4 physical address
+    /// # Safety
+    /// The caller must ensure that the root pml4 is not freed, once [`self`] is dropped otherwise it will cause UB
+    pub unsafe fn root_pml4(&self) -> PhysAddr {
+        (self.inner as VirtAddr - hddm()) as PhysAddr
+    }
+}
+
+impl Drop for PhysPageTable {
+    fn drop(&mut self) {
+        unsafe {
+            self.free(4);
+        }
+    }
 }

@@ -71,6 +71,20 @@ impl FileDescriptor {
             write_pos: 0,
         }
     }
+
+    pub fn close(&mut self) {
+        unsafe {
+            (*self.mountpoint)
+                .close(self)
+                .expect("failed to close FileDescriptor");
+        }
+    }
+}
+
+impl Drop for FileDescriptor {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 #[derive(Debug, Clone)]

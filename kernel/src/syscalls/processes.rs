@@ -1,5 +1,5 @@
 use crate::{
-    threading::{self, expose::SpawnFlags, processes::ProcessInfo},
+    threading::{self, expose::SpawnFlags, task::TaskInfo},
     utils::{
         errors::ErrorStatus,
         ffi::{Optional, Required, Slice, SliceMut},
@@ -70,7 +70,7 @@ extern "C" fn syspspawn(
 }
 
 #[no_mangle]
-extern "C" fn syspcollect(ptr: *mut ProcessInfo, len: usize) -> ErrorStatus {
+extern "C" fn syspcollect(ptr: *mut TaskInfo, len: usize) -> ErrorStatus {
     let slice = SliceMut::new(ptr, len)?.into_slice();
 
     if let Err(()) = threading::expose::pcollect(slice) {

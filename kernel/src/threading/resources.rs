@@ -1,29 +1,22 @@
 use core::fmt::Debug;
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
+use spin::{Mutex, MutexGuard};
 
-use crate::drivers::vfs::{DirIter, FileDescriptor, FS, VFS_STRUCT};
+use crate::drivers::vfs::{DirIter, FileDescriptor};
+
+use super::expose::thread_yeild;
 
 #[derive(Clone)]
 pub enum Resource {
     Null,
     File(FileDescriptor),
-    /// TODO: better diriter implementation
     DirIter(DirIter),
 }
 
-impl Resource {
-    pub const fn variant(&self) -> u8 {
-        match self {
-            Resource::Null => 0,
-            Resource::File(_) => 1,
-            Resource::DirIter(_) => 2,
-        }
-    }
-}
-
+type ResourceItem = Arc<Mutex<Resource>>;
 pub struct ResourceManager {
-    resources: Vec<Resource>,
+    resources: Vec<ResourceItem>,
     next_ri: usize,
 }
 
@@ -36,7 +29,6 @@ impl Debug for ResourceManager {
                     .resources
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| !matches!(r, Resource::Null))
                     .map(|(i, _)| i)
                     .collect::<Vec<usize>>(),
             )
@@ -53,21 +45,21 @@ impl ResourceManager {
         }
     }
 
-    pub fn add_resource(&mut self, resource: Resource) -> usize {
+    fn add_resource(&mut self, resource: Resource) -> usize {
         let resources = &mut self.resources[self.next_ri..];
 
-        for (mut ri, res) in resources.iter_mut().enumerate() {
-            if res.variant() == Resource::Null.variant() {
-                ri += self.next_ri;
+        for (ri, res) in resources.iter().enumerate() {
+            if let Some(mut free) = res.try_lock().filter(|res| matches!(**res, Resource::Null)) {
+                let ri = self.next_ri + ri;
 
                 self.next_ri = ri;
-                *res = resource;
+                *free = resource;
 
                 return ri;
             }
         }
 
-        self.resources.push(resource);
+        self.resources.push(Arc::new(Mutex::new(resource)));
 
         let ri = self.resources.len() - 1;
         self.next_ri = ri;
@@ -75,76 +67,99 @@ impl ResourceManager {
         ri
     }
 
-    #[inline]
-    pub fn remove_resource(&mut self, ri: usize) -> Result<(), ()> {
+    #[inline(always)]
+    fn remove_resource(&mut self, ri: usize) -> Option<()> {
         if ri >= self.resources.len() {
-            return Err(());
+            return None;
         }
 
-        self.resources[ri] = Resource::Null;
+        loop {
+            if let Some(mut resource) = self.resources[ri].try_lock() {
+                *resource = Resource::Null;
+                break;
+            }
+
+            thread_yeild();
+        }
+
         if ri < self.next_ri {
             self.next_ri = ri;
         }
-        Ok(())
-    }
 
-    /// cleans up all resources
-    /// returns the **previous** next resource index
-    pub fn clean(&mut self) -> usize {
-        for resource in &mut self.resources {
-            match resource {
-                Resource::File(fd) => VFS_STRUCT.read().close(fd).unwrap(),
-                _ => *resource = Resource::Null,
-            }
-        }
-
-        let prev = self.next_ri;
-        self.next_ri = 0;
-        prev
+        Some(())
     }
 
     pub fn next_ri(&self) -> usize {
         self.next_ri
     }
 
-    pub fn overwrite_resources(&mut self, resources: Vec<Resource>) {
+    pub fn overwrite_resources(&mut self, resources: Vec<ResourceItem>) {
         self.resources = resources;
     }
 
-    pub fn clone_resources(&self) -> Vec<Resource> {
-        self.resources.clone()
+    pub fn clone_resources(&self) -> Vec<ResourceItem> {
+        let mut clone_resources = Vec::with_capacity(self.resources.len());
+
+        for resource in &self.resources {
+            let clone_resource = resource.lock().clone();
+            clone_resources.push(Arc::new(Mutex::new(clone_resource)));
+        }
+
+        clone_resources
     }
-
-    /// gets a mutable reference to the resource with index `ri`
+    /// gets a reference to the resource with index `ri`
     /// returns `None` if `ri` is invaild
-    pub fn get(&mut self, ri: usize) -> Option<&mut Resource> {
-        let resources = &mut self.resources;
-
-        if ri >= resources.len() {
+    fn get(&self, ri: usize) -> Option<ResourceItem> {
+        if ri >= self.resources.len() {
             return None;
         }
 
-        Some(&mut resources[ri])
+        Some(self.resources[ri].clone())
     }
 }
-
-// TODO: lock? or should every resource handle it's own lock?
-/// gets a resource by `ri` and executes `then` on it
-/// returns `None` if `ri` doesn't exist
-/// returns `Some(R)` where `R` is the result of `then` if sucessful
-pub fn with_resource<DO, R>(ri: usize, then: DO) -> Option<R>
+/// gets a resource with ri `ri` then executes then on it
+pub fn get_resource<DO, R>(ri: usize, then: DO) -> Option<R>
 where
-    DO: FnOnce(&mut Resource) -> R,
+    DO: FnOnce(MutexGuard<Resource>) -> R,
 {
-    super::with_current_state(|state| state.resource_manager.get_mut().get(ri).map(then))
+    let owned = super::with_current(|current| current.state().resource_manager().unwrap().get(ri))?;
+    let lock = owned.lock();
+    if matches!(*lock, Resource::Null) {
+        None
+    } else {
+        Some(then(lock))
+    }
 }
 
 /// adds a resource to the current process
 pub fn add_resource(resource: Resource) -> usize {
-    super::with_current_state(move |state| state.resource_manager.lock().add_resource(resource))
+    super::with_current(move |current| {
+        current
+            .state_mut()
+            .resource_manager_mut()
+            .unwrap()
+            .add_resource(resource)
+    })
 }
 
 /// removes a resource from the current process with `ri`
-pub fn remove_resource(ri: usize) -> Result<(), ()> {
-    super::with_current_state(move |state| state.resource_manager.lock().remove_resource(ri))
+pub fn remove_resource(ri: usize) -> Option<()> {
+    super::with_current(move |current| {
+        current
+            .state_mut()
+            .resource_manager_mut()
+            .unwrap()
+            .remove_resource(ri)
+    })
+}
+
+/// clones the resources of the current process
+pub fn clone_resources() -> Vec<ResourceItem> {
+    super::with_current(|current| {
+        current
+            .state()
+            .resource_manager()
+            .unwrap()
+            .clone_resources()
+    })
 }

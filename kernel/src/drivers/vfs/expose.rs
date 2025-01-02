@@ -2,7 +2,7 @@
 //! a resource index instead of a file descriptor aka ri
 use core::fmt::Debug;
 
-use crate::threading::resources::{self, with_resource, Resource};
+use crate::threading::resources::{self, Resource};
 
 use super::{FSError, FSResult, FileDescriptor, Inode, InodeType, Path, FS, VFS_STRUCT};
 
@@ -11,8 +11,8 @@ fn with_fd<T, R>(ri: usize, then: T) -> FSResult<R>
 where
     T: FnOnce(&mut FileDescriptor) -> R,
 {
-    with_resource(ri, |resource| {
-        if let Resource::File(ref mut fd) = resource {
+    resources::get_resource(ri, |mut resource| {
+        if let Resource::File(ref mut fd) = *resource {
             Ok(then(fd))
         } else {
             Err(FSError::NotAFile)
@@ -131,8 +131,8 @@ pub fn diriter_open(fd_ri: usize) -> FSResult<usize> {
 }
 
 pub fn diriter_next(dir_ri: usize, direntry: &mut DirEntry) -> FSResult<()> {
-    resources::with_resource(dir_ri, |resource| {
-        if let Resource::DirIter(diriter) = resource {
+    resources::get_resource(dir_ri, |mut resource| {
+        if let Resource::DirIter(ref mut diriter) = *resource {
             let next = diriter.next();
             if let Some(entry) = next {
                 *direntry = entry.clone();
@@ -150,7 +150,7 @@ pub fn diriter_next(dir_ri: usize, direntry: &mut DirEntry) -> FSResult<()> {
 #[no_mangle]
 /// may only Err if dir_ri is invaild
 pub fn diriter_close(dir_ri: usize) -> FSResult<()> {
-    resources::remove_resource(dir_ri).map_err(|_| FSError::InvaildFileDescriptorOrRes)
+    resources::remove_resource(dir_ri).ok_or(FSError::InvaildFileDescriptorOrRes)
 }
 
 #[no_mangle]

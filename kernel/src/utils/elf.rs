@@ -8,7 +8,7 @@ use crate::{
     hddm,
     memory::{
         copy_to_userspace, frame_allocator,
-        paging::{EntryFlags, IterPage, Page, PageTable, PAGE_SIZE},
+        paging::{EntryFlags, IterPage, MapToError, Page, PageTable, PAGE_SIZE},
     },
     utils::errors::{ErrorStatus, IntoErr},
     VirtAddr,
@@ -102,6 +102,12 @@ impl IntoErr for ElfError {
 
             _ => ErrorStatus::NotSupported,
         }
+    }
+}
+
+impl From<MapToError> for ElfError {
+    fn from(error: MapToError) -> Self {
+        Self::MapToError
     }
 }
 

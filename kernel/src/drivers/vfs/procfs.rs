@@ -2,17 +2,13 @@ use core::str;
 
 use alloc::{
     boxed::Box,
-    format,
     string::{String, ToString},
     sync::Arc,
     vec::Vec,
 };
 use hashbrown::HashMap;
 
-use crate::threading::{
-    expose::{getinfo, getpid, getpids},
-    processes::ProcessInfo,
-};
+use crate::threading::expose::getpids;
 
 use super::{DirIter, FSError, FSResult, FileDescriptor, Inode, FS};
 
