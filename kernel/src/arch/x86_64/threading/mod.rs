@@ -60,12 +60,12 @@ bitflags! {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct CPUStatus {
-    pub rsp: u64,
-    pub rflags: RFLAGS,
-    pub ss: u64,
-    pub cs: u64,
+    rsp: u64,
+    rflags: RFLAGS,
+    ss: u64,
+    cs: u64,
 
-    pub rip: u64,
+    rip: u64,
 
     r15: u64,
     r14: u64,
@@ -77,8 +77,8 @@ pub struct CPUStatus {
     r8: u64,
 
     rbp: u64,
-    pub rdi: u64,
-    pub rsi: u64,
+    rdi: u64,
+    rsi: u64,
 
     rdx: u64,
     rcx: u64,

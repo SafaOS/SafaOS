@@ -1,4 +1,5 @@
-// TODO: define write and read behaviour, especially write
+// FIXME: re-write this module in a more rusty way
+// for example, file descriptors opened using this module in kernel space aren't closed by drop
 pub mod expose;
 
 use crate::{
@@ -50,6 +51,7 @@ pub fn init() {
     debug!(VFS, "done ...");
 }
 
+/// Defines a file descriptor resource
 #[derive(Clone)]
 pub struct FileDescriptor {
     pub mountpoint: *mut dyn FS,

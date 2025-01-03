@@ -3,7 +3,7 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     arch::threading::CPUStatus,
-    hddm,
+    debug, hddm,
     memory::{
         frame_allocator,
         paging::{Page, PhysPageTable, PAGE_SIZE},
@@ -275,6 +275,7 @@ impl Task {
         let mut state = self.state.write();
 
         state.die(exit_code, killed_by.unwrap_or(self.pid));
+        debug!(Task, "Task {} ({}) TERMINATED", self.pid, self.name());
     }
 }
 

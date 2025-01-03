@@ -98,15 +98,11 @@ impl ResourceManager {
         self.resources = resources;
     }
 
-    pub fn clone_resources(&self) -> Vec<ResourceItem> {
-        let mut clone_resources = Vec::with_capacity(self.resources.len());
-
-        for resource in &self.resources {
-            let clone_resource = resource.lock().clone();
-            clone_resources.push(Mutex::new(clone_resource));
-        }
-
-        clone_resources
+    pub fn clone_resources(&mut self) -> Vec<ResourceItem> {
+        self.resources
+            .iter_mut()
+            .map(|r| Mutex::new(r.get_mut().clone()))
+            .collect()
     }
     /// gets a reference to the resource with index `ri`
     /// returns `None` if `ri` is invaild
@@ -118,6 +114,9 @@ impl ResourceManager {
         Some(self.resources[ri].lock())
     }
 }
+// TODO: fgure out a better way to do this, where it's easier to tell that we are holding a lock on
+// the current process state.
+
 /// gets a resource with ri `ri` then executes then on it
 pub fn get_resource<DO, R>(ri: usize, then: DO) -> Option<R>
 where
@@ -160,8 +159,8 @@ pub fn remove_resource(ri: usize) -> Option<()> {
 pub fn clone_resources() -> Vec<ResourceItem> {
     super::with_current(|current| {
         current
-            .state()
-            .resource_manager()
+            .state_mut()
+            .resource_manager_mut()
             .unwrap()
             .clone_resources()
     })

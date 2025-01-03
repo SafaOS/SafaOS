@@ -92,7 +92,12 @@ impl Scheduler {
         self.next_pid += 1;
         self.tasks.push(task);
 
-        debug!(Scheduler, "task with pid {} CREATED ...", pid);
+        debug!(
+            Scheduler,
+            "Task {} ({}) ADDED",
+            pid,
+            self.tasks.last().unwrap().name()
+        );
         pid
     }
 

@@ -9,7 +9,7 @@ use bitflags::bitflags;
 
 use crate::{
     drivers::vfs::{
-        expose::{fstat, open, read, DirEntry},
+        expose::{close, fstat, open, read, DirEntry},
         FSError, FSResult, InodeType, VFS_STRUCT,
     },
     khalt,
@@ -137,6 +137,7 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
     let mut buffer = vec![0; stat.size];
 
     read(file, &mut buffer)?;
+    close(file)?;
     spawn(name, &buffer, argv, flags).map_err(|_| FSError::NotExecuteable)
 }
 

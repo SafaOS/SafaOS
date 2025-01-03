@@ -5,7 +5,6 @@ pub const PAGE_SIZE: usize = 4096;
 use crate::{
     hddm,
     memory::{translate, PhysAddr},
-    serial,
 };
 use bitflags::bitflags;
 use core::{
@@ -254,6 +253,12 @@ impl PageTable {
         let level_1_table = level_2_table[level_2_index].map(flags)?;
 
         let entry = &mut level_1_table[level_1_index];
+        // FIXME: this is a hack to deallocate the old frame if it's not the same as the new one
+        // there is a bug in process spawning that causes the same entry to be mapped to two different
+        // frames which causes a memory leak so this is a temporary fix
+        if let Some(frame) = entry.frame().filter(|x| x != &frame) {
+            frame_allocator::deallocate_frame(frame);
+        }
 
         *entry = Entry::new(flags, frame.start_address);
         Ok(())
@@ -282,7 +287,6 @@ impl PageTable {
 /// allocates a pml4 and returns its physical address
 fn allocate_pml4<'a>() -> Result<&'a mut PageTable, MapToError> {
     let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-
     let virt_start_addr = frame.start_address | hddm();
     let table = unsafe { &mut *(virt_start_addr as *mut PageTable) };
 
@@ -292,6 +296,7 @@ fn allocate_pml4<'a>() -> Result<&'a mut PageTable, MapToError> {
     Ok(table)
 }
 
+#[repr(C)]
 /// A wrapper around a Physically allocated page table
 /// when the PhysPageTable is dropped it will free the whole page table so be careful with it
 #[derive(Debug)]

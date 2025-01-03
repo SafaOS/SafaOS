@@ -258,6 +258,17 @@ impl<T> LinkedList<T> {
         unsafe { Some(&(*current.as_ptr()).inner) }
     }
 
+    pub fn last(&self) -> Option<&T> {
+        let last = self.tail?;
+        unsafe { Some(&(*last.as_ptr()).inner) }
+    }
+
+    #[allow(dead_code)]
+    pub fn last_mut(&mut self) -> Option<&mut T> {
+        let last = self.tail?;
+        unsafe { Some(&mut (*last.as_ptr()).inner) }
+    }
+
     pub fn current_mut(&mut self) -> Option<&mut T> {
         let current = self.current?;
         unsafe { Some(&mut (*current.as_ptr()).inner) }
