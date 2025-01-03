@@ -5,7 +5,7 @@ use crate::{
     arch::threading::CPUStatus,
     debug, hddm,
     memory::{
-        frame_allocator,
+        align_up, frame_allocator,
         paging::{Page, PhysPageTable, PAGE_SIZE},
     },
     utils::elf::{Elf, ElfError},
@@ -221,6 +221,7 @@ impl Task {
     ) -> Self {
         assert!(cwd.len() < 128);
         assert!(name.len() < 64);
+        let data_break = align_up(data_break, PAGE_SIZE);
 
         Self {
             name,

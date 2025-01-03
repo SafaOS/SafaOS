@@ -253,9 +253,7 @@ impl PageTable {
         let level_1_table = level_2_table[level_2_index].map(flags)?;
 
         let entry = &mut level_1_table[level_1_index];
-        // FIXME: this is a hack to deallocate the old frame if it's not the same as the new one
-        // there is a bug in process spawning that causes the same entry to be mapped to two different
-        // frames which causes a memory leak so this is a temporary fix
+        // TODO: stress test this
         if let Some(frame) = entry.frame().filter(|x| x != &frame) {
             frame_allocator::deallocate_frame(frame);
         }

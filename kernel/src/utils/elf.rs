@@ -381,10 +381,6 @@ impl<'a> Elf<'a> {
             };
 
             unsafe {
-                // FIXME: double mapping here
-                // 0x0000000001026000 is mapped to 0x11a9000 and then to a different frame in the
-                // spawn test
-                // happens with every elf load
                 for page in iter {
                     let frame = frame_allocator::allocate_frame().ok_or(ElfError::MapToError)?;
 
