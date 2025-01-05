@@ -15,7 +15,7 @@ pub fn main() !void {
     const file = try File.open(filename, .{ .read = true });
     defer file.close();
 
-    const data = try file.reader().readUntilEOFOrDelimiter('\n');
+    const data = try file.reader().readUntilEOF();
     try printf("%.*s\n", .{ data.len, data.ptr });
 }
 
