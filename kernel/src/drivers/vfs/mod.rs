@@ -192,7 +192,13 @@ pub trait InodeOps: Send + Sync {
         Err(FSError::OperationNotSupported)
     }
 
+    /// executes when the inode is opened
+    /// will be always called when the inode is opened, regardless of the file system
+    fn opened(&self) {
+        _ = self;
+    }
     /// executes when the inode is closed
+    /// will be always called when the inode is closed, regardless of the file system
     fn close(&self) {
         _ = self;
     }
@@ -246,7 +252,7 @@ pub trait FS: Send + Sync {
     fn name(&self) -> &'static str;
     /// attempts to close a file cleanig all it's resources
     fn close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
-        file_descriptor.node.close();
+        _ = file_descriptor;
         Ok(())
     }
 
@@ -546,8 +552,8 @@ impl FS for VFS {
 
     fn open(&self, path: Path) -> FSResult<FileDescriptor> {
         let (mountpoint, path) = self.get_from_path(path)?;
-
         let file = mountpoint.open(&path)?;
+        file.node.opened();
 
         Ok(file)
     }
@@ -577,6 +583,7 @@ impl FS for VFS {
     }
 
     fn close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
+        file_descriptor.node.close();
         unsafe { (*file_descriptor.mountpoint).close(file_descriptor) }
     }
 

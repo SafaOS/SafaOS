@@ -185,6 +185,13 @@ impl super::InodeOps for Mutex<ProcInode> {
             ProcInodeData::File(file) => file.close(),
         }
     }
+
+    fn opened(&self) {
+        match &mut self.lock().data {
+            ProcInodeData::Dir(_, _) => {}
+            ProcInodeData::File(file) => file.refresh(),
+        }
+    }
 }
 pub struct ProcFS {
     /// inodeid -> inode
