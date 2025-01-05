@@ -7,7 +7,7 @@ pub type Pid = usize;
 use core::arch::asm;
 use lazy_static::lazy_static;
 
-use alloc::string::String;
+use alloc::{string::String, vec::Vec};
 use spin::RwLock;
 use task::{Task, TaskInfo, TaskStatus};
 
@@ -125,6 +125,18 @@ impl Scheduler {
         None
     }
 
+    /// Executes `then` on a all tasks and returns a vector of the results
+    pub fn map<T, R>(&self, mut then: T) -> Vec<R>
+    where
+        T: FnMut(&Task) -> R,
+    {
+        let mut results = Vec::with_capacity(self.tasks.len());
+        for task in self.tasks.clone_iter() {
+            results.push(then(task));
+        }
+        results
+    }
+
     /// iterates through all taskes and executes `then` on each of them
     /// executed on all taskes
     fn for_each<T>(&mut self, mut then: T)
@@ -200,6 +212,14 @@ where
     T: FnMut(&Task) -> R,
 {
     SCHEDULER.read().find(condition, then)
+}
+
+/// acquires lock on scheduler and executes `then` on a all tasks and returns a vector of the results
+pub fn map<T, R>(then: T) -> Vec<R>
+where
+    T: FnMut(&Task) -> R,
+{
+    SCHEDULER.read().map(then)
 }
 
 /// acquires lock on scheduler

@@ -191,6 +191,11 @@ pub trait InodeOps: Send + Sync {
         _ = fs;
         Err(FSError::OperationNotSupported)
     }
+
+    /// executes when the inode is closed
+    fn close(&self) {
+        _ = self;
+    }
 }
 
 /// unknown inode type
@@ -228,7 +233,7 @@ impl DirIter {
         match inode {
             Ok(Some(inode)) => Some(DirEntry::get_from_inode(inode)),
             Ok(None) => self.next(),
-            _ => None,
+            Err(_) => None,
         }
     }
 }
@@ -241,7 +246,7 @@ pub trait FS: Send + Sync {
     fn name(&self) -> &'static str;
     /// attempts to close a file cleanig all it's resources
     fn close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
-        _ = file_descriptor;
+        file_descriptor.node.close();
         Ok(())
     }
 
@@ -285,7 +290,7 @@ pub trait FS: Send + Sync {
             }
 
             if !current_inode.is_dir() {
-                return Err(FSError::NoSuchAFileOrDirectory);
+                return Err(FSError::NotADirectory);
             }
 
             if !current_inode.contains(depth) {
@@ -331,16 +336,36 @@ pub trait FS: Send + Sync {
     /// attempts to read `buffer.len` bytes from file_descriptor returns the actual count of the bytes read
     /// shouldn't read directories!
     fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        _ = file_descriptor;
-        _ = buffer;
-        Err(FSError::OperationNotSupported)
+        let count = buffer.len();
+        let file_size = file_descriptor.node.size()?;
+
+        let count = if file_descriptor.read_pos + count > file_size {
+            file_size - file_descriptor.read_pos
+        } else {
+            count
+        };
+
+        file_descriptor
+            .node
+            .read(buffer, file_descriptor.read_pos, count)?;
+
+        file_descriptor.read_pos += count;
+        Ok(count)
     }
     /// attempts to write `buffer.len` bytes to `file_descriptor`
     /// shouldn't write to directories!
     fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        _ = file_descriptor;
-        _ = buffer;
-        Err(FSError::OperationNotSupported)
+        if file_descriptor.write_pos == 0 {
+            file_descriptor.node.truncate(0)?;
+        }
+
+        file_descriptor
+            .node
+            .write(buffer, file_descriptor.write_pos)?;
+
+        file_descriptor.write_pos += buffer.len();
+
+        Ok(buffer.len())
     }
     /// creates an empty file named `name` in `path`
     fn create(&mut self, path: Path) -> FSResult<()> {

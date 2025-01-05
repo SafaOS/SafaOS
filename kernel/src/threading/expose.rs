@@ -76,10 +76,7 @@ pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
 }
 
 pub fn getpids() -> Vec<Pid> {
-    let mut pids = Vec::with_capacity(super::pcount());
-    super::for_each(|process| pids.push(process.pid));
-
-    pids
+    super::map(|process| process.pid)
 }
 bitflags! {
     #[derive(Debug, Clone, Copy)]

@@ -7,8 +7,12 @@ use alloc::{
     vec::Vec,
 };
 use hashbrown::HashMap;
+use spin::Mutex;
 
-use crate::threading::expose::getpids;
+use crate::threading::{
+    expose::{getinfo, getpids},
+    Pid,
+};
 
 use super::{DirIter, FSError, FSResult, FileDescriptor, Inode, FS};
 
@@ -16,17 +20,48 @@ pub trait ProcFSFile: Send + Sync {
     /// returns the name of the file which is statically known
     fn name(&self) -> &'static str;
     /// returns the data in the file which is a utf8 string representing Self as json
-    fn get_data(&self) -> String;
+    fn get_data(&mut self) -> &str {
+        if self.try_get_data().is_none() {
+            self.refresh();
+        }
+
+        self.try_get_data().unwrap()
+    }
+    /// returns the data in the file which is a utf8 string representing Self as json if it is available, None otherwise
+    fn try_get_data(&self) -> Option<&str>;
+    /// refreshes the data in the file to be up to date
+    fn refresh(&mut self);
+    /// deletes the data in the file
+    fn close(&mut self);
 }
 
-struct ProcessInfoFile(usize);
+struct ProcessInfoFile {
+    pid: Pid,
+    data: Option<String>,
+}
+
+impl ProcessInfoFile {
+    pub fn new(pid: Pid) -> Self {
+        Self { pid, data: None }
+    }
+}
 
 impl ProcFSFile for ProcessInfoFile {
     fn name(&self) -> &'static str {
         "info"
     }
-    fn get_data(&self) -> String {
-        todo!()
+
+    fn try_get_data(&self) -> Option<&str> {
+        self.data.as_deref()
+    }
+
+    fn refresh(&mut self) {
+        let task_info = getinfo(self.pid).unwrap();
+        self.data = serde_json::to_string(&task_info).ok();
+    }
+
+    fn close(&mut self) {
+        self.data = None;
     }
 }
 
@@ -56,31 +91,51 @@ impl ProcInode {
     }
 }
 
-impl super::InodeOps for ProcInode {
+impl super::InodeOps for Mutex<ProcInode> {
     fn inodeid(&self) -> usize {
-        self.inodeid
+        self.lock().inodeid
     }
 
     fn kind(&self) -> super::InodeType {
-        match &self.data {
+        match &self.lock().data {
             ProcInodeData::Dir(_, _) => super::InodeType::Directory,
             ProcInodeData::File(_) => super::InodeType::File,
         }
     }
 
+    fn contains(&self, name: &str) -> bool {
+        match &self.lock().data {
+            ProcInodeData::Dir(_, dir) => dir.contains_key(name),
+            ProcInodeData::File(_) => false,
+        }
+    }
+
     fn size(&self) -> FSResult<usize> {
-        FSResult::Err(FSError::OperationNotSupported)
+        match &mut self.lock().data {
+            ProcInodeData::Dir(_, dir) => Ok(dir.len()),
+            ProcInodeData::File(file) => Ok(file.get_data().len()),
+        }
+    }
+
+    fn get(&self, name: &str) -> FSResult<usize> {
+        match &self.lock().data {
+            ProcInodeData::Dir(_, dir) => dir
+                .get(name)
+                .copied()
+                .ok_or(FSError::NoSuchAFileOrDirectory),
+            ProcInodeData::File(_) => Err(FSError::NotADirectory),
+        }
     }
 
     fn name(&self) -> String {
-        match &self.data {
+        match &self.lock().data {
             ProcInodeData::Dir(name, _) => name.clone(),
             ProcInodeData::File(file) => file.name().to_string(),
         }
     }
 
     fn read(&self, buffer: &mut [u8], offset: usize, count: usize) -> FSResult<usize> {
-        match &self.data {
+        match &mut self.lock().data {
             ProcInodeData::File(file) => {
                 let file_data = file.get_data();
                 let count = if offset + count > file_data.len() {
@@ -97,10 +152,10 @@ impl super::InodeOps for ProcInode {
     }
 
     fn open_diriter(&self, fs: *mut dyn FS) -> FSResult<DirIter> {
-        match &self.data {
+        match &self.lock().data {
             ProcInodeData::Dir(_, dir) => {
                 let mut inodeids = Vec::with_capacity(dir.len());
-                for (_, inodeid) in dir {
+                for inodeid in dir.values() {
                     inodeids.push(*inodeid);
                 }
 
@@ -109,10 +164,31 @@ impl super::InodeOps for ProcInode {
             _ => FSResult::Err(FSError::NotADirectory),
         }
     }
+
+    fn insert(&self, name: &str, node: usize) -> FSResult<()> {
+        match &mut self.lock().data {
+            ProcInodeData::Dir(_, dir) => {
+                if dir.contains_key(name) {
+                    return FSResult::Err(FSError::AlreadyExists);
+                }
+
+                dir.insert(name.to_string(), node);
+                Ok(())
+            }
+            ProcInodeData::File(_) => FSResult::Err(FSError::NotADirectory),
+        }
+    }
+
+    fn close(&self) {
+        match &mut self.lock().data {
+            ProcInodeData::Dir(_, _) => {}
+            ProcInodeData::File(file) => file.close(),
+        }
+    }
 }
 pub struct ProcFS {
     /// inodeid -> inode
-    inodes: HashMap<usize, Arc<ProcInode>>,
+    inodes: HashMap<usize, Arc<Mutex<ProcInode>>>,
     /// pid -> process inodeid
     processes: HashMap<usize, usize>,
 
@@ -122,7 +198,10 @@ pub struct ProcFS {
 impl ProcFS {
     pub fn new() -> Self {
         Self {
-            inodes: HashMap::from([(0, Arc::new(ProcInode::new_dir(0, String::new())))]),
+            inodes: HashMap::from([(
+                0,
+                Arc::new(Mutex::new(ProcInode::new_dir(0, String::new()))),
+            )]),
             processes: HashMap::new(),
             next_inodeid: 1,
         }
@@ -132,8 +211,10 @@ impl ProcFS {
         let name = file.name();
         let inodeid = self.next_inodeid;
         self.next_inodeid += 1;
-        self.inodes
-            .insert(inodeid, Arc::new(ProcInode::new_file(inodeid, file)));
+        self.inodes.insert(
+            inodeid,
+            Arc::new(Mutex::new(ProcInode::new_file(inodeid, file))),
+        );
 
         (inodeid, name)
     }
@@ -149,17 +230,18 @@ impl ProcFS {
 
         self.inodes.insert(
             inodeid,
-            Arc::new(ProcInode {
+            Arc::new(Mutex::new(ProcInode {
                 inodeid,
                 data: ProcInodeData::Dir(name.to_string(), dir),
-            }),
+            })),
         );
+
         self.root_inode().unwrap().insert(name, inodeid).unwrap();
         inodeid
     }
 
-    fn append_process(&mut self, pid: usize) -> usize {
-        let info_file = Box::new(ProcessInfoFile(pid));
+    fn append_process(&mut self, pid: Pid) -> usize {
+        let info_file = Box::new(ProcessInfoFile::new(pid));
         let (file_inode, file_name) = self.append_file(info_file);
 
         let inodeid = self.append_dir(&pid.to_string(), &[(file_name, file_inode)]);
@@ -169,7 +251,7 @@ impl ProcFS {
 
     fn remove_inode(&mut self, inodeid: usize) {
         let inode = self.inodes.remove(&inodeid).unwrap();
-        match &inode.data {
+        match &inode.lock().data {
             ProcInodeData::Dir(_, dir) => {
                 for (_, inodeid) in dir {
                     self.remove_inode(*inodeid);
@@ -201,12 +283,17 @@ impl ProcFS {
         // O(NlogN)
         let useless_inodes: Vec<_> = self
             .processes
-            .extract_if(|pid, _| getpids.binary_search(pid).is_ok())
-            .map(|(_, inodeid)| inodeid)
+            .extract_if(|pid, _| getpids.binary_search(pid).is_err())
             .collect();
 
-        for inodeid in useless_inodes {
+        for (pid, inodeid) in useless_inodes {
             self.remove_inode(inodeid);
+            match &mut self.inodes.get(&0).unwrap().lock().data {
+                ProcInodeData::Dir(_, dir) => {
+                    dir.remove(&pid.to_string());
+                }
+                _ => unreachable!(),
+            }
         }
     }
 }
@@ -223,12 +310,8 @@ impl super::FS for ProcFS {
         Ok(FileDescriptor::new(self as *const Self as *mut Self, node))
     }
 
-    fn root_inode(&self) -> FSResult<Inode> {
-        self.inodes
-            .get(&0)
-            .cloned()
-            .map(|inode| inode as Arc<dyn super::InodeOps>)
-            .ok_or(FSError::NoSuchAFileOrDirectory)
+    fn get_inode(&self, inode_id: usize) -> FSResult<Option<Inode>> {
+        Ok(self.inodes.get(&inode_id).cloned().map(|x| x as Inode))
     }
 
     fn diriter_open(&mut self, fd: &mut FileDescriptor) -> FSResult<DirIter> {

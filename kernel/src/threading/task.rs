@@ -1,4 +1,5 @@
 use alloc::string::String;
+use serde::Serialize;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
@@ -188,7 +189,7 @@ impl TaskState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     /// in queue ready to be scheduled
     Ready,
@@ -281,11 +282,31 @@ impl Task {
 }
 
 #[derive(Debug, Clone)]
+struct Name([u8; 64]);
+
+impl From<[u8; 64]> for Name {
+    fn from(name: [u8; 64]) -> Self {
+        Self(name)
+    }
+}
+
+impl serde::Serialize for Name {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        unsafe {
+            serializer.serialize_str(core::str::from_utf8_unchecked(&self.0).trim_matches('\0'))
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Clone)]
 #[repr(C)]
 pub struct TaskInfo {
     pub ppid: Pid,
     pub pid: Pid,
-    pub name: [u8; 64],
+    name: Name,
     pub status: TaskStatus,
 
     pub last_resource_id: usize,
@@ -298,6 +319,12 @@ pub struct TaskInfo {
     pub data_break: VirtAddr,
     pub is_alive: bool,
 }
+
+// impl TaskInfo {
+//     pub fn name(&self) -> &str {
+//         unsafe { core::str::from_utf8_unchecked(&self.name.0) }
+//     }
+// }
 
 impl From<&Task> for TaskInfo {
     fn from(task: &Task) -> Self {
@@ -337,7 +364,7 @@ impl From<&Task> for TaskInfo {
         Self {
             ppid: task.ppid,
             pid: task.pid,
-            name,
+            name: name.into(),
             status: task.status,
 
             last_resource_id,

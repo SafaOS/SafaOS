@@ -17,6 +17,9 @@ heapless = "0.8.0"
 limine = "0.3.0"
 hashbrown = "0.15.2"
 
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+
 [dev-dependencies]
 cc = "1.1.1"
 

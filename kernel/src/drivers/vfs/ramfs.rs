@@ -197,38 +197,6 @@ impl FS for RamFS {
         ))
     }
 
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        let count = buffer.len();
-        let file_size = file_descriptor.node.size()?;
-
-        let count = if file_descriptor.read_pos + count > file_size {
-            file_size - file_descriptor.read_pos
-        } else {
-            count
-        };
-
-        file_descriptor
-            .node
-            .read(buffer, file_descriptor.read_pos, count)?;
-
-        file_descriptor.read_pos += count;
-        Ok(count)
-    }
-
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        if file_descriptor.write_pos == 0 {
-            file_descriptor.node.truncate(0)?;
-        }
-
-        file_descriptor
-            .node
-            .write(buffer, file_descriptor.write_pos)?;
-
-        file_descriptor.write_pos += buffer.len();
-
-        Ok(buffer.len())
-    }
-
     fn create(&mut self, path: Path) -> FSResult<()> {
         let inodeid = self.inodes.len();
 
