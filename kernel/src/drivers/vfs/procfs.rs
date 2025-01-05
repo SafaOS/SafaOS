@@ -57,7 +57,7 @@ impl ProcFSFile for ProcessInfoFile {
 
     fn refresh(&mut self) {
         let task_info = getinfo(self.pid).unwrap();
-        self.data = serde_json::to_string(&task_info).ok();
+        self.data = serde_json::to_string_pretty(&task_info).ok();
     }
 
     fn close(&mut self) {
