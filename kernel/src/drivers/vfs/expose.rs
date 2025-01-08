@@ -4,7 +4,9 @@ use core::fmt::Debug;
 
 use crate::threading::resources::{self, Resource};
 
-use super::{FSError, FSResult, FileDescriptor, Inode, InodeType, Path, FS, VFS_STRUCT};
+use super::{
+    CoreFileSystem, FSError, FSResult, FileDescriptor, Inode, InodeType, Path, VFS_STRUCT,
+};
 
 /// gets a FileDescriptor from a fd (file_descriptor id) may return Err(FSError::InvaildFileDescriptor)
 fn with_fd<T, R>(ri: usize, then: T) -> FSResult<R>
@@ -66,7 +68,7 @@ pub fn write(ri: usize, buffer: &[u8]) -> FSResult<usize> {
 #[no_mangle]
 pub fn create(path: Path) -> FSResult<()> {
     VFS_STRUCT
-        .try_write()
+        .try_read()
         .ok_or(FSError::ResourceBusy)?
         .create(path)
 }
@@ -74,7 +76,7 @@ pub fn create(path: Path) -> FSResult<()> {
 #[no_mangle]
 pub fn createdir(path: Path) -> FSResult<()> {
     VFS_STRUCT
-        .try_write()
+        .try_read()
         .ok_or(FSError::ResourceBusy)?
         .createdir(path)
 }
@@ -122,9 +124,9 @@ impl DirEntry {
 pub fn diriter_open(fd_ri: usize) -> FSResult<usize> {
     let diriter = with_fd(fd_ri, |fd| {
         VFS_STRUCT
-            .try_write()
+            .try_read()
             .ok_or(FSError::ResourceBusy)?
-            .diriter_open(fd)
+            .open_diriter(fd)
     })??;
 
     Ok(resources::add_resource(Resource::DirIter(diriter)))

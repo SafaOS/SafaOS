@@ -14,7 +14,7 @@ use crate::threading::{
     Pid,
 };
 
-use super::{DirIter, FSError, FSResult, FileDescriptor, Inode, FS};
+use super::{FSError, FSResult, InodeOps};
 
 pub trait ProcFSFile: Send + Sync {
     /// returns the name of the file which is statically known
@@ -65,7 +65,7 @@ impl ProcFSFile for ProcessInfoFile {
     }
 }
 
-struct ProcInode {
+pub struct ProcInode {
     inodeid: usize,
     data: ProcInodeData,
 }
@@ -151,7 +151,7 @@ impl super::InodeOps for Mutex<ProcInode> {
         }
     }
 
-    fn open_diriter(&self, fs: *mut dyn FS) -> FSResult<DirIter> {
+    fn open_diriter(&self) -> FSResult<Box<[usize]>> {
         match &self.lock().data {
             ProcInodeData::Dir(_, dir) => {
                 let mut inodeids = Vec::with_capacity(dir.len());
@@ -159,7 +159,7 @@ impl super::InodeOps for Mutex<ProcInode> {
                     inodeids.push(*inodeid);
                 }
 
-                Ok(DirIter::new(fs, inodeids.into_boxed_slice()))
+                Ok(inodeids.into_boxed_slice())
             }
             _ => FSResult::Err(FSError::NotADirectory),
         }
@@ -243,7 +243,8 @@ impl ProcFS {
             })),
         );
 
-        self.root_inode().unwrap().insert(name, inodeid).unwrap();
+        let root_inode = self.inodes.get(&0).unwrap();
+        root_inode.insert(name, inodeid).unwrap();
         inodeid
     }
 
@@ -305,27 +306,18 @@ impl ProcFS {
     }
 }
 
-impl super::FS for ProcFS {
+impl super::FileSystem for Mutex<ProcFS> {
+    type Inode = Mutex<ProcInode>;
+    fn on_open(&self, _: super::Path) -> FSResult<()> {
+        self.lock().update_processes();
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         "proc"
     }
 
-    fn open(&self, path: super::Path) -> FSResult<FileDescriptor> {
-        let file = self.reslove_path(path)?;
-        let node = file.clone();
-
-        Ok(FileDescriptor::new(self as *const Self as *mut Self, node))
-    }
-
-    fn get_inode(&self, inode_id: usize) -> FSResult<Option<Inode>> {
-        Ok(self.inodes.get(&inode_id).cloned().map(|x| x as Inode))
-    }
-
-    fn diriter_open(&mut self, fd: &mut FileDescriptor) -> FSResult<DirIter> {
-        if fd.node.inodeid() == 0 {
-            self.update_processes();
-        }
-
-        fd.node.open_diriter(self as *const Self as *mut Self)
+    fn get_inode(&self, inode_id: usize) -> Option<Arc<Self::Inode>> {
+        self.lock().inodes.get(&inode_id).cloned()
     }
 }
