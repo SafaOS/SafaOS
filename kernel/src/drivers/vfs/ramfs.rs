@@ -177,14 +177,17 @@ impl RamFS {
 }
 
 impl FileSystem for RwLock<RamFS> {
-    type Inode = Mutex<RamInode>;
     fn name(&self) -> &'static str {
         "ramfs"
     }
 
     #[inline]
-    fn get_inode(&self, inode_id: usize) -> Option<Arc<Self::Inode>> {
-        self.read().inodes.get(inode_id).cloned()
+    fn get_inode(&self, inode_id: usize) -> Option<Inode> {
+        self.read()
+            .inodes
+            .get(inode_id)
+            .cloned()
+            .map(|x| x as Inode)
     }
 
     fn create(&self, path: Path) -> FSResult<()> {

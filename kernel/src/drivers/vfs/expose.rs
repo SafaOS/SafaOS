@@ -4,9 +4,7 @@ use core::fmt::Debug;
 
 use crate::threading::resources::{self, Resource};
 
-use super::{
-    CoreFileSystem, FSError, FSResult, FileDescriptor, Inode, InodeType, Path, VFS_STRUCT,
-};
+use super::{FSError, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT};
 
 /// gets a FileDescriptor from a fd (file_descriptor id) may return Err(FSError::InvaildFileDescriptor)
 fn with_fd<T, R>(ri: usize, then: T) -> FSResult<R>

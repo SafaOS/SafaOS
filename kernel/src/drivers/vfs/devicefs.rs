@@ -6,7 +6,7 @@ use alloc::{
 
 use crate::devices::{Device, DEVICE_MANAGER};
 
-use super::{FSResult, FileDescriptor, FileSystem, InodeOps, InodeType};
+use super::{FSResult, FileDescriptor, FileSystem, Inode, InodeOps, InodeType};
 
 #[derive(Clone)]
 pub enum DeviceInode {
@@ -120,12 +120,11 @@ impl DeviceFS {
 }
 
 impl FileSystem for DeviceFS {
-    type Inode = DeviceInode;
     fn name(&self) -> &'static str {
         "DevFS"
     }
 
-    fn get_inode(&self, inode_id: usize) -> Option<Arc<Self::Inode>> {
+    fn get_inode(&self, inode_id: usize) -> Option<Inode> {
         if inode_id == 0 {
             return Some(self.root_inode.clone());
         }

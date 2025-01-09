@@ -14,7 +14,7 @@ use crate::threading::{
     Pid,
 };
 
-use super::{FSError, FSResult, InodeOps};
+use super::{FSError, FSResult, Inode, InodeOps};
 
 pub trait ProcFSFile: Send + Sync {
     /// returns the name of the file which is statically known
@@ -307,7 +307,6 @@ impl ProcFS {
 }
 
 impl super::FileSystem for Mutex<ProcFS> {
-    type Inode = Mutex<ProcInode>;
     fn on_open(&self, _: super::Path) -> FSResult<()> {
         self.lock().update_processes();
         Ok(())
@@ -317,7 +316,11 @@ impl super::FileSystem for Mutex<ProcFS> {
         "proc"
     }
 
-    fn get_inode(&self, inode_id: usize) -> Option<Arc<Self::Inode>> {
-        self.lock().inodes.get(&inode_id).cloned()
+    fn get_inode(&self, inode_id: usize) -> Option<Inode> {
+        self.lock()
+            .inodes
+            .get(&inode_id)
+            .cloned()
+            .map(|x| x as Inode)
     }
 }

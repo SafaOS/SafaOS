@@ -58,7 +58,7 @@ pub fn init() {
 /// Defines a file descriptor resource
 #[derive(Clone)]
 pub struct FileDescriptor {
-    mountpoint: Arc<dyn CoreFileSystem>,
+    mountpoint: Arc<dyn FileSystem>,
     pub node: Inode,
     /// acts as a dir entry index for directories
     /// acts as a byte index for files
@@ -69,7 +69,7 @@ pub struct FileDescriptor {
 }
 
 impl FileDescriptor {
-    fn new(mountpoint: Arc<dyn CoreFileSystem>, node: Inode) -> Self {
+    fn new(mountpoint: Arc<dyn FileSystem>, node: Inode) -> Self {
         Self {
             mountpoint,
             node,
@@ -200,13 +200,13 @@ pub type InodeOf<T> = Arc<T>;
 
 #[derive(Debug, Clone)]
 pub struct DirIter {
-    fs: Arc<dyn CoreFileSystem>,
+    fs: Arc<dyn FileSystem>,
     inode_ids: Box<[usize]>,
     index: usize,
 }
 
 impl DirIter {
-    const fn new(fs: Arc<dyn CoreFileSystem>, inode_ids: Box<[usize]>) -> Self {
+    const fn new(fs: Arc<dyn FileSystem>, inode_ids: Box<[usize]>) -> Self {
         Self {
             fs,
             inode_ids,
@@ -233,12 +233,11 @@ impl DirIter {
 }
 
 pub trait FileSystem: Send + Sync {
-    type Inode: InodeOps + 'static;
     fn name(&self) -> &'static str;
 
-    fn get_inode(&self, inode_id: usize) -> Option<Arc<Self::Inode>>;
+    fn get_inode(&self, inode_id: usize) -> Option<Inode>;
     #[inline(always)]
-    fn root_inode(&self) -> Arc<Self::Inode> {
+    fn root_inode(&self) -> Inode {
         self.get_inode(0).unwrap()
     }
 
@@ -256,7 +255,7 @@ pub trait FileSystem: Send + Sync {
 
     /// goes trough path to get the inode it refers to
     /// will err if there is no such a file or directory or path is straight up invaild
-    fn resolve_path(&self, path: Path) -> FSResult<Arc<Self::Inode>> {
+    fn reslove_path(&self, path: Path) -> FSResult<Inode> {
         let mut path = path.split(&['/', '\\']).peekable();
 
         let mut current_inode = self.root_inode();
@@ -301,7 +300,7 @@ pub trait FileSystem: Send + Sync {
     /// goes trough path to get the inode it refers to
     /// will err if there is no such a file or directory or path is straight up invaild
     /// assumes that the last depth in path is the filename and returns it alongside the parent dir
-    fn reslove_path_uncreated<'a>(&self, path: Path<'a>) -> FSResult<(Arc<Self::Inode>, &'a str)> {
+    fn reslove_path_uncreated<'a>(&self, path: Path<'a>) -> FSResult<(Inode, &'a str)> {
         let path = path.trim_end_matches('/');
 
         let (name, path) = {
@@ -314,7 +313,7 @@ pub trait FileSystem: Send + Sync {
             }
         };
 
-        let resloved = self.resolve_path(path)?;
+        let resloved = self.reslove_path(path)?;
         if resloved.kind() != InodeType::Directory {
             return Err(FSError::NotADirectory);
         }
@@ -370,92 +369,7 @@ pub trait FileSystem: Send + Sync {
     }
 }
 
-impl<T, I> CoreFileSystem for T
-where
-    I: InodeOps + 'static,
-    T: FileSystem<Inode = I>,
-{
-    fn name(&self) -> &'static str {
-        FileSystem::name(self)
-    }
-
-    fn on_open(&self, path: Path) -> FSResult<()> {
-        FileSystem::on_open(self, path)
-    }
-
-    fn on_close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
-        FileSystem::on_close(self, file_descriptor)
-    }
-
-    fn get_inode(&self, inode_id: usize) -> Option<Inode> {
-        FileSystem::get_inode(self, inode_id).map(|x| x as Inode)
-    }
-
-    fn root_inode(&self) -> Inode {
-        FileSystem::root_inode(self) as Inode
-    }
-
-    fn reslove_path(&self, path: Path) -> FSResult<Inode> {
-        FileSystem::resolve_path(self, path).map(|x| x as Inode)
-    }
-
-    fn reslove_path_uncreated<'a>(&self, path: Path<'a>) -> FSResult<(Inode, &'a str)> {
-        FileSystem::reslove_path_uncreated(self, path).map(|(x, y)| (x as Inode, y))
-    }
-
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        FileSystem::read(self, file_descriptor, buffer)
-    }
-
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        FileSystem::write(self, file_descriptor, buffer)
-    }
-
-    fn create(&self, path: Path) -> FSResult<()> {
-        FileSystem::create(self, path)
-    }
-
-    fn createdir(&self, path: Path) -> FSResult<()> {
-        FileSystem::createdir(self, path)
-    }
-}
-
-/// defines a layer of abstraction under the [`FileSystem`] trait
-/// this layer's methods returns an [`Inode`] instead of using generics making it object safe
-/// it is also automatically implemented for all types that implement [`FileSystem`]
-/// shouldn't be manually implemented except for the [`VFS`]
-trait CoreFileSystem: Send + Sync {
-    fn name(&self) -> &'static str;
-
-    fn on_open(&self, path: Path) -> FSResult<()>;
-    fn on_close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
-        _ = file_descriptor;
-        Ok(())
-    }
-
-    fn get_inode(&self, inode_id: usize) -> Option<Inode>;
-    fn root_inode(&self) -> Inode;
-
-    fn reslove_path(&self, path: Path) -> FSResult<Inode>;
-    /// goes trough path to get the inode it refers to
-    /// will err if there is no such a file or directory or path is straight up invaild
-    /// assumes that the last depth in path is the filename and returns it alongside the parent dir
-    fn reslove_path_uncreated<'a>(&self, path: Path<'a>) -> FSResult<(Inode, &'a str)>;
-    /// attempts to read `buffer.len` bytes from file_descriptor returns the actual count of the bytes read
-    /// shouldn't read directories!
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize>;
-
-    /// attempts to write `buffer.len` bytes to `file_descriptor`
-    /// shouldn't write to directories!
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize>;
-
-    /// creates an empty file named `name` in `path`
-    fn create(&self, path: Path) -> FSResult<()>;
-    /// creates an empty dir named `name` in `path`
-    fn createdir(&self, path: Path) -> FSResult<()>;
-}
-
-impl Debug for dyn CoreFileSystem {
+impl Debug for dyn FileSystem {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.name())
     }
@@ -468,7 +382,7 @@ impl Debug for dyn InodeOps {
 }
 #[allow(clippy::upper_case_acronyms)]
 pub struct VFS {
-    drivers: BTreeMap<Vec<u8>, Arc<dyn CoreFileSystem>>,
+    drivers: BTreeMap<Vec<u8>, Arc<dyn FileSystem>>,
 }
 
 impl VFS {
@@ -480,7 +394,7 @@ impl VFS {
     /// mounts a file system as a drive
     /// returns Err(()) if not enough memory or there is an already mounted driver with that
     /// name
-    fn mount<F: CoreFileSystem + 'static>(&mut self, name: &[u8], value: F) -> Result<(), ()> {
+    fn mount<F: FileSystem + 'static>(&mut self, name: &[u8], value: F) -> Result<(), ()> {
         let name = name.to_vec();
 
         if let Entry::Vacant(entry) = self.drivers.entry(name) {
@@ -493,7 +407,7 @@ impl VFS {
 
     /// gets a drive from `self` named "`name`"
     /// or "`name`:" imuttabily
-    pub(self) fn get_with_name(&self, name: &[u8]) -> Option<&Arc<dyn CoreFileSystem>> {
+    pub(self) fn get_with_name(&self, name: &[u8]) -> Option<&Arc<dyn FileSystem>> {
         let mut name = name;
 
         if name.ends_with(b":") {
@@ -506,7 +420,7 @@ impl VFS {
     /// gets the drive name from `path` then gets the drive
     /// path must be absolute starting with DRIVE_NAME:/
     /// also handles relative path
-    pub(self) fn get_from_path(&self, path: Path) -> FSResult<(&Arc<dyn CoreFileSystem>, String)> {
+    pub(self) fn get_from_path(&self, path: Path) -> FSResult<(&Arc<dyn FileSystem>, String)> {
         let mut spilt_path = path.split(&['/', '\\']);
 
         let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
@@ -523,7 +437,7 @@ impl VFS {
     pub(self) fn get_from_path_checked(
         &self,
         path: Path,
-    ) -> FSResult<(&Arc<dyn CoreFileSystem>, String)> {
+    ) -> FSResult<(&Arc<dyn FileSystem>, String)> {
         let mut spilt_path = path.split(&['/', '\\']);
 
         let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
@@ -552,7 +466,7 @@ impl VFS {
         Ok(path)
     }
 
-    fn unpack_tar(&self, fs: &mut dyn CoreFileSystem, tar: &mut TarArchiveIter) -> FSResult<()> {
+    fn unpack_tar(&self, fs: &mut dyn FileSystem, tar: &mut TarArchiveIter) -> FSResult<()> {
         while let Some(inode) = tar.next() {
             let path = inode.name();
 
@@ -598,7 +512,7 @@ impl VFS {
     }
 }
 
-impl CoreFileSystem for VFS {
+impl FileSystem for VFS {
     fn name(&self) -> &'static str {
         "vfs"
     }
@@ -624,7 +538,7 @@ impl CoreFileSystem for VFS {
         FSResult::Err(FSError::OperationNotSupported)
     }
 
-    fn on_close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
+    fn on_close(&self, file_descriptor: &FileDescriptor) -> FSResult<()> {
         _ = file_descriptor;
         FSResult::Err(FSError::OperationNotSupported)
     }
