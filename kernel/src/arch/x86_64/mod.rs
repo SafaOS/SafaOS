@@ -5,6 +5,7 @@ pub mod power;
 pub mod serial;
 mod syscalls;
 pub mod threading;
+pub mod utils;
 
 use core::arch::asm;
 
