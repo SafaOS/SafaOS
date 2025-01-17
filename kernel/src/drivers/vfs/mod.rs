@@ -1,5 +1,3 @@
-// FIXME: re-write this module in a more rusty way
-// for example, file descriptors opened using this module in kernel space aren't closed by drop
 pub mod expose;
 
 use core::fmt::Debug;
@@ -76,6 +74,10 @@ impl FileDescriptor {
             read_pos: 0,
             write_pos: 0,
         }
+    }
+
+    pub fn close(&mut self) {
+        self.node.close();
     }
 }
 
@@ -245,11 +247,6 @@ pub trait FileSystem: Send + Sync {
     /// will be always called before the inode is opened, regardless of the file system
     fn on_open(&self, path: Path) -> FSResult<()> {
         _ = path;
-        Ok(())
-    }
-    /// always executed before closing a file descriptor which belongs to [`self`]
-    fn on_close(&self, file_descriptor: &FileDescriptor) -> FSResult<()> {
-        _ = file_descriptor;
         Ok(())
     }
 
@@ -501,15 +498,6 @@ impl VFS {
 
         Ok(DirIter::new(fs, inodes))
     }
-
-    fn close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
-        file_descriptor
-            .mountpoint
-            .clone()
-            .on_close(file_descriptor)?;
-        file_descriptor.node.close();
-        Ok(())
-    }
 }
 
 impl FileSystem for VFS {
@@ -535,11 +523,6 @@ impl FileSystem for VFS {
 
     fn on_open(&self, path: Path) -> FSResult<()> {
         _ = path;
-        FSResult::Err(FSError::OperationNotSupported)
-    }
-
-    fn on_close(&self, file_descriptor: &FileDescriptor) -> FSResult<()> {
-        _ = file_descriptor;
         FSResult::Err(FSError::OperationNotSupported)
     }
 

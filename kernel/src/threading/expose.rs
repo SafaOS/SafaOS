@@ -8,10 +8,7 @@ use alloc::{
 use bitflags::bitflags;
 
 use crate::{
-    drivers::vfs::{
-        expose::{close, fstat, open, read, DirEntry},
-        FSError, FSResult, InodeType, VFS_STRUCT,
-    },
+    drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
     khalt,
     utils::elf::{Elf, ElfError},
 };
@@ -122,10 +119,9 @@ pub fn spawn(
 
 /// spawns an elf process from a path
 pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Result<usize, FSError> {
-    let file = open(path)?;
+    let file = File::open(path)?;
 
-    let mut stat = unsafe { DirEntry::zeroed() };
-    fstat(file, &mut stat)?;
+    let stat = file.direntry();
 
     if stat.kind != InodeType::File {
         return Err(FSError::NotAFile);
@@ -133,8 +129,7 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
 
     let mut buffer = vec![0; stat.size];
 
-    read(file, &mut buffer)?;
-    close(file)?;
+    file.read(&mut buffer)?;
     spawn(name, &buffer, argv, flags).map_err(|_| FSError::NotExecuteable)
 }
 

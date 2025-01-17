@@ -179,13 +179,14 @@ fn kstart() -> ! {
     panic!("failed context switching to kmain! ...")
 }
 
+/// Acts like an init process
 #[no_mangle]
 fn kmain() -> ! {
     debug!(Scheduler, "done ...");
-    let stdin = vfs::expose::open("dev:/tty").unwrap();
-    let stdout = vfs::expose::open("dev:/tty").unwrap();
+    let stdin = vfs::expose::File::open("dev:/tty").unwrap();
+    let stdout = vfs::expose::File::open("dev:/tty").unwrap();
     serial!(
-        "Hello, world!, running tests... stdin: {}, stdout: {}\n",
+        "Hello, world!, running tests... stdin: {:?}, stdout: {:?}\n",
         stdin,
         stdout
     );

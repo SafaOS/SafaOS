@@ -1,5 +1,5 @@
 use crate::{
-    drivers::vfs::{self, expose::open, FSError},
+    drivers::vfs::{self, expose::FileRef, FSError},
     threading,
     utils::{
         errors::ErrorStatus,
@@ -11,10 +11,10 @@ use crate::{
 extern "C" fn sysopen(path_ptr: *const u8, len: usize, dest_fd: Optional<usize>) -> ErrorStatus {
     let path = Slice::new(path_ptr, len)?.into_str();
 
-    match open(path) {
-        Ok(fd) => {
+    match FileRef::open(path) {
+        Ok(file_ref) => {
             if let Some(dest_fd) = dest_fd.into_option() {
-                *dest_fd = fd;
+                *dest_fd = file_ref.fd();
             }
             ErrorStatus::None
         }
@@ -25,7 +25,9 @@ extern "C" fn sysopen(path_ptr: *const u8, len: usize, dest_fd: Optional<usize>)
 #[no_mangle]
 extern "C" fn syswrite(fd: usize, ptr: *const u8, len: usize) -> ErrorStatus {
     let slice = Slice::new(ptr, len)?.into_slice();
-    while let Err(err) = vfs::expose::write(fd, slice) {
+    let file_ref = FileRef::get(fd).ok_or(ErrorStatus::InvaildResource)?;
+
+    while let Err(err) = file_ref.write(slice) {
         match err {
             FSError::ResourceBusy => {
                 threading::expose::thread_yeild();
@@ -44,9 +46,10 @@ extern "C" fn sysread(
     dest_read: Optional<usize>,
 ) -> ErrorStatus {
     let slice = SliceMut::new(ptr, len)?.into_slice();
+    let file_ref = FileRef::get(fd).ok_or(ErrorStatus::InvaildResource)?;
 
     loop {
-        match vfs::expose::read(fd, slice) {
+        match file_ref.read(slice) {
             Err(FSError::ResourceBusy) => threading::expose::thread_yeild(),
             Err(err) => return err.into(),
             Ok(bytes_read) => {
@@ -61,11 +64,11 @@ extern "C" fn sysread(
 
 #[no_mangle]
 extern "C" fn sysclose(fd: usize) -> ErrorStatus {
-    if let Err(err) = vfs::expose::close(fd) {
-        err.into()
-    } else {
-        ErrorStatus::None
-    }
+    let _ = FileRef::get(fd)
+        .ok_or(ErrorStatus::InvaildResource)?
+        .into_inner();
+
+    ErrorStatus::None
 }
 
 #[no_mangle]
@@ -92,7 +95,9 @@ extern "C" fn syscreatedir(path_ptr: *const u8, path_len: usize) -> ErrorStatus 
 
 #[no_mangle]
 extern "C" fn sysdiriter_open(dir_ri: usize, dest_diriter: *mut usize) -> ErrorStatus {
-    match vfs::expose::diriter_open(dir_ri) {
+    let file_ref = FileRef::get(dir_ri).ok_or(ErrorStatus::InvaildResource)?;
+
+    match file_ref.diriter_open() {
         Err(err) => err.into(),
         Ok(ri) => unsafe {
             *dest_diriter = ri;
@@ -121,10 +126,10 @@ extern "C" fn sysdiriter_next(
 }
 
 #[no_mangle]
-extern "C" fn sysfstat(ri: usize, direntry: RequiredMut<vfs::expose::DirEntry>) -> ErrorStatus {
-    if let Err(err) = vfs::expose::fstat(ri, direntry.get()?) {
-        err.into()
-    } else {
-        ErrorStatus::None
-    }
+extern "C" fn sysfstat(ri: usize, direntry_ptr: RequiredMut<vfs::expose::DirEntry>) -> ErrorStatus {
+    let file_ref = FileRef::get(ri).ok_or(ErrorStatus::InvaildResource)?;
+    let direntry = file_ref.direntry();
+
+    *direntry_ptr.get()? = direntry;
+    ErrorStatus::None
 }
