@@ -7,12 +7,16 @@ use alloc::{
     vec::Vec,
 };
 use hashbrown::HashMap;
+use init::{InitStateItem, INIT_STATE};
 use spin::Mutex;
 use tasks::TaskInfoFile;
 
 use crate::threading::{expose::getpids, Pid};
 
 use super::{FSError, FSResult, Inode, InodeOps};
+
+mod cpuinfo;
+mod init;
 mod tasks;
 
 pub trait ProcFSFile: Send + Sync {
@@ -183,16 +187,47 @@ impl ProcFS {
         }
     }
 
-    fn append_file(&mut self, file: Box<dyn ProcFSFile>) -> (usize, &'static str) {
+    fn append_init_state(&mut self, state: &InitStateItem<'static>) -> (&'static str, usize) {
+        match state {
+            InitStateItem::File(file) => self.append_file(file.into_box()),
+            InitStateItem::Directory(name, items) => {
+                let mut dir_items = Vec::with_capacity(items.len());
+
+                for item in *items {
+                    let results = self.append_init_state(item);
+                    dir_items.push(results);
+                }
+
+                let inodeid = self.append_dir(name, &dir_items);
+                (name, inodeid)
+            }
+        }
+    }
+
+    /// Creates a new procfs with the init state defined in [`self::init`]
+    pub fn create() -> Self {
+        let mut fs = Self::new();
+        let root_inode = fs.inodes.get(&0).unwrap().clone();
+
+        for item in INIT_STATE {
+            let (name, inodeid) = fs.append_init_state(item);
+            root_inode.insert(name, inodeid).unwrap();
+        }
+        fs
+    }
+
+    fn append_file(&mut self, file: Box<dyn ProcFSFile>) -> (&'static str, usize) {
         let name = file.name();
+
         let inodeid = self.next_inodeid;
         self.next_inodeid += 1;
+
         self.inodes.insert(
             inodeid,
             Arc::new(Mutex::new(ProcInode::new_file(inodeid, file))),
         );
 
-        (inodeid, name)
+        (name, inodeid)
     }
 
     fn append_dir(&mut self, name: &str, items: &[(&str, usize)]) -> usize {
@@ -219,7 +254,7 @@ impl ProcFS {
 
     fn append_process(&mut self, pid: Pid) -> usize {
         let info_file = Box::new(TaskInfoFile::new(pid));
-        let (file_inode, file_name) = self.append_file(info_file);
+        let (file_name, file_inode) = self.append_file(info_file);
 
         let inodeid = self.append_dir(&pid.to_string(), &[(file_name, file_inode)]);
         self.tasks.insert(pid, inodeid);
@@ -269,7 +304,7 @@ impl ProcFS {
                 ProcInodeData::Dir(_, dir) => {
                     dir.remove(&pid.to_string());
                 }
-                _ => unreachable!(),
+                ProcInodeData::File(_) => unreachable!(),
             }
         }
     }

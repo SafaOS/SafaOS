@@ -40,7 +40,7 @@ pub fn init() {
     // devices
     vfs.mount(b"dev", devicefs::DeviceFS::new()).unwrap();
     // processes
-    vfs.mount(b"proc", Mutex::new(procfs::ProcFS::new()))
+    vfs.mount(b"proc", Mutex::new(procfs::ProcFS::create()))
         .unwrap();
     // ramdisk
     let mut ramdisk = limine::get_ramdisk();
