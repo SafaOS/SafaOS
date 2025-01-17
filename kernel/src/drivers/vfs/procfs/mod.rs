@@ -8,13 +8,12 @@ use alloc::{
 };
 use hashbrown::HashMap;
 use spin::Mutex;
+use tasks::TaskInfoFile;
 
-use crate::threading::{
-    expose::{getinfo, getpids},
-    Pid,
-};
+use crate::threading::{expose::getpids, Pid};
 
 use super::{FSError, FSResult, Inode, InodeOps};
+mod tasks;
 
 pub trait ProcFSFile: Send + Sync {
     /// returns the name of the file which is statically known
@@ -33,36 +32,6 @@ pub trait ProcFSFile: Send + Sync {
     fn refresh(&mut self);
     /// deletes the data in the file
     fn close(&mut self);
-}
-
-struct ProcessInfoFile {
-    pid: Pid,
-    data: Option<String>,
-}
-
-impl ProcessInfoFile {
-    pub fn new(pid: Pid) -> Self {
-        Self { pid, data: None }
-    }
-}
-
-impl ProcFSFile for ProcessInfoFile {
-    fn name(&self) -> &'static str {
-        "info"
-    }
-
-    fn try_get_data(&self) -> Option<&str> {
-        self.data.as_deref()
-    }
-
-    fn refresh(&mut self) {
-        let task_info = getinfo(self.pid).unwrap();
-        self.data = serde_json::to_string_pretty(&task_info).ok();
-    }
-
-    fn close(&mut self) {
-        self.data = None;
-    }
 }
 
 pub struct ProcInode {
@@ -196,8 +165,8 @@ impl super::InodeOps for Mutex<ProcInode> {
 pub struct ProcFS {
     /// inodeid -> inode
     inodes: HashMap<usize, Arc<Mutex<ProcInode>>>,
-    /// pid -> process inodeid
-    processes: HashMap<usize, usize>,
+    /// pid -> task inodeid
+    tasks: HashMap<usize, usize>,
 
     next_inodeid: usize,
 }
@@ -209,7 +178,7 @@ impl ProcFS {
                 0,
                 Arc::new(Mutex::new(ProcInode::new_dir(0, String::new()))),
             )]),
-            processes: HashMap::new(),
+            tasks: HashMap::new(),
             next_inodeid: 1,
         }
     }
@@ -249,11 +218,11 @@ impl ProcFS {
     }
 
     fn append_process(&mut self, pid: Pid) -> usize {
-        let info_file = Box::new(ProcessInfoFile::new(pid));
+        let info_file = Box::new(TaskInfoFile::new(pid));
         let (file_inode, file_name) = self.append_file(info_file);
 
         let inodeid = self.append_dir(&pid.to_string(), &[(file_name, file_inode)]);
-        self.processes.insert(pid, inodeid);
+        self.tasks.insert(pid, inodeid);
         inodeid
     }
 
@@ -270,10 +239,10 @@ impl ProcFS {
 
         drop(inode);
 
-        for (pid, p_inodeid) in self.processes.iter() {
+        for (pid, p_inodeid) in self.tasks.iter() {
             if inodeid == *p_inodeid {
                 let pid = *pid;
-                self.processes.remove(&pid);
+                self.tasks.remove(&pid);
                 break;
             }
         }
@@ -283,14 +252,14 @@ impl ProcFS {
         let getpids = getpids();
         // O(N)
         for pid in &getpids {
-            if !self.processes.contains_key(pid) {
+            if !self.tasks.contains_key(pid) {
                 self.append_process(*pid);
             }
         }
 
         // O(NlogN)
         let useless_inodes: Vec<_> = self
-            .processes
+            .tasks
             .extract_if(|pid, _| getpids.binary_search(pid).is_err())
             .collect();
 
