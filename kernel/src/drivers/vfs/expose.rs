@@ -1,6 +1,6 @@
 use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
-use crate::threading::resources::{self, add_resource, Resource};
+use crate::threading::resources::{self, Resource};
 
 use super::{FSError, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT};
 
@@ -27,31 +27,18 @@ impl File {
     }
 
     pub fn open(path: Path) -> FSResult<Self> {
-        let fd = VFS_STRUCT
-            .try_read()
-            .ok_or(FSError::ResourceBusy)?
-            .open(path)?;
+        let fd = VFS_STRUCT.read().open(path)?;
 
-        let fd_ri = add_resource(Resource::File(fd));
+        let fd_ri = resources::add_resource(Resource::File(fd));
         Ok(Self(fd_ri))
     }
 
     pub fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
-        self.with_fd(|fd| {
-            VFS_STRUCT
-                .try_read()
-                .ok_or(FSError::ResourceBusy)?
-                .read(fd, buffer)
-        })
+        self.with_fd(|fd| VFS_STRUCT.read().read(fd, buffer))
     }
 
     pub fn write(&self, buffer: &[u8]) -> FSResult<usize> {
-        self.with_fd(|fd| {
-            VFS_STRUCT
-                .try_read()
-                .ok_or(FSError::ResourceBusy)?
-                .write(fd, buffer)
-        })
+        self.with_fd(|fd| VFS_STRUCT.read().write(fd, buffer))
     }
 
     pub fn from_fd(fd: usize) -> Option<Self> {
@@ -66,12 +53,7 @@ impl File {
     }
 
     pub fn diriter_open(&self) -> FSResult<usize> {
-        let diriter = self.with_fd(|fd| {
-            VFS_STRUCT
-                .try_read()
-                .ok_or(FSError::ResourceBusy)?
-                .open_diriter(fd)
-        })?;
+        let diriter = self.with_fd(|fd| VFS_STRUCT.read().open_diriter(fd))?;
 
         Ok(resources::add_resource(Resource::DirIter(diriter)))
     }
@@ -122,18 +104,12 @@ impl Deref for FileRef {
 
 #[no_mangle]
 pub fn create(path: Path) -> FSResult<()> {
-    VFS_STRUCT
-        .try_read()
-        .ok_or(FSError::ResourceBusy)?
-        .create(path)
+    VFS_STRUCT.read().create(path)
 }
 
 #[no_mangle]
 pub fn createdir(path: Path) -> FSResult<()> {
-    VFS_STRUCT
-        .try_read()
-        .ok_or(FSError::ResourceBusy)?
-        .createdir(path)
+    VFS_STRUCT.read().createdir(path)
 }
 
 pub const MAX_NAME_LEN: usize = 128;
