@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
 
-use crate::drivers::vfs::{DirIter, FileDescriptor};
+use crate::drivers::vfs::{DirIterDescriptor, FileDescriptor};
 
 use super::expose::thread_yeild;
 
@@ -11,7 +11,7 @@ use super::expose::thread_yeild;
 pub enum Resource {
     Null,
     File(FileDescriptor),
-    DirIter(DirIter),
+    DirIter(DirIterDescriptor),
 }
 
 type ResourceItem = Mutex<Resource>;

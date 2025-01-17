@@ -90,8 +90,6 @@ pub enum FSError {
     NoSuchAFileOrDirectory,
     InvaildDrive,
     InvaildPath,
-    /// ethier a fd which points to a resource which isnt a FileDescriptor or it points to nothing
-    InvaildFileDescriptorOrRes,
     AlreadyExists,
     NotExecuteable,
     ResourceBusy,
@@ -106,7 +104,6 @@ impl IntoErr for FSError {
             Self::NoSuchAFileOrDirectory => ErrorStatus::NoSuchAFileOrDirectory,
             Self::InvaildPath => ErrorStatus::InvaildPath,
             Self::InvaildDrive => ErrorStatus::NoSuchAFileOrDirectory,
-            Self::InvaildFileDescriptorOrRes => ErrorStatus::InvaildResource,
             Self::AlreadyExists => ErrorStatus::AlreadyExists,
             Self::NotExecuteable => ErrorStatus::NotExecutable,
             Self::ResourceBusy => ErrorStatus::Busy,
@@ -201,13 +198,13 @@ pub type Inode = Arc<dyn InodeOps>;
 pub type InodeOf<T> = Arc<T>;
 
 #[derive(Debug, Clone)]
-pub struct DirIter {
+pub struct DirIterDescriptor {
     fs: Arc<dyn FileSystem>,
     inode_ids: Box<[usize]>,
     index: usize,
 }
 
-impl DirIter {
+impl DirIterDescriptor {
     const fn new(fs: Arc<dyn FileSystem>, inode_ids: Box<[usize]>) -> Self {
         Self {
             fs,
@@ -492,11 +489,11 @@ impl VFS {
         Ok(FileDescriptor::new(mountpoint.clone(), node))
     }
 
-    fn open_diriter(&self, file_descriptor: &mut FileDescriptor) -> FSResult<DirIter> {
+    fn open_diriter(&self, file_descriptor: &mut FileDescriptor) -> FSResult<DirIterDescriptor> {
         let inodes = file_descriptor.node.open_diriter()?;
         let fs = file_descriptor.mountpoint.clone();
 
-        Ok(DirIter::new(fs, inodes))
+        Ok(DirIterDescriptor::new(fs, inodes))
     }
 }
 

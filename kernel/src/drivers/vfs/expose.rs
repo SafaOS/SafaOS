@@ -2,7 +2,9 @@ use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
 use crate::threading::resources::{self, Resource};
 
-use super::{FSError, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT};
+use super::{
+    DirIterDescriptor, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT,
+};
 
 #[derive(Debug)]
 /// A high-level wrapper around a file descriptor resource
@@ -52,10 +54,10 @@ impl File {
         .flatten()
     }
 
-    pub fn diriter_open(&self) -> FSResult<usize> {
+    pub fn diriter_open(&self) -> FSResult<DirIter> {
         let diriter = self.with_fd(|fd| VFS_STRUCT.read().open_diriter(fd))?;
 
-        Ok(resources::add_resource(Resource::DirIter(diriter)))
+        Ok(DirIter(resources::add_resource(Resource::DirIter(diriter))))
     }
 
     pub fn direntry(&self) -> DirEntry {
@@ -81,16 +83,18 @@ impl FileRef {
         Ok(Self(ManuallyDrop::new(file)))
     }
 
+    pub fn diriter_open(&self) -> FSResult<DirIterRef> {
+        self.0
+            .diriter_open()
+            .map(|x| DirIterRef(ManuallyDrop::new(x)))
+    }
+
     pub fn get(fd: usize) -> Option<Self> {
         Some(Self(ManuallyDrop::new(File::from_fd(fd)?)))
     }
 
-    pub fn fd(&self) -> usize {
+    pub fn ri(&self) -> usize {
         self.0 .0
-    }
-
-    pub fn into_inner(self) -> File {
-        ManuallyDrop::into_inner(self.0)
     }
 }
 
@@ -149,25 +153,66 @@ impl DirEntry {
     }
 }
 
-pub fn diriter_next(dir_ri: usize, direntry: &mut DirEntry) -> FSResult<()> {
-    resources::get_resource(dir_ri, |mut resource| {
-        if let Resource::DirIter(ref mut diriter) = *resource {
-            let next = diriter.next();
-            if let Some(entry) = next {
-                *direntry = entry.clone();
+/// a wrapper around a DirIterDescriptor resource which closes the diriter when dropped
+pub struct DirIter(usize);
+
+impl DirIter {
+    pub fn from_ri(ri: usize) -> Option<Self> {
+        resources::get_resource(ri, |resource| {
+            if let Resource::DirIter(_) = *resource {
+                Some(Self(ri))
             } else {
-                unsafe { *direntry = DirEntry::zeroed() }
+                None
             }
-            Ok(())
-        } else {
-            Err(FSError::InvaildFileDescriptorOrRes)
+        })
+        .flatten()
+    }
+
+    fn with_diriter<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut DirIterDescriptor) -> R,
+    {
+        unsafe {
+            resources::get_resource(self.0, |mut resource| {
+                let Resource::DirIter(ref mut diriter) = *resource else {
+                    unreachable!()
+                };
+
+                f(diriter)
+            })
+            .unwrap_unchecked()
         }
-    })
-    .ok_or(FSError::InvaildFileDescriptorOrRes)?
+    }
+
+    pub fn next(&self) -> Option<DirEntry> {
+        self.with_diriter(|diriter| diriter.next())
+    }
 }
 
-#[no_mangle]
-/// may only Err if dir_ri is invaild
-pub fn diriter_close(dir_ri: usize) -> FSResult<()> {
-    resources::remove_resource(dir_ri).ok_or(FSError::InvaildFileDescriptorOrRes)
+impl Drop for DirIter {
+    fn drop(&mut self) {
+        resources::remove_resource(self.0).unwrap();
+    }
+}
+
+/// a wrapper around [`ManuallyDrop<DirIter>`] which doesn't close the diriter when dropped
+pub struct DirIterRef(ManuallyDrop<DirIter>);
+
+impl DirIterRef {
+    pub fn get(ri: usize) -> Option<Self> {
+        let diriter = DirIter::from_ri(ri)?;
+        Some(Self(ManuallyDrop::new(diriter)))
+    }
+
+    pub fn ri(&self) -> usize {
+        self.0 .0
+    }
+}
+
+impl Deref for DirIterRef {
+    type Target = DirIter;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
