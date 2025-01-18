@@ -1,10 +1,13 @@
-const libc = @import("libc");
-const printf = libc.stdio.zprintf;
-const File = libc.stdio.File;
-pub const panic = libc.panic;
+const std_c = @import("std-c");
+const std = @import("std");
+
+const print = std_c.print;
+const File = std_c.stdio.File;
+
+pub const panic = std_c.panic;
 
 pub fn main() !void {
-    const args = libc.sys.args();
+    const args = std_c.sys.args();
     var data: []u8 = undefined;
 
     if (args.count() > 1) {
@@ -15,12 +18,15 @@ pub fn main() !void {
 
         data = try file.reader().readUntilEOF();
     } else {
-        data = try libc.stdio.zgetline();
+        const StdinReader = std_c.StdinReader;
+
+        const stdin_data = try StdinReader.readUntilDelimiterOrEofAlloc(std_c.heap.c_allocator, '\n', std.math.maxInt(usize));
+        data = stdin_data.?;
     }
 
-    try printf("%.*s\n", .{ data.len, data.ptr });
+    print("{s}\n", .{data});
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

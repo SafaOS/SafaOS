@@ -1,21 +1,23 @@
-const libc = @import("libc");
-const printf = libc.stdio.zprintf;
-const Error = libc.sys.errno.Error;
+const std_c = @import("std-c");
+const print = std_c.print;
+const Error = std_c.Error;
 
 pub fn main() Error!void {
-    var args = libc.sys.args();
-    if (args.count() < 2) {
-        try printf("expected at least one argument to echo...\n", .{});
-        return error.NotEnoughArguments;
-    }
+    var args = std_c.sys.args();
 
     _ = args.next();
-    while (args.next()) |arg| {
-        try printf("%s", .{arg.ptr});
+
+    if (args.next()) |arg| {
+        print("{s}", .{arg});
     }
-    try printf("\n", .{});
+
+    while (args.next()) |arg| {
+        print(" {s}", .{arg});
+    }
+
+    print("\n", .{});
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

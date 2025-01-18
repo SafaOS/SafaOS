@@ -1,21 +1,23 @@
-const libc = @import("libc");
-const sysinfo = libc.sys.utils.zsysinfo;
-const zalloc = libc.stdlib.zalloc;
-const pcollect = libc.sys.utils.zpcollect;
-const printf = libc.stdio.zprintf;
+const std_c = @import("std-c");
+
+const sysinfo = std_c.sys.utils.zsysinfo;
+const allocator = std_c.heap.c_allocator;
+const pcollect = std_c.sys.utils.zpcollect;
+const print = std_c.print;
 
 pub fn main() !void {
     const info = try sysinfo();
-    const processes = try zalloc(libc.sys.raw.ProcessInfo, info.processes_count);
+    const processes = try allocator.alloc(std_c.sys.raw.ProcessInfo, info.processes_count);
+    defer allocator.free(processes);
 
     _ = try pcollect(processes);
 
-    try printf("name:  pid  ppid\n", .{});
+    print("name:  pid  ppid\n", .{});
     for (processes) |process| {
-        try printf("\x1B[38;2;0;255;0m%s\x1B[0m:  %d  %d\n", .{ &process.name, process.pid, process.ppid });
+        print("\x1B[38;2;0;255;0m{s}\x1B[0m:  {}  {}\n", .{ process.name, process.pid, process.ppid });
     }
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

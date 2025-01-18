@@ -1,11 +1,13 @@
-const libc = @import("libc");
-const File = libc.stdio.File;
-const printf = libc.stdio.zprintf;
+const std_c = @import("std-c");
+const File = std_c.stdio.File;
+const print = std_c.print;
+const Error = std_c.Error;
 
-pub fn main() !void {
-    var args = libc.sys.args();
+pub fn main() Error!void {
+    var args = std_c.sys.args();
+
     if (args.count() < 2) {
-        try printf("expected at least the file name to touch!\n", .{});
+        print("expected at least the file name to touch!\n", .{});
         return error.NotEnoughArguments;
     }
 
@@ -14,6 +16,7 @@ pub fn main() !void {
         switch (err) {
         error.NoSuchAFileOrDirectory => try File.open(filename, .{ .write = true }),
         else => {
+            print("failed to open file {s}, err {s}\n", .{ filename, @errorName(err) });
             return err;
         },
     };
@@ -22,5 +25,5 @@ pub fn main() !void {
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

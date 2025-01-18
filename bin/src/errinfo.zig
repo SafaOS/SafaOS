@@ -1,40 +1,26 @@
-const libc = @import("libc");
-const printf = libc.stdio.zprintf;
-const panic = libc.panic;
+const std_c = @import("std-c");
+const std = @import("std");
 
-fn parse(str: []const u8) !usize {
-    var result: usize = 0;
-    var power: usize = 1;
-    var i: usize = str.len;
+const panic = std_c.panic;
+const print = std_c.print;
 
-    while (i != 0) {
-        i -= 1;
+const Error = std_c.Error;
 
-        if (str[i] < '0' or str[i] > '9') return error.InvalidNumber;
-        const digit = str[i] - '0';
-
-        const value = digit * power;
-
-        power *= 10;
-        result += value;
-    }
-
-    return result;
-}
-
-pub fn main() libc.sys.errno.Error!void {
-    var args = libc.sys.args();
+pub fn main() Error!void {
+    var args = std_c.sys.args();
 
     if (args.count() < 2) return error.NotEnoughArguments;
+
     const errstr = args.nth(1).?;
-    const errnum = parse(errstr) catch return error.ArgumentOutOfDomain;
-    const errnum_tru: u16 = @truncate(errnum);
 
-    const name = libc.string.strerror(errnum_tru);
+    const errnum = std.fmt.parseInt(u16, errstr, 10) catch return error.ArgumentOutOfDomain;
+    const err: Error = @errorCast(@errorFromInt(errnum));
 
-    try printf("%s\n", .{name});
+    const name = @errorName(err);
+
+    print("{s}\n", .{name});
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

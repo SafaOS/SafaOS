@@ -1,9 +1,12 @@
-const libc = @import("libc");
-const File = libc.stdio.FILE;
-const Slice = libc.sys.raw.Slice;
-const spawn = libc.sys.utils.zpspwan;
-const wait = libc.syscalls.wait;
+const std_c = @import("std-c");
+const std = @import("std");
 
+const File = std_c.stdio.FILE;
+const Slice = std_c.sys.raw.Slice;
+const spawn = std_c.sys.utils.zpspwan;
+const wait = std_c.syscalls.wait;
+
+const allocator = std_c.heap.c_allocator;
 var serial: *File = undefined;
 
 var last_output: ?Output = null;
@@ -19,7 +22,7 @@ pub fn print(fmt: [:0]const u8, args: anytype) void {
     serial.writer().writeFmt(fmt, args) catch {};
 }
 
-const NativeError = libc.sys.errno.Error;
+const NativeError = std_c.sys.errno.Error;
 const ExtraError = error{ UnexpectedError, UnexpectedStatus, UnexpectedStdout };
 
 const Error = NativeError || ExtraError;
@@ -65,7 +68,7 @@ const Output = struct {
     }
 
     pub fn uninit(self: Output) void {
-        libc.stdlib.zfree(u8, self.stdout);
+        allocator.free(self.stdout);
     }
 };
 
@@ -129,14 +132,14 @@ fn cat(file: []const u8) !Output {
 }
 
 fn get_cwd() ![]u8 {
-    const buffer = try libc.sys.io.zalloc(u8, 1024);
-    const len = try libc.sys.io.zgetcwd(&buffer);
+    const buffer = try allocator.alloc(u8, 1024);
+    const len = try std_c.sys.io.zgetcwd(&buffer);
 
     return buffer[0..len];
 }
 
 fn chdir(dir: []const u8) !void {
-    try libc.sys.io.zchdir(dir);
+    try std_c.sys.io.zchdir(dir);
 }
 
 fn ls() !Output {
@@ -238,6 +241,8 @@ const TestCase = struct { name: []const u8, func: fn () Error!void };
 
 fn get_tests() []const TestCase {
     const info = @typeInfo(@This());
+
+    // tests are ran in the order they are defined in
     comptime var tests: []const TestCase = &[_]TestCase{};
     inline for (info.Struct.decls) |decl| {
         const func = @field(@This(), decl.name);
@@ -266,5 +271,5 @@ pub fn main() !void {
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

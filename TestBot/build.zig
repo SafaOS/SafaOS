@@ -15,6 +15,12 @@ pub fn build(b: *std.Build) void {
     const libc = b.addModule("libc", .{
         .root_source_file = b.path("../libc/src/root.zig"),
     });
+
+    const std_c = b.addModule("std-c", .{
+        .root_source_file = b.path("../std-c/src/root.zig"),
+    });
+
+    std_c.addImport("libc", libc);
     const exe = b.addExecutable(.{
         .name = "TestBot",
         .root_source_file = b.path("src/main.zig"),
@@ -23,7 +29,7 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
 
-    exe.root_module.addImport("libc", libc);
+    exe.root_module.addImport("std-c", std_c);
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).

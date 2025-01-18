@@ -22,10 +22,16 @@ pub fn build(b: *std.Build) !void {
     const libc = b.addModule("libc", .{
         .root_source_file = b.path("../libc/src/root.zig"),
     });
+
+    const std_c = b.addModule("std-c", .{
+        .root_source_file = b.path("../std-c/src/root.zig"),
+    });
+    std_c.addImport("libc", libc);
+
     while (try it.next()) |entry| {
         const exe = b.addExecutable(.{ .name = entry.name[0 .. entry.name.len - 4], .root_source_file = b.path("src").path(b, entry.name), .target = target, .optimize = optimize, .linkage = .static });
 
-        exe.root_module.addImport("libc", libc);
+        exe.root_module.addImport("std-c", std_c);
         check.dependOn(&exe.step);
         b.installArtifact(exe);
     }
