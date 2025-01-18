@@ -1,15 +1,15 @@
 use alloc::string::String;
 
-use crate::arch::utils::CpuInfo;
+use crate::arch::utils::CPU_INFO;
 
 use super::ProcFSFile;
 
 #[derive(Clone)]
-pub struct CpuInfoWrapper(Option<String>);
+pub struct CpuInfoWrapper(String);
 
 impl CpuInfoWrapper {
-    pub const fn new() -> Self {
-        Self(None)
+    pub fn new() -> Self {
+        Self(serde_json::to_string_pretty(&*CPU_INFO).unwrap())
     }
 }
 
@@ -18,15 +18,11 @@ impl ProcFSFile for CpuInfoWrapper {
         "cpuinfo"
     }
 
-    fn close(&mut self) {
-        self.0 = None;
-    }
+    fn close(&mut self) {}
 
-    fn refresh(&mut self) {
-        self.0 = serde_json::to_string_pretty(&CpuInfo::fetch()).ok();
-    }
+    fn refresh(&mut self) {}
 
     fn try_get_data(&self) -> Option<&str> {
-        self.0.as_deref()
+        Some(self.0.as_str())
     }
 }

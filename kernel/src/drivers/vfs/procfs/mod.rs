@@ -209,7 +209,7 @@ impl ProcFS {
         let mut fs = Self::new();
         let root_inode = fs.inodes.get(&0).unwrap().clone();
 
-        for item in INIT_STATE {
+        for item in &*INIT_STATE {
             let (name, inodeid) = fs.append_init_state(item);
             root_inode.insert(name, inodeid).unwrap();
         }

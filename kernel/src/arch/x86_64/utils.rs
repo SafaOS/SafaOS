@@ -1,41 +1,25 @@
 use core::arch::asm;
 
 use serde::Serialize;
+use spin::Lazy;
 
-pub struct VendorId(heapless::String<12>);
-impl Serialize for VendorId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.0.as_str().trim_matches('\0'))
-    }
-}
+use crate::utils::HeaplessString;
 
-impl From<heapless::String<12>> for VendorId {
-    fn from(s: heapless::String<12>) -> Self {
-        Self(s)
-    }
-}
-
-pub struct CpuModel(heapless::String<48>);
-impl Serialize for CpuModel {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.0.as_str().trim_matches('\0'))
-    }
-}
-
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct CpuInfo {
-    vendor_id: VendorId,
-    model: CpuModel,
+    vendor_id: HeaplessString<12>,
+    model: HeaplessString<48>,
+
+    physical_address_space: u8,
+    virtual_address_space: u8,
+    core_count: u8,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    easter_egg: Option<HeaplessString<16>>,
 }
 
 impl CpuInfo {
-    fn fetch_vendor_id() -> VendorId {
+    fn fetch_vendor_id() -> HeaplessString<12> {
         unsafe {
             let ebx: u32;
             let edx: u32;
@@ -64,7 +48,7 @@ impl CpuInfo {
         }
     }
 
-    fn fetch_model() -> CpuModel {
+    fn fetch_model() -> HeaplessString<48> {
         unsafe {
             let mut model: [u8; 48] = [0u8; 48];
 
@@ -94,14 +78,84 @@ impl CpuInfo {
             }
 
             let model = heapless::Vec::from_slice(&model).unwrap_unchecked();
-            CpuModel(heapless::String::from_utf8_unchecked(model))
+            heapless::String::from_utf8_unchecked(model).into()
         }
     }
 
+    fn fetch_address_space() -> (u8, u8) {
+        unsafe {
+            let mut eax: u32;
+
+            asm!(
+                "
+            cpuid
+            ",
+                in("eax") 0x80000008u32,
+                lateout("eax") eax,
+            );
+
+            ((eax & 0xFF) as u8, ((eax >> 8) & 0xFF) as u8)
+        }
+    }
+
+    fn fetch_easter_egg() -> Option<HeaplessString<16>> {
+        unsafe {
+            let eax: u32;
+            let ebx: u32;
+            let ecx: u32;
+            let edx: u32;
+
+            asm!(
+                "
+            cpuid
+            mov edi, ebx
+            ",
+                in("eax") 0x8FFFFFFFu32,
+                lateout("eax") eax,
+                lateout("edi") ebx,
+                lateout("ecx") ecx,
+                lateout("edx") edx,
+            );
+
+            let easter_egg: [u8; 16] = core::mem::transmute([eax, ebx, ecx, edx]);
+
+            if easter_egg[0] == 0 {
+                return None;
+            }
+
+            let easter_egg = heapless::Vec::from_slice(&easter_egg).ok()?;
+            heapless::String::from_utf8(easter_egg)
+                .ok()
+                .map(HeaplessString::from)
+        }
+    }
+
+    fn fetch_core_count() -> u8 {
+        unsafe {
+            let mut eax: u32;
+
+            asm!(
+                "
+            cpuid
+            ",
+                in("eax") 0x4,
+                lateout("eax") eax,
+            );
+
+            ((eax >> 26) & 0xFF) as u8 + 1
+        }
+    }
     pub fn fetch() -> Self {
+        let (physical_address_space, virtual_address_space) = Self::fetch_address_space();
         Self {
             vendor_id: Self::fetch_vendor_id(),
             model: Self::fetch_model(),
+            physical_address_space,
+            virtual_address_space,
+            core_count: Self::fetch_core_count(),
+            easter_egg: Self::fetch_easter_egg(),
         }
     }
 }
+
+pub static CPU_INFO: Lazy<CpuInfo> = Lazy::new(|| CpuInfo::fetch());

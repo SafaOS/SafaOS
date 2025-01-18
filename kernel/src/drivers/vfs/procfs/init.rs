@@ -1,6 +1,7 @@
 //! This module contains the boot-time implementiation of the initialization of the procfs.
 
 use alloc::boxed::Box;
+use spin::Lazy;
 
 use crate::drivers::vfs::procfs::cpuinfo;
 
@@ -12,36 +13,8 @@ pub trait IntoBoxFile: Send + Sync {
 
 pub enum InitStateItem<'a> {
     File(&'a dyn IntoBoxFile),
-    Directory(&'a str, &'a [Self]),
-}
-
-impl InitStateItem<'static> {
     #[allow(unused)]
-    const fn create_directory(name: &'static str, files: &'static [Self]) -> Self {
-        InitStateItem::Directory(name, files)
-    }
-
-    const fn create_file<T: IntoBoxFile>(file: &'static T) -> Self {
-        InitStateItem::File(file)
-    }
-}
-
-macro_rules! generate_init_state {
-    ($(
-        $(dir $dir_name:literal => $dir_contents:tt)?
-        $(file $file:expr)?
-    ),*) => {
-      [
-            $(
-                $(
-                    InitStateItem::create_directory($dir_name, &generate_init_state! $dir_contents),
-                )?
-                $(
-                    InitStateItem::create_file($file),
-                )?
-            )*
-        ]
-    };
+    Directory(&'a str, &'a [Self]),
 }
 
 impl<T: ProcFSFile + Clone + 'static> IntoBoxFile for T {
@@ -50,8 +23,7 @@ impl<T: ProcFSFile + Clone + 'static> IntoBoxFile for T {
     }
 }
 
-static CPU_INFO: CpuInfoWrapper = cpuinfo::CpuInfoWrapper::new();
+static CPU_INFO: Lazy<CpuInfoWrapper> = Lazy::new(cpuinfo::CpuInfoWrapper::new);
 
-pub static INIT_STATE: &[InitStateItem<'static>] = &generate_init_state! {
-    file &CPU_INFO,
-};
+pub static INIT_STATE: Lazy<[InitStateItem<'static>; 1]> =
+    Lazy::new(|| [InitStateItem::File(&*CPU_INFO)]);
