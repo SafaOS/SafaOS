@@ -21,27 +21,18 @@ pub struct CpuInfo {
 impl CpuInfo {
     fn fetch_vendor_id() -> HeaplessString<12> {
         unsafe {
-            let ebx: u32;
-            let edx: u32;
-            let ecx: u32;
-            let mut vendor_id = [0u32; 3];
+            let (ebx, ecx, edx): (u32, u32, u32);
 
             asm!(
-                "
-            cpuid
-            mov eax, ebx
-            ",
+                "cpuid",
+                "mov eax, ebx",
                 in("eax") 0,
                 lateout("eax") ebx,
                 lateout("ecx") ecx,
                 lateout("edx") edx,
             );
 
-            vendor_id[0] = ebx;
-            vendor_id[1] = edx;
-            vendor_id[2] = ecx;
-
-            let vendor_id: [u8; 12] = core::mem::transmute(vendor_id);
+            let vendor_id: [u8; 12] = core::mem::transmute([ebx, edx, ecx]);
             let vendor_id = heapless::Vec::from_slice(&vendor_id).unwrap_unchecked();
 
             heapless::String::from_utf8_unchecked(vendor_id).into()
@@ -53,28 +44,21 @@ impl CpuInfo {
             let mut model: [u8; 48] = [0u8; 48];
 
             for i in 0..3 {
-                let eax: u32;
-                let ebx: u32;
-                let ecx: u32;
-                let edx: u32;
+                let (eax, ebx, ecx, edx): (u32, u32, u32, u32);
 
                 asm!(
-                    "
-            cpuid
-            mov esi, ebx
-            ",
+                    "cpuid",
+                    "mov esi, ebx",
                     in("eax") 0x80000002 + i,
                     lateout("eax") eax,
                     lateout("esi") ebx,
                     lateout("ecx") ecx,
                     lateout("edx") edx,
                 );
+                let i = i * 16;
 
-                let index = i * 16;
-                model[index..index + 4].copy_from_slice(&eax.to_le_bytes());
-                model[index + 4..index + 8].copy_from_slice(&ebx.to_le_bytes());
-                model[index + 8..index + 12].copy_from_slice(&ecx.to_le_bytes());
-                model[index + 12..index + 16].copy_from_slice(&edx.to_le_bytes());
+                model[i..i + 16]
+                    .copy_from_slice(&core::mem::transmute::<_, [u8; 16]>([eax, ebx, ecx, edx]));
             }
 
             let model = heapless::Vec::from_slice(&model).unwrap_unchecked();
@@ -87,9 +71,7 @@ impl CpuInfo {
             let mut eax: u32;
 
             asm!(
-                "
-            cpuid
-            ",
+                "cpuid",
                 in("eax") 0x80000008u32,
                 lateout("eax") eax,
             );
@@ -100,16 +82,11 @@ impl CpuInfo {
 
     fn fetch_easter_egg() -> Option<HeaplessString<16>> {
         unsafe {
-            let eax: u32;
-            let ebx: u32;
-            let ecx: u32;
-            let edx: u32;
+            let (eax, ebx, ecx, edx): (u32, u32, u32, u32);
 
             asm!(
-                "
-            cpuid
-            mov edi, ebx
-            ",
+                "cpuid",
+                "mov edi, ebx",
                 in("eax") 0x8FFFFFFFu32,
                 lateout("eax") eax,
                 lateout("edi") ebx,
@@ -135,9 +112,7 @@ impl CpuInfo {
             let mut eax: u32;
 
             asm!(
-                "
-            cpuid
-            ",
+                "cpuid",
                 in("eax") 0x4,
                 lateout("eax") eax,
             );
