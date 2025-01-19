@@ -4,7 +4,6 @@ pub mod display;
 pub mod either;
 pub mod elf;
 pub mod errors;
-pub mod expose;
 pub mod ffi;
 pub mod ustar;
 

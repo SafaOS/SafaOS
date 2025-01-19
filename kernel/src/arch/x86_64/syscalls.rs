@@ -1,7 +1,7 @@
 // TODO: figure out errors
 // for now errors are a big mess
 use super::interrupts::InterruptFrame;
-use crate::utils::errors::ErrorStatus;
+use crate::{debug, utils::errors::ErrorStatus};
 use core::arch::global_asm;
 /// used sometimes for debugging syscalls
 #[allow(dead_code)]
@@ -44,8 +44,8 @@ syscall_table:
     .quad sysspawn
     .quad syschdir
     .quad sysgetcwd
-    .quad sysinfo
-    .quad syspcollect
+    .quad deprecated_syscall
+    .quad deprecated_syscall
     .quad syssbrk
     .quad syspspawn
     .quad sysshutdown
@@ -98,4 +98,13 @@ unsupported:
 
 extern "x86-interrupt" {
     pub fn syscall_base();
+}
+
+#[no_mangle]
+extern "C" fn deprecated_syscall(syscall: usize) -> ErrorStatus {
+    debug!(
+        SyscallContext,
+        "deprecated syscall called with syscall {}", syscall
+    );
+    ErrorStatus::InvaildSyscall
 }

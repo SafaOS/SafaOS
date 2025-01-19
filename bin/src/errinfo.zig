@@ -1,7 +1,7 @@
 const std_c = @import("std-c");
 const std = @import("std");
 
-const panic = std_c.panic;
+pub const panic = std_c.panic;
 const print = std_c.print;
 
 const Error = std_c.Error;

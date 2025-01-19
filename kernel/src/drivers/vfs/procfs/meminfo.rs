@@ -17,8 +17,8 @@ pub struct MemInfo {
 impl MemInfo {
     pub fn fetch() -> Self {
         let total = usable_frames() * 4096;
-        let free = mapped_frames() * 4096;
-        let used = total - free;
+        let used = mapped_frames() * 4096;
+        let free = total - used;
 
         let current_process_used = 0;
 

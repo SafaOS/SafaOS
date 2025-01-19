@@ -148,30 +148,11 @@ impl Scheduler {
         }
     }
 
-    /// iterates through all taskes and executes `then` on each of them
-    /// if then returns false it breaks the loop
-    /// executed on all taskes
-    fn while_each<T>(&mut self, mut then: T)
-    where
-        T: FnMut(&mut Task) -> bool,
-    {
-        for task in self.tasks.clone_iter_mut() {
-            if !then(task) {
-                break;
-            }
-        }
-    }
-
     /// attempt to remove a task where executing `condition` on returns true, returns the removed task info
     pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
         self.tasks
             .remove_where(|task| condition(task))
             .map(|task| TaskInfo::from(&task))
-    }
-
-    #[inline(always)]
-    pub fn tasks_count(&self) -> usize {
-        self.tasks.len()
     }
 
     #[inline(always)]
@@ -229,20 +210,6 @@ where
     T: FnMut(&mut Task),
 {
     SCHEDULER.write().for_each(then)
-}
-
-/// acquires lock on scheduler
-/// executes `then` on each task until it returns false
-fn while_each<T>(then: T)
-where
-    T: FnMut(&mut Task) -> bool,
-{
-    SCHEDULER.write().while_each(then)
-}
-
-/// acquires lock on scheduler and returns the number of taskes
-pub fn pcount() -> usize {
-    SCHEDULER.read().tasks_count()
 }
 
 /// acquires lock on scheduler and adds a task to it

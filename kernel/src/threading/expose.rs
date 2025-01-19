@@ -208,26 +208,6 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
 }
 
 #[no_mangle]
-/// collects as much processes as it can in `buffer`
-/// collects `buffer.len()` processes
-/// if it didn't finish returns Err(())
-pub fn pcollect(info: &mut [TaskInfo]) -> Result<(), ()> {
-    let mut i = 0;
-
-    super::while_each(|process| {
-        if i >= info.len() {
-            return false;
-        }
-
-        info[i] = TaskInfo::from(&*process);
-        i += 1;
-        true
-    });
-
-    Ok(())
-}
-
-#[no_mangle]
 /// extends program break by `amount`
 /// returns the new program break ptr
 /// on fail returns null
