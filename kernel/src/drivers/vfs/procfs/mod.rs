@@ -7,7 +7,7 @@ use alloc::{
     vec::Vec,
 };
 use hashbrown::HashMap;
-use init::{InitStateItem, INIT_STATE};
+use init::InitStateItem;
 use spin::Mutex;
 use tasks::TaskInfoFile;
 
@@ -17,25 +17,65 @@ use super::{FSError, FSResult, Inode, InodeOps};
 
 mod cpuinfo;
 mod init;
+mod meminfo;
 mod tasks;
 
-pub trait ProcFSFile: Send + Sync {
-    /// returns the name of the file which is statically known
-    fn name(&self) -> &'static str;
-    /// returns the data in the file which is a utf8 string representing Self as json
+pub struct ProcFSFile {
+    name: &'static str,
+    id: usize,
+    data: Option<String>,
+    /// if true the data won't be de-allocated when the file is closed
+    is_static: bool,
+    fetch: fn(&mut Self) -> Option<String>,
+}
+
+impl ProcFSFile {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub fn new(name: &'static str, id: usize, fetch: fn(&mut Self) -> Option<String>) -> Self {
+        Self {
+            name,
+            id,
+            data: None,
+            is_static: false,
+            fetch,
+        }
+    }
+
+    pub fn new_static(
+        name: &'static str,
+        id: usize,
+        fetch: fn(&mut Self) -> Option<String>,
+    ) -> Self {
+        Self {
+            name,
+            id,
+            data: None,
+            is_static: true,
+            fetch,
+        }
+    }
+
     fn get_data(&mut self) -> &str {
-        if self.try_get_data().is_none() {
+        if self.data.is_none() {
             self.refresh();
         }
 
-        self.try_get_data().unwrap()
+        self.data.as_ref().unwrap().as_str()
     }
-    /// returns the data in the file which is a utf8 string representing Self as json if it is available, None otherwise
-    fn try_get_data(&self) -> Option<&str>;
-    /// refreshes the data in the file to be up to date
-    fn refresh(&mut self);
-    /// deletes the data in the file
-    fn close(&mut self);
+
+    fn close(&mut self) {
+        if !self.is_static {
+            self.data = None;
+        }
+    }
+
+    fn refresh(&mut self) {
+        let fetch = self.fetch;
+        self.data = fetch(self);
+    }
 }
 
 pub struct ProcInode {
@@ -45,7 +85,7 @@ pub struct ProcInode {
 
 enum ProcInodeData {
     Dir(String, HashMap<String, usize>),
-    File(Box<dyn ProcFSFile>),
+    File(ProcFSFile),
 }
 
 impl ProcInode {
@@ -56,7 +96,7 @@ impl ProcInode {
         }
     }
 
-    fn new_file(inodeid: usize, data: Box<dyn ProcFSFile>) -> Self {
+    fn new_file(inodeid: usize, data: ProcFSFile) -> Self {
         Self {
             inodeid,
             data: ProcInodeData::File(data),
@@ -187,20 +227,9 @@ impl ProcFS {
         }
     }
 
-    fn append_init_state(&mut self, state: &InitStateItem<'static>) -> (&'static str, usize) {
+    fn append_init_state(&mut self, state: InitStateItem) -> (&'static str, usize) {
         match state {
-            InitStateItem::File(file) => self.append_file(file.into_box()),
-            InitStateItem::Directory(name, items) => {
-                let mut dir_items = Vec::with_capacity(items.len());
-
-                for item in *items {
-                    let results = self.append_init_state(item);
-                    dir_items.push(results);
-                }
-
-                let inodeid = self.append_dir(name, &dir_items);
-                (name, inodeid)
-            }
+            InitStateItem::File(file) => self.append_file(file),
         }
     }
 
@@ -209,14 +238,14 @@ impl ProcFS {
         let mut fs = Self::new();
         let root_inode = fs.inodes.get(&0).unwrap().clone();
 
-        for item in &*INIT_STATE {
+        for item in init::get_init_state() {
             let (name, inodeid) = fs.append_init_state(item);
             root_inode.insert(name, inodeid).unwrap();
         }
         fs
     }
 
-    fn append_file(&mut self, file: Box<dyn ProcFSFile>) -> (&'static str, usize) {
+    fn append_file(&mut self, file: ProcFSFile) -> (&'static str, usize) {
         let name = file.name();
 
         let inodeid = self.next_inodeid;
@@ -253,7 +282,7 @@ impl ProcFS {
     }
 
     fn append_process(&mut self, pid: Pid) -> usize {
-        let info_file = Box::new(TaskInfoFile::new(pid));
+        let info_file = TaskInfoFile::new(pid);
         let (file_name, file_inode) = self.append_file(info_file);
 
         let inodeid = self.append_dir(&pid.to_string(), &[(file_name, file_inode)]);

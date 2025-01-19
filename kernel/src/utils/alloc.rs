@@ -7,6 +7,7 @@ use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
 use crate::memory::{align_up, paging::PAGE_SIZE};
 use alloc::boxed::Box;
 use alloc::str::pattern::{Pattern, ReverseSearcher};
+use alloc::string::String;
 use alloc::vec::{Drain, Vec};
 
 pub struct PageVec<T> {
@@ -64,6 +65,15 @@ impl<T> core::ops::Deref for PageVec<T> {
     }
 }
 
+impl<T: Clone> From<Vec<T>> for PageVec<T> {
+    fn from(v: Vec<T>) -> Self {
+        let mut results = Vec::with_capacity_in(v.len(), &*GLOBAL_PAGE_ALLOCATOR);
+        results.extend_from_slice(&v);
+
+        Self { inner: results }
+    }
+}
+
 pub struct PageString {
     pub inner: PageVec<u8>,
 }
@@ -114,6 +124,14 @@ impl PageString {
 
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+}
+
+impl From<String> for PageString {
+    fn from(s: String) -> Self {
+        Self {
+            inner: s.into_bytes().into(),
+        }
     }
 }
 
