@@ -16,6 +16,11 @@ const CpuInfo = struct {
     model: []const u8,
 };
 
+const KernelInfo = struct {
+    name: []const u8,
+    version: []const u8,
+};
+
 fn get_meminfo() !MemInfo {
     const meminfo_file = try File.open("proc:/meminfo", .{ .read = true });
     defer meminfo_file.close();
@@ -41,12 +46,28 @@ fn get_cpuinfo() !std.json.Parsed(CpuInfo) {
     return parsed_cpuinfo;
 }
 
+fn get_kernel_info() !std.json.Parsed(KernelInfo) {
+    const kernelinfo_file = try File.open("proc:/kernelinfo", .{ .read = true });
+    defer kernelinfo_file.close();
+
+    const kernelinfo_str = try kernelinfo_file.reader().readUntilEOF();
+    defer allocator.free(kernelinfo_str);
+
+    const parsed_kernelinfo = try std.json.parseFromSlice(KernelInfo, allocator, kernelinfo_str, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+
+    return parsed_kernelinfo;
+}
+
 pub fn main() !void {
     const meminfo = try get_meminfo();
 
     const parsed_cpuinfo = try get_cpuinfo();
     defer parsed_cpuinfo.deinit();
 
+    const parsed_kernelinfo = try get_kernel_info();
+    defer parsed_kernelinfo.deinit();
+
+    const kernelinfo = parsed_kernelinfo.value;
     const cpuinfo = parsed_cpuinfo.value;
 
     // fetching info
@@ -67,8 +88,8 @@ pub fn main() !void {
     print("\x1b[11A", .{});
 
     print("\x1b[31C\x1b[31mroot\x1b[0m@\x1b[31mlocalhost\x1b[0m\n\n", .{});
-    print("\x1b[31C\x1b[31mOS:\x1b[0m SafaOS (UNKNOWN)\n", .{});
-    print("\x1b[31C\x1b[31mKernel:\x1b[0m Snowball (UNKNOWN)\n", .{});
+    print("\x1b[31C\x1b[31mOS:\x1b[0m SafaOS\n", .{});
+    print("\x1b[31C\x1b[31mKernel:\x1b[0m {s} (v{s})\n", .{ kernelinfo.name, kernelinfo.version });
     print("\x1b[31C\x1b[31mTerminal:\x1b[0m dev:/tty\n", .{});
     print("\x1b[31C\x1b[31mCPU:\x1b[0m {s}\n\n", .{cpuinfo.model});
     print("\x1b[31C\x1b[31mMemory:\x1b[0m {}MiB / {}MiB\n\n", .{ used_memory, total_memory });

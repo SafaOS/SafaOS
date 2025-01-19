@@ -17,6 +17,7 @@ use super::{FSError, FSResult, Inode, InodeOps};
 
 mod cpuinfo;
 mod init;
+mod kernelinfo;
 mod meminfo;
 mod tasks;
 
