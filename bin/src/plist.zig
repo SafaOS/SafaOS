@@ -18,9 +18,20 @@ pub fn main() !void {
     const proc_dir = try Dir.open("proc:/");
     defer proc_dir.close();
 
-    print("name:  pid  ppid  status\n", .{});
+    var longest_name: usize = 0;
+    var longest_status: usize = 0;
+    var longest_pid: usize = 4;
+
+    var processes = std.ArrayList(std.json.Parsed(ProccessInfo)).init(allocator);
+    defer processes.deinit();
+
     while (proc_dir.next()) |entry| {
         if (std.fmt.parseInt(u32, entry.name[0..entry.name_length], 10) catch null) |pid| {
+            const longest_pid_val = std.math.pow(usize, 10, longest_pid);
+
+            if (pid > longest_pid_val * 10)
+                longest_pid = std.math.log10(longest_pid_val * 10);
+
             const path = try std.fmt.allocPrint(allocator, "proc:/{d}/info", .{pid});
             defer allocator.free(path);
 
@@ -30,12 +41,39 @@ pub fn main() !void {
             const info = try file.reader().readUntilEOF();
 
             const process_info = try std.json.parseFromSlice(ProccessInfo, allocator, info, .{ .ignore_unknown_fields = true });
-            defer process_info.deinit();
-
+            try processes.append(process_info);
             const process = process_info.value;
 
-            print("\x1B[38;2;0;255;0m{s}\x1B[0m:  {}  {}  {s}\n", .{ process.name, process.pid, process.ppid, process.status });
+            if (process.name.len > longest_name)
+                longest_name = process.name.len;
+            if (process.status.len > longest_status)
+                longest_status = process.status.len;
         }
+    }
+
+    print("\x1B[32m{[name]s:<[longest_name]}\x1B[0m:  \x1B[31m{[pid]s:<[pid_align]}  {[ppid]s:<[pid_align]}  \x1B[33m{[status]s:<[longest_status]}\x1b[0m\n", .{
+        .longest_name = longest_name,
+        .longest_status = longest_status,
+        .name = "name",
+        .pid = "pid",
+        .ppid = "ppid",
+        .status = "status",
+        .pid_align = longest_pid,
+    });
+
+    print("{s:-<[width]}\n", .{ .nothing = "", .width = longest_name + longest_pid + longest_status + 3 + 4 + 6 });
+
+    for (processes.items) |process_info| {
+        const process = process_info.value;
+        print("\x1B[32m{[name]s:<[longest_name]}\x1B[0m:  \x1B[31m{[pid]d:<[pid_align]}  {[ppid]d:<[pid_align]}  \x1B[33m{[status]s:<[longest_status]}\x1b[0m\n", .{
+            .longest_name = longest_name,
+            .longest_status = longest_status,
+            .name = process.name,
+            .pid = process.pid,
+            .ppid = process.ppid,
+            .status = process.status,
+            .pid_align = longest_pid,
+        });
     }
 }
 
