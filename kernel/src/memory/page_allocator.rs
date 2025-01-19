@@ -84,6 +84,15 @@ impl PageAllocator {
 
         self.allocations -= 1;
         if self.allocations == 0 {
+            let start_page = Page::containing_address(self.heap_start);
+            let end_page = Page::containing_address(self.last_allocation.1);
+
+            for page in Page::iter_pages(start_page, end_page) {
+                unsafe {
+                    current_root_table().unmap(page);
+                }
+            }
+
             self.last_allocation = (self.heap_start, self.heap_start);
         }
     }
