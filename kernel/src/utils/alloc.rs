@@ -7,7 +7,6 @@ use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
 use crate::memory::{align_up, paging::PAGE_SIZE};
 use alloc::boxed::Box;
 use alloc::str::pattern::{Pattern, ReverseSearcher};
-use alloc::string::String;
 use alloc::vec::{Drain, Vec};
 
 pub struct PageVec<T> {
@@ -18,6 +17,12 @@ impl<T> PageVec<T> {
     pub fn new() -> Self {
         Self {
             inner: Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            inner: Vec::with_capacity_in(capacity, &*GLOBAL_PAGE_ALLOCATOR),
         }
     }
 
@@ -65,12 +70,9 @@ impl<T> core::ops::Deref for PageVec<T> {
     }
 }
 
-impl<T: Clone> From<Vec<T>> for PageVec<T> {
-    fn from(v: Vec<T>) -> Self {
-        let mut results = Vec::with_capacity_in(v.len(), &*GLOBAL_PAGE_ALLOCATOR);
-        results.extend_from_slice(&v);
-
-        Self { inner: results }
+impl<T> From<Vec<T, PageAlloc>> for PageVec<T> {
+    fn from(v: Vec<T, PageAlloc>) -> Self {
+        Self { inner: v }
     }
 }
 
@@ -82,6 +84,12 @@ impl PageString {
     pub fn new() -> Self {
         Self {
             inner: PageVec::new(),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            inner: PageVec::with_capacity(capacity),
         }
     }
 
@@ -127,11 +135,31 @@ impl PageString {
     }
 }
 
-impl From<String> for PageString {
-    fn from(s: String) -> Self {
-        Self {
-            inner: s.into_bytes().into(),
-        }
+impl serde_json::io::Write for PageVec<u8> {
+    fn write(&mut self, buf: &[u8]) -> serde_json::io::Result<usize> {
+        self.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> serde_json::io::Result<()> {
+        Ok(())
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> serde_json::io::Result<()> {
+        self.extend_from_slice(buf);
+        Ok(())
+    }
+}
+impl serde_json::io::Write for PageString {
+    fn write(&mut self, buf: &[u8]) -> serde_json::io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> serde_json::io::Result<()> {
+        self.inner.flush()
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> serde_json::io::Result<()> {
+        self.inner.write_all(buf)
     }
 }
 

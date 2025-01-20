@@ -1,7 +1,9 @@
-use alloc::string::String;
 use serde::Serialize;
 
-use crate::memory::frame_allocator::{mapped_frames, usable_frames};
+use crate::{
+    memory::frame_allocator::{mapped_frames, usable_frames},
+    utils::alloc::PageString,
+};
 
 use super::ProcFSFile;
 
@@ -38,8 +40,12 @@ impl MemInfoFile {
         ProcFSFile::new("meminfo", 0, Self::fetch)
     }
 
-    pub fn fetch(_: &mut ProcFSFile) -> Option<String> {
+    pub fn fetch(_: &mut ProcFSFile) -> Option<PageString> {
+        let mut page_string = PageString::with_capacity(1024);
         let mem_info = MemInfo::fetch();
-        serde_json::to_string_pretty(&mem_info).ok()
+
+        serde_json::to_writer_pretty(&mut page_string, &mem_info)
+            .ok()
+            .map(|()| page_string)
     }
 }

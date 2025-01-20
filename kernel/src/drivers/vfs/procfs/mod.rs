@@ -11,7 +11,10 @@ use init::InitStateItem;
 use spin::Mutex;
 use tasks::TaskInfoFile;
 
-use crate::threading::{expose::getpids, Pid};
+use crate::{
+    threading::{expose::getpids, Pid},
+    utils::alloc::PageString,
+};
 
 use super::{FSError, FSResult, Inode, InodeOps};
 
@@ -24,10 +27,10 @@ mod tasks;
 pub struct ProcFSFile {
     name: &'static str,
     id: usize,
-    data: Option<String>,
+    data: Option<PageString>,
     /// if true the data won't be de-allocated when the file is closed
     is_static: bool,
-    fetch: fn(&mut Self) -> Option<String>,
+    fetch: fn(&mut Self) -> Option<PageString>,
 }
 
 impl ProcFSFile {
@@ -35,7 +38,7 @@ impl ProcFSFile {
         self.name
     }
 
-    pub fn new(name: &'static str, id: usize, fetch: fn(&mut Self) -> Option<String>) -> Self {
+    pub fn new(name: &'static str, id: usize, fetch: fn(&mut Self) -> Option<PageString>) -> Self {
         Self {
             name,
             id,
@@ -48,7 +51,7 @@ impl ProcFSFile {
     pub fn new_static(
         name: &'static str,
         id: usize,
-        fetch: fn(&mut Self) -> Option<String>,
+        fetch: fn(&mut Self) -> Option<PageString>,
     ) -> Self {
         Self {
             name,

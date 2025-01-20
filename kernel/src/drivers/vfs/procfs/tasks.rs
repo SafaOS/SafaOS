@@ -1,6 +1,7 @@
-use alloc::string::String;
-
-use crate::threading::{expose::getinfo, Pid};
+use crate::{
+    threading::{expose::getinfo, Pid},
+    utils::alloc::PageString,
+};
 
 use super::ProcFSFile;
 
@@ -11,8 +12,12 @@ impl TaskInfoFile {
         ProcFSFile::new("info", pid, Self::fetch)
     }
 
-    pub fn fetch(file: &mut ProcFSFile) -> Option<String> {
+    pub fn fetch(file: &mut ProcFSFile) -> Option<PageString> {
+        let mut str = PageString::with_capacity(1024);
         let task_info = getinfo(file.id).unwrap();
-        serde_json::to_string_pretty(&task_info).ok()
+
+        serde_json::to_writer_pretty(&mut str, &task_info)
+            .ok()
+            .map(|()| str)
     }
 }

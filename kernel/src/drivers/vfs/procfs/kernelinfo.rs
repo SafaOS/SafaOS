@@ -1,7 +1,6 @@
-use alloc::string::String;
 use serde::Serialize;
 
-use crate::{KERNEL_CODE_NAME, KERNEL_CODE_VERSION};
+use crate::{utils::alloc::PageString, KERNEL_CODE_NAME, KERNEL_CODE_VERSION};
 
 use super::ProcFSFile;
 
@@ -26,8 +25,11 @@ impl KernelInfoFile {
         ProcFSFile::new_static("kernelinfo", 0, Self::fetch)
     }
 
-    fn fetch(_: &mut ProcFSFile) -> Option<String> {
+    fn fetch(_: &mut ProcFSFile) -> Option<PageString> {
+        let mut page_string = PageString::with_capacity(1024);
         let kernel_info = KernelInfo::fetch();
-        serde_json::to_string_pretty(&kernel_info).ok()
+        serde_json::to_writer_pretty(&mut page_string, &kernel_info)
+            .ok()
+            .map(|()| page_string)
     }
 }
