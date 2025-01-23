@@ -2,7 +2,6 @@ use core::arch::asm;
 
 use alloc::{
     string::{String, ToString},
-    vec,
     vec::Vec,
 };
 use bitflags::bitflags;
@@ -10,6 +9,7 @@ use bitflags::bitflags;
 use crate::{
     drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
     khalt,
+    memory::page_allocator::GLOBAL_PAGE_ALLOCATOR,
     utils::elf::{Elf, ElfError},
 };
 
@@ -127,7 +127,8 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
         return Err(FSError::NotAFile);
     }
 
-    let mut buffer = vec![0; stat.size];
+    let mut buffer = Vec::with_capacity_in(stat.size, &*GLOBAL_PAGE_ALLOCATOR);
+    buffer.resize(stat.size, 0);
 
     file.read(&mut buffer)?;
     spawn(name, &buffer, argv, flags).map_err(|_| FSError::NotExecuteable)

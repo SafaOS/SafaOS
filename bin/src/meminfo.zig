@@ -6,6 +6,8 @@ const print = std_c.print;
 const File = std_c.stdio.File;
 const allocator = std_c.heap.c_allocator;
 
+pub const panic = std_c.panic;
+
 const Mode = enum {
     Bytes,
     KiB,
@@ -24,7 +26,6 @@ pub fn main() !void {
     defer info_file.close();
 
     const info_str = try info_file.reader().readUntilEOF();
-
     const parsed_info = try std.json.parseFromSlice(MemInfo, allocator, info_str, .{ .allocate = .alloc_if_needed, .ignore_unknown_fields = true });
     defer parsed_info.deinit();
 

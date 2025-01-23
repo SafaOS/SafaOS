@@ -5,11 +5,13 @@ use alloc::vec;
 use alloc::{collections::btree_map::BTreeMap, string::String, vec::Vec};
 use spin::{Mutex, RwLock};
 
+use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
+
 use super::InodeOf;
 use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType, Path};
 
 pub enum RamInodeData {
-    Data(Vec<u8>),
+    Data(Vec<u8, PageAlloc>),
     Children(BTreeMap<String, usize>),
     HardLink(Inode),
 }
@@ -31,7 +33,7 @@ impl RamInode {
     fn new_file(name: String, data: &[u8], inodeid: usize) -> InodeOf<Mutex<Self>> {
         Arc::new(RamInode::new(
             name,
-            RamInodeData::Data(data.to_vec()),
+            RamInodeData::Data(data.to_vec_in(&*GLOBAL_PAGE_ALLOCATOR)),
             inodeid,
         ))
     }

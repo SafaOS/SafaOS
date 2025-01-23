@@ -94,7 +94,7 @@ impl TaskState {
                 let ptr = addr as *mut u8;
                 let slice = unsafe { core::slice::from_raw_parts_mut(ptr, PAGE_SIZE) };
 
-                slice.fill(0);
+                slice.fill(0xAA);
                 *data_pages += 1;
                 Some(addr)
             }
@@ -275,9 +275,17 @@ impl Task {
     /// if `killed_by` is `None` the task will be killed by itself
     pub fn kill(&self, exit_code: usize, killed_by: Option<Pid>) {
         let mut state = self.state.write();
+        let killed_by = killed_by.unwrap_or(self.pid);
 
-        state.die(exit_code, killed_by.unwrap_or(self.pid));
-        debug!(Task, "Task {} ({}) TERMINATED", self.pid, self.name());
+        state.die(exit_code, killed_by);
+        debug!(
+            Task,
+            "Task {} ({}) TERMINATED with code {} by {}",
+            self.pid,
+            self.name(),
+            exit_code,
+            killed_by
+        );
     }
 }
 
@@ -319,12 +327,6 @@ pub struct TaskInfo {
     pub data_break: VirtAddr,
     pub is_alive: bool,
 }
-
-// impl TaskInfo {
-//     pub fn name(&self) -> &str {
-//         unsafe { core::str::from_utf8_unchecked(&self.name.0) }
-//     }
-// }
 
 impl From<&Task> for TaskInfo {
     fn from(task: &Task) -> Self {
