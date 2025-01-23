@@ -9,6 +9,7 @@ use crate::{
 use bitflags::bitflags;
 use core::{
     arch::asm,
+    fmt::Debug,
     ops::{Deref, DerefMut, Index, IndexMut},
 };
 
@@ -55,8 +56,16 @@ impl Iterator for IterPage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Entry(PhysAddr);
+impl Debug for Entry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Entry")
+            .field(&format_args!("{:#x}", self.0))
+            .field(&self.flags())
+            .finish()
+    }
+}
 // address of the next table or physial frame in 0x000FFFFF_FFFFF000 (the fs is the address are the fs the rest are flags or reserved)
 
 #[cfg(target_arch = "x86_64")]
@@ -84,16 +93,28 @@ impl Entry {
 
     /// deallocates an entry depending on it's level if it is 1 it should just deallocate the frame
     /// otherwise treat the frame as a page table and deallocate it
-    /// &mut self becomes invaild after use
+    /// # Safety
+    /// the caller must ensure that the entry is not used anymore
     pub unsafe fn free(&mut self, level: u8) {
         let frame = self.frame().unwrap();
 
-        if level == 0 {
-            frame_allocator::deallocate_frame(frame);
-            return;
+        if level != 0 {
+            let table = &mut *((frame.start_address | hddm()) as *mut PageTable);
+            table.free(level);
         }
-        let table = &mut *((frame.start_address | hddm()) as *mut PageTable);
-        table.free(level)
+        self.deallocate(false);
+    }
+
+    /// deallocates a page table entry and invalidates it if `invalidate` is true
+    /// # Safety
+    /// the caller must ensure that the entry is not used anymore, especially if `invalidate` is true
+    pub unsafe fn deallocate(&mut self, invalidate: bool) {
+        if let Some(frame) = self.frame() {
+            frame_allocator::deallocate_frame(frame);
+            if invalidate {
+                self.set(EntryFlags::empty(), 0);
+            }
+        }
     }
 }
 
@@ -135,18 +156,14 @@ impl PageTable {
         }
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    /// unsafe because self becomes invaild after use
+    /// unsafe because self becomes almost invaild after use, the entries are not invalidated
+    /// meaning you can still use virtual addresses from the page table but using them will cause UB
     pub unsafe fn free(&mut self, level: u8) {
         for entry in &mut self.entries[0..HIGHER_HALF_ENTRY] {
             if entry.0 != 0 {
                 entry.free(level - 1);
             }
         }
-
-        let table_addr = self as *mut PageTable as VirtAddr;
-
-        let frame = Frame::containing_address(table_addr - hddm());
-        frame_allocator::deallocate_frame(frame)
     }
 }
 
@@ -254,9 +271,7 @@ impl PageTable {
 
         let entry = &mut level_1_table[level_1_index];
         // TODO: stress test this
-        if let Some(frame) = entry.frame().filter(|x| x != &frame) {
-            frame_allocator::deallocate_frame(frame);
-        }
+        debug_assert!(entry.frame().is_none());
 
         *entry = Entry::new(flags, frame.start_address);
         Ok(())
@@ -275,10 +290,24 @@ impl PageTable {
         entry.frame()
     }
 
+    /// get a mutable reference to the entry for a given page
+    pub fn get_entry(&self, page: Page) -> Option<&mut Entry> {
+        let (level_1_index, level_2_index, level_3_index, level_4_index) =
+            translate(page.start_address);
+        let level_3_table = self[level_4_index].mapped_to()?;
+        let level_2_table = level_3_table[level_3_index].mapped_to()?;
+        let level_1_table = level_2_table[level_2_index].mapped_to()?;
+
+        Some(&mut level_1_table[level_1_index])
+    }
+
     /// unmap page and all of it's entries
     pub fn unmap(&mut self, page: Page) {
-        self.get_frame(page)
-            .inspect(|x| frame_allocator::deallocate_frame(*x));
+        let entry = self.get_entry(page);
+
+        if let Some(entry) = entry {
+            unsafe { entry.deallocate(true) };
+        }
     }
 }
 
