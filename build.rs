@@ -1,7 +1,6 @@
 // build.rs
 use std::{
     collections::HashSet,
-    env::current_dir,
     fs::{self, File},
     io::empty,
     path::{Path, PathBuf},
@@ -165,8 +164,19 @@ fn make_ramdisk() {
 fn cleanup() {
     let _ = fs::remove_dir_all("iso_root");
 }
+
+fn submodules_init() {
+    let _ = Command::new("git")
+        .arg("submodule")
+        .arg("update")
+        .arg("--init")
+        .arg("--recursive")
+        .status()
+        .unwrap();
+}
 /// TODO: spilt into more functions and make it work on other oses like windows
 fn main() {
+    submodules_init();
     cleanup();
     out(limine_make());
     setup_iso_root();
