@@ -1,5 +1,3 @@
-// a pmm i believe
-
 use core::{fmt::Debug, slice};
 
 use lazy_static::lazy_static;
@@ -90,7 +88,10 @@ impl RegionAllocator {
 
         debug!(
             RegionAllocator,
-            "expected {} bytes, found a region with {} bytes", bytes, bitmap_length
+            "expected {} bytes, found a region with {} bytes at {:#x}",
+            bytes,
+            bitmap_length,
+            bitmap_base
         );
 
         // allocates and setups bitmap
@@ -114,7 +115,9 @@ impl RegionAllocator {
         let last_usable_entry = last_usable_entry.unwrap();
         // sets all unusable frames as used
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE {
+            if entry.entry_type == limine::memory_map::EntryType::USABLE
+                && entry.base != best_region.base
+            {
                 this.set_unused_from(entry.base as PhysAddr, entry.length as usize);
             }
 
@@ -123,17 +126,7 @@ impl RegionAllocator {
             }
         }
 
-        this.set_used_from(bitmap_base, bitmap_length);
         this
-    }
-
-    #[inline]
-    fn set_used_from(&mut self, from: PhysAddr, size: usize) {
-        let frames_needed = align_up(size, PAGE_SIZE) / PAGE_SIZE;
-
-        for frame in 0..frames_needed {
-            self.set_used(from + frame * PAGE_SIZE);
-        }
     }
 
     #[inline]
@@ -176,11 +169,6 @@ impl RegionAllocator {
     fn set_unused(&mut self, addr: PhysAddr) {
         let (row, col) = Self::bitmap_loc_from_addr(addr);
         self.bitmap[row] ^= 1 << col
-    }
-
-    fn set_used(&mut self, addr: PhysAddr) {
-        let (row, col) = Self::bitmap_loc_from_addr(addr);
-        self.bitmap[row] |= 1 << col
     }
 
     pub fn deallocate_frame(&mut self, frame: Frame) {
