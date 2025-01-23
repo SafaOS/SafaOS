@@ -178,12 +178,12 @@ fn main() {
     out(compile_programs());
     make_ramdisk();
     make_iso();
-    let iso_path = current_dir().unwrap().join(ISO_PATH);
-    println!("cargo:rerun-if-changed={}", iso_path.display());
+    let iso_path = ISO_PATH;
+    println!("cargo:rerun-if-changed={}", iso_path);
     println!("cargo:rerun-if-changed=limine");
     println!("cargo:rerun-if-changed=programs/build");
     println!("cargo:rerun-if-changed=programs");
 
     // pass the disk image paths as env variables to the `main.rs`
-    println!("cargo:rustc-env=ISO_PATH={}", iso_path.display());
+    println!("cargo:rustc-env=ISO_PATH={}", iso_path);
 }
