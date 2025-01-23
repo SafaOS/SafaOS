@@ -16,6 +16,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: mlugg/setup-zig@v1
+      with:
+        version: 0.13.0
     - name: Install deps
       run: sudo apt update -y && sudo apt upgrade && sudo apt install xorriso qemu-system -y
     - name: Setup
