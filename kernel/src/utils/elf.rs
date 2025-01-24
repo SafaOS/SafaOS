@@ -393,7 +393,7 @@ impl<'a> Elf<'a> {
 
                 copy_to_userspace(page_table, header.vaddr, file);
             }
-            program_break = header.vaddr + header.memz;
+            program_break = header.vaddr + header.memz + PAGE_SIZE;
         }
         Ok(program_break)
     }

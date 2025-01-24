@@ -110,12 +110,14 @@ impl TaskState {
                 root_page_table,
                 ..
             } => {
+                if *data_pages == 0 {
+                    return Some(*data_start);
+                }
+
                 let page_end = *data_start + PAGE_SIZE * *data_pages;
 
-                let page = Page::containing_address(page_end);
-
-                let frame = root_page_table.get_frame(page).unwrap();
-                frame_allocator::deallocate_frame(frame);
+                let page = Page::containing_address(page_end - PAGE_SIZE);
+                root_page_table.unmap(page);
 
                 *data_pages -= 1;
                 Some(page_end - PAGE_SIZE)
