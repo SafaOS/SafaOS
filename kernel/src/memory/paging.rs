@@ -23,8 +23,8 @@ pub struct Page {
 }
 #[derive(Debug, Clone)]
 pub struct IterPage {
-    pub start: Page,
-    pub end: Page,
+    start: Page,
+    end: Page,
 }
 
 impl Page {
@@ -37,7 +37,7 @@ impl Page {
     /// creates an iterator'able struct
     /// requires that start.start_address is smaller then end.start_address
     pub const fn iter_pages(start: Page, end: Page) -> IterPage {
-        assert!(start.start_address < end.start_address);
+        assert!(start.start_address <= end.start_address);
         IterPage { start, end }
     }
 }
@@ -271,7 +271,14 @@ impl PageTable {
 
         let entry = &mut level_1_table[level_1_index];
         // TODO: stress test this
-        debug_assert!(entry.frame().is_none());
+        debug_assert!(
+            entry.frame().is_none(),
+            "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {:#x}",
+            entry,
+            entry.frame(),
+            frame,
+            page.start_address
+        );
 
         *entry = Entry::new(flags, frame.start_address);
         Ok(())
@@ -304,7 +311,7 @@ impl PageTable {
     /// unmap page and all of it's entries
     pub fn unmap(&mut self, page: Page) {
         let entry = self.get_entry(page);
-
+        debug_assert!(entry.is_some());
         if let Some(entry) = entry {
             unsafe { entry.deallocate(true) };
         }

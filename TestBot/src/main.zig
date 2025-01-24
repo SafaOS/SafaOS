@@ -143,14 +143,14 @@ fn ls() !Output {
 }
 
 pub fn allocator_test() Error!void {
-    var ptr = try allocator.alloc(u8, 1024);
-    defer allocator.free(ptr);
+    var ptr = try allocator.alloc(u8, 4096 * 2);
     ptr[0] = 0x0;
+    allocator.free(ptr);
 
     const aligned_alloc = try allocator.alignedAlloc(u8, 16, 1024);
     defer allocator.free(aligned_alloc);
 
-    if (@intFromPtr(aligned_alloc.ptr) % 32 != 0) {
+    if (@intFromPtr(aligned_alloc.ptr) % 16 != 0) {
         return error.UnexpectedError;
     }
 
@@ -216,9 +216,9 @@ pub fn memory_info_test() Error!void {
             \\actual:
             \\{s}
             \\
-        , .{ meminfo_output.stdout, output.stdout });
+        , .{ meminfo_output.stdout[0 .. meminfo_output.stdout.len - 1], output.stdout[0 .. output.stdout.len - 1] });
         print("\x1b[0m", .{});
-    } else print("\x1b[36m[TestBot]\x1b[0m: memory has been reported to be {s} since the start of the TestBot, no possible leaks detected\n", .{output.stdout});
+    } else print("\x1b[36m[TestBot]\x1b[0m: memory has been reported to be {s} since the start of the TestBot, no possible leaks detected\n", .{output.stdout[0 .. output.stdout.len - 1]});
     output.uninit();
 }
 

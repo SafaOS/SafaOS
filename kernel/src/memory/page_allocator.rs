@@ -13,7 +13,7 @@ use crate::{debug, utils::Locked};
 
 use super::{
     align_up, frame_allocator,
-    paging::{current_root_table, EntryFlags, IterPage, MapToError, Page, PAGE_SIZE},
+    paging::{current_root_table, EntryFlags, MapToError, Page, PAGE_SIZE},
     sorcery::ROOT_BINDINGS,
 };
 
@@ -82,7 +82,8 @@ impl PageAllocator {
 
                 if bit < usize::BITS as usize {
                     *bytes |= mask << bit;
-                    return Some((self.get_addr(i, bit), page_count));
+                    let addr = self.get_addr(i, bit);
+                    return Some((addr, page_count));
                 }
             }
         } else {
@@ -104,6 +105,9 @@ impl PageAllocator {
 
                     final_index = i;
                     count += 1;
+                    if count >= bytes {
+                        break;
+                    }
                 }
 
                 if count < bytes {
@@ -111,9 +115,10 @@ impl PageAllocator {
                 }
 
                 let start_index = start_index.unwrap();
+                bitmap[start_index..final_index + 1].fill(usize::MAX);
 
-                bitmap[start_index..final_index + 1].fill(0xFF);
-                return Some((self.get_addr(start_index, 0), bytes * usize::BITS as usize));
+                let addr = self.get_addr(start_index, 0);
+                return Some((addr, bytes * usize::BITS as usize));
             }
         }
 
@@ -169,11 +174,11 @@ impl PageAllocator {
 
         let start = ptr as usize;
         let end = start + size;
-        let iter = IterPage {
-            start: Page::containing_address(start),
-            end: Page::containing_address(end),
-        };
-        for page in iter {
+
+        let start = Page::containing_address(start);
+        let end = Page::containing_address(end);
+
+        for page in Page::iter_pages(start, end) {
             unsafe {
                 current_root_table().unmap(page);
             }
@@ -185,7 +190,7 @@ impl PageAllocator {
 
         // if we have more than 1 usizes then allocated page_count is a multiple of usize::BITS
         // else it is less then usize::BITS so we need to find the actual index
-        let mask = if usizes > 1 {
+        let mask = if usizes >= 1 {
             usize::MAX
         } else {
             ((1usize << page_count) - 1) << start_bit

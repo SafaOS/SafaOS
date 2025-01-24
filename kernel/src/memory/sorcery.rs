@@ -8,7 +8,7 @@ use crate::{
     memory::frame_allocator::{self, Frame},
 };
 
-use super::paging::{IterPage, MapToError, Page, PageTable};
+use super::paging::{MapToError, Page, PageTable};
 
 pub struct PageTableBinding {
     name: &'static str,
@@ -22,17 +22,17 @@ pub struct PageTableBindings<const N: usize> {
 
 impl PageTableBinding {
     pub fn apply_binding(&self, from_page_table: &mut PageTable, to_page_table: &mut PageTable) {
-        let iter = IterPage {
-            start: Page::containing_address(self.from.0),
-            end: Page::containing_address(self.from.1),
-        };
+        let from_iter = Page::iter_pages(
+            Page::containing_address(self.from.0),
+            Page::containing_address(self.from.1),
+        );
 
-        let mut to_iter = IterPage {
-            start: Page::containing_address(self.to.0),
-            end: Page::containing_address(self.to.1),
-        };
+        let mut to_iter = Page::iter_pages(
+            Page::containing_address(self.to.0),
+            Page::containing_address(self.to.1),
+        );
 
-        for page in iter {
+        for page in from_iter {
             let pml4_index = super::translate(page.start_address).3;
             let to_page = to_iter.next().unwrap();
             let to_plm4_index = super::translate(to_page.start_address).3;

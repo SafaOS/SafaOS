@@ -8,7 +8,7 @@ use crate::{
     hddm,
     memory::{
         copy_to_userspace, frame_allocator,
-        paging::{EntryFlags, IterPage, MapToError, Page, PageTable, PAGE_SIZE},
+        paging::{EntryFlags, MapToError, Page, PageTable, PAGE_SIZE},
     },
     utils::errors::{ErrorStatus, IntoErr},
     VirtAddr,
@@ -375,13 +375,9 @@ impl<'a> Elf<'a> {
 
             let start_page = Page::containing_address(header.vaddr);
             let end_page = Page::containing_address(header.vaddr + header.memz + PAGE_SIZE);
-            let iter = IterPage {
-                start: start_page,
-                end: end_page,
-            };
 
             unsafe {
-                for page in iter {
+                for page in Page::iter_pages(start_page, end_page) {
                     let frame = frame_allocator::allocate_frame().ok_or(ElfError::MapToError)?;
 
                     page_table.map_to(page, frame, entry_flags)?;
