@@ -399,6 +399,10 @@ impl Drop for PhysPageTable {
     fn drop(&mut self) {
         unsafe {
             self.free(4);
+            // actually deallocating the page table
+            let phys_addr = self.root_pml4();
+            let frame = Frame::containing_address(phys_addr);
+            frame_allocator::deallocate_frame(frame);
         }
     }
 }

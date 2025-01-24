@@ -81,6 +81,12 @@ impl FileDescriptor {
     }
 }
 
+impl Drop for FileDescriptor {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 #[derive(Debug, Clone)]
 #[repr(u8)]
 pub enum FSError {
