@@ -1,6 +1,4 @@
-// a pmm i believe
-
-use core::slice;
+use core::{fmt::Debug, slice};
 
 use lazy_static::lazy_static;
 use spin::Mutex;
@@ -8,7 +6,7 @@ use spin::Mutex;
 use crate::debug;
 
 use super::{align_down, align_up, paging::PAGE_SIZE, PhysAddr};
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Frame {
     pub start_address: PhysAddr,
 }
@@ -23,6 +21,13 @@ impl Frame {
     }
 }
 
+impl Debug for Frame {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Frame")
+            .field(&format_args!("{:#x}", self.start_address))
+            .finish()
+    }
+}
 pub type Bitmap = &'static mut [u8];
 
 #[derive(Debug)]
@@ -83,7 +88,10 @@ impl RegionAllocator {
 
         debug!(
             RegionAllocator,
-            "expected {} bytes, found a region with {} bytes", bytes, bitmap_length
+            "expected {} bytes, found a region with {} bytes at {:#x}",
+            bytes,
+            bitmap_length,
+            bitmap_base
         );
 
         // allocates and setups bitmap
@@ -107,7 +115,9 @@ impl RegionAllocator {
         let last_usable_entry = last_usable_entry.unwrap();
         // sets all unusable frames as used
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE {
+            if entry.entry_type == limine::memory_map::EntryType::USABLE
+                && entry.base != best_region.base
+            {
                 this.set_unused_from(entry.base as PhysAddr, entry.length as usize);
             }
 
@@ -116,17 +126,7 @@ impl RegionAllocator {
             }
         }
 
-        this.set_used_from(bitmap_base, bitmap_length);
         this
-    }
-
-    #[inline]
-    fn set_used_from(&mut self, from: PhysAddr, size: usize) {
-        let frames_needed = align_up(size, PAGE_SIZE) / PAGE_SIZE;
-
-        for frame in 0..frames_needed {
-            self.set_used(from + frame * PAGE_SIZE);
-        }
     }
 
     #[inline]
@@ -155,9 +155,10 @@ impl RegionAllocator {
             for col in 0..8 {
                 if (self.bitmap[row] >> col) & 1 == 0 {
                     self.bitmap[row] |= 1 << col;
-                    return Some(Frame {
+                    let frame = Frame {
                         start_address: (row * 8 + col) * PAGE_SIZE,
-                    });
+                    };
+                    return Some(frame);
                 }
             }
         }
@@ -168,11 +169,6 @@ impl RegionAllocator {
     fn set_unused(&mut self, addr: PhysAddr) {
         let (row, col) = Self::bitmap_loc_from_addr(addr);
         self.bitmap[row] ^= 1 << col
-    }
-
-    fn set_used(&mut self, addr: PhysAddr) {
-        let (row, col) = Self::bitmap_loc_from_addr(addr);
-        self.bitmap[row] |= 1 << col
     }
 
     pub fn deallocate_frame(&mut self, frame: Frame) {

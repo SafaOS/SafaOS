@@ -1,32 +1,37 @@
-const libc = @import("libc");
-const printf = libc.stdio.zprintf;
-const getline = libc.stdio.zgetline;
+const std_c = @import("std-c");
+const std = @import("std");
+const sys = std_c.sys;
+
+const print = std_c.print;
+const StdinReader = std_c.StdinReader;
+pub const allocator = std_c.heap.c_allocator;
+
 const Lexer = @import("Lexer.zig");
 const repl = @import("repl.zig");
-const Error = libc.sys.errno.Error;
-const eql = @import("utils.zig").eql;
 
-pub const panic = libc.panic;
-const ArrayList = @import("utils.zig").ArrayList;
+const Error = std_c.Error;
+pub const panic = std_c.panic;
+
 const environment = @import("environment.zig");
 var ret: u64 = 0;
 
 pub fn prompt() Error!void {
-    const cwd_buffer = try libc.stdlib.zalloc(u8, 1024);
-    defer libc.stdlib.free(cwd_buffer.ptr);
+    const cwd_buffer = try allocator.alloc(u8, 1024);
+    defer allocator.free(cwd_buffer);
 
-    const cwd_len = try libc.sys.io.zgetcwd(cwd_buffer);
-    try printf("\x1B[38;2;255;0;193m%.*s\x1B[0m ", .{ cwd_len, cwd_buffer.ptr });
+    const cwd_len = try sys.io.zgetcwd(cwd_buffer);
+
+    print("\x1B[38;2;255;0;193m{s}\x1B[0m ", .{cwd_buffer[0..cwd_len]});
 
     if (ret != 0) {
-        try printf("\x1B[38;2;255;0;0m[%l]\x1B[0m ", .{ret});
+        print("\x1B[38;2;255;0;0m[{}]\x1B[0m ", .{ret});
     }
 
-    try printf("# ", .{});
+    print("# ", .{});
 }
 
 pub fn run(line: []const u8) Error!void {
-    var tokens = try ArrayList(Lexer.Token).init();
+    var tokens = std.ArrayList(Lexer.Token).init(allocator);
     defer tokens.deinit();
 
     var lexer = Lexer.init(line);
@@ -38,14 +43,14 @@ pub fn run(line: []const u8) Error!void {
     const name = tokens.items[0].asString();
     ret = repl.repl(tokens.items) catch |err| blk: {
         const err_name = @errorName(err);
-        try printf("failed to execute %.*s, error: %.*s\n", .{ name.len, name.ptr, err_name.len, err_name.ptr });
+        print("failed to execute {s}, error: {s}\n", .{ name, err_name });
         break :blk 0;
     };
 }
 
 pub fn main() Error!void {
-    try printf("\x1B[38;2;255;192;203m", .{});
-    try printf(
+    print("\x1B[38;2;255;192;203m", .{});
+    print(
         \\  ,---.             ,---.           ,-----.   ,---.   
         \\ '   .-'   ,--,--. /  .-'  ,--,--. '  .-.  ' '   .-'  
         \\ `.  `-.  ' ,-.  | |  `-, ' ,-.  | |  | |  | `.  `-.  
@@ -53,8 +58,8 @@ pub fn main() Error!void {
         \\ `-----'   `--`--' `--'    `--`--'  `-----'  `-----'  
     , .{});
 
-    try printf("\n\x1B[38;2;200;200;200m", .{});
-    try printf(
+    print("\n\x1B[38;2;200;200;200m", .{});
+    print(
         \\| Welcome to SafaOS!
         \\| you are currently in ram:/, a playground
         \\| init ramdisk has been mounted at sys:/
@@ -62,19 +67,23 @@ pub fn main() Error!void {
         \\| the command `help` will provide a list of builtin commands and some terminal usage guide
     , .{});
 
-    try printf("\x1B[0m\n", .{});
+    print("\x1B[0m\n", .{});
 
     try environment.init();
 
     while (true) {
         try prompt();
-        const line = try getline();
-        defer libc.stdlib.free(line.ptr);
+        const line = try StdinReader.readUntilDelimiterAlloc(
+            allocator,
+            '\n',
+            std.math.maxInt(usize),
+        );
+        defer allocator.free(line);
 
         try run(line);
     }
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

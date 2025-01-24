@@ -1,39 +1,46 @@
-const libc = @import("libc");
-const eql = @import("utils.zig").eql;
-const Slice = libc.sys.raw.Slice;
+const std_c = @import("std-c");
+const sys = std_c.sys;
+const Error = std_c.Error;
+const syscalls = std_c.syscalls;
+
+const eql = @import("std").mem.eql;
+const print = std_c.print;
+
+const Slice = sys.raw.Slice;
 
 pub fn exit() noreturn {
-    libc.exit(1);
+    syscalls.exit(0);
+    unreachable;
 }
 
 pub fn cd(argv: []const Slice(u8)) u64 {
-    if (argv.len < 2) return @intFromError(libc.sys.errno.Error.NotEnoughArguments);
+    if (argv.len < 2) return @intFromError(Error.NotEnoughArguments);
     const path = argv[1];
-    libc.sys.io.zchdir(path.ptr[0..path.len]) catch |err| return @intFromError(err);
+    sys.io.zchdir(path.ptr[0..path.len]) catch |err| return @intFromError(err);
     return 0;
 }
 
 pub fn help() void {
-    libc.stdio.zprintf(
+    print(
         \\to scroll up use PageUp, to scroll down use PageDown
         \\### Basic builtin commands list:
         \\
-    , .{}) catch {};
+    , .{});
     for (BuiltinFunctions) |function| {
-        libc.stdio.zprintf("- %.*s\n", .{ function.len, function.ptr }) catch {};
+        print("- {s}\n", .{function});
     }
 }
 
 pub fn shutdown() noreturn {
-    libc.syscalls.shutdown();
+    syscalls.shutdown();
 }
 
 pub fn reboot() noreturn {
-    libc.syscalls.reboot();
+    syscalls.reboot();
 }
 
 pub fn clear() void {
-    libc.stdio.zprintf("\x1B[2J\x1B[H", .{}) catch {};
+    print("\x1B[2J\x1B[H", .{});
 }
 
 pub fn getBuitlinFunctions() []const []const u8 {

@@ -1,6 +1,12 @@
-const libc = @import("libc");
-const sysinfo = libc.sys.utils.zsysinfo;
-const printf = libc.stdio.zprintf;
+const std_c = @import("std-c");
+const std = @import("std");
+
+const sysinfo = std_c.sys.utils.zsysinfo;
+const print = std_c.print;
+const File = std_c.stdio.File;
+const allocator = std_c.heap.c_allocator;
+
+pub const panic = std_c.panic;
 
 const Mode = enum {
     Bytes,
@@ -8,45 +14,58 @@ const Mode = enum {
     MiB,
     Verbose,
 };
+
+const MemInfo = struct {
+    total: usize,
+    free: usize,
+    used: usize,
+};
+
 pub fn main() !void {
-    const info = try sysinfo();
-    const mem_ava: usize = info.total_mem - info.used_mem;
+    const info_file = try File.open("proc:/meminfo", .{ .read = true });
+    defer info_file.close();
+
+    const info_str = try info_file.reader().readUntilEOF();
+    const parsed_info = try std.json.parseFromSlice(MemInfo, allocator, info_str, .{ .allocate = .alloc_if_needed, .ignore_unknown_fields = true });
+    defer parsed_info.deinit();
+
+    const info = parsed_info.value;
 
     var mode: Mode = .Verbose;
-    var args = libc.sys.args();
+    var args = std_c.sys.args();
 
     while (args.next()) |arg| {
-        if (libc.extra.eql(u8, arg, "-b")) {
+        if (std.mem.eql(u8, arg, "-b")) {
             mode = .Bytes;
-        } else if (libc.extra.eql(u8, arg, "-k")) {
+        } else if (std.mem.eql(u8, arg, "-k")) {
             mode = .KiB;
-        } else if (libc.extra.eql(u8, arg, "-m")) {
+        } else if (std.mem.eql(u8, arg, "-m")) {
             mode = .MiB;
         }
     }
 
     switch (mode) {
         .Bytes => {
-            try printf("%luB/%luB\n", .{ info.used_mem, info.total_mem });
+            print("{}B/{}B\n", .{ info.used, info.total });
         },
         .KiB => {
-            try printf("%luKiB/%luKiB\n", .{ info.used_mem / 1024, info.total_mem / 1024 });
+            print("{}KiB/{}KiB\n", .{ info.used / 1024, info.total / 1024 });
         },
         .MiB => {
-            try printf("%luMiB/%luMiB\n", .{ info.used_mem / 1024 / 1024, info.total_mem / 1024 / 1024 });
+            print("{}MiB/{}MiB\n", .{ info.used / 1024 / 1024, info.total / 1024 / 1024 });
         },
 
         .Verbose => {
-            try printf("memory info:\n", .{});
-            try printf("%luB used of %luB, %luB usable\n", .{ info.used_mem, info.total_mem, mem_ava });
+            print("memory info:\n", .{});
+            print("{}B used of {}B, {}B usable\n", .{ info.used, info.total, info.free });
 
-            try printf("%luKiBs used of %luKiBs, %luKiBs usable\n", .{ info.used_mem / 1024, info.total_mem / 1024, mem_ava / 1024 });
+            print("{}KiBs used of {}KiBs, {}KiBs usable\n", .{ info.used / 1024, info.total / 1024, info.free / 1024 });
 
-            try printf("%luMiBs used of %luMiBs, %luMiBs usable\n", .{ info.used_mem / 1024 / 1024, info.total_mem / 1024 / 1024, mem_ava / 1024 / 1024 });
+            print("{}MiBs used of {}MiBs, {}MiBs usable\n", .{ info.used / 1024 / 1024, info.total / 1024 / 1024, info.free / 1024 / 1024 });
         },
     }
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

@@ -1,8 +1,30 @@
+pub const STACK_SIZE: usize = PAGE_SIZE * 6;
+pub const STACK_START: usize = 0x00007A3000000000;
+pub const STACK_END: usize = STACK_START + STACK_SIZE;
+
+pub const RING0_STACK_START: usize = 0x00007A0000000000;
+pub const RING0_STACK_END: usize = RING0_STACK_START + STACK_SIZE;
+
+pub const ENVIROMENT_START: usize = 0x00007E0000000000;
+pub const ARGV_START: usize = ENVIROMENT_START + 0xA000000000;
+pub const ARGV_SIZE: usize = PAGE_SIZE * 4;
+
+pub const ARGV_END: usize = ARGV_START + ARGV_SIZE;
+
 use core::arch::global_asm;
 
 use bitflags::bitflags;
 
-use crate::threading::swtch;
+use crate::{
+    memory::{
+        copy_to_userspace,
+        paging::{EntryFlags, MapToError, PhysPageTable, PAGE_SIZE},
+    },
+    threading::swtch,
+    VirtAddr,
+};
+
+use super::gdt::{KERNEL_CODE_SEG, KERNEL_DATA_SEG, USER_CODE_SEG, USER_DATA_SEG};
 
 bitflags! {
     #[derive(Default, Debug, Clone, Copy)]
@@ -38,12 +60,12 @@ bitflags! {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct CPUStatus {
-    pub rsp: u64,
-    pub rflags: RFLAGS,
-    pub ss: u64,
-    pub cs: u64,
+    rsp: u64,
+    rflags: RFLAGS,
+    ss: u64,
+    cs: u64,
 
-    pub rip: u64,
+    rip: u64,
 
     r15: u64,
     r14: u64,
@@ -55,8 +77,8 @@ pub struct CPUStatus {
     r8: u64,
 
     rbp: u64,
-    pub rdi: u64,
-    pub rsi: u64,
+    rdi: u64,
+    rsi: u64,
 
     rdx: u64,
     rcx: u64,
@@ -84,12 +106,114 @@ pub struct CPUStatus {
 }
 
 impl CPUStatus {
-    pub fn at(&self) -> usize {
-        self.rip as usize
+    pub fn at(&self) -> VirtAddr {
+        self.rip as VirtAddr
     }
 
-    pub fn stack_at(&self) -> usize {
-        self.rsp as usize
+    pub fn stack_at(&self) -> VirtAddr {
+        self.rsp as VirtAddr
+    }
+
+    /// Initializes a new userspace `CPUStatus` instance, intializes the stack, argv, etc...
+    /// argument `userspace` determines if the process is in ring0 or not
+    /// # Safety
+    /// The caller must ensure `page_table` is not freed, as long as [`Self`] is alive otherwise it will cause UB
+    /// TODO: maybe use lifetimes to make this safe?
+    pub unsafe fn create(
+        page_table: &mut PhysPageTable,
+        argv: &[&str],
+        entry_point: usize,
+        userspace: bool,
+    ) -> Result<Self, MapToError> {
+        // allocate the stack
+        page_table.alloc_map(
+            STACK_START,
+            STACK_END,
+            EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+        )?;
+
+        // allocate the syscall stack
+        page_table.alloc_map(
+            RING0_STACK_START,
+            RING0_STACK_END,
+            EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+        )?;
+
+        // allocate the argv area
+        page_table.alloc_map(
+            ARGV_START,
+            ARGV_END,
+            EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+        )?;
+
+        let argc = argv.len();
+        let argv_addr = if !argv.is_empty() {
+            let mut start_addr = ARGV_START;
+            const USIZE_BYTES: usize = size_of::<usize>();
+
+            // argc
+            copy_to_userspace(page_table, start_addr, &argc.to_ne_bytes());
+
+            // argv*
+            start_addr += USIZE_BYTES;
+
+            for arg in argv {
+                let arg = arg.as_bytes();
+                let len = arg.len();
+
+                copy_to_userspace(page_table, start_addr, &len.to_ne_bytes());
+                start_addr += USIZE_BYTES;
+
+                copy_to_userspace(page_table, start_addr, arg);
+                // null-terminate arg
+                copy_to_userspace(page_table, start_addr + len, b"\0");
+                start_addr += len + 1;
+            }
+
+            let argv_addr = start_addr;
+            let mut current_argv_ptr = ARGV_START + USIZE_BYTES /* after argc */;
+            // argv**
+            for arg in argv {
+                copy_to_userspace(page_table, start_addr, &current_argv_ptr.to_ne_bytes());
+                start_addr += USIZE_BYTES;
+
+                current_argv_ptr += USIZE_BYTES; // skip the len
+                current_argv_ptr += arg.len() + 1; // skip the data
+            }
+
+            // _start looks like: extern "C" _start(argc: u64, argv: *const (len, str))
+            // looks like this: argc: 8 (u64) -> argv: (len: 8 (u64) + bytes: len ([u8])) * argc -> argv_pointers: 8 (u64) * argc
+            // where numbers is bytes count, (TYPE) is the type of the bytes
+            argv_addr
+        } else {
+            0
+        };
+
+        let (cs, ss, rflags) = if userspace {
+            (
+                USER_CODE_SEG as u64,
+                USER_DATA_SEG as u64,
+                RFLAGS::IOPL_LOW | RFLAGS::IOPL_HIGH | RFLAGS::from_bits_retain(0x202),
+            )
+        } else {
+            (
+                KERNEL_CODE_SEG as u64,
+                KERNEL_DATA_SEG as u64,
+                RFLAGS::from_bits_retain(0x202),
+            )
+        };
+
+        Ok(Self {
+            rflags,
+            rip: entry_point as u64,
+            rdi: argc as u64,
+            rsi: argv_addr as u64,
+            cr3: page_table.root_pml4() as u64,
+            rsp: STACK_END as u64,
+            cs,
+            ss,
+            ..Default::default()
+        })
     }
 }
 

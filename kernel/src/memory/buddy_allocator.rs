@@ -7,7 +7,7 @@ use crate::{debug, memory::frame_allocator, utils::Locked};
 
 use super::{
     align_up,
-    paging::{current_root_table, EntryFlags, IterPage, Page},
+    paging::{current_root_table, EntryFlags, Page},
     VirtAddr,
 };
 
@@ -115,12 +115,10 @@ impl BuddyAllocator<'_> {
 
     pub fn expand_heap_by<'b>(&mut self, size: usize) -> Option<&'b mut Block> {
         debug!(BuddyAllocator, "expanding the heap by {:#x}", size);
-        let iter = IterPage {
-            start: Page::containing_address(self.heap_end),
-            end: Page::containing_address(self.heap_end + size),
-        };
+        let start = Page::containing_address(self.heap_end);
+        let end = Page::containing_address(self.heap_end + size);
 
-        for page in iter {
+        for page in Page::iter_pages(start, end) {
             unsafe {
                 if current_root_table().get_frame(page).is_none() {
                     let frame = frame_allocator::allocate_frame()?;

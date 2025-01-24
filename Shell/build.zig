@@ -7,7 +7,14 @@ pub fn build(b: *std.Build) void {
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
     // for restricting supported target set are available.
-    const target = b.standardTargetOptions(.{ .default_target = .{ .abi = .none, .os_tag = .freestanding, .cpu_features_sub = std.Target.x86.featureSet(&[_]std.Target.x86.Feature{ .avx, .avx2, .sse, .sse2 }) } });
+    // DON'T DARE TO CHANGE ANYTHING HERE THE ZIG COMPILER IS STUPID
+    const target = b.standardTargetOptions(.{ .default_target = .{
+        .abi = .none,
+        .os_tag = .freestanding,
+        .cpu_arch = .x86_64,
+        .cpu_features_sub = std.Target.x86.featureSet(&[_]std.Target.x86.Feature{ .avx, .avx2, .sse, .sse2, .sse3 }),
+        .cpu_features_add = std.Target.x86.featureSet(&[_]std.Target.x86.Feature{.soft_float}),
+    } });
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
@@ -15,6 +22,12 @@ pub fn build(b: *std.Build) void {
     const libc = b.addModule("libc", .{
         .root_source_file = b.path("../libc/src/root.zig"),
     });
+
+    const std_c = b.addModule("std-c", .{
+        .root_source_file = b.path("../std-c/src/root.zig"),
+    });
+    std_c.addImport("libc", libc);
+
     const exe = b.addExecutable(.{
         .name = "Shell",
         .root_source_file = b.path("src/main.zig"),
@@ -23,7 +36,8 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
 
-    exe.root_module.addImport("libc", libc);
+    exe.root_module.addImport("std-c", std_c);
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).

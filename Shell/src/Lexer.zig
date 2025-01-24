@@ -1,6 +1,5 @@
 // TODO: handle errors
-const utils = @import("utils.zig");
-const eql = utils.eql;
+const std = @import("std");
 const Self = @This();
 
 line: usize = 1,
@@ -48,7 +47,7 @@ pub const Token = union(enum) {
         const keyword_list = getKeywordlist();
         pub fn fromString(str: []const u8) ?Keyword {
             for (keyword_list, 0..) |keyword, i| {
-                if (eql(u8, keyword, str)) {
+                if (std.mem.eql(u8, keyword, str)) {
                     return @enumFromInt(i);
                 }
             }

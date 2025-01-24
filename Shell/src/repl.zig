@@ -1,14 +1,17 @@
-const libc = @import("libc");
+const std_c = @import("std-c");
+const std = @import("std");
+const sys = std_c.sys;
+
+const allocator = @import("main.zig").allocator;
+
+const Slice = sys.raw.Slice;
+const Error = std_c.Error;
+
 const Token = @import("Lexer.zig").Token;
-const alloc = libc.stdlib.zalloc;
-const free = libc.stdlib.free;
-const zpspawn = libc.sys.utils.zpspwan;
-const Slice = libc.sys.raw.Slice;
-const Error = libc.sys.errno.Error;
-const eql = @import("utils.zig").eql;
+const Dir = std_c.dirent.DIR;
+
+const zpspawn = sys.utils.zpspwan;
 const environment = @import("environment.zig");
-const ArrayList = @import("utils.zig").ArrayList;
-const Dir = libc.dirent.DIR;
 
 const ExecuteBuiltin = @import("builtin.zig").executeBuiltin;
 
@@ -23,15 +26,13 @@ fn spawn(name: []const u8, argv: []const Slice(u8)) Error!u64 {
         while (it.next()) |entry| {
             const entry_name = entry.name[0..entry.name_length];
 
-            if (eql(u8, entry_name, name)) {
-                var full_path = try ArrayList(u8).init();
+            if (std.mem.eql(u8, entry_name, name)) {
+                var full_path = std.ArrayList(u8).init(allocator);
                 defer full_path.deinit();
 
-                try full_path.set_len(path.len + 1 + entry_name.len);
-
-                libc.string.zmemcpy(u8, full_path.items, path);
-                full_path.items[path.len] = '/';
-                libc.string.zmemcpy(u8, full_path.items[path.len + 1 ..], entry_name);
+                try full_path.appendSlice(path);
+                try full_path.appendSlice("/");
+                try full_path.appendSlice(entry_name);
 
                 const pid = zpspawn(full_path.items, argv, name);
                 return pid;
@@ -43,14 +44,14 @@ fn spawn(name: []const u8, argv: []const Slice(u8)) Error!u64 {
 }
 
 fn wait(pid: u64) usize {
-    return libc.syscalls.wait(pid);
+    return std_c.syscalls.wait(pid);
 }
 
 pub fn repl(tokens: []const Token) Error!usize {
     if (tokens.len == 0) return 0;
 
-    const argv = try alloc(Slice(u8), tokens.len);
-    defer free(argv.ptr);
+    const argv = try allocator.alloc(Slice(u8), tokens.len);
+    defer allocator.free(argv);
 
     for (tokens, 0..) |token, i| {
         const string = token.asString();

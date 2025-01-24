@@ -1,10 +1,8 @@
 use crate::{
     threading,
     utils::{
-        self,
         errors::ErrorStatus,
-        expose::SysInfo,
-        ffi::{Optional, RequiredMut, Slice, SliceMut},
+        ffi::{Optional, Slice, SliceMut},
     },
 };
 
@@ -52,11 +50,4 @@ extern "C" fn sysgetcwd(path_ptr: *mut u8, len: usize, dest_len: Optional<usize>
 #[no_mangle]
 extern "C" fn syssbrk(amount: isize) -> *mut u8 {
     threading::expose::sbrk(amount)
-}
-
-#[no_mangle]
-extern "C" fn sysinfo(ptr: RequiredMut<SysInfo>) -> ErrorStatus {
-    utils::expose::info(ptr.get()?);
-
-    ErrorStatus::None
 }

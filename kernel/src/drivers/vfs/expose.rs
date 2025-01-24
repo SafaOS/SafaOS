@@ -1,82 +1,119 @@
-//! exposed functions of VFS they manually uses
-//! a resource index instead of a file descriptor aka ri
-use core::fmt::Debug;
+use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
-use crate::threading::resources::{self, with_resource, Resource};
+use crate::threading::resources::{self, Resource};
 
-use super::{FSError, FSResult, FileDescriptor, Inode, InodeType, Path, FS, VFS_STRUCT};
+use super::{
+    DirIterDescriptor, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT,
+};
 
-/// gets a FileDescriptor from a fd (file_descriptor id) may return Err(FSError::InvaildFileDescriptor)
-fn with_fd<T, R>(ri: usize, then: T) -> FSResult<R>
-where
-    T: FnOnce(&mut FileDescriptor) -> R,
-{
-    with_resource(ri, |resource| {
-        if let Resource::File(ref mut fd) = resource {
-            Ok(then(fd))
-        } else {
-            Err(FSError::NotAFile)
+#[derive(Debug)]
+/// A high-level wrapper around a file descriptor resource
+/// that automatically closes the file descriptor when dropped
+pub struct File(usize);
+
+impl File {
+    fn with_fd<T, R>(&self, then: T) -> R
+    where
+        T: FnOnce(&mut FileDescriptor) -> R,
+    {
+        unsafe {
+            resources::get_resource(self.0, |mut resource| {
+                let Resource::File(ref mut fd) = *resource else {
+                    unreachable!()
+                };
+
+                then(fd)
+            })
+            .unwrap_unchecked()
         }
-    })
-    .ok_or(FSError::InvaildFileDescriptorOrRes)?
+    }
+
+    pub fn open(path: Path) -> FSResult<Self> {
+        let fd = VFS_STRUCT.read().open(path)?;
+
+        let fd_ri = resources::add_resource(Resource::File(fd));
+        Ok(Self(fd_ri))
+    }
+
+    pub fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
+        self.with_fd(|fd| VFS_STRUCT.read().read(fd, buffer))
+    }
+
+    pub fn write(&self, buffer: &[u8]) -> FSResult<usize> {
+        self.with_fd(|fd| VFS_STRUCT.read().write(fd, buffer))
+    }
+
+    pub fn from_fd(fd: usize) -> Option<Self> {
+        resources::get_resource(fd, |resource| {
+            if let Resource::File(_) = *resource {
+                Some(Self(fd))
+            } else {
+                None
+            }
+        })
+        .flatten()
+    }
+
+    pub fn diriter_open(&self) -> FSResult<DirIter> {
+        let diriter = self.with_fd(|fd| VFS_STRUCT.read().open_diriter(fd))?;
+
+        Ok(DirIter(resources::add_resource(Resource::DirIter(diriter))))
+    }
+
+    pub fn direntry(&self) -> DirEntry {
+        let node = self.with_fd(|fd| fd.node.clone());
+        DirEntry::get_from_inode(node)
+    }
 }
 
-#[no_mangle]
-pub fn open(path: Path) -> FSResult<usize> {
-    let fd = VFS_STRUCT
-        .try_read()
-        .ok_or(FSError::ResourceBusy)?
-        .open(path)?;
-    Ok(resources::add_resource(Resource::File(fd)))
+impl Drop for File {
+    fn drop(&mut self) {
+        self.with_fd(|fd| fd.close());
+        resources::remove_resource(self.0).unwrap();
+    }
 }
 
-#[no_mangle]
-pub fn close(ri: usize) -> FSResult<()> {
-    with_fd(ri, |fd| {
-        VFS_STRUCT
-            .try_read()
-            .ok_or(FSError::ResourceBusy)?
-            .close(fd)
-    })??;
+#[derive(Debug)]
+/// A wrapper around a [`ManuallyDrop<File>`] which doesn't close the file descriptor when dropped
+pub struct FileRef(ManuallyDrop<File>);
 
-    _ = resources::remove_resource(ri);
-    Ok(())
+impl FileRef {
+    pub fn open(path: Path) -> FSResult<Self> {
+        let file = File::open(path)?;
+        Ok(Self(ManuallyDrop::new(file)))
+    }
+
+    pub fn diriter_open(&self) -> FSResult<DirIterRef> {
+        self.0
+            .diriter_open()
+            .map(|x| DirIterRef(ManuallyDrop::new(x)))
+    }
+
+    pub fn get(fd: usize) -> Option<Self> {
+        Some(Self(ManuallyDrop::new(File::from_fd(fd)?)))
+    }
+
+    pub fn ri(&self) -> usize {
+        self.0 .0
+    }
 }
 
-#[no_mangle]
-pub fn read(ri: usize, buffer: &mut [u8]) -> FSResult<usize> {
-    with_fd(ri, |fd| {
-        VFS_STRUCT
-            .try_read()
-            .ok_or(FSError::ResourceBusy)?
-            .read(fd, buffer)
-    })?
-}
+impl Deref for FileRef {
+    type Target = File;
 
-#[no_mangle]
-pub fn write(ri: usize, buffer: &[u8]) -> FSResult<usize> {
-    with_fd(ri, |fd| {
-        VFS_STRUCT
-            .try_read()
-            .ok_or(FSError::ResourceBusy)?
-            .write(fd, buffer)
-    })?
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[no_mangle]
 pub fn create(path: Path) -> FSResult<()> {
-    VFS_STRUCT
-        .try_write()
-        .ok_or(FSError::ResourceBusy)?
-        .create(path)
+    VFS_STRUCT.read().create(path)
 }
 
 #[no_mangle]
 pub fn createdir(path: Path) -> FSResult<()> {
-    VFS_STRUCT
-        .try_write()
-        .ok_or(FSError::ResourceBusy)?
-        .createdir(path)
+    VFS_STRUCT.read().createdir(path)
 }
 
 pub const MAX_NAME_LEN: usize = 128;
@@ -116,46 +153,66 @@ impl DirEntry {
     }
 }
 
-#[no_mangle]
-/// opens a diriter as a resource
-/// return the ri of the diriter
-pub fn diriter_open(fd_ri: usize) -> FSResult<usize> {
-    let diriter = with_fd(fd_ri, |fd| {
-        VFS_STRUCT
-            .try_read()
-            .ok_or(FSError::ResourceBusy)?
-            .diriter_open(fd)
-    })??;
+/// a wrapper around a DirIterDescriptor resource which closes the diriter when dropped
+pub struct DirIter(usize);
 
-    Ok(resources::add_resource(Resource::DirIter(diriter)))
-}
-
-pub fn diriter_next(dir_ri: usize, direntry: &mut DirEntry) -> FSResult<()> {
-    resources::with_resource(dir_ri, |resource| {
-        if let Resource::DirIter(diriter) = resource {
-            let next = diriter.next();
-            if let Some(entry) = next {
-                *direntry = entry.clone();
+impl DirIter {
+    pub fn from_ri(ri: usize) -> Option<Self> {
+        resources::get_resource(ri, |resource| {
+            if let Resource::DirIter(_) = *resource {
+                Some(Self(ri))
             } else {
-                unsafe { *direntry = DirEntry::zeroed() }
+                None
             }
-            Ok(())
-        } else {
-            Err(FSError::InvaildFileDescriptorOrRes)
+        })
+        .flatten()
+    }
+
+    fn with_diriter<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut DirIterDescriptor) -> R,
+    {
+        unsafe {
+            resources::get_resource(self.0, |mut resource| {
+                let Resource::DirIter(ref mut diriter) = *resource else {
+                    unreachable!()
+                };
+
+                f(diriter)
+            })
+            .unwrap_unchecked()
         }
-    })
-    .ok_or(FSError::InvaildFileDescriptorOrRes)?
+    }
+
+    pub fn next(&self) -> Option<DirEntry> {
+        self.with_diriter(|diriter| diriter.next())
+    }
 }
 
-#[no_mangle]
-/// may only Err if dir_ri is invaild
-pub fn diriter_close(dir_ri: usize) -> FSResult<()> {
-    resources::remove_resource(dir_ri).map_err(|_| FSError::InvaildFileDescriptorOrRes)
+impl Drop for DirIter {
+    fn drop(&mut self) {
+        resources::remove_resource(self.0).unwrap();
+    }
 }
 
-#[no_mangle]
-pub fn fstat(ri: usize, direntry: &mut DirEntry) -> FSResult<()> {
-    let node = with_fd(ri, |fd| fd.node.clone())?;
-    *direntry = DirEntry::get_from_inode(node);
-    Ok(())
+/// a wrapper around [`ManuallyDrop<DirIter>`] which doesn't close the diriter when dropped
+pub struct DirIterRef(ManuallyDrop<DirIter>);
+
+impl DirIterRef {
+    pub fn get(ri: usize) -> Option<Self> {
+        let diriter = DirIter::from_ri(ri)?;
+        Some(Self(ManuallyDrop::new(diriter)))
+    }
+
+    pub fn ri(&self) -> usize {
+        self.0 .0
+    }
+}
+
+impl Deref for DirIterRef {
+    type Target = DirIter;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }

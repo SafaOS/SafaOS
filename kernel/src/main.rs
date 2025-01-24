@@ -67,6 +67,7 @@ pub fn khalt() -> ! {
 
 #[allow(unused_imports)]
 use core::panic::PanicInfo;
+pub const QUITE_PANIC: bool = true;
 
 /// prints to both the serial and the terminal doesn't print to the terminal if it panicked or if
 /// it is not ready...
@@ -76,8 +77,9 @@ macro_rules! cross_println {
         $crate::serial!($($arg)*);
         $crate::serial!("\n");
 
-
-        $crate::println!(r"{}", format_args!($($arg)*));
+        if !$crate::QUITE_PANIC {
+            $crate::println!($($arg)*);
+        }
     };
 }
 
@@ -98,10 +100,12 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe { asm!("cli") }
     unsafe {
         arch::x86_64::serial::SERIAL.inner.force_unlock();
-        FRAMEBUFFER_TERMINAL.force_write_unlock();
+        if !QUITE_PANIC {
+            FRAMEBUFFER_TERMINAL.force_write_unlock();
+            FRAMEBUFFER_TERMINAL.write().clear();
+        }
     }
 
-    FRAMEBUFFER_TERMINAL.write().clear();
     cross_println!(
         "\x1B[38;2;255;0;0mkernel panic:\n{}, at {}\x1B[0m",
         info.message(),
@@ -179,13 +183,14 @@ fn kstart() -> ! {
     panic!("failed context switching to kmain! ...")
 }
 
+/// Acts like an init process
 #[no_mangle]
 fn kmain() -> ! {
     debug!(Scheduler, "done ...");
-    let stdin = vfs::expose::open("dev:/tty").unwrap();
-    let stdout = vfs::expose::open("dev:/tty").unwrap();
+    let stdin = vfs::expose::File::open("dev:/tty").unwrap();
+    let stdout = vfs::expose::File::open("dev:/tty").unwrap();
     serial!(
-        "Hello, world!, running tests... stdin: {}, stdout: {}\n",
+        "Hello, world!, running tests... stdin: {:?}, stdout: {:?}\n",
         stdin,
         stdout
     );

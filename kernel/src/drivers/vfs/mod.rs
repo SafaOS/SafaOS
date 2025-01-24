@@ -1,5 +1,6 @@
-// TODO: define write and read behaviour, especially write
 pub mod expose;
+
+use core::fmt::Debug;
 
 use crate::{
     debug, limine,
@@ -23,7 +24,7 @@ use alloc::{
 };
 use expose::DirEntry;
 use lazy_static::lazy_static;
-use spin::RwLock;
+use spin::{Mutex, RwLock};
 pub type Path<'a> = &'a str;
 
 lazy_static! {
@@ -34,25 +35,28 @@ pub fn init() {
     debug!(VFS, "initing ...");
     let mut vfs = VFS_STRUCT.write();
     // ramfs
-    let ramfs = Box::new(ramfs::RamFS::new());
+    let ramfs = RwLock::new(ramfs::RamFS::new());
     vfs.mount(b"ram", ramfs).unwrap();
     // devices
-    vfs.mount(b"dev", Box::new(devicefs::DeviceFS::new()))
-        .unwrap();
+    vfs.mount(b"dev", devicefs::DeviceFS::new()).unwrap();
     // processes
-    vfs.mount(b"proc", Box::new(procfs::ProcFS::new())).unwrap();
+    vfs.mount(b"proc", Mutex::new(procfs::ProcFS::create()))
+        .unwrap();
     // ramdisk
     let mut ramdisk = limine::get_ramdisk();
-    let mut ramfs = Box::new(ramfs::RamFS::new());
-    VFS::unpack_tar(&mut *ramfs, &mut ramdisk).expect("failed unpacking ramdisk archive");
+    let mut ramfs = RwLock::new(ramfs::RamFS::new());
+
+    vfs.unpack_tar(&mut ramfs, &mut ramdisk)
+        .expect("failed unpacking ramdisk archive");
     vfs.mount(b"sys", ramfs).expect("failed mounting");
 
     debug!(VFS, "done ...");
 }
 
+/// Defines a file descriptor resource
 #[derive(Clone)]
 pub struct FileDescriptor {
-    pub mountpoint: *mut dyn FS,
+    mountpoint: Arc<dyn FileSystem>,
     pub node: Inode,
     /// acts as a dir entry index for directories
     /// acts as a byte index for files
@@ -63,13 +67,23 @@ pub struct FileDescriptor {
 }
 
 impl FileDescriptor {
-    pub fn new(mountpoint: *mut dyn FS, node: Inode) -> Self {
+    fn new(mountpoint: Arc<dyn FileSystem>, node: Inode) -> Self {
         Self {
             mountpoint,
             node,
             read_pos: 0,
             write_pos: 0,
         }
+    }
+
+    pub fn close(&mut self) {
+        self.node.close();
+    }
+}
+
+impl Drop for FileDescriptor {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -82,8 +96,6 @@ pub enum FSError {
     NoSuchAFileOrDirectory,
     InvaildDrive,
     InvaildPath,
-    /// ethier a fd which points to a resource which isnt a FileDescriptor or it points to nothing
-    InvaildFileDescriptorOrRes,
     AlreadyExists,
     NotExecuteable,
     ResourceBusy,
@@ -98,7 +110,6 @@ impl IntoErr for FSError {
             Self::NoSuchAFileOrDirectory => ErrorStatus::NoSuchAFileOrDirectory,
             Self::InvaildPath => ErrorStatus::InvaildPath,
             Self::InvaildDrive => ErrorStatus::NoSuchAFileOrDirectory,
-            Self::InvaildFileDescriptorOrRes => ErrorStatus::InvaildResource,
             Self::AlreadyExists => ErrorStatus::AlreadyExists,
             Self::NotExecuteable => ErrorStatus::NotExecutable,
             Self::ResourceBusy => ErrorStatus::Busy,
@@ -171,9 +182,19 @@ pub trait InodeOps: Send + Sync {
         self.kind() == InodeType::Directory
     }
 
-    fn open_diriter(&self, fs: *mut dyn FS) -> FSResult<DirIter> {
-        _ = fs;
+    fn open_diriter(&self) -> FSResult<Box<[usize]>> {
         Err(FSError::OperationNotSupported)
+    }
+
+    /// executes when the inode is opened
+    /// will be always called when the inode is opened, regardless of the file system
+    fn opened(&self) {
+        _ = self;
+    }
+    /// executes when the inode is closed
+    /// will be always called when the inode is closed, regardless of the file system
+    fn close(&self) {
+        _ = self;
     }
 }
 
@@ -183,14 +204,14 @@ pub type Inode = Arc<dyn InodeOps>;
 pub type InodeOf<T> = Arc<T>;
 
 #[derive(Debug, Clone)]
-pub struct DirIter {
-    fs: *mut dyn FS,
+pub struct DirIterDescriptor {
+    fs: Arc<dyn FileSystem>,
     inode_ids: Box<[usize]>,
     index: usize,
 }
 
-impl DirIter {
-    pub const fn new(fs: *mut dyn FS, inode_ids: Box<[usize]>) -> Self {
+impl DirIterDescriptor {
+    const fn new(fs: Arc<dyn FileSystem>, inode_ids: Box<[usize]>) -> Self {
         Self {
             fs,
             inode_ids,
@@ -207,36 +228,29 @@ impl DirIter {
         }
 
         let inode_id = self.inode_ids[index];
-        let inode = unsafe { (*self.fs).get_inode(inode_id) };
+        let inode = (*self.fs).get_inode(inode_id);
 
         match inode {
-            Ok(Some(inode)) => Some(DirEntry::get_from_inode(inode)),
-            Ok(None) => self.next(),
-            _ => None,
+            Some(inode) => Some(DirEntry::get_from_inode(inode)),
+            None => self.next(),
         }
     }
 }
 
-#[allow(clippy::upper_case_acronyms)]
-pub trait FS: Send + Sync {
-    /// returns the name of the fs
-    /// for example, `TmpFS` name is "tmpfs"
-    /// again we cannot use consts because of `dyn`...
+pub trait FileSystem: Send + Sync {
     fn name(&self) -> &'static str;
-    /// attempts to close a file cleanig all it's resources
-    fn close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
-        _ = file_descriptor;
+
+    fn get_inode(&self, inode_id: usize) -> Option<Inode>;
+    #[inline(always)]
+    fn root_inode(&self) -> Inode {
+        self.get_inode(0).unwrap()
+    }
+
+    /// called when a file is opened
+    /// will be always called before the inode is opened, regardless of the file system
+    fn on_open(&self, path: Path) -> FSResult<()> {
+        _ = path;
         Ok(())
-    }
-
-    fn get_inode(&self, inode_id: usize) -> FSResult<Option<Inode>> {
-        _ = inode_id;
-        Err(FSError::OperationNotSupported)
-    }
-
-    #[inline]
-    fn root_inode(&self) -> FSResult<Inode> {
-        Ok(self.get_inode(0)?.unwrap())
     }
 
     /// goes trough path to get the inode it refers to
@@ -244,7 +258,7 @@ pub trait FS: Send + Sync {
     fn reslove_path(&self, path: Path) -> FSResult<Inode> {
         let mut path = path.split(&['/', '\\']).peekable();
 
-        let mut current_inode = self.root_inode()?;
+        let mut current_inode = self.root_inode();
 
         if path.peek() == Some(&"") {
             path.next();
@@ -269,7 +283,7 @@ pub trait FS: Send + Sync {
             }
 
             if !current_inode.is_dir() {
-                return Err(FSError::NoSuchAFileOrDirectory);
+                return Err(FSError::NotADirectory);
             }
 
             if !current_inode.contains(depth) {
@@ -277,7 +291,7 @@ pub trait FS: Send + Sync {
             }
 
             let inodeid = current_inode.get(depth)?;
-            current_inode = self.get_inode(inodeid)?.unwrap();
+            current_inode = self.get_inode(inodeid).unwrap();
         }
 
         Ok(current_inode.clone())
@@ -307,45 +321,68 @@ pub trait FS: Send + Sync {
         Ok((resloved, name))
     }
 
-    /// opens a path returning a file descriptor or an Err(()) if path doesn't exist
-    fn open(&self, path: Path) -> FSResult<FileDescriptor> {
-        _ = path;
-        Err(FSError::OperationNotSupported)
-    }
     /// attempts to read `buffer.len` bytes from file_descriptor returns the actual count of the bytes read
     /// shouldn't read directories!
     fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        _ = file_descriptor;
-        _ = buffer;
-        Err(FSError::OperationNotSupported)
+        let count = buffer.len();
+        let file_size = file_descriptor.node.size()?;
+
+        let count = if file_descriptor.read_pos + count > file_size {
+            file_size - file_descriptor.read_pos
+        } else {
+            count
+        };
+
+        file_descriptor
+            .node
+            .read(buffer, file_descriptor.read_pos, count)?;
+
+        file_descriptor.read_pos += count;
+        Ok(count)
     }
     /// attempts to write `buffer.len` bytes to `file_descriptor`
     /// shouldn't write to directories!
     fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        _ = file_descriptor;
-        _ = buffer;
-        Err(FSError::OperationNotSupported)
+        if file_descriptor.write_pos == 0 {
+            file_descriptor.node.truncate(0)?;
+        }
+
+        file_descriptor
+            .node
+            .write(buffer, file_descriptor.write_pos)?;
+
+        file_descriptor.write_pos += buffer.len();
+
+        Ok(buffer.len())
     }
+
     /// creates an empty file named `name` in `path`
-    fn create(&mut self, path: Path) -> FSResult<()> {
-        _ = path;
-        Err(FSError::OperationNotSupported)
-    }
-    /// creates an empty dir named `name` in `path`
-    fn createdir(&mut self, path: Path) -> FSResult<()> {
+    fn create(&self, path: Path) -> FSResult<()> {
         _ = path;
         Err(FSError::OperationNotSupported)
     }
 
-    /// opens an iterator of directroy entires, fd must be a directory
-    fn diriter_open(&self, fd: &mut FileDescriptor) -> FSResult<DirIter> {
-        fd.node.open_diriter(fd.mountpoint)
+    /// creates an empty dir named `name` in `path`
+    fn createdir(&self, path: Path) -> FSResult<()> {
+        _ = path;
+        Err(FSError::OperationNotSupported)
     }
 }
 
+impl Debug for dyn FileSystem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl Debug for dyn InodeOps {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Inode").field(&self.inodeid()).finish()
+    }
+}
 #[allow(clippy::upper_case_acronyms)]
 pub struct VFS {
-    drivers: BTreeMap<Vec<u8>, Box<dyn FS>>,
+    drivers: BTreeMap<Vec<u8>, Arc<dyn FileSystem>>,
 }
 
 impl VFS {
@@ -357,11 +394,11 @@ impl VFS {
     /// mounts a file system as a drive
     /// returns Err(()) if not enough memory or there is an already mounted driver with that
     /// name
-    pub fn mount(&mut self, name: &[u8], value: Box<dyn FS>) -> Result<(), ()> {
+    fn mount<F: FileSystem + 'static>(&mut self, name: &[u8], value: F) -> Result<(), ()> {
         let name = name.to_vec();
 
         if let Entry::Vacant(entry) = self.drivers.entry(name) {
-            entry.insert(value);
+            entry.insert(Arc::new(value));
             Ok(())
         } else {
             Err(())
@@ -369,52 +406,21 @@ impl VFS {
     }
 
     /// gets a drive from `self` named "`name`"
-    /// or "`name`:" muttabily
-    pub(self) fn get_with_name_mut(&mut self, name: &[u8]) -> Option<&mut (dyn FS + '_)> {
-        let mut name = name;
-
-        if name.ends_with(b":") {
-            name = &name[..name.len() - 1];
-        }
-
-        if let Some(x) = self.drivers.get_mut(name) {
-            Some(&mut **x)
-        } else {
-            None
-        }
-    }
-
-    /// gets a drive from `self` named "`name`"
     /// or "`name`:" imuttabily
-    pub(self) fn get_with_name(&self, name: &[u8]) -> Option<&dyn FS> {
+    pub(self) fn get_with_name(&self, name: &[u8]) -> Option<&Arc<dyn FileSystem>> {
         let mut name = name;
 
         if name.ends_with(b":") {
             name = &name[..name.len() - 1];
         }
 
-        self.drivers.get(name).map(|x| &**x)
-    }
-    /// gets the drive name from `path` then gets the drive
-    /// path must be absolute starting with DRIVE_NAME:/
-    /// also handles relative path
-    pub(self) fn get_from_path_mut(&mut self, path: Path) -> FSResult<(&mut dyn FS, String)> {
-        let mut spilt_path = path.split(&['/', '\\']);
-
-        let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
-        let full_path = if !(drive.ends_with(':')) {
-            &(getcwd().to_owned() + path)
-        } else {
-            path
-        };
-
-        self.get_from_path_checked_mut(full_path)
+        self.drivers.get(name)
     }
 
     /// gets the drive name from `path` then gets the drive
     /// path must be absolute starting with DRIVE_NAME:/
     /// also handles relative path
-    pub(self) fn get_from_path(&self, path: Path) -> FSResult<(&dyn FS, String)> {
+    pub(self) fn get_from_path(&self, path: Path) -> FSResult<(&Arc<dyn FileSystem>, String)> {
         let mut spilt_path = path.split(&['/', '\\']);
 
         let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
@@ -428,26 +434,10 @@ impl VFS {
     }
 
     /// get_from_path but path cannot be realtive to cwd
-    pub(self) fn get_from_path_checked_mut(
-        &mut self,
+    pub(self) fn get_from_path_checked(
+        &self,
         path: Path,
-    ) -> FSResult<(&mut dyn FS, String)> {
-        let mut spilt_path = path.split(&['/', '\\']);
-
-        let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
-        if !(drive.ends_with(':')) {
-            return Err(FSError::InvaildDrive);
-        }
-
-        Ok((
-            self.get_with_name_mut(drive.as_bytes())
-                .ok_or(FSError::InvaildDrive)?,
-            path.to_string(),
-        ))
-    }
-
-    /// get_from_path but path cannot be realtive to cwd
-    pub(self) fn get_from_path_checked(&self, path: Path) -> FSResult<(&dyn FS, String)> {
+    ) -> FSResult<(&Arc<dyn FileSystem>, String)> {
         let mut spilt_path = path.split(&['/', '\\']);
 
         let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
@@ -476,7 +466,7 @@ impl VFS {
         Ok(path)
     }
 
-    pub fn unpack_tar(fs: &mut dyn FS, tar: &mut TarArchiveIter) -> FSResult<()> {
+    fn unpack_tar(&self, fs: &mut dyn FileSystem, tar: &mut TarArchiveIter) -> FSResult<()> {
         while let Some(inode) = tar.next() {
             let path = inode.name();
 
@@ -484,9 +474,9 @@ impl VFS {
                 ustar::Type::NORMAL => {
                     fs.create(path)?;
 
-                    let mut opened = fs.open(path)?;
-                    fs.write(&mut opened, inode.data())?;
-                    fs.close(&mut opened)?;
+                    let node = fs.reslove_path(path)?;
+                    node.write(inode.data(), 0)?;
+                    node.close();
                 }
 
                 ustar::Type::DIR => fs.createdir(path.trim_end_matches('/'))?,
@@ -496,31 +486,65 @@ impl VFS {
         }
         Ok(())
     }
+
+    fn open(&self, path: Path) -> FSResult<FileDescriptor> {
+        let (mountpoint, path) = self.get_from_path(path)?;
+        mountpoint.on_open(&path)?;
+        let node = mountpoint.reslove_path(&path)?;
+        node.opened();
+        Ok(FileDescriptor::new(mountpoint.clone(), node))
+    }
+
+    fn open_diriter(&self, file_descriptor: &mut FileDescriptor) -> FSResult<DirIterDescriptor> {
+        let inodes = file_descriptor.node.open_diriter()?;
+        let fs = file_descriptor.mountpoint.clone();
+
+        Ok(DirIterDescriptor::new(fs, inodes))
+    }
 }
 
-impl FS for VFS {
+impl FileSystem for VFS {
     fn name(&self) -> &'static str {
         "vfs"
     }
 
-    fn open(&self, path: Path) -> FSResult<FileDescriptor> {
-        let (mountpoint, path) = self.get_from_path(path)?;
+    fn get_inode(&self, _: usize) -> Option<Inode> {
+        unreachable!()
+    }
 
-        let file = mountpoint.open(&path)?;
+    fn root_inode(&self) -> Inode {
+        unreachable!()
+    }
 
-        Ok(file)
+    fn reslove_path(&self, _: Path) -> FSResult<Inode> {
+        FSResult::Err(FSError::OperationNotSupported)
+    }
+
+    fn reslove_path_uncreated<'a>(&self, _: Path<'a>) -> FSResult<(Inode, &'a str)> {
+        FSResult::Err(FSError::OperationNotSupported)
+    }
+
+    fn on_open(&self, path: Path) -> FSResult<()> {
+        _ = path;
+        FSResult::Err(FSError::OperationNotSupported)
     }
 
     fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        unsafe { (*file_descriptor.mountpoint).read(file_descriptor, buffer) }
+        file_descriptor
+            .mountpoint
+            .clone()
+            .read(file_descriptor, buffer)
     }
 
     fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        unsafe { (*file_descriptor.mountpoint).write(file_descriptor, buffer) }
+        file_descriptor
+            .mountpoint
+            .clone()
+            .write(file_descriptor, buffer)
     }
 
-    fn create(&mut self, path: Path) -> FSResult<()> {
-        let (mountpoint, path) = self.get_from_path_mut(path)?;
+    fn create(&self, path: Path) -> FSResult<()> {
+        let (mountpoint, path) = self.get_from_path(path)?;
 
         if path.ends_with('/') {
             return Err(FSError::NotAFile);
@@ -529,17 +553,9 @@ impl FS for VFS {
         mountpoint.create(&path)
     }
 
-    fn createdir(&mut self, path: Path) -> FSResult<()> {
-        let (mountpoint, path) = self.get_from_path_mut(path)?;
+    fn createdir(&self, path: Path) -> FSResult<()> {
+        let (mountpoint, path) = self.get_from_path(path)?;
 
         mountpoint.createdir(&path)
-    }
-
-    fn close(&self, file_descriptor: &mut FileDescriptor) -> FSResult<()> {
-        unsafe { (*file_descriptor.mountpoint).close(file_descriptor) }
-    }
-
-    fn diriter_open(&self, fd: &mut FileDescriptor) -> FSResult<DirIter> {
-        unsafe { (*fd.mountpoint).diriter_open(fd) }
     }
 }

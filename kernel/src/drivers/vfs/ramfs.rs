@@ -1,14 +1,17 @@
+use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::{collections::btree_map::BTreeMap, string::String, vec::Vec};
-use spin::Mutex;
+use spin::{Mutex, RwLock};
 
-use super::{DirIter, InodeOf};
-use super::{FSError, FSResult, FileDescriptor, Inode, InodeOps, InodeType, Path, FS};
+use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
+
+use super::InodeOf;
+use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType, Path};
 
 pub enum RamInodeData {
-    Data(Vec<u8>),
+    Data(Vec<u8, PageAlloc>),
     Children(BTreeMap<String, usize>),
     HardLink(Inode),
 }
@@ -30,7 +33,7 @@ impl RamInode {
     fn new_file(name: String, data: &[u8], inodeid: usize) -> InodeOf<Mutex<Self>> {
         Arc::new(RamInode::new(
             name,
-            RamInodeData::Data(data.to_vec()),
+            RamInodeData::Data(data.to_vec_in(&*GLOBAL_PAGE_ALLOCATOR)),
             inodeid,
         ))
     }
@@ -141,21 +144,20 @@ impl InodeOps for Mutex<RamInode> {
     fn inodeid(&self) -> usize {
         self.lock().inodeid
     }
-    fn open_diriter(&self, fs: *mut dyn FS) -> FSResult<DirIter> {
+    fn open_diriter(&self) -> FSResult<Box<[usize]>> {
         match self.lock().data {
-            RamInodeData::Children(ref data) => Ok(DirIter::new(
-                fs,
-                data.iter().map(|(_, inodeid)| *inodeid).collect(),
-            )),
+            RamInodeData::Children(ref data) => {
+                Ok(data.iter().map(|(_, inodeid)| *inodeid).collect())
+            }
 
-            RamInodeData::HardLink(ref inode) => inode.open_diriter(fs),
+            RamInodeData::HardLink(ref inode) => inode.open_diriter(),
             _ => Err(FSError::NotADirectory),
         }
     }
 }
 
 pub struct RamFS {
-    inodes: Vec<Inode>,
+    inodes: Vec<Arc<Mutex<RamInode>>>,
 }
 
 impl RamFS {
@@ -176,81 +178,44 @@ impl RamFS {
     }
 }
 
-impl FS for RamFS {
+impl FileSystem for RwLock<RamFS> {
     fn name(&self) -> &'static str {
         "ramfs"
     }
 
     #[inline]
-    fn get_inode(&self, inode_id: usize) -> FSResult<Option<Inode>> {
-        let node = self.inodes.get(inode_id);
-        Ok(node.cloned())
+    fn get_inode(&self, inode_id: usize) -> Option<Inode> {
+        self.read()
+            .inodes
+            .get(inode_id)
+            .cloned()
+            .map(|x| x as Inode)
     }
 
-    fn open(&self, path: Path) -> FSResult<FileDescriptor> {
-        let file = self.reslove_path(path)?;
-        let node = file.clone();
-
-        Ok(FileDescriptor::new(
-            self as *const RamFS as *mut RamFS,
-            node,
-        ))
-    }
-
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        let count = buffer.len();
-        let file_size = file_descriptor.node.size()?;
-
-        let count = if file_descriptor.read_pos + count > file_size {
-            file_size - file_descriptor.read_pos
-        } else {
-            count
-        };
-
-        file_descriptor
-            .node
-            .read(buffer, file_descriptor.read_pos, count)?;
-
-        file_descriptor.read_pos += count;
-        Ok(count)
-    }
-
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        if file_descriptor.write_pos == 0 {
-            file_descriptor.node.truncate(0)?;
-        }
-
-        file_descriptor
-            .node
-            .write(buffer, file_descriptor.write_pos)?;
-
-        file_descriptor.write_pos += buffer.len();
-
-        Ok(buffer.len())
-    }
-
-    fn create(&mut self, path: Path) -> FSResult<()> {
-        let inodeid = self.inodes.len();
+    fn create(&self, path: Path) -> FSResult<()> {
+        let inodeid = self.read().inodes.len();
 
         let (resloved, name) = self.reslove_path_uncreated(path)?;
         resloved.insert(name, inodeid)?;
 
         let node = RamInode::new_file(name.to_string(), &[], inodeid);
-        self.inodes.push(node);
+        self.write().inodes.push(node);
 
         Ok(())
     }
 
-    fn createdir(&mut self, path: Path) -> FSResult<()> {
-        let inodeid = self.inodes.len();
+    fn createdir(&self, path: Path) -> FSResult<()> {
+        let inodeid = self.read().inodes.len();
 
         let (resloved, name) = self.reslove_path_uncreated(path)?;
         resloved.insert(name, inodeid)?;
 
         let node = RamInode::new_dir(name.to_string(), inodeid);
-        self.inodes.push(node.clone());
+        self.write().inodes.push(node.clone());
 
-        let inodeid = self.make_hardlink(resloved.inodeid(), "..".to_string());
+        let inodeid = self
+            .write()
+            .make_hardlink(resloved.inodeid(), "..".to_string());
         node.insert("..", inodeid)?;
 
         Ok(())

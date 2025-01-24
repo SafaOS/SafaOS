@@ -1,24 +1,32 @@
-const libc = @import("libc");
-const printf = libc.stdio.zprintf;
-const File = libc.stdio.File;
-pub const panic = libc.panic;
+const std_c = @import("std-c");
+const std = @import("std");
+
+const print = std_c.print;
+const File = std_c.stdio.File;
+
+pub const panic = std_c.panic;
 
 pub fn main() !void {
-    const args = libc.sys.args();
-    if (args.count() < 2) {
-        try printf("expected filename to cat\n", .{});
-        return error.NotEnoughArguments;
+    const args = std_c.sys.args();
+    var data: []u8 = undefined;
+
+    if (args.count() > 1) {
+        const filename = args.nth(1).?;
+
+        const file = try File.open(filename, .{ .read = true });
+        defer file.close();
+
+        data = try file.reader().readUntilEOF();
+    } else {
+        const StdinReader = std_c.StdinReader;
+
+        const stdin_data = try StdinReader.readUntilDelimiterOrEofAlloc(std_c.heap.c_allocator, '\n', std.math.maxInt(usize));
+        data = stdin_data.?;
     }
 
-    const filename = args.nth(1).?;
-
-    const file = try File.open(filename, .{ .read = true });
-    defer file.close();
-
-    const data = try file.reader().readUntilEOFOrDelimiter('\n');
-    try printf("%.*s\n", .{ data.len, data.ptr });
+    print("{s}\n", .{data});
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

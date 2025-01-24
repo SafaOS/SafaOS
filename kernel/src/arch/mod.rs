@@ -12,3 +12,6 @@ pub use x86_64::power;
 
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::serial;
+
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::utils;

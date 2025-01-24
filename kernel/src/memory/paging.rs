@@ -9,7 +9,8 @@ use crate::{
 use bitflags::bitflags;
 use core::{
     arch::asm,
-    ops::{Index, IndexMut},
+    fmt::Debug,
+    ops::{Deref, DerefMut, Index, IndexMut},
 };
 
 use crate::memory::frame_allocator::Frame;
@@ -22,8 +23,8 @@ pub struct Page {
 }
 #[derive(Debug, Clone)]
 pub struct IterPage {
-    pub start: Page,
-    pub end: Page,
+    start: Page,
+    end: Page,
 }
 
 impl Page {
@@ -36,7 +37,7 @@ impl Page {
     /// creates an iterator'able struct
     /// requires that start.start_address is smaller then end.start_address
     pub const fn iter_pages(start: Page, end: Page) -> IterPage {
-        assert!(start.start_address < end.start_address);
+        assert!(start.start_address <= end.start_address);
         IterPage { start, end }
     }
 }
@@ -55,8 +56,16 @@ impl Iterator for IterPage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Entry(PhysAddr);
+impl Debug for Entry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Entry")
+            .field(&format_args!("{:#x}", self.0))
+            .field(&self.flags())
+            .finish()
+    }
+}
 // address of the next table or physial frame in 0x000FFFFF_FFFFF000 (the fs is the address are the fs the rest are flags or reserved)
 
 #[cfg(target_arch = "x86_64")]
@@ -84,16 +93,28 @@ impl Entry {
 
     /// deallocates an entry depending on it's level if it is 1 it should just deallocate the frame
     /// otherwise treat the frame as a page table and deallocate it
-    /// &mut self becomes invaild after use
+    /// # Safety
+    /// the caller must ensure that the entry is not used anymore
     pub unsafe fn free(&mut self, level: u8) {
         let frame = self.frame().unwrap();
 
-        if level == 0 {
-            frame_allocator::deallocate_frame(frame);
-            return;
+        if level != 0 {
+            let table = &mut *((frame.start_address | hddm()) as *mut PageTable);
+            table.free(level);
         }
-        let table = &mut *((frame.start_address | hddm()) as *mut PageTable);
-        table.free(level)
+        self.deallocate(false);
+    }
+
+    /// deallocates a page table entry and invalidates it if `invalidate` is true
+    /// # Safety
+    /// the caller must ensure that the entry is not used anymore, especially if `invalidate` is true
+    pub unsafe fn deallocate(&mut self, invalidate: bool) {
+        if let Some(frame) = self.frame() {
+            frame_allocator::deallocate_frame(frame);
+            if invalidate {
+                self.set(EntryFlags::empty(), 0);
+            }
+        }
     }
 }
 
@@ -135,18 +156,14 @@ impl PageTable {
         }
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    /// unsafe because self becomes invaild after use
+    /// unsafe because self becomes almost invaild after use, the entries are not invalidated
+    /// meaning you can still use virtual addresses from the page table but using them will cause UB
     pub unsafe fn free(&mut self, level: u8) {
         for entry in &mut self.entries[0..HIGHER_HALF_ENTRY] {
             if entry.0 != 0 {
                 entry.free(level - 1);
             }
         }
-
-        let table_addr = self as *mut PageTable as VirtAddr;
-
-        let frame = Frame::containing_address(table_addr - hddm());
-        frame_allocator::deallocate_frame(frame)
     }
 }
 
@@ -253,6 +270,15 @@ impl PageTable {
         let level_1_table = level_2_table[level_2_index].map(flags)?;
 
         let entry = &mut level_1_table[level_1_index];
+        // TODO: stress test this
+        debug_assert!(
+            entry.frame().is_none(),
+            "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {:#x}",
+            entry,
+            entry.frame(),
+            frame,
+            page.start_address
+        );
 
         *entry = Entry::new(flags, frame.start_address);
         Ok(())
@@ -271,22 +297,119 @@ impl PageTable {
         entry.frame()
     }
 
+    /// get a mutable reference to the entry for a given page
+    pub fn get_entry(&self, page: Page) -> Option<&mut Entry> {
+        let (level_1_index, level_2_index, level_3_index, level_4_index) =
+            translate(page.start_address);
+        let level_3_table = self[level_4_index].mapped_to()?;
+        let level_2_table = level_3_table[level_3_index].mapped_to()?;
+        let level_1_table = level_2_table[level_2_index].mapped_to()?;
+
+        Some(&mut level_1_table[level_1_index])
+    }
+
     /// unmap page and all of it's entries
     pub fn unmap(&mut self, page: Page) {
-        self.get_frame(page)
-            .inspect(|x| frame_allocator::deallocate_frame(*x));
+        let entry = self.get_entry(page);
+        debug_assert!(entry.is_some());
+        if let Some(entry) = entry {
+            unsafe { entry.deallocate(true) };
+        }
     }
 }
 
 /// allocates a pml4 and returns its physical address
-pub fn allocate_pml4() -> Result<PhysAddr, MapToError> {
+fn allocate_pml4<'a>() -> Result<&'a mut PageTable, MapToError> {
     let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-
     let virt_start_addr = frame.start_address | hddm();
     let table = unsafe { &mut *(virt_start_addr as *mut PageTable) };
 
     table.zeroize();
     table.copy_higher_half();
 
-    Ok(frame.start_address)
+    Ok(table)
+}
+
+#[repr(C)]
+/// A wrapper around a Physically allocated page table
+/// when the PhysPageTable is dropped it will free the whole page table so be careful with it
+#[derive(Debug)]
+pub struct PhysPageTable {
+    inner: *mut PageTable,
+}
+
+impl Deref for PhysPageTable {
+    type Target = PageTable;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.inner }
+    }
+}
+
+impl DerefMut for PhysPageTable {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.inner }
+    }
+}
+
+impl PhysPageTable {
+    pub fn create() -> Result<Self, MapToError> {
+        let page_table = allocate_pml4()?;
+        Ok(Self {
+            inner: page_table as *mut PageTable,
+        })
+    }
+
+    /// creates a new PhysPageTable from the current pml4 table
+    /// takes ownership of the current pml4 table meaning it will free it when the PhysPageTable is dropped
+    pub unsafe fn from_current() -> Self {
+        let page_table = current_root_table() as *mut PageTable;
+        Self { inner: page_table }
+    }
+
+    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
+    /// returns Err if any of the frames couldn't be allocated
+    /// the mapped pages are zeroed
+    pub fn alloc_map(
+        &mut self,
+        from: VirtAddr,
+        to: VirtAddr,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        let from_page = Page::containing_address(from);
+        let to_page = Page::containing_address(to);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+            let virt_addr = frame.start_address | hddm();
+            self.map_to(page, frame, flags)?;
+
+            unsafe {
+                core::ptr::write_bytes(virt_addr as *mut u8, 0, PAGE_SIZE);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the root pml4 physical address
+    /// # Safety
+    /// The caller must ensure that the root pml4 is not freed, once [`self`] is dropped otherwise it will cause UB
+    pub unsafe fn root_pml4(&self) -> PhysAddr {
+        (self.inner as VirtAddr - hddm()) as PhysAddr
+    }
+}
+
+impl Drop for PhysPageTable {
+    fn drop(&mut self) {
+        unsafe {
+            self.free(4);
+            // actually deallocating the page table
+            let phys_addr = self.root_pml4();
+            let frame = Frame::containing_address(phys_addr);
+            frame_allocator::deallocate_frame(frame);
+        }
+    }
 }

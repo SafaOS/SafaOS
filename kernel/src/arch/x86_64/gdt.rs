@@ -103,13 +103,12 @@ macro_rules! alloc_stack {
 }
 lazy_static! {
     pub static ref TSS: TaskStateSegment = {
-        use crate::threading::STACK_SIZE;
-
+        use super::threading::{RING0_STACK_END, STACK_SIZE};
         let mut tss = TaskStateSegment::new();
 
         tss.interrupt_stack_table[0] = alloc_stack!();
         tss.interrupt_stack_table[1] = alloc_stack!();
-        tss.privilege_stack_table[0] = crate::threading::RING0_STACK_END as u64;
+        tss.privilege_stack_table[0] = RING0_STACK_END as u64;
 
         tss
     };

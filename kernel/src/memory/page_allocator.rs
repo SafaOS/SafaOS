@@ -3,23 +3,29 @@
 //! makes use of memmory mapping and `FrameAllocator` (TODO: check if these are possible reasons it
 //! is slow)
 
-use core::alloc::{AllocError, Allocator, GlobalAlloc};
+use core::alloc::{AllocError, Allocator};
 
+use alloc::vec;
+use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
 use crate::{debug, utils::Locked};
 
 use super::{
     align_up, frame_allocator,
-    paging::{current_root_table, EntryFlags, IterPage, MapToError, Page, PAGE_SIZE},
+    paging::{current_root_table, EntryFlags, MapToError, Page, PAGE_SIZE},
     sorcery::ROOT_BINDINGS,
 };
 
+/// a bitmap page allocator which allocates contiguous virtual memory pages
+/// good for allocating large amounts of memory which won't be freed or reallocated much
+/// slower than [`super::buddy_allocator::BuddyAllocator`]
 pub struct PageAllocator {
     heap_start: usize,
     heap_end: usize,
-    last_allocation: (usize, usize),
-    allocations: usize,
+    /// bitmap is used to keep track of which pages are used and which are free
+    /// the number of bytes it contain should be aligned to usize bytes
+    bitmap: Vec<usize>,
 }
 
 impl PageAllocator {
@@ -27,78 +33,173 @@ impl PageAllocator {
         let (start, size) = ROOT_BINDINGS
             .get("LARGE_HEAP")
             .expect("failed to get LARGE_HEAP binding");
-        debug!(PageAllocator, "initialized allocator");
+
+        debug!(PageAllocator, "initialized allocator",);
         Self {
             heap_start: start as usize,
             heap_end: start as usize + size,
-            last_allocation: (start as usize, start as usize),
-            allocations: 0,
+            bitmap: vec![0; 8],
+        }
+    }
+    #[inline(always)]
+    fn get_addr(&self, index: usize, bit: usize) -> *mut u8 {
+        let computed_addr = index * usize::BITS as usize + bit;
+        (self.heap_start + (computed_addr * PAGE_SIZE)) as *mut u8
+    }
+
+    #[inline(always)]
+    fn get_location(&self, addr: *mut u8) -> (usize, usize) {
+        let start = addr as usize - self.heap_start;
+        let abs_index = start / PAGE_SIZE;
+
+        let index = abs_index / usize::BITS as usize;
+        let bit = abs_index % usize::BITS as usize;
+
+        (index, bit)
+    }
+    /// finds `page_count` number of contiguous pages
+    /// returns a pointer to the start of the allocated memory, or None if allocation fails.
+    /// sets the allocated pages as used in the bitmap
+    pub fn find_pages(&mut self, page_count: usize) -> Option<(*mut u8, usize)> {
+        let bitmap = self.bitmap.as_mut_slice();
+
+        if page_count <= usize::BITS as usize {
+            let mask = (1 << page_count) - 1;
+            for (i, bytes) in bitmap.iter_mut().enumerate() {
+                let mut byte_ref = *bytes;
+
+                if byte_ref == 0 {
+                    *bytes = mask;
+                    return Some((self.get_addr(i, 0), page_count));
+                }
+
+                let mut bit = 0;
+
+                while byte_ref & mask != 0 && bit < usize::BITS as usize {
+                    byte_ref >>= page_count;
+                    bit += page_count;
+                }
+
+                if bit < usize::BITS as usize {
+                    *bytes |= mask << bit;
+                    let addr = self.get_addr(i, bit);
+                    return Some((addr, page_count));
+                }
+            }
+        } else {
+            let bytes = page_count.div_ceil(usize::BITS as usize);
+            let mut iter = bitmap.iter_mut().enumerate();
+            'outer: loop {
+                let mut start_index = None;
+                let mut final_index = 0;
+                let mut count = 0;
+
+                while let Some((i, byte)) = iter.next() {
+                    if start_index.is_none() {
+                        start_index = Some(i);
+                    }
+
+                    if !(*byte == 0) {
+                        continue 'outer;
+                    }
+
+                    final_index = i;
+                    count += 1;
+                    if count >= bytes {
+                        break;
+                    }
+                }
+
+                if count < bytes {
+                    return None;
+                }
+
+                let start_index = start_index.unwrap();
+                bitmap[start_index..final_index + 1].fill(usize::MAX);
+
+                let addr = self.get_addr(start_index, 0);
+                return Some((addr, bytes * usize::BITS as usize));
+            }
+        }
+
+        None
+    }
+
+    pub fn try_find_pages(&mut self, page_count: usize) -> Option<(*mut u8, usize)> {
+        match self.find_pages(page_count) {
+            Some(ptr) => Some(ptr),
+            None => {
+                let bitcount = page_count.div_ceil(usize::BITS as usize);
+
+                self.bitmap.reserve(bitcount);
+                self.bitmap.resize(self.bitmap.len() + bitcount, 0);
+
+                Some(self.find_pages(page_count).unwrap())
+            }
         }
     }
 
     /// allocates `page_count` number of contiguous pages
     /// returns a pointer to the start of the allocated memory, or an error if allocation fails.
-    pub fn allocmut(&mut self, page_count: usize) -> Result<*mut u8, MapToError> {
-        let start = self.last_allocation.1;
+    pub fn allocmut(&mut self, page_count: usize) -> Result<(*mut u8, usize), MapToError> {
+        let (ptr, pages) = self
+            .try_find_pages(page_count)
+            .ok_or(MapToError::FrameAllocationFailed)?;
 
-        let end = start + page_count * PAGE_SIZE;
-        let start_page = Page::containing_address(start);
+        let start_page = Page::containing_address(ptr as usize);
+        let end_page = Page::containing_address(ptr as usize + pages * PAGE_SIZE);
 
-        if end > self.heap_end {
-            return Err(MapToError::FrameAllocationFailed);
-        }
-
-        let iter = IterPage {
-            start: start_page,
-            end: Page::containing_address(end),
-        };
-
-        for page in iter {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+        for page in Page::iter_pages(start_page, end_page) {
             unsafe {
                 current_root_table().map_to(
                     page,
-                    frame,
+                    frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
                     EntryFlags::PRESENT | EntryFlags::WRITABLE,
-                )?;
+                )?
             }
         }
-        self.last_allocation = (start, end);
-        self.allocations += 1;
-        Ok(start_page.start_address as *mut u8)
+        Ok((ptr, pages))
     }
 
     unsafe fn deallocmut(&mut self, ptr: *mut u8, size: usize) {
+        let page_count = size.div_ceil(PAGE_SIZE);
+
+        let page_count = if page_count > usize::BITS as usize {
+            align_up(page_count, usize::BITS as usize)
+        } else {
+            page_count
+        };
+
+        let size = page_count * PAGE_SIZE;
+
         let start = ptr as usize;
         let end = start + size;
-        let iter = IterPage {
-            start: Page::containing_address(start),
-            end: Page::containing_address(end),
-        };
-        for page in iter {
+
+        let start = Page::containing_address(start);
+        let end = Page::containing_address(end);
+
+        for page in Page::iter_pages(start, end) {
             unsafe {
                 current_root_table().unmap(page);
             }
         }
 
-        self.allocations -= 1;
-        if self.allocations == 0 {
-            self.last_allocation = (self.heap_start, self.heap_start);
+        let usizes = page_count / usize::BITS as usize;
+
+        let (start_index, start_bit) = self.get_location(ptr);
+
+        // if we have more than 1 usizes then allocated page_count is a multiple of usize::BITS
+        // else it is less then usize::BITS so we need to find the actual index
+        let mask = if usizes >= 1 {
+            usize::MAX
+        } else {
+            ((1usize << page_count) - 1) << start_bit
+        };
+        self.bitmap[start_index] &= !mask;
+
+        for i in start_index + 1..start_index + usizes {
+            self.bitmap[i] = 0;
         }
-    }
-}
-
-unsafe impl GlobalAlloc for Locked<PageAllocator> {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        self.inner
-            .lock()
-            .allocmut(layout.size().div_ceil(PAGE_SIZE))
-            .unwrap_or(core::ptr::null_mut())
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
-        self.inner.lock().deallocmut(ptr, layout.size())
     }
 }
 
@@ -108,12 +209,17 @@ unsafe impl Allocator for Locked<PageAllocator> {
         layout: core::alloc::Layout,
     ) -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError> {
         unsafe {
-            let ptr = self.alloc(layout);
+            let page_count = layout.size().div_ceil(PAGE_SIZE);
+            let (ptr, pages) = self
+                .lock()
+                .allocmut(page_count)
+                .unwrap_or((core::ptr::null_mut(), 0));
+
             if ptr.is_null() {
                 return Err(AllocError);
             }
 
-            let length = align_up(layout.size(), PAGE_SIZE);
+            let length = pages * PAGE_SIZE;
 
             let slice = core::ptr::slice_from_raw_parts_mut(ptr, length);
             Ok(core::ptr::NonNull::new(slice).unwrap_unchecked())
@@ -121,7 +227,42 @@ unsafe impl Allocator for Locked<PageAllocator> {
     }
 
     unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-        self.dealloc(ptr.as_ptr(), layout);
+        self.lock().deallocmut(ptr.as_ptr(), layout.size());
+    }
+
+    unsafe fn grow(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        if old_layout.size() % PAGE_SIZE != 0 {
+            let actual_size = align_up(old_layout.size(), PAGE_SIZE);
+            if actual_size >= new_layout.size() {
+                let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
+                return Ok(core::ptr::NonNull::new_unchecked(slice));
+            }
+        }
+
+        let new_ptr = self.allocate(new_layout)?;
+        core::ptr::copy_nonoverlapping(
+            ptr.as_ptr(),
+            new_ptr.as_ptr() as *mut u8,
+            old_layout.size(),
+        );
+        self.deallocate(ptr, old_layout);
+
+        Ok(new_ptr)
+    }
+
+    unsafe fn shrink(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        _: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
+        Ok(core::ptr::NonNull::new_unchecked(slice))
     }
 }
 

@@ -1,12 +1,13 @@
-const libc = @import("libc");
-const io = libc.sys.io;
-const strlen = libc.string.strlen;
-const printf = libc.stdio.zprintf;
+const std_c = @import("std-c");
+
+const io = std_c.sys.io;
+const print = std_c.print;
 
 pub fn main() !void {
-    var args = libc.sys.args();
+    var args = std_c.sys.args();
+
     if (args.count() < 2) {
-        try printf("expected at least the name of the directory to make\n", .{});
+        print("expected at least the name of the directory to make\n", .{});
         return error.NotEnoughArguments;
     }
 
@@ -15,5 +16,5 @@ pub fn main() !void {
 }
 
 comptime {
-    _ = libc;
+    _ = std_c;
 }

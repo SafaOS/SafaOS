@@ -8,7 +8,7 @@ use crate::{
     hddm,
     memory::{
         copy_to_userspace, frame_allocator,
-        paging::{EntryFlags, IterPage, Page, PageTable, PAGE_SIZE},
+        paging::{EntryFlags, MapToError, Page, PageTable, PAGE_SIZE},
     },
     utils::errors::{ErrorStatus, IntoErr},
     VirtAddr,
@@ -102,6 +102,12 @@ impl IntoErr for ElfError {
 
             _ => ErrorStatus::NotSupported,
         }
+    }
+}
+
+impl From<MapToError> for ElfError {
+    fn from(_: MapToError) -> Self {
+        Self::MapToError
     }
 }
 
@@ -369,19 +375,12 @@ impl<'a> Elf<'a> {
 
             let start_page = Page::containing_address(header.vaddr);
             let end_page = Page::containing_address(header.vaddr + header.memz + PAGE_SIZE);
-            let iter = IterPage {
-                start: start_page,
-                end: end_page,
-            };
 
             unsafe {
-                for page in iter {
+                for page in Page::iter_pages(start_page, end_page) {
                     let frame = frame_allocator::allocate_frame().ok_or(ElfError::MapToError)?;
 
-                    page_table
-                        .map_to(page, frame, entry_flags)
-                        .ok()
-                        .ok_or(ElfError::MapToError)?;
+                    page_table.map_to(page, frame, entry_flags)?;
 
                     let slice = slice::from_raw_parts_mut(
                         (frame.start_address | hddm()) as *mut u8,
@@ -393,52 +392,9 @@ impl<'a> Elf<'a> {
                 let file = slice::from_raw_parts(file_start, header.filez);
 
                 copy_to_userspace(page_table, header.vaddr, file);
-                // let mut size_to_copy = if index < pages_required - 1 {
-                //     PAGE_SIZE
-                // } else {
-                //     header.memz % PAGE_SIZE
-                // };
-                //
-                // let mem = slice::from_raw_parts_mut(mem_start, size_to_copy);
-                // mem.fill(0);
-                //
-                // let start = index * PAGE_SIZE;
-                // if mem.len() > file.len() + start {
-                //     let diff = mem.len() - (file.len() + start);
-                //     size_to_copy -= diff;
-                // }
-                // serial!(
-                //     "copying {}, start {}, end {}, page {:#x}\n",
-                //     size_to_copy,
-                //     start,
-                //     start + size_to_copy,
-                //     page.start_address
-                // );
-                // mem[..size_to_copy].copy_from_slice(&file[start..size_to_copy + start]);
             }
-            program_break = header.vaddr + header.memz;
+            program_break = header.vaddr + header.memz + PAGE_SIZE;
         }
         Ok(program_break)
     }
-
-    // pub fn debug(&self) {
-    //     cross_println!("{:#?}", self);
-    //     cross_println!("section names section {:#?}", self.section_names_table());
-    //
-    //     for sym in self.symtable().unwrap() {
-    //         cross_println!(
-    //             "sym {}: `{}`",
-    //             sym.name_index,
-    //             self.string_table_index(sym.name_index)
-    //         );
-    //     }
-    //
-    //     for section in self.sections {
-    //         cross_println!(
-    //             "section {}: '{}'",
-    //             section.name_index,
-    //             self.section_names_table_index(section.name_index)
-    //         );
-    //     }
-    // }
 }

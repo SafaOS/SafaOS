@@ -3,5 +3,5 @@ export fn main() bool {
 }
 
 comptime {
-    _ = @import("libc");
+    _ = @import("std-c");
 }

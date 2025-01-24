@@ -1,4 +1,7 @@
-use core::ops::{FromResidual, Try};
+use core::{
+    convert::Infallible,
+    ops::{FromResidual, Try},
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +43,15 @@ pub enum ErrorStatus {
 impl FromResidual for ErrorStatus {
     fn from_residual(residual: Self) -> Self {
         residual
+    }
+}
+
+impl FromResidual<Result<Infallible, ErrorStatus>> for ErrorStatus {
+    fn from_residual(residual: Result<Infallible, ErrorStatus>) -> Self {
+        match residual {
+            Ok(_) => Self::None,
+            Err(err) => err,
+        }
     }
 }
 

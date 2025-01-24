@@ -1,12 +1,13 @@
-const libc = @import("libc");
-const File = libc.stdio.File;
-const printf = libc.stdio.zprintf;
-pub const panic = libc.panic;
+const std_c = @import("std-c");
+
+const File = std_c.stdio.File;
+const print = std_c.print;
+const panic = std_c.panic;
 
 pub fn main() !void {
-    const args = libc.sys.args();
+    const args = std_c.sys.args();
     if (args.count() < 3) {
-        try printf("expected filename to write to, and data to write\n", .{});
+        print("expected filename to write to, and data to write\n", .{});
         return error.NotEnoughArguments;
     }
     const filename = args.nth(1).?;
@@ -19,5 +20,5 @@ pub fn main() !void {
     try writer.write(data);
 }
 comptime {
-    _ = libc;
+    _ = std_c;
 }

@@ -1,15 +1,15 @@
-const eql = @import("utils.zig").eql;
-const ArrayList = @import("utils.zig").ArrayList;
+const std = @import("std");
+const allocator = @import("main.zig").allocator;
 
 pub const EnvironmentVariable = struct {
     name: []const u8,
     value: []const u8,
 };
 
-var environment: ArrayList(EnvironmentVariable) = undefined;
+var environment: std.ArrayList(EnvironmentVariable) = undefined;
 
 pub fn init() !void {
-    environment = try ArrayList(EnvironmentVariable).init();
+    environment = std.ArrayList(EnvironmentVariable).init(allocator);
     try add_environment_variable("PATH", "sys:/bin");
 }
 
@@ -19,15 +19,15 @@ pub fn add_environment_variable(name: []const u8, value: []const u8) !void {
 
 pub fn get_environment_variable(name: []const u8) ?[]const u8 {
     for (environment.items) |env| {
-        if (eql(u8, env.name, name)) {
+        if (std.mem.eql(u8, env.name, name)) {
             return env.value;
         }
     }
     return null;
 }
 
-pub fn get_path() !ArrayList([]const u8) {
-    var path = try ArrayList([]const u8).init();
+pub fn get_path() !std.ArrayList([]const u8) {
+    var path = std.ArrayList([]const u8).init(allocator);
     // adding current dir
     try path.append(".");
 

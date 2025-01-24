@@ -20,6 +20,12 @@ impl<T> PageVec<T> {
         }
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            inner: Vec::with_capacity_in(capacity, &*GLOBAL_PAGE_ALLOCATOR),
+        }
+    }
+
     pub fn clear(&mut self) {
         self.inner.clear();
     }
@@ -64,6 +70,12 @@ impl<T> core::ops::Deref for PageVec<T> {
     }
 }
 
+impl<T> From<Vec<T, PageAlloc>> for PageVec<T> {
+    fn from(v: Vec<T, PageAlloc>) -> Self {
+        Self { inner: v }
+    }
+}
+
 pub struct PageString {
     pub inner: PageVec<u8>,
 }
@@ -72,6 +84,12 @@ impl PageString {
     pub fn new() -> Self {
         Self {
             inner: PageVec::new(),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            inner: PageVec::with_capacity(capacity),
         }
     }
 
@@ -114,6 +132,34 @@ impl PageString {
 
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+}
+
+impl serde_json::io::Write for PageVec<u8> {
+    fn write(&mut self, buf: &[u8]) -> serde_json::io::Result<usize> {
+        self.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> serde_json::io::Result<()> {
+        Ok(())
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> serde_json::io::Result<()> {
+        self.extend_from_slice(buf);
+        Ok(())
+    }
+}
+impl serde_json::io::Write for PageString {
+    fn write(&mut self, buf: &[u8]) -> serde_json::io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> serde_json::io::Result<()> {
+        self.inner.flush()
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> serde_json::io::Result<()> {
+        self.inner.write_all(buf)
     }
 }
 
@@ -256,6 +302,17 @@ impl<T> LinkedList<T> {
     pub fn current(&self) -> Option<&T> {
         let current = self.current?;
         unsafe { Some(&(*current.as_ptr()).inner) }
+    }
+
+    pub fn last(&self) -> Option<&T> {
+        let last = self.tail?;
+        unsafe { Some(&(*last.as_ptr()).inner) }
+    }
+
+    #[allow(dead_code)]
+    pub fn last_mut(&mut self) -> Option<&mut T> {
+        let last = self.tail?;
+        unsafe { Some(&mut (*last.as_ptr()).inner) }
     }
 
     pub fn current_mut(&mut self) -> Option<&mut T> {
