@@ -1,6 +1,7 @@
 // build.rs
 use std::{
     collections::HashSet,
+    env::current_dir,
     fs::{self, File},
     io::empty,
     path::{Path, PathBuf},
@@ -192,7 +193,12 @@ fn main() {
     compile_programs();
     make_ramdisk();
     make_iso();
-    let iso_path = ISO_PATH;
+    let iso_path = current_dir()
+        .unwrap()
+        .join(ISO_PATH)
+        .to_str()
+        .unwrap()
+        .to_string();
     println!("cargo:rerun-if-changed={}", iso_path);
     println!("cargo:rerun-if-changed=limine");
     println!("cargo:rerun-if-changed=programs/build");
