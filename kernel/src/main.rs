@@ -53,6 +53,14 @@ macro_rules! serial {
     };
 }
 
+/// Returns the number of milliseconds since the CPU was started
+#[macro_export]
+macro_rules! time {
+    () => {
+        $crate::arch::x86_64::utils::time()
+    };
+}
+
 use core::arch::asm;
 #[no_mangle]
 #[inline]

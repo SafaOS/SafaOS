@@ -1,6 +1,7 @@
 pub mod apic;
 pub mod handlers;
 mod idt;
+mod pit;
 
 use core::{arch::asm, fmt::Display};
 use idt::IDTDesc;

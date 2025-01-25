@@ -4,7 +4,6 @@ use macros::test_module;
 pub mod testing_module {
     use alloc::vec::Vec;
 
-    use crate::cross_println;
     use crate::memory::frame_allocator;
     use crate::println;
     use crate::threading::expose::pspawn;
