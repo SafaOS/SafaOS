@@ -105,6 +105,12 @@ impl InodeOps for DeviceInode {
             }
         }
     }
+    fn sync(&self) -> FSResult<()> {
+        match self.device() {
+            Some(device) => device.sync(),
+            None => Err(super::FSError::NotAFile),
+        }
+    }
 }
 
 pub struct DeviceFS {

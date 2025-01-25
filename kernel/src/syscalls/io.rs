@@ -143,3 +143,15 @@ extern "C" fn sysfstat(ri: usize, direntry_ptr: RequiredMut<vfs::expose::DirEntr
     *direntry_ptr.get()? = direntry;
     ErrorStatus::None
 }
+
+#[no_mangle]
+extern "C" fn syssync(ri: usize) -> ErrorStatus {
+    let file_ref = FileRef::get(ri).ok_or(ErrorStatus::InvaildResource)?;
+    loop {
+        match file_ref.sync() {
+            Err(FSError::ResourceBusy) => threading::expose::thread_yeild(),
+            Ok(()) => return ErrorStatus::None,
+            Err(err) => return err.into(),
+        }
+    }
+}

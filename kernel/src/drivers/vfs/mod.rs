@@ -196,6 +196,11 @@ pub trait InodeOps: Send + Sync {
     fn close(&self) {
         _ = self;
     }
+
+    /// syncs the inode reads and writes
+    fn sync(&self) -> FSResult<()> {
+        Ok(())
+    }
 }
 
 /// unknown inode type

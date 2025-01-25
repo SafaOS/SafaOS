@@ -1,6 +1,9 @@
 use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
-use crate::threading::resources::{self, Resource};
+use crate::{
+    serial,
+    threading::resources::{self, Resource},
+};
 
 use super::{
     DirIterDescriptor, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT,
@@ -63,6 +66,10 @@ impl File {
     pub fn direntry(&self) -> DirEntry {
         let node = self.with_fd(|fd| fd.node.clone());
         DirEntry::get_from_inode(node)
+    }
+
+    pub fn sync(&self) -> FSResult<()> {
+        self.with_fd(|fd| fd.node.sync())
     }
 }
 

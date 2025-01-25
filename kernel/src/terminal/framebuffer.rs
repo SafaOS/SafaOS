@@ -34,11 +34,6 @@ pub struct FrameBufferTTY<'a> {
 
 impl FrameBufferTTY<'_> {
     pub fn new() -> Self {
-        let size_pixels = FRAMEBUFFER_DRIVER.read().width() * FRAMEBUFFER_DRIVER.read().height();
-        let bytes_per_pixel = FRAMEBUFFER_DRIVER.read().info.bytes_per_pixel;
-        let size = size_pixels * bytes_per_pixel;
-
-        FRAMEBUFFER_DRIVER.write().increase_buffer(size * 3);
         Self {
             framebuffer: &FRAMEBUFFER_DRIVER,
             cursor_x: 0,

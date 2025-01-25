@@ -65,31 +65,25 @@ pub struct TTY<T: TTYInterface> {
 
 impl<T: TTYInterface> Write for TTY<T> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
-            self.interface.write_str(s)?;
+        for c in s.chars() {
+            self.write_char(c)?;
         }
         Ok(())
     }
 
     fn write_char(&mut self, c: char) -> core::fmt::Result {
-        if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
-            self.interface.write_char(c)?;
-        }
+        self.stdout_buffer.push_char(c);
         Ok(())
     }
 
     fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> core::fmt::Result {
-        if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
-            if let Some(s) = args.as_str() {
-                self.interface.write_str(s)?;
-            } else {
-                self.stdout_buffer.clear();
-                // always succeeds
-                let _ = self.stdout_buffer.write_fmt(args);
-                self.interface.write_str(&self.stdout_buffer)?;
-            }
+        if let Some(s) = args.as_str() {
+            _ = self.write_str(s);
+            self.sync();
+        } else {
+            self.stdout_buffer.write_fmt(args)?;
+            self.sync();
         }
-
         Ok(())
     }
 }
@@ -112,7 +106,7 @@ impl<T: TTYInterface> TTY<T> {
     pub fn enable_input(&mut self) {
         if !self.settings.contains(TTYSettings::RECIVE_INPUT) {
             self.settings |= TTYSettings::RECIVE_INPUT;
-            _ = self.write_char('_');
+            _ = self.interface.write_char('_');
         }
     }
 
@@ -135,8 +129,18 @@ impl<T: TTYInterface> TTY<T> {
 
             if self.settings.contains(TTYSettings::RECIVE_INPUT) {
                 // puts the cursor `_`
-                _ = self.write_char('_');
+                _ = self.interface.write_char('_');
             }
+        }
+    }
+
+    /// syncs the buffer by actually writing it to the interface
+    pub fn sync(&mut self) {
+        if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
+            self.interface
+                .write_str(self.stdout_buffer.as_str())
+                .unwrap();
+            self.stdout_buffer.clear();
         }
     }
 }
@@ -164,11 +168,11 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                     self.interface.backspace();
                     let char = key.map_key();
                     if char != '\0' {
-                        let _ = self.write_char(char);
+                        let _ = self.interface.write_char(char);
                         self.stdin_buffer.push_char(char);
                     }
                     // put the cursor back
-                    _ = self.write_char('_');
+                    _ = self.interface.write_char('_');
                 }
             }
         }

@@ -47,4 +47,10 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
         }
         Ok(buffer.len())
     }
+
+    fn sync(&self) -> FSResult<()> {
+        let mut writer = self.try_write().ok_or(FSError::ResourceBusy)?;
+        writer.sync();
+        Ok(())
+    }
 }

@@ -51,6 +51,9 @@ pub trait CharDevice: Send + Sync {
     fn name(&self) -> &'static str;
     fn read(&self, buffer: &mut [u8]) -> FSResult<usize>;
     fn write(&self, buffer: &[u8]) -> FSResult<usize>;
+    fn sync(&self) -> FSResult<()> {
+        Ok(())
+    }
 }
 
 impl<T: CharDevice> InodeOps for T {
@@ -77,6 +80,10 @@ impl<T: CharDevice> InodeOps for T {
 
     fn inodeid(&self) -> usize {
         0
+    }
+
+    fn sync(&self) -> crate::drivers::vfs::FSResult<()> {
+        CharDevice::sync(self)
     }
 }
 

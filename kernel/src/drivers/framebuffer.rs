@@ -33,20 +33,14 @@ pub struct FrameBuffer {
 impl FrameBuffer {
     pub fn new() -> Self {
         let (video_buffer, info) = limine::get_framebuffer();
-        let mut buffer = Vec::with_capacity_in(video_buffer.len(), &*GLOBAL_PAGE_ALLOCATOR);
-        buffer.resize(video_buffer.len(), 0);
+        let mut buffer = Vec::with_capacity_in(video_buffer.len() * 4, &*GLOBAL_PAGE_ALLOCATOR);
+        buffer.resize(video_buffer.len() * 4, 0);
         Self {
             info,
             buffer_display_index: 0,
             buffer,
             video_buffer,
         }
-    }
-
-    /// reserves `size` additional bytes to the buffer
-    pub fn increase_buffer(&mut self, size: usize) {
-        self.buffer.reserve(size);
-        self.buffer.resize(self.buffer.len() + size, 0);
     }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {

@@ -44,7 +44,7 @@ syscall_table:
     .quad sysspawn
     .quad syschdir
     .quad sysgetcwd
-    .quad deprecated_syscall
+    .quad syssync
     .quad deprecated_syscall
     .quad syssbrk
     .quad syspspawn
@@ -102,9 +102,6 @@ extern "x86-interrupt" {
 
 #[no_mangle]
 extern "C" fn deprecated_syscall(syscall: usize) -> ErrorStatus {
-    debug!(
-        SyscallContext,
-        "deprecated syscall called with syscall {}", syscall
-    );
+    debug!(SyscallContext, "deprecated syscall ({}) called", syscall);
     ErrorStatus::InvaildSyscall
 }
