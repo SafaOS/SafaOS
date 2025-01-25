@@ -1,12 +1,13 @@
+use core::fmt::Write;
 use core::marker::PhantomData;
-use core::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut, RangeBounds};
 use core::ptr::NonNull;
 use core::str;
 
 use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
 use alloc::boxed::Box;
 use alloc::str::pattern::{Pattern, ReverseSearcher};
-use alloc::vec::Vec;
+use alloc::vec::{Drain, Vec};
 
 pub struct PageVec<T>(Vec<T, PageAlloc>);
 
@@ -53,7 +54,7 @@ impl<T> From<Vec<T, PageAlloc>> for PageVec<T> {
 }
 
 pub struct PageString {
-    pub inner: PageVec<u8>,
+    inner: PageVec<u8>,
 }
 
 impl PageString {
@@ -97,6 +98,10 @@ impl PageString {
         unsafe { core::str::from_utf8_unchecked(&self.inner) }
     }
 
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+
     pub fn ends_with<P>(&self, other: P) -> bool
     where
         P: Pattern,
@@ -107,6 +112,10 @@ impl PageString {
 
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Drain<'_, u8, PageAlloc> {
+        self.inner.drain(range)
     }
 }
 
@@ -124,6 +133,19 @@ impl serde_json::io::Write for PageVec<u8> {
         Ok(())
     }
 }
+
+impl Write for PageString {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.push_str(s);
+        Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> core::fmt::Result {
+        self.push_char(c);
+        Ok(())
+    }
+}
+
 impl serde_json::io::Write for PageString {
     fn write(&mut self, buf: &[u8]) -> serde_json::io::Result<usize> {
         self.inner.write(buf)
@@ -135,6 +157,20 @@ impl serde_json::io::Write for PageString {
 
     fn write_all(&mut self, buf: &[u8]) -> serde_json::io::Result<()> {
         self.inner.write_all(buf)
+    }
+}
+
+impl Deref for PageString {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::str::from_utf8_unchecked(&self.inner) }
+    }
+}
+
+impl DerefMut for PageString {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { core::str::from_utf8_unchecked_mut(&mut self.inner) }
     }
 }
 

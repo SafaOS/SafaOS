@@ -1,6 +1,5 @@
-use core::fmt::Write;
+use core::{fmt::Write, str};
 
-use alloc::string::String;
 use spin::RwLock;
 
 use crate::{
@@ -35,15 +34,17 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
         };
 
         buffer[..count].copy_from_slice(&stdin_buffer.as_str().as_bytes()[..count]);
-        stdin_buffer.inner.drain(..count);
+        stdin_buffer.drain(..count);
         Ok(count)
     }
 
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
-        let _ = self
-            .try_write()
-            .ok_or(FSError::ResourceBusy)?
-            .write_str(&String::from_utf8_lossy(buffer));
+        unsafe {
+            let _ = self
+                .try_write()
+                .ok_or(FSError::ResourceBusy)?
+                .write_str(&str::from_utf8_unchecked(buffer));
+        }
         Ok(buffer.len())
     }
 }

@@ -55,8 +55,10 @@ bitflags! {
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct TTY<T: TTYInterface> {
+    /// stores the stdout buffer for write operations peformed on the tty device, allows to write to the tty at once instead of a peice by piece
+    stdout_buffer: PageString,
+    /// stores the stdin buffer for read operations peformed on the tty device
     pub stdin_buffer: PageString,
-
     pub settings: TTYSettings,
     interface: T,
 }
@@ -75,12 +77,28 @@ impl<T: TTYInterface> Write for TTY<T> {
         }
         Ok(())
     }
+
+    fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> core::fmt::Result {
+        if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
+            if let Some(s) = args.as_str() {
+                self.interface.write_str(s)?;
+            } else {
+                self.stdout_buffer.clear();
+                // always succeeds
+                let _ = self.stdout_buffer.write_fmt(args);
+                self.interface.write_str(&self.stdout_buffer)?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl<T: TTYInterface> TTY<T> {
     pub fn new(interface: T) -> Self {
         Self {
             stdin_buffer: PageString::new(),
+            stdout_buffer: PageString::with_capacity(4096),
             interface,
             settings: TTYSettings::DRAW_GRAPHICS,
         }
@@ -161,5 +179,10 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub fn _print(args: core::fmt::Arguments) {
-    FRAMEBUFFER_TERMINAL.write().write_fmt(args).unwrap();
+    unsafe {
+        FRAMEBUFFER_TERMINAL
+            .write()
+            .write_fmt(args)
+            .unwrap_unchecked();
+    }
 }
