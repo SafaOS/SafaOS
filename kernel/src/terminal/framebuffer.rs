@@ -8,7 +8,6 @@ use crate::utils::{
     ansi::{self, AnsiSequence},
     either::Either,
 };
-use lazy_static::lazy_static;
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
 };
@@ -17,7 +16,7 @@ use spin::RwLock;
 use super::TTYInterface;
 use crate::{
     drivers::framebuffer::{FrameBuffer, FRAMEBUFFER_DRIVER},
-    utils::{display::RGB, Locked},
+    utils::display::RGB,
 };
 
 const DEFAULT_FG_COLOR: RGB = RGB::WHITE;
@@ -34,7 +33,7 @@ pub struct FrameBufferTTY<'a> {
 }
 
 impl FrameBufferTTY<'_> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let size_pixels = FRAMEBUFFER_DRIVER.read().width() * FRAMEBUFFER_DRIVER.read().height();
         let bytes_per_pixel = FRAMEBUFFER_DRIVER.read().info.bytes_per_pixel;
         let size = size_pixels * bytes_per_pixel;
@@ -293,9 +292,4 @@ impl TTYInterface for FrameBufferTTY<'_> {
 
         self.sync_pixels();
     }
-}
-
-lazy_static! {
-    pub static ref FRAMEBUFFER_TTY_INTERFACE: Locked<FrameBufferTTY<'static>> =
-        Locked::new(FrameBufferTTY::new());
 }

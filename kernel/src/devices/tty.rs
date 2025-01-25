@@ -5,12 +5,12 @@ use spin::RwLock;
 
 use crate::{
     drivers::vfs::{FSError, FSResult},
-    terminal::TTY,
+    terminal::{TTYInterface, TTY},
 };
 
 use super::CharDevice;
 
-impl CharDevice for RwLock<TTY<'_>> {
+impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
     fn name(&self) -> &'static str {
         "tty"
     }
