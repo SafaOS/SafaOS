@@ -28,6 +28,7 @@ pub fn prompt() Error!void {
     }
 
     print("# ", .{});
+    std_c.stdio.stdout.flush() catch unreachable;
 }
 
 pub fn run(line: []const u8) Error!void {
