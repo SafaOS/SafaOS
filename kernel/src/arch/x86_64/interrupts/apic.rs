@@ -159,7 +159,7 @@ fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
         core::ptr::write_volatile(addr, timer.encode_u32());
         core::ptr::write_volatile(divide, 0x3);
 
-        core::ptr::write_volatile(init, apic_timer_ms_to_ticks(10));
+        core::ptr::write_volatile(init, apic_timer_ms_to_ticks(5));
     }
 }
 
