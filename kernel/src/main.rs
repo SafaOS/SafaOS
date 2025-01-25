@@ -5,6 +5,7 @@
 #![feature(try_trait_v2)]
 #![feature(pattern)]
 #![feature(box_vec_non_null)]
+#![feature(sync_unsafe_cell)]
 
 #[cfg(feature = "test")]
 mod test;

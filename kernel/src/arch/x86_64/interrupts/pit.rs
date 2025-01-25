@@ -1,22 +1,22 @@
-use core::sync::atomic::{AtomicI64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicI16, AtomicU8, Ordering};
 
 use crate::arch::x86_64::outb;
 
 use super::apic::{send_eoi, write_ioapic_irq, LVTEntry, LVTEntryFlags, IOREDTBL};
 
 const PIT_CHANNEL_0: u16 = 0x40;
+const PIT_COMMAND_CHANNEL: u16 = 0x43;
 
 fn set_freq(freq: u32) {
-    let divisor: u16 = (1193180 / freq) as u16;
-    let command: u8 = 0b00_110_100;
+    let command: u8 = 0b00_11_010_0;
 
-    outb(PIT_CHANNEL_0, command);
-    outb(PIT_CHANNEL_0, (divisor & 0xFF) as u8);
-    outb(PIT_CHANNEL_0, (divisor >> 8) as u8);
+    outb(PIT_COMMAND_CHANNEL, command);
+    outb(PIT_CHANNEL_0, (freq & 0xFF) as u8);
+    outb(PIT_CHANNEL_0, (freq >> 8) as u8);
 }
 
 pub static PIT_IRQ: AtomicU8 = AtomicU8::new(2);
-pub static PIT_COUNTER: AtomicI64 = AtomicI64::new(0);
+pub static PIT_COUNTER: AtomicI16 = AtomicI16::new(0);
 
 pub extern "x86-interrupt" fn pit_handler() {
     PIT_COUNTER.fetch_sub(1, Ordering::Relaxed);
@@ -28,7 +28,7 @@ pub extern "x86-interrupt" fn pit_handler() {
 /// make sure that timer is disabled until [`sleep`] is called
 pub fn prepare_sleep(ms: u32) {
     set_freq(1000);
-    PIT_COUNTER.store(ms as i64, Ordering::Relaxed);
+    PIT_COUNTER.store(ms as i16, Ordering::Relaxed);
 }
 
 #[inline(always)]
@@ -65,7 +65,7 @@ pub fn disable(ioapic_id: u8) {
     let irq = PIT_IRQ.load(Ordering::Relaxed);
 
     unsafe {
-        let pit = IOREDTBL::new(LVTEntry::new(0x22, LVTEntryFlags::DISABLED), ioapic_id);
+        let pit = IOREDTBL::new(LVTEntry::new(0x0, LVTEntryFlags::DISABLED), ioapic_id);
         write_ioapic_irq(irq, pit);
     }
 }

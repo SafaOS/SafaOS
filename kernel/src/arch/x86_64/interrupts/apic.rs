@@ -13,33 +13,28 @@ use crate::{
 
 pub static IOAPIC_ADDR: AtomicUsize = AtomicUsize::new(0);
 
-#[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct LVTEntry {
-    pub entry: u8,
-    pub flags: LVTEntryFlags,
-    _res: u8,
+    entry: u8,
+    flags: LVTEntryFlags,
 }
 
 impl LVTEntry {
     pub fn new(entry: u8, flags: LVTEntryFlags) -> Self {
-        Self {
-            entry,
-            flags,
-            _res: 0,
-        }
+        Self { entry, flags }
     }
-    pub fn encode_u32(self) -> u32 {
-        unsafe { core::mem::transmute(self) }
+
+    pub const fn encode_u32(self) -> u32 {
+        self.entry as u32 | ((self.flags.bits() as u32) << 8)
     }
 }
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct LVTEntryFlags: u16 {
-        const LEVEL_TRIGGERED = 1 << 7;
         const DISABLED = 1 << 8;
         const TIMER_PERIODIC = 1 << 9;
+        const TSC_DEADLINE = 2 << 9;
     }
 }
 
@@ -92,28 +87,20 @@ pub unsafe fn write_ioapic_val_to_reg(ioapic_addr: VirtAddr, reg: u8, val: u32) 
     *((ioapic_addr + 0x10) as *mut u32) = val;
 }
 
-#[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct IOREDTBL {
-    pub entry: LVTEntry,
-    _reserved: u16,
-    _reserved1: u8,
-    pub dest: u8,
+    entry: LVTEntry,
+    dest: u8,
 }
 
 impl IOREDTBL {
     pub const fn new(entry: LVTEntry, dest: u8) -> Self {
-        Self {
-            entry,
-            _reserved: 0,
-            _reserved1: 0,
-            dest,
-        }
+        Self { entry, dest }
     }
 
     pub const fn into_regs(self) -> (u32, u32) {
-        let combined: u64 = unsafe { core::mem::transmute(self) };
-        (combined as u32, (combined >> 31) as u32)
+        let as_u64 = self.entry.encode_u32() as u64 | ((self.dest as u64) << 56);
+        (as_u64 as u32, (as_u64 >> 31) as u32)
     }
 }
 
