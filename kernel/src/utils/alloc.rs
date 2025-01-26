@@ -332,7 +332,7 @@ impl<T> LinkedList<T> {
     }
 
     /// returns an iterator that 'continues' the list which means calling `next` on the iterator
-    /// would be the same as calling `next_wrap` on the list, this iterator muttates the list...
+    /// would advance then return the current element, it currently wraps around the list
     pub fn continue_iter(&mut self) -> LinkedListContinue<T> {
         LinkedListContinue { list: self }
     }
@@ -424,8 +424,12 @@ pub struct LinkedListContinue<'a, T: 'a> {
 
 impl<'a, T> Iterator for LinkedListContinue<'a, T> {
     type Item = &'a mut T;
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.list.next_wrap();
-        unsafe { Some(&mut (*self.list.current?.as_ptr()).inner) }
+        unsafe {
+            let current = &mut (*self.list.current?.as_ptr()).inner;
+            Some(current)
+        }
     }
 }

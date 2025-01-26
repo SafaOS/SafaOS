@@ -1,5 +1,7 @@
 use macros::test_module;
 
+use crate::{println, serial, threading::expose::thread_exit};
+
 #[test_module]
 pub mod testing_module {
     use alloc::vec::Vec;
@@ -75,12 +77,12 @@ pub mod testing_module {
             assert_ne!(frames[i - 1].start_address(), frames[i].start_address());
         }
 
-        let first_frame = frames[0];
+        let last_frame = frames[frames.len() - 1];
         for frame in frames.iter() {
             frame_allocator::deallocate_frame(*frame);
         }
         let allocated = frame_allocator::allocate_frame().unwrap();
-        assert_eq!(allocated, first_frame);
+        assert_eq!(allocated, last_frame);
 
         frame_allocator::deallocate_frame(allocated);
     }
@@ -101,4 +103,13 @@ pub mod testing_module {
         assert_eq!(ret, 0);
         unsafe { core::arch::asm!("sti") }
     }
+}
+
+pub fn main() -> ! {
+    testing_module::test_main();
+    // printing this to the serial makes `test.sh` know that the kernel tests were succesful
+    serial!("finished initing ...\n");
+    println!("finished running tests...");
+    println!("\x1B[38;2;0;255;0mBoot success! press ctrl + shift + C to start the shell\x1B[0m");
+    thread_exit(0)
 }

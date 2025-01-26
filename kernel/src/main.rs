@@ -13,6 +13,7 @@ mod test;
 mod arch;
 mod devices;
 mod drivers;
+mod eve;
 mod globals;
 mod limine;
 mod memory;
@@ -157,7 +158,7 @@ fn print_stack_trace() {
 }
 
 #[no_mangle]
-pub extern "C" fn kinit() {
+extern "C" fn kstart() -> ! {
     arch::init_phase1();
     // initing globals
     let phy_offset = get_phy_offset();
@@ -182,38 +183,13 @@ pub extern "C" fn kinit() {
         devices::init();
         vfs::init();
         debug!(Scheduler, "Eve starting...");
-        Scheduler::init(kmain as usize, "Eve");
+        Scheduler::init(eve::main, "Eve");
     }
-}
 
-#[no_mangle]
-fn kstart() -> ! {
-    kinit();
-    panic!("failed context switching to kmain! ...")
-}
-
-/// Acts like an init process
-#[no_mangle]
-fn kmain() -> ! {
-    debug!(Scheduler, "done ...");
-    let stdin = vfs::expose::File::open("dev:/tty").unwrap();
-    let stdout = vfs::expose::File::open("dev:/tty").unwrap();
-    serial!(
-        "Hello, world!, running tests... stdin: {:?}, stdout: {:?}\n",
-        stdin,
-        stdout
-    );
-
-    #[cfg(feature = "test")]
-    test::testing_module::test_main();
-
-    println!("finished running tests...");
-    println!("\x1B[38;2;0;255;0mBoot success! press ctrl + shift + C to start the shell\x1B[0m");
-
-    serial!("finished initing...\n");
-    serial!("idle!\n");
-    // listening to interrupts
-    khalt()
+    #[allow(unreachable_code)]
+    {
+        panic!("failed context switching to Eve! ...")
+    }
 }
 
 // whenever a key is pressed this function should be called

@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 
 use alloc::{string::String, vec::Vec};
 use spin::RwLock;
-use task::{Task, TaskInfo, TaskStatus};
+use task::{Task, TaskInfo};
 
 use crate::{
     arch::threading::{restore_cpu_status, CPUStatus},
@@ -36,11 +36,11 @@ impl Scheduler {
 
     #[inline]
     /// inits the scheduler
-    pub unsafe fn init(function: usize, name: &str) -> ! {
+    pub unsafe fn init(function: fn() -> !, name: &str) -> ! {
         debug!(Scheduler, "initing ...");
         asm!("cli");
         let mut page_table = PhysPageTable::from_current();
-        let context = CPUStatus::create(&mut page_table, &[], function, false).unwrap();
+        let context = CPUStatus::create(&mut page_table, &[], function as usize, false).unwrap();
 
         let task = Task::new(
             String::from(name),
@@ -71,11 +71,8 @@ impl Scheduler {
         unsafe { asm!("cli") }
 
         self.current().context = context;
-        self.current().status = TaskStatus::Ready;
-
         for task in self.tasks.continue_iter() {
-            if task.status == TaskStatus::Ready {
-                task.status = TaskStatus::Busy;
+            if task.is_alive.load(core::sync::atomic::Ordering::Relaxed) {
                 break;
             }
         }
@@ -88,7 +85,8 @@ impl Scheduler {
     fn add_task(&mut self, mut task: Task) -> usize {
         let pid = self.next_pid;
         task.pid = pid;
-        task.status = TaskStatus::Ready;
+        task.is_alive
+            .store(true, core::sync::atomic::Ordering::Relaxed);
         self.next_pid += 1;
         self.tasks.push(task);
 

@@ -9,7 +9,7 @@ const File = std_c.stdio.File;
 
 const ProccessInfo = struct {
     name: []const u8,
-    status: []const u8,
+    is_alive: bool,
     pid: u32,
     ppid: u32,
 };
@@ -19,7 +19,7 @@ pub fn main() !void {
     defer proc_dir.close();
 
     var longest_name: usize = 0;
-    var longest_status: usize = 0;
+    const longest_status: usize = 5;
     var longest_pid: usize = 4;
 
     var processes = std.ArrayList(std.json.Parsed(ProccessInfo)).init(allocator);
@@ -46,18 +46,15 @@ pub fn main() !void {
 
             if (process.name.len > longest_name)
                 longest_name = process.name.len;
-            if (process.status.len > longest_status)
-                longest_status = process.status.len;
         }
     }
 
-    print("\x1B[32m{[name]s:<[longest_name]}\x1B[0m:  \x1B[31m{[pid]s:<[pid_align]}  {[ppid]s:<[pid_align]}  \x1B[33m{[status]s:<[longest_status]}\x1b[0m\n", .{
+    print("\x1B[32m{[name]s:<[longest_name]}\x1B[0m:  \x1B[31m{[pid]s:<[pid_align]}  {[ppid]s:<[pid_align]}  \x1B[33m{[status]s:<5}\x1b[0m\n", .{
         .longest_name = longest_name,
-        .longest_status = longest_status,
         .name = "name",
         .pid = "pid",
         .ppid = "ppid",
-        .status = "status",
+        .status = "alive",
         .pid_align = longest_pid,
     });
 
@@ -65,13 +62,12 @@ pub fn main() !void {
 
     for (processes.items) |process_info| {
         const process = process_info.value;
-        print("\x1B[32m{[name]s:<[longest_name]}\x1B[0m:  \x1B[31m{[pid]d:<[pid_align]}  {[ppid]d:<[pid_align]}  \x1B[33m{[status]s:<[longest_status]}\x1b[0m\n", .{
+        print("\x1B[32m{[name]s:<[longest_name]}\x1B[0m:  \x1B[31m{[pid]d:<[pid_align]}  {[ppid]d:<[pid_align]}  \x1B[33m{[is_alive]:<5}\x1b[0m\n", .{
             .longest_name = longest_name,
-            .longest_status = longest_status,
             .name = process.name,
             .pid = process.pid,
             .ppid = process.ppid,
-            .status = process.status,
+            .is_alive = process.is_alive,
             .pid_align = longest_pid,
         });
     }

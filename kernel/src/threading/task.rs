@@ -1,10 +1,12 @@
+use core::{mem::ManuallyDrop, sync::atomic::AtomicBool};
+
 use alloc::string::String;
 use serde::Serialize;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     arch::threading::CPUStatus,
-    debug,
+    debug, eve,
     memory::{
         align_up, frame_allocator,
         paging::{Page, PhysPageTable, PAGE_SIZE},
@@ -17,7 +19,7 @@ use super::{resources::ResourceManager, Pid};
 
 pub enum TaskState {
     Alive {
-        root_page_table: PhysPageTable,
+        root_page_table: ManuallyDrop<PhysPageTable>,
         resources: ResourceManager,
 
         data_pages: usize,
@@ -163,9 +165,13 @@ impl TaskState {
                 data_start,
                 data_break,
                 resources,
+                root_page_table,
                 ..
             } => {
                 let last_resource_id = resources.next_ri();
+
+                let root_page_table = unsafe { ManuallyDrop::take(root_page_table) };
+                eve::add_cleanup(root_page_table);
 
                 *self = TaskState::Zombie {
                     exit_code,
@@ -191,22 +197,14 @@ impl TaskState {
     }
 }
 
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskStatus {
-    /// in queue ready to be scheduled
-    Ready,
-    /// not available for scheduling
-    Busy,
-}
-
 pub struct Task {
     state: RwLock<TaskState>,
 
     name: String,
     pub pid: Pid,
     pub ppid: Pid,
-    pub status: TaskStatus,
     pub context: CPUStatus,
+    pub is_alive: AtomicBool,
 }
 
 impl Task {
@@ -230,10 +228,10 @@ impl Task {
             name,
             pid,
             ppid,
-            status: TaskStatus::Ready,
+            is_alive: AtomicBool::new(true),
             context,
             state: RwLock::new(TaskState::Alive {
-                root_page_table,
+                root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
                 data_pages: 0,
                 data_start: data_break,
@@ -280,6 +278,9 @@ impl Task {
         let killed_by = killed_by.unwrap_or(self.pid);
 
         state.die(exit_code, killed_by);
+        self.is_alive
+            .store(false, core::sync::atomic::Ordering::Relaxed);
+
         debug!(
             Task,
             "Task {} ({}) TERMINATED with code {} by {}",
@@ -317,7 +318,6 @@ pub struct TaskInfo {
     pub ppid: Pid,
     pub pid: Pid,
     name: Name,
-    pub status: TaskStatus,
 
     pub last_resource_id: usize,
     pub exit_code: usize,
@@ -337,30 +337,30 @@ impl From<&Task> for TaskInfo {
 
         let state = task.state();
 
-        let (exit_code, data_start, data_break, killed_by, last_resource_id, is_alive) =
-            match &*state {
-                TaskState::Alive {
-                    data_start,
-                    data_break,
-                    resources,
-                    ..
-                } => (0, *data_start, *data_break, 0, resources.next_ri(), true),
-                TaskState::Zombie {
-                    data_start,
-                    data_break,
-                    exit_code,
-                    killed_by,
-                    last_resource_id,
-                    ..
-                } => (
-                    *exit_code,
-                    *data_start,
-                    *data_break,
-                    *killed_by,
-                    *last_resource_id,
-                    false,
-                ),
-            };
+        let (exit_code, data_start, data_break, killed_by, last_resource_id) = match &*state {
+            TaskState::Alive {
+                data_start,
+                data_break,
+                resources,
+                ..
+            } => (0, *data_start, *data_break, 0, resources.next_ri()),
+            TaskState::Zombie {
+                data_start,
+                data_break,
+                exit_code,
+                killed_by,
+                last_resource_id,
+                ..
+            } => (
+                *exit_code,
+                *data_start,
+                *data_break,
+                *killed_by,
+                *last_resource_id,
+            ),
+        };
+
+        let is_alive = task.is_alive.load(core::sync::atomic::Ordering::Relaxed);
 
         let mut name = [0u8; 64];
         name[..task.name().len()].copy_from_slice(task.name().as_bytes());
@@ -369,8 +369,6 @@ impl From<&Task> for TaskInfo {
             ppid: task.ppid,
             pid: task.pid,
             name: name.into(),
-            status: task.status,
-
             last_resource_id,
             exit_code,
             at,

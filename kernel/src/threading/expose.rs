@@ -7,9 +7,13 @@ use alloc::{
 use bitflags::bitflags;
 
 use crate::{
+    arch::threading::CPUStatus,
     drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
     khalt,
-    memory::page_allocator::GLOBAL_PAGE_ALLOCATOR,
+    memory::{
+        page_allocator::GLOBAL_PAGE_ALLOCATOR,
+        paging::{MapToError, PhysPageTable},
+    },
     utils::elf::{Elf, ElfError},
 };
 
@@ -20,7 +24,7 @@ use super::{
 };
 
 #[no_mangle]
-pub fn thread_exit(code: usize) {
+pub fn thread_exit(code: usize) -> ! {
     super::with_current(|current| current.kill(code, None));
     // enables interrupts if they were disabled to give control back to the scheduler
     #[cfg(target_arch = "x86_64")]
@@ -82,6 +86,39 @@ bitflags! {
         const CLONE_RESOURCES = 1 << 0;
         const CLONE_CWD = 1 << 1;
     }
+}
+
+#[allow(unused)]
+pub fn function_spawn(
+    name: &str,
+    function: fn() -> !,
+    argv: &[&str],
+    flags: SpawnFlags,
+) -> Result<usize, MapToError> {
+    let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
+        getcwd()
+    } else {
+        String::from("ram:/")
+    };
+
+    let mut page_table = PhysPageTable::create()?;
+    let context =
+        unsafe { CPUStatus::create(&mut page_table, argv, function as usize, false).unwrap() };
+    let task = Task::new(name.to_string(), 0, 0, cwd, page_table, context, 0);
+
+    if flags.contains(SpawnFlags::CLONE_RESOURCES) {
+        let mut state = task.state_mut();
+
+        let TaskState::Alive { resources, .. } = &mut *state else {
+            unreachable!()
+        };
+
+        let clone = resources::clone_resources();
+        resources.overwrite_resources(clone);
+    }
+
+    let pid = super::add_task(task);
+    Ok(pid)
 }
 
 pub fn spawn(
