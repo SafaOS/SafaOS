@@ -5,6 +5,7 @@ use core::fmt::Debug;
 use crate::{
     debug, limine,
     threading::expose::getcwd,
+    time,
     utils::{
         errors::{ErrorStatus, IntoErr},
         ustar::{self, TarArchiveIter},
@@ -33,6 +34,8 @@ lazy_static! {
 
 pub fn init() {
     debug!(VFS, "initing ...");
+    let the_now = time!();
+
     let mut vfs = VFS_STRUCT.write();
     // ramfs
     let ramfs = RwLock::new(ramfs::RamFS::new());
@@ -49,8 +52,8 @@ pub fn init() {
     vfs.unpack_tar(&mut ramfs, &mut ramdisk)
         .expect("failed unpacking ramdisk archive");
     vfs.mount(b"sys", ramfs).expect("failed mounting");
-
-    debug!(VFS, "done ...");
+    let elapsed = time!() - the_now;
+    debug!(VFS, "done in ({}ms) ...", elapsed);
 }
 
 /// Defines a file descriptor resource
