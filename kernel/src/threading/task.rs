@@ -4,7 +4,7 @@ use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     arch::threading::CPUStatus,
-    debug, hddm,
+    debug,
     memory::{
         align_up, frame_allocator,
         paging::{Page, PhysPageTable, PAGE_SIZE},
@@ -90,7 +90,7 @@ impl TaskState {
                     )
                     .ok()?;
 
-                let addr = frame.start_address | hddm();
+                let addr = frame.virt_addr();
                 let ptr = addr as *mut u8;
                 let slice = unsafe { core::slice::from_raw_parts_mut(ptr, PAGE_SIZE) };
 

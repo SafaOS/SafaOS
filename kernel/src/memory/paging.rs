@@ -99,7 +99,7 @@ impl Entry {
         let frame = self.frame().unwrap();
 
         if level != 0 {
-            let table = &mut *((frame.start_address | hddm()) as *mut PageTable);
+            let table = &mut *(frame.virt_addr() as *mut PageTable);
             table.free(level);
         }
         self.deallocate(false);
@@ -187,9 +187,9 @@ pub unsafe fn current_root_table() -> &'static mut PageTable {
     unsafe {
         asm!("mov {}, cr3", out(reg) phys_addr);
     }
-    let frame = Frame::containing_address(phys_addr);
 
-    let virt_addr = frame.start_address | hddm();
+    let frame = Frame::containing_address(phys_addr);
+    let virt_addr = frame.virt_addr();
 
     &mut *(virt_addr as *mut PageTable)
 }
@@ -206,13 +206,11 @@ impl Entry {
     /// then returns the entry address as a pagetable
     #[cfg(target_arch = "x86_64")]
     fn map(&mut self, flags: EntryFlags) -> Result<&'static mut PageTable, MapToError> {
-        use crate::hddm;
-
-        if self.is_mapped() {
-            let addr = self.frame().unwrap().start_address;
+        if let Some(frame) = self.frame() {
+            let addr = frame.start_address();
 
             self.set(flags, addr);
-            let virt_addr = addr | hddm();
+            let virt_addr = frame.virt_addr();
             let entry_ptr = virt_addr as *mut PageTable;
 
             Ok(unsafe { &mut *(entry_ptr) })
@@ -220,10 +218,10 @@ impl Entry {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
-            let addr = frame.start_address;
+            let addr = frame.start_address();
             self.set(flags, addr);
 
-            let virt_addr = addr | hddm();
+            let virt_addr = frame.virt_addr();
             let table_ptr = virt_addr as *mut PageTable;
 
             Ok(unsafe {
@@ -236,20 +234,14 @@ impl Entry {
     /// if an entry is mapped returns the PageTable or the Frame(as a PageTable) it is mapped to
     #[inline]
     pub fn mapped_to(&self) -> Option<&'static mut PageTable> {
-        if self.is_mapped() {
-            let addr = self.frame().unwrap().start_address;
-            let virt_addr = addr | hddm();
+        if let Some(frame) = self.frame() {
+            let virt_addr = frame.virt_addr();
             let entry_ptr = virt_addr as *mut PageTable;
 
             return Some(unsafe { &mut *entry_ptr });
         }
 
         None
-    }
-
-    #[inline]
-    pub fn is_mapped(&self) -> bool {
-        self.flags().contains(EntryFlags::PRESENT)
     }
 }
 
@@ -280,7 +272,7 @@ impl PageTable {
             page.start_address
         );
 
-        *entry = Entry::new(flags, frame.start_address);
+        *entry = Entry::new(flags, frame.start_address());
         Ok(())
     }
 
@@ -321,7 +313,7 @@ impl PageTable {
 /// allocates a pml4 and returns its physical address
 fn allocate_pml4<'a>() -> Result<&'a mut PageTable, MapToError> {
     let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-    let virt_start_addr = frame.start_address | hddm();
+    let virt_start_addr = frame.virt_addr();
     let table = unsafe { &mut *(virt_start_addr as *mut PageTable) };
 
     table.zeroize();
@@ -383,7 +375,7 @@ impl PhysPageTable {
         for page in iter {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-            let virt_addr = frame.start_address | hddm();
+            let virt_addr = frame.virt_addr();
             self.map_to(page, frame, flags)?;
 
             unsafe {

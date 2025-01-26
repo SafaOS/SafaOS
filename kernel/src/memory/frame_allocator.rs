@@ -3,28 +3,36 @@ use core::{fmt::Debug, slice};
 use lazy_static::lazy_static;
 use spin::Mutex;
 
-use crate::debug;
+use crate::{debug, hddm};
 
-use super::{align_down, align_up, paging::PAGE_SIZE, PhysAddr};
+use super::{align_down, align_up, paging::PAGE_SIZE, PhysAddr, VirtAddr};
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Frame {
-    pub start_address: PhysAddr,
-}
+pub struct Frame(PhysAddr);
 
 impl Frame {
     #[inline]
     // returns the frame that contains an address
     pub fn containing_address(address: PhysAddr) -> Self {
-        Self {
-            start_address: align_down(address, PAGE_SIZE), // for now frames can only be 1 normal page sized
-        }
+        Self(
+            align_down(address, PAGE_SIZE), // for now frames can only be 1 normal page sized
+        )
+    }
+
+    #[inline]
+    pub fn start_address(&self) -> PhysAddr {
+        self.0
+    }
+
+    #[inline]
+    pub fn virt_addr(&self) -> VirtAddr {
+        self.0 | hddm()
     }
 }
 
 impl Debug for Frame {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Frame")
-            .field(&format_args!("{:#x}", self.start_address))
+            .field(&format_args!("{:#x}", self.start_address()))
             .finish()
     }
 }
@@ -155,9 +163,7 @@ impl RegionAllocator {
             for col in 0..8 {
                 if (self.bitmap[row] >> col) & 1 == 0 {
                     self.bitmap[row] |= 1 << col;
-                    let frame = Frame {
-                        start_address: (row * 8 + col) * PAGE_SIZE,
-                    };
+                    let frame = Frame((row * 8 + col) * PAGE_SIZE);
                     return Some(frame);
                 }
             }
@@ -172,7 +178,7 @@ impl RegionAllocator {
     }
 
     pub fn deallocate_frame(&mut self, frame: Frame) {
-        self.set_unused(frame.start_address);
+        self.set_unused(frame.start_address());
     }
     /// returns the number of pages mapped
     pub fn mapped_frames(&self) -> usize {

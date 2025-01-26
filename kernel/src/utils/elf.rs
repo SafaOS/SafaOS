@@ -5,7 +5,6 @@ use bitflags::bitflags;
 use macros::display_consts;
 
 use crate::{
-    hddm,
     memory::{
         copy_to_userspace, frame_allocator,
         paging::{EntryFlags, MapToError, Page, PageTable, PAGE_SIZE},
@@ -382,10 +381,7 @@ impl<'a> Elf<'a> {
 
                     page_table.map_to(page, frame, entry_flags)?;
 
-                    let slice = slice::from_raw_parts_mut(
-                        (frame.start_address | hddm()) as *mut u8,
-                        PAGE_SIZE,
-                    );
+                    let slice = slice::from_raw_parts_mut(frame.virt_addr() as *mut u8, PAGE_SIZE);
                     slice.fill(0);
                 }
                 let file_start = (self.header as *const ElfHeader as *const u8).add(header.offset);

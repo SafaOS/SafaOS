@@ -72,7 +72,7 @@ pub mod testing_module {
         }
 
         for i in 1..frames.capacity() {
-            assert_ne!(frames[i - 1].start_address, frames[i].start_address);
+            assert_ne!(frames[i - 1].start_address(), frames[i].start_address());
         }
 
         let first_frame = frames[0];

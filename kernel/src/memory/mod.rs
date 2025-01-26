@@ -107,7 +107,7 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
 
         let frame = page_table.get_frame(page).unwrap();
 
-        let phys_addr = frame.start_address + diff;
+        let phys_addr = frame.start_address() + diff;
         let virt_addr = phys_addr | hddm();
         unsafe {
             core::ptr::copy_nonoverlapping(
