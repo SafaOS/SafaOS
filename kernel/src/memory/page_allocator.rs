@@ -26,6 +26,8 @@ pub struct PageAllocator {
     /// bitmap is used to keep track of which pages are used and which are free
     /// the number of bytes it contain should be aligned to usize bytes
     bitmap: Vec<usize>,
+    next_large_allocation_index: usize,
+    next_small_allocation_index: usize,
 }
 
 impl PageAllocator {
@@ -39,6 +41,8 @@ impl PageAllocator {
             heap_start: start as usize,
             heap_end: start as usize + size,
             bitmap: vec![0; 8],
+            next_large_allocation_index: 0,
+            next_small_allocation_index: 0,
         }
     }
     #[inline(always)]
@@ -64,8 +68,13 @@ impl PageAllocator {
         let bitmap = self.bitmap.as_mut_slice();
 
         if page_count <= usize::BITS as usize {
+            let iter = bitmap
+                .iter_mut()
+                .enumerate()
+                .skip(self.next_small_allocation_index);
             let mask = (1 << page_count) - 1;
-            for (i, bytes) in bitmap.iter_mut().enumerate() {
+
+            for (i, bytes) in iter {
                 let mut byte_ref = *bytes;
 
                 if byte_ref == 0 {
@@ -82,13 +91,22 @@ impl PageAllocator {
 
                 if bit < usize::BITS as usize {
                     *bytes |= mask << bit;
+
+                    if self.next_small_allocation_index < i + 1 {
+                        self.next_small_allocation_index = i + 1;
+                    }
+
                     let addr = self.get_addr(i, bit);
                     return Some((addr, page_count));
                 }
             }
         } else {
             let bytes = page_count.div_ceil(usize::BITS as usize);
-            let mut iter = bitmap.iter_mut().enumerate();
+            let mut iter = bitmap
+                .iter_mut()
+                .enumerate()
+                .skip(self.next_large_allocation_index);
+
             'outer: loop {
                 let mut start_index = None;
                 let mut final_index = 0;
@@ -117,6 +135,10 @@ impl PageAllocator {
                 let start_index = start_index.unwrap();
                 bitmap[start_index..final_index + 1].fill(usize::MAX);
 
+                if self.next_large_allocation_index < final_index + 1 {
+                    self.next_large_allocation_index = final_index + 1;
+                }
+
                 let addr = self.get_addr(start_index, 0);
                 return Some((addr, bytes * usize::BITS as usize));
             }
@@ -130,6 +152,10 @@ impl PageAllocator {
             Some(ptr) => Some(ptr),
             None => {
                 let bitcount = page_count.div_ceil(usize::BITS as usize);
+
+                if page_count * PAGE_SIZE > self.heap_end - self.heap_start {
+                    return None;
+                }
 
                 self.bitmap.reserve(bitcount);
                 self.bitmap.resize(self.bitmap.len() + bitcount, 0);
@@ -190,9 +216,17 @@ impl PageAllocator {
 
         // if we have more than 1 usizes then allocated page_count is a multiple of usize::BITS
         // else it is less then usize::BITS so we need to find the actual index
-        let mask = if usizes >= 1 {
+        let mask = if usizes > 1 {
+            if self.next_large_allocation_index > start_index {
+                self.next_large_allocation_index = start_index;
+            }
+
             usize::MAX
         } else {
+            if self.next_small_allocation_index > start_index {
+                self.next_small_allocation_index = start_index;
+            }
+
             ((1usize << page_count) - 1) << start_bit
         };
         self.bitmap[start_index] &= !mask;
