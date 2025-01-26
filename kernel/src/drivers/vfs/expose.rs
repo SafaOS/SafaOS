@@ -1,9 +1,6 @@
 use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
-use crate::{
-    serial,
-    threading::resources::{self, Resource},
-};
+use crate::threading::resources::{self, Resource};
 
 use super::{
     DirIterDescriptor, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT,

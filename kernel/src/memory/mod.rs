@@ -34,10 +34,12 @@ pub fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
     )
 }
 
+#[inline(always)]
 pub const fn align_up(address: usize, alignment: usize) -> usize {
     (address + alignment - 1) & !(alignment - 1)
 }
 
+#[inline(always)]
 pub const fn align_down(x: usize, alignment: usize) -> usize {
     x & !(alignment - 1)
 }

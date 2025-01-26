@@ -1,16 +1,16 @@
-use core::{fmt::Debug, slice};
+use core::fmt::Debug;
 
 use lazy_static::lazy_static;
 use spin::Mutex;
 
-use crate::{debug, hddm};
+use crate::hddm;
 
-use super::{align_down, align_up, paging::PAGE_SIZE, PhysAddr, VirtAddr};
+use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Frame(PhysAddr);
 
 impl Frame {
-    #[inline]
+    #[inline(always)]
     // returns the frame that contains an address
     pub fn containing_address(address: PhysAddr) -> Self {
         Self(
@@ -27,6 +27,30 @@ impl Frame {
     pub fn virt_addr(&self) -> VirtAddr {
         self.0 | hddm()
     }
+
+    pub fn iter_frames(start: Frame, end: Frame) -> FrameIter {
+        debug_assert!(start.start_address() <= end.start_address());
+        FrameIter { start, end }
+    }
+}
+
+pub struct FrameIter {
+    start: Frame,
+    end: Frame,
+}
+
+impl Iterator for FrameIter {
+    type Item = Frame;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start.start_address() < self.end.start_address() {
+            let frame = self.start;
+
+            self.start.0 += PAGE_SIZE;
+            Some(frame)
+        } else {
+            None
+        }
+    }
 }
 
 impl Debug for Frame {
@@ -36,164 +60,125 @@ impl Debug for Frame {
             .finish()
     }
 }
-pub type Bitmap = &'static mut [u8];
 
 #[derive(Debug)]
-pub struct RegionAllocator {
-    /// keeps track of which frame is used or not
-    bitmap: Bitmap,
-    usable_frames: usize,
-    unusable_frames: usize,
+struct RegionNode<'a> {
+    start_address: PhysAddr,
+    next: Option<&'a mut RegionNode<'a>>,
 }
 
-impl RegionAllocator {
-    /// limine
-    /// TODO: look at setting unsable frames as used in the bitmap
+impl<'a> RegionNode<'a> {
+    pub fn new(start_address: PhysAddr) -> Self {
+        Self {
+            start_address,
+            next: None,
+        }
+    }
+
+    /// creates a new region node in the given frame
+    /// # Safety
+    /// the caller must ensure that the frame is not used anymore
+    unsafe fn new_in(frame: Frame) -> &'a mut Self {
+        let frame_addr = frame.virt_addr();
+        let region_pointer = frame_addr as *mut RegionNode;
+
+        *region_pointer = RegionNode::new(frame.start_address());
+        unsafe { &mut *region_pointer }
+    }
+
+    #[inline(always)]
+    pub fn insert(&mut self, next: &'a mut Self) {
+        self.next = Some(next);
+    }
+}
+
+#[derive(Debug)]
+pub struct RegionListAllocator<'a> {
+    head: Option<&'a mut RegionNode<'a>>,
+    // metadata
+    allocations: usize,
+    usable_regions: usize,
+    unusable_regions: usize,
+}
+
+impl<'a> RegionListAllocator<'a> {
     pub fn new() -> Self {
+        Self {
+            head: None,
+            allocations: 0,
+            usable_regions: 0,
+            unusable_regions: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn add_region(&mut self, frame: Frame) {
+        unsafe {
+            let node = RegionNode::new_in(frame);
+            if let Some(head) = self.head.take() {
+                node.insert(head);
+            }
+
+            self.head = Some(node);
+        }
+    }
+
+    #[inline(always)]
+    pub fn allocate_frame(&mut self) -> Option<Frame> {
+        let head = self.head.take()?;
+
+        self.head = head.next.take();
+        self.allocations += 1;
+        Some(Frame::containing_address(head.start_address))
+    }
+
+    #[inline(always)]
+    pub fn deallocate_frame(&mut self, frame: Frame) {
+        self.add_region(frame);
+        self.allocations -= 1;
+    }
+
+    /// returns the number of frames mapped
+    pub fn mapped_frames(&self) -> usize {
+        self.allocations
+    }
+    /// returns the number of usable frames
+    pub fn usable_frames(&self) -> usize {
+        self.usable_regions
+    }
+
+    /// creates a new static RegionAllocator based on the memory map provided by the bootloader
+    pub fn create() -> RegionListAllocator<'static> {
+        let mut allocator = RegionListAllocator::new();
+
         let mmap = crate::limine::mmap_request();
-        // figuring out how much frames we have
-        let mut last_usable_entry = None;
-        let mut usable_frames = 0;
-        let mut unusable_frames = 0;
+
+        let mut usable_regions = 0;
+        let mut unusable_regions = 0;
 
         for entry in mmap.entries() {
             if entry.entry_type == limine::memory_map::EntryType::USABLE {
-                usable_frames += entry.length as usize / PAGE_SIZE;
-                last_usable_entry = Some(entry);
-            } else {
-                unusable_frames += entry.length as usize / PAGE_SIZE;
-            }
-        }
+                let frame = Frame::containing_address(entry.base as usize);
+                let end_frame = Frame::containing_address((entry.base + entry.length) as usize);
 
-        let managed_frames = usable_frames + unusable_frames;
-        debug!(
-            RegionAllocator,
-            "about {} usable bytes found",
-            usable_frames * PAGE_SIZE
-        );
-
-        // frame_count is the number of bits
-        // aligns to 8 to make sure we can get a vaild number of bytes for our frame bitmap
-        let bytes = align_up(managed_frames, 8) / 8;
-
-        // finds a place the bitmap can live in
-        let mut best_region: Option<&limine::memory_map::Entry> = None;
-
-        for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE
-                && entry.length as usize >= bytes
-                && (best_region.is_none() || best_region.is_some_and(|x| x.length > entry.length))
-            {
-                best_region = Some(entry);
-            }
-        }
-
-        debug_assert!(best_region.is_some());
-
-        let best_region = best_region.unwrap();
-        let bitmap_base = best_region.base as usize;
-        let bitmap_length = best_region.length as usize;
-
-        debug!(
-            RegionAllocator,
-            "expected {} bytes, found a region with {} bytes at {:#x}",
-            bytes,
-            bitmap_length,
-            bitmap_base
-        );
-
-        // allocates and setups bitmap
-        let addr = (bitmap_base + crate::limine::get_phy_offset()) as *mut u8;
-
-        let bitmap = unsafe { slice::from_raw_parts_mut(addr, bytes) };
-
-        // setup
-        bitmap.fill(0xFF);
-
-        debug_assert!(bitmap[0] == 0xFF);
-
-        let mut this = Self {
-            bitmap,
-            usable_frames,
-            unusable_frames,
-        };
-
-        debug!(RegionAllocator, "bitmap allocation successful!");
-
-        let last_usable_entry = last_usable_entry.unwrap();
-        // sets all unusable frames as used
-        for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE
-                && entry.base != best_region.base
-            {
-                this.set_unused_from(entry.base as PhysAddr, entry.length as usize);
-            }
-
-            if entry.base == last_usable_entry.base {
-                break;
-            }
-        }
-
-        this
-    }
-
-    #[inline]
-    fn set_unused_from(&mut self, from: PhysAddr, size: usize) {
-        let frames_needed = align_down(size, PAGE_SIZE) / PAGE_SIZE;
-
-        for frame in 0..frames_needed {
-            self.set_unused(from + frame * PAGE_SIZE);
-        }
-    }
-
-    /// takes a bitmap index(bitnumber) and turns it into (row, col)
-    #[inline(always)]
-    fn bitmap_loc_from_index(index: usize) -> (usize, usize) {
-        (index / 8, index % 8)
-    }
-
-    /// takes an addr and turns it into a bitmap (row, col)
-    #[inline(always)]
-    fn bitmap_loc_from_addr(addr: PhysAddr) -> (usize, usize) {
-        Self::bitmap_loc_from_index(align_down(addr, PAGE_SIZE) / PAGE_SIZE)
-    }
-
-    pub fn allocate_frame(&mut self) -> Option<Frame> {
-        for row in 0..self.bitmap.len() {
-            for col in 0..8 {
-                if (self.bitmap[row] >> col) & 1 == 0 {
-                    self.bitmap[row] |= 1 << col;
-                    let frame = Frame((row * 8 + col) * PAGE_SIZE);
-                    return Some(frame);
+                for frame in Frame::iter_frames(frame, end_frame) {
+                    usable_regions += 1;
+                    allocator.add_region(frame);
                 }
+            } else {
+                unusable_regions += entry.length as usize / PAGE_SIZE;
             }
         }
 
-        None
-    }
-
-    fn set_unused(&mut self, addr: PhysAddr) {
-        let (row, col) = Self::bitmap_loc_from_addr(addr);
-        self.bitmap[row] ^= 1 << col
-    }
-
-    pub fn deallocate_frame(&mut self, frame: Frame) {
-        self.set_unused(frame.start_address());
-    }
-    /// returns the number of pages mapped
-    pub fn mapped_frames(&self) -> usize {
-        self.bitmap
-            .iter()
-            .fold(0, |acc, x| acc + x.count_ones() as usize)
-            - self.unusable_frames
-    }
-
-    pub fn usable_frames(&self) -> usize {
-        self.usable_frames
+        allocator.usable_regions = usable_regions;
+        allocator.unusable_regions = unusable_regions;
+        allocator
     }
 }
+
 lazy_static! {
-    pub static ref REGION_ALLOCATOR: Mutex<RegionAllocator> = Mutex::new(RegionAllocator::new());
+    pub static ref REGION_ALLOCATOR: Mutex<RegionListAllocator<'static>> =
+        Mutex::new(RegionListAllocator::create());
 }
 #[inline(always)]
 pub fn allocate_frame() -> Option<Frame> {

@@ -102,18 +102,16 @@ impl Entry {
             let table = &mut *(frame.virt_addr() as *mut PageTable);
             table.free(level);
         }
-        self.deallocate(false);
+        self.deallocate();
     }
 
-    /// deallocates a page table entry and invalidates it if `invalidate` is true
+    /// deallocates a page table entry and invalidates it
     /// # Safety
-    /// the caller must ensure that the entry is not used anymore, especially if `invalidate` is true
-    pub unsafe fn deallocate(&mut self, invalidate: bool) {
+    /// the caller must ensure that the entry is not used anymore
+    pub unsafe fn deallocate(&mut self) {
         if let Some(frame) = self.frame() {
             frame_allocator::deallocate_frame(frame);
-            if invalidate {
-                self.set(EntryFlags::empty(), 0);
-            }
+            self.set(EntryFlags::empty(), 0);
         }
     }
 }
@@ -305,7 +303,7 @@ impl PageTable {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {
-            unsafe { entry.deallocate(true) };
+            unsafe { entry.deallocate() };
         }
     }
 }
@@ -405,3 +403,5 @@ impl Drop for PhysPageTable {
         }
     }
 }
+
+unsafe impl Send for PhysPageTable {}
