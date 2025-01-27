@@ -29,31 +29,7 @@ use spin::{Mutex, RwLock};
 pub type Path<'a> = &'a str;
 
 lazy_static! {
-    pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::new());
-}
-
-pub fn init() {
-    debug!(VFS, "initing ...");
-    let the_now = time!();
-
-    let mut vfs = VFS_STRUCT.write();
-    // ramfs
-    let ramfs = RwLock::new(ramfs::RamFS::new());
-    vfs.mount(b"ram", ramfs).unwrap();
-    // devices
-    vfs.mount(b"dev", devicefs::DeviceFS::new()).unwrap();
-    // processes
-    vfs.mount(b"proc", Mutex::new(procfs::ProcFS::create()))
-        .unwrap();
-    // ramdisk
-    let mut ramdisk = limine::get_ramdisk();
-    let mut ramfs = RwLock::new(ramfs::RamFS::new());
-
-    vfs.unpack_tar(&mut ramfs, &mut ramdisk)
-        .expect("failed unpacking ramdisk archive");
-    vfs.mount(b"sys", ramfs).expect("failed mounting");
-    let elapsed = time!() - the_now;
-    debug!(VFS, "done in ({}ms) ...", elapsed);
+    pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
 }
 
 /// Defines a file descriptor resource
@@ -398,6 +374,36 @@ impl VFS {
         Self {
             drivers: BTreeMap::new(),
         }
+    }
+
+    /// Creates a new VFS and mounts the default filesystems
+    pub fn create() -> Self {
+        let mut this = Self::new();
+
+        debug!(
+            VFS,
+            "Creating a new VFS with default initial filesystems ..."
+        );
+        let the_now = time!();
+
+        // ramfs
+        let ramfs = RwLock::new(ramfs::RamFS::new());
+        this.mount(b"ram", ramfs).unwrap();
+        // devices
+        this.mount(b"dev", devicefs::DeviceFS::new()).unwrap();
+        // processes
+        this.mount(b"proc", Mutex::new(procfs::ProcFS::create()))
+            .unwrap();
+        // ramdisk
+        let mut ramdisk = limine::get_ramdisk();
+        let mut ramfs = RwLock::new(ramfs::RamFS::new());
+
+        this.unpack_tar(&mut ramfs, &mut ramdisk)
+            .expect("failed unpacking ramdisk archive");
+        this.mount(b"sys", ramfs).expect("failed mounting");
+        let elapsed = time!() - the_now;
+        debug!(VFS, "done in ({}ms) ...", elapsed);
+        this
     }
     /// mounts a file system as a drive
     /// returns Err(()) if not enough memory or there is an already mounted driver with that

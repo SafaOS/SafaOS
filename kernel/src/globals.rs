@@ -1,21 +1,10 @@
-use core::mem::MaybeUninit;
-
 use lazy_static::lazy_static;
-use spin::Mutex;
 
 use crate::{
     limine,
-    memory::buddy_allocator::BuddyAllocator,
-    utils::{self, elf::Elf, Locked},
+    utils::{self, elf::Elf},
 };
 
-#[global_allocator]
-static GLOBAL_ALLOCATOR: Locked<MaybeUninit<BuddyAllocator>> =
-    unsafe { Locked::new(BuddyAllocator::new()) };
-
-pub fn global_allocator() -> &'static Mutex<MaybeUninit<BuddyAllocator<'static>>> {
-    &GLOBAL_ALLOCATOR.inner
-}
 /// static mut because we need really fast access of HDDM
 pub static mut HDDM: usize = 0;
 #[inline(always)]

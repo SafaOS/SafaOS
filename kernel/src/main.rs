@@ -27,11 +27,9 @@ use arch::x86_64::serial;
 
 use drivers::keyboard::keys::Key;
 use drivers::keyboard::HandleKey;
-use drivers::vfs;
 use globals::*;
 
 use limine::get_phy_offset;
-use limine::get_phy_offset_end;
 pub use memory::PhysAddr;
 pub use memory::VirtAddr;
 use terminal::FRAMEBUFFER_TERMINAL;
@@ -109,7 +107,7 @@ macro_rules! debug {
 fn panic(info: &PanicInfo) -> ! {
     unsafe { asm!("cli") }
     unsafe {
-        arch::x86_64::serial::SERIAL.inner.force_unlock();
+        arch::x86_64::serial::SERIAL.force_unlock();
         if !QUITE_PANIC {
             FRAMEBUFFER_TERMINAL.force_write_unlock();
             FRAMEBUFFER_TERMINAL.write().clear();
@@ -173,15 +171,12 @@ extern "C" fn kstart() -> ! {
     );
 
     memory::sorcery::init_page_table();
-    memory::init(get_phy_offset_end());
     println!("Terminal initialized successfuly");
 
     // initing the arch
     arch::init_phase2();
 
     unsafe {
-        devices::init();
-        vfs::init();
         debug!(Scheduler, "Eve starting...");
         Scheduler::init(eve::main, "Eve");
     }

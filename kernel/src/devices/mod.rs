@@ -41,6 +41,15 @@ impl DeviceManager {
 
         None
     }
+
+    /// Create a new device manager and mounts all the initial devices
+    pub fn create() -> Self {
+        let mut this = Self::new();
+        this.add_device(&*FRAMEBUFFER_TERMINAL);
+        this.add_device(&*SERIAL);
+
+        this
+    }
 }
 
 pub trait Device: Send + Sync + InodeOps {
@@ -93,10 +102,5 @@ impl<T: CharDevice> Device for T {
     }
 }
 lazy_static! {
-    pub static ref DEVICE_MANAGER: Mutex<DeviceManager> = Mutex::new(DeviceManager::new());
-}
-
-pub fn init() {
-    DEVICE_MANAGER.lock().add_device(&*FRAMEBUFFER_TERMINAL);
-    DEVICE_MANAGER.lock().add_device(&*SERIAL);
+    pub static ref DEVICE_MANAGER: Mutex<DeviceManager> = Mutex::new(DeviceManager::create());
 }

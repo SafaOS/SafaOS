@@ -10,10 +10,10 @@ pub mod ustar;
 use core::ops::Deref;
 
 use serde::Serialize;
-use spin::Mutex;
+use spin::{Lazy, Mutex};
 
 pub struct Locked<T: ?Sized> {
-    pub inner: Mutex<T>,
+    inner: Mutex<T>,
 }
 
 impl<T> Locked<T> {
@@ -25,6 +25,27 @@ impl<T> Locked<T> {
 }
 
 impl<T> Deref for Locked<T> {
+    type Target = Mutex<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+/// LazyLock is a wrapper around [`Lazy<Mutex<T>>`] that implements [`Deref`] to [`Mutex<T>`]
+pub struct LazyLock<T> {
+    inner: Lazy<Locked<T>>,
+}
+
+impl<T> LazyLock<T> {
+    pub const fn new(inner: fn() -> Locked<T>) -> Self {
+        Self {
+            inner: Lazy::new(inner),
+        }
+    }
+}
+
+impl<T> Deref for LazyLock<T> {
     type Target = Mutex<T>;
 
     fn deref(&self) -> &Self::Target {
