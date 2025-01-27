@@ -65,9 +65,7 @@ pub struct TTY<T: TTYInterface> {
 
 impl<T: TTYInterface> Write for TTY<T> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for c in s.chars() {
-            self.write_char(c)?;
-        }
+        self.stdout_buffer.push_str(s);
         Ok(())
     }
 
