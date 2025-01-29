@@ -8,7 +8,8 @@ use crate::{
         utils::{APIC_TIMER_TICKS_PER_20MS, TICKS_PER_20MS},
         x86_64::acpi::{self, MADT},
     },
-    hddm, serial, PhysAddr, VirtAddr,
+    limine::HDDM,
+    serial, PhysAddr, VirtAddr,
 };
 
 pub static IOAPIC_ADDR: AtomicUsize = AtomicUsize::new(0);
@@ -62,14 +63,14 @@ pub struct MADTIOApic {
 pub fn get_io_apic_addr(madt: &MADT) -> VirtAddr {
     unsafe {
         let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
-        let addr = (*record).ioapic_address as PhysAddr | hddm();
+        let addr = (*record).ioapic_address as PhysAddr | *HDDM;
         addr
     }
 }
 
 #[inline(always)]
 pub fn get_local_apic_addr() -> VirtAddr {
-    let address = (read_msr(0x1B) & 0xFFFFF000) | hddm();
+    let address = (read_msr(0x1B) & 0xFFFFF000) | *HDDM;
 
     address
 }

@@ -5,13 +5,6 @@ use crate::{
     utils::{self, elf::Elf},
 };
 
-/// static mut because we need really fast access of HDDM
-pub static mut HDDM: usize = 0;
-#[inline(always)]
-pub fn hddm() -> usize {
-    unsafe { HDDM }
-}
-
 lazy_static! {
     pub static ref KERNEL_ELF: Elf<'static> = {
         let kernel_img = limine::kernel_image_info();

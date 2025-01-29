@@ -28,6 +28,10 @@ static BASE_REVISION: BaseRevision = BaseRevision::new();
 #[link_section = ".requests"]
 static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
+lazy_static! {
+    pub static ref HDDM: usize = get_phy_offset();
+}
+
 #[used]
 #[link_section = ".requests"]
 static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();

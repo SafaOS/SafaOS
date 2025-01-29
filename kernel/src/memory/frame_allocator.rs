@@ -1,11 +1,41 @@
-use core::fmt::Debug;
+use core::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+};
 
 use lazy_static::lazy_static;
 use spin::Mutex;
 
-use crate::hddm;
+use crate::limine::HDDM;
 
 use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
+
+/// A pointer to some data in a physical frame that is mapped to a virtual address in the hddm
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FramePtr<T>(*mut T);
+impl<T> FramePtr<T> {
+    pub fn phys_addr(&self) -> PhysAddr {
+        (self.0 as usize) - *HDDM
+    }
+
+    pub fn frame(&self) -> Frame {
+        Frame(self.phys_addr())
+    }
+}
+
+impl<T> Deref for FramePtr<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.0 }
+    }
+}
+
+impl<T> DerefMut for FramePtr<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.0 }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Frame(PhysAddr);
 
@@ -25,12 +55,19 @@ impl Frame {
 
     #[inline]
     pub fn virt_addr(&self) -> VirtAddr {
-        self.0 | hddm()
+        self.0 | *HDDM
     }
 
     pub fn iter_frames(start: Frame, end: Frame) -> FrameIter {
         debug_assert!(start.start_address() <= end.start_address());
         FrameIter { start, end }
+    }
+
+    /// Converts a frame into a pointer to some data in that frame
+    /// # Safety
+    /// unsafe because the caller must ensure that the frame is valid and points to data containing [`T`]
+    pub unsafe fn into_ptr<T>(self) -> FramePtr<T> {
+        FramePtr(self.virt_addr() as *mut T)
     }
 }
 

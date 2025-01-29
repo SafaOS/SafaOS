@@ -29,7 +29,6 @@ use drivers::keyboard::keys::Key;
 use drivers::keyboard::HandleKey;
 use globals::*;
 
-use limine::get_phy_offset;
 pub use memory::PhysAddr;
 pub use memory::VirtAddr;
 use terminal::FRAMEBUFFER_TERMINAL;
@@ -158,18 +157,6 @@ fn print_stack_trace() {
 #[no_mangle]
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
-    // initing globals
-    let phy_offset = get_phy_offset();
-    unsafe {
-        HDDM = phy_offset;
-    }
-
-    serial!(
-        "phy_offset: {:#x}..{:#x}\n",
-        phy_offset,
-        limine::get_phy_offset_end(),
-    );
-
     memory::sorcery::init_page_table();
     println!("Terminal initialized successfuly");
 

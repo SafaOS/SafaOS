@@ -208,7 +208,7 @@ impl CPUStatus {
             rip: entry_point as u64,
             rdi: argc as u64,
             rsi: argv_addr as u64,
-            cr3: page_table.root_pml4() as u64,
+            cr3: page_table.phys_addr() as u64,
             rsp: STACK_END as u64,
             cs,
             ss,

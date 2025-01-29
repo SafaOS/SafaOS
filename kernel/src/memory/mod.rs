@@ -10,8 +10,6 @@ pub type PhysAddr = usize;
 
 use paging::{current_root_table, Page, PageTable, PAGE_SIZE};
 
-use crate::hddm;
-
 fn p4_index(addr: VirtAddr) -> usize {
     (addr >> 39) & 0x1FF
 }
@@ -61,8 +59,7 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
 
         let frame = page_table.get_frame(page).unwrap();
 
-        let phys_addr = frame.start_address() + diff;
-        let virt_addr = phys_addr | hddm();
+        let virt_addr = frame.virt_addr() + diff;
         unsafe {
             core::ptr::copy_nonoverlapping(
                 obj.as_ptr().byte_add(copied),
