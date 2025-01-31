@@ -45,7 +45,7 @@ syscall_table:
     .quad syschdir
     .quad sysgetcwd
     .quad syssync
-    .quad deprecated_syscall
+    .quad systruncate
     .quad syssbrk
     .quad syspspawn
     .quad sysshutdown

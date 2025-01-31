@@ -74,16 +74,11 @@ impl<T: CharDevice> InodeOps for T {
         crate::drivers::vfs::InodeType::Device
     }
 
-    fn read(
-        &self,
-        buffer: &mut [u8],
-        _offset: usize,
-        _count: usize,
-    ) -> crate::drivers::vfs::FSResult<usize> {
+    fn read(&self, _offset: isize, buffer: &mut [u8]) -> crate::drivers::vfs::FSResult<usize> {
         self.read(buffer)
     }
 
-    fn write(&self, buffer: &[u8], _offset: usize) -> crate::drivers::vfs::FSResult<usize> {
+    fn write(&self, _offset: isize, buffer: &[u8]) -> crate::drivers::vfs::FSResult<usize> {
         CharDevice::write(self, buffer)
     }
 

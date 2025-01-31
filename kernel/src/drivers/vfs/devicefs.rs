@@ -6,7 +6,7 @@ use alloc::{
 
 use crate::devices::{Device, DEVICE_MANAGER};
 
-use super::{FSResult, FileDescriptor, FileSystem, Inode, InodeOps, InodeType};
+use super::{FSResult, FileSystem, Inode, InodeOps, InodeType};
 
 #[derive(Clone)]
 pub enum DeviceInode {
@@ -49,16 +49,16 @@ impl InodeOps for DeviceInode {
         }
     }
 
-    fn read(&self, buffer: &mut [u8], offset: usize, count: usize) -> FSResult<usize> {
+    fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
         match self.device() {
-            Some(device) => device.read(buffer, offset, count),
+            Some(device) => device.read(offset, buffer),
             None => FSResult::Err(super::FSError::NotAFile),
         }
     }
 
-    fn write(&self, buffer: &[u8], offset: usize) -> FSResult<usize> {
+    fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
         match self.device() {
-            Some(device) => device.write(buffer, offset),
+            Some(device) => device.write(offset, buffer),
             None => FSResult::Err(super::FSError::NotAFile),
         }
     }
@@ -139,13 +139,5 @@ impl FileSystem for DeviceFS {
             return Some(DeviceInode::create_device(inode_id - 1));
         }
         None
-    }
-
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        file_descriptor.node.write(buffer, 0)
-    }
-
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        file_descriptor.node.read(buffer, 0, 0)
     }
 }

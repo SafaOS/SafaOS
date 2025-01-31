@@ -58,8 +58,10 @@ pub mod testing_module {
             asm!(
                 "mov rax, 3
                 mov rdi, 1
-                mov rsi, r9
-                mov rdx, r10
+                mov rsi, 0
+                mov rdx, r9
+                mov rcx, r10
+                mov r8, 0
                 int 0x80", in("r9") msg, in("r10") len
             )
         }

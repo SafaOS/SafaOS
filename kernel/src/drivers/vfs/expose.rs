@@ -35,12 +35,18 @@ impl File {
         Ok(Self(fd_ri))
     }
 
-    pub fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
-        self.with_fd(|fd| VFS_STRUCT.read().read(fd, buffer))
+    pub fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
+        self.with_fd(|fd| VFS_STRUCT.read().read(fd, offset, buffer))
     }
 
-    pub fn write(&self, buffer: &[u8]) -> FSResult<usize> {
-        self.with_fd(|fd| VFS_STRUCT.read().write(fd, buffer))
+    pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
+        self.with_fd(|fd| VFS_STRUCT.read().write(fd, offset, buffer))
+    }
+
+    pub fn truncate(&self, len: usize) -> FSResult<()> {
+        // TODO: work more on truncating, for now we are using the node directly
+        // i am not really sure if the VFS layer is even needed anymore because even reads and writes are just directing to the node
+        self.with_fd(|fd| fd.node.truncate(len))
     }
 
     pub fn from_fd(fd: usize) -> Option<Self> {

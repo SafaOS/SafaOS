@@ -167,7 +167,7 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
     let mut buffer = Vec::with_capacity_in(stat.size, &*GLOBAL_PAGE_ALLOCATOR);
     buffer.resize(stat.size, 0);
 
-    file.read(&mut buffer)?;
+    file.read(0, &mut buffer)?;
     spawn(name, &buffer, argv, flags).map_err(|_| FSError::NotExecuteable)
 }
 

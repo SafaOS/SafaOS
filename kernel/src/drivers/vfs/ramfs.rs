@@ -88,28 +88,54 @@ impl InodeOps for Mutex<RamInode> {
         }
     }
 
-    fn read(&self, buffer: &mut [u8], offset: usize, count: usize) -> FSResult<usize> {
+    fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
         match self.lock().data {
             RamInodeData::Data(ref data) => {
-                buffer[..count].copy_from_slice(&data[offset..offset + count]);
-                Ok(count)
+                if offset >= data.len() as isize {
+                    return Err(FSError::InvaildOffset);
+                }
+
+                if offset >= 0 {
+                    let offset = offset as usize;
+
+                    let count = buffer.len().min(data.len() - offset);
+                    buffer[..count].copy_from_slice(&data[offset..offset + count]);
+                    Ok(count)
+                } else {
+                    let rev_offset = (-offset) as usize;
+                    if rev_offset > data.len() {
+                        return Err(FSError::InvaildOffset);
+                    }
+                    // TODO: this is slower then inlining the code ourselves
+                    self.read((data.len() - rev_offset) as isize + 1, buffer)
+                }
             }
-            RamInodeData::HardLink(ref inode) => inode.read(buffer, offset, count),
+            RamInodeData::HardLink(ref inode) => inode.read(offset, buffer),
             _ => Err(FSError::NotAFile),
         }
     }
 
-    fn write(&self, buffer: &[u8], offset: usize) -> FSResult<usize> {
+    fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
         match self.lock().data {
             RamInodeData::Data(ref mut data) => {
-                if data.len() < buffer.len() + offset {
-                    data.resize(buffer.len() + offset, 0);
-                }
+                if offset >= 0 {
+                    let offset = offset as usize;
+                    if data.len() < buffer.len() + offset {
+                        data.resize(buffer.len() + offset, 0);
+                    }
 
-                data[offset..(offset + buffer.len())].copy_from_slice(buffer);
-                Ok(buffer.len())
+                    data[offset..(offset + buffer.len())].copy_from_slice(buffer);
+                    Ok(buffer.len())
+                } else {
+                    let rev_offset = (-offset) as usize;
+                    if rev_offset > data.len() {
+                        return Err(FSError::InvaildOffset);
+                    }
+                    // TODO: this is slower then inlining the code ourselves
+                    self.write((data.len() - rev_offset) as isize + 1, buffer)
+                }
             }
-            RamInodeData::HardLink(ref inode) => inode.write(buffer, offset),
+            RamInodeData::HardLink(ref inode) => inode.write(offset, buffer),
             _ => Err(FSError::NotAFile),
         }
     }

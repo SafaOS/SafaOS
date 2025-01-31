@@ -19,6 +19,7 @@ pub enum ErrorStatus {
     InvaildSyscall,
     InvaildResource,
     InvaildPid,
+    InvaildOffset,
     // instead of panicking syscalls will return this on null and unaligned pointers
     InvaildPtr,
     // for operations that requires a vaild utf8 str...

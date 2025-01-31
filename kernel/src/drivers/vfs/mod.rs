@@ -37,22 +37,11 @@ lazy_static! {
 pub struct FileDescriptor {
     mountpoint: Arc<dyn FileSystem>,
     pub node: Inode,
-    /// acts as a dir entry index for directories
-    /// acts as a byte index for files
-    pub read_pos: usize,
-    /// acts as a byte index for files
-    /// doesn't do anything for directories
-    pub write_pos: usize,
 }
 
 impl FileDescriptor {
     fn new(mountpoint: Arc<dyn FileSystem>, node: Inode) -> Self {
-        Self {
-            mountpoint,
-            node,
-            read_pos: 0,
-            write_pos: 0,
-        }
+        Self { mountpoint, node }
     }
 
     pub fn close(&mut self) {
@@ -78,6 +67,7 @@ pub enum FSError {
     AlreadyExists,
     NotExecuteable,
     ResourceBusy,
+    InvaildOffset,
 }
 
 impl IntoErr for FSError {
@@ -92,6 +82,7 @@ impl IntoErr for FSError {
             Self::AlreadyExists => ErrorStatus::AlreadyExists,
             Self::NotExecuteable => ErrorStatus::NotExecutable,
             Self::ResourceBusy => ErrorStatus::Busy,
+            Self::InvaildOffset => ErrorStatus::InvaildOffset,
         }
     }
 }
@@ -121,20 +112,20 @@ pub trait InodeOps: Send + Sync {
     fn size(&self) -> FSResult<usize> {
         Err(FSError::OperationNotSupported)
     }
-    /// attempts to read `count` bytes of node data if it is a file
-    /// panics if invaild `offset`
+    /// attempts to read `buffer.len` bytes of node data if it is a file
     /// returns the amount of bytes read
-    fn read(&self, buffer: &mut [u8], offset: usize, count: usize) -> FSResult<usize> {
+    /// offset in negative values acts the same as reading from at the end of the file + offset + 1
+    fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
         _ = buffer;
         _ = offset;
-        _ = count;
         Err(FSError::OperationNotSupported)
     }
     /// attempts to write `buffer.len` bytes from `buffer` into node data if it is a file starting
     /// from offset
     /// extends the nodes data and node size if `buffer.len` + `offset` is greater then node size
     /// returns the amount of bytes written
-    fn write(&self, buffer: &[u8], offset: usize) -> FSResult<usize> {
+    /// offset in negative values acts the same as writing to at the end of the file + offset + 1
+    fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
         _ = buffer;
         _ = offset;
         Err(FSError::OperationNotSupported)
@@ -307,37 +298,23 @@ pub trait FileSystem: Send + Sync {
 
     /// attempts to read `buffer.len` bytes from file_descriptor returns the actual count of the bytes read
     /// shouldn't read directories!
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        let count = buffer.len();
-        let file_size = file_descriptor.node.size()?;
-
-        let count = if file_descriptor.read_pos + count > file_size {
-            file_size - file_descriptor.read_pos
-        } else {
-            count
-        };
-
-        file_descriptor
-            .node
-            .read(buffer, file_descriptor.read_pos, count)?;
-
-        file_descriptor.read_pos += count;
-        Ok(count)
+    fn read(
+        &self,
+        file_descriptor: &mut FileDescriptor,
+        offset: isize,
+        buffer: &mut [u8],
+    ) -> FSResult<usize> {
+        file_descriptor.node.read(offset, buffer)
     }
     /// attempts to write `buffer.len` bytes to `file_descriptor`
     /// shouldn't write to directories!
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        if file_descriptor.write_pos == 0 {
-            file_descriptor.node.truncate(0)?;
-        }
-
-        file_descriptor
-            .node
-            .write(buffer, file_descriptor.write_pos)?;
-
-        file_descriptor.write_pos += buffer.len();
-
-        Ok(buffer.len())
+    fn write(
+        &self,
+        file_descriptor: &mut FileDescriptor,
+        offset: isize,
+        buffer: &[u8],
+    ) -> FSResult<usize> {
+        file_descriptor.node.write(offset, buffer)
     }
 
     /// creates an empty file named `name` in `path`
@@ -489,7 +466,7 @@ impl VFS {
                     fs.create(path)?;
 
                     let node = fs.reslove_path(path)?;
-                    node.write(inode.data(), 0)?;
+                    node.write(0, inode.data())?;
                     node.close();
                 }
 
@@ -543,18 +520,28 @@ impl FileSystem for VFS {
         FSResult::Err(FSError::OperationNotSupported)
     }
 
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
+    fn read(
+        &self,
+        file_descriptor: &mut FileDescriptor,
+        offset: isize,
+        buffer: &mut [u8],
+    ) -> FSResult<usize> {
         file_descriptor
             .mountpoint
             .clone()
-            .read(file_descriptor, buffer)
+            .read(file_descriptor, offset, buffer)
     }
 
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
+    fn write(
+        &self,
+        file_descriptor: &mut FileDescriptor,
+        offset: isize,
+        buffer: &[u8],
+    ) -> FSResult<usize> {
         file_descriptor
             .mountpoint
             .clone()
-            .write(file_descriptor, buffer)
+            .write(file_descriptor, offset, buffer)
     }
 
     fn create(&self, path: Path) -> FSResult<()> {

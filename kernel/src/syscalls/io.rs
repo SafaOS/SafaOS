@@ -27,24 +27,33 @@ extern "C" fn sysopen(path_ptr: *const u8, len: usize, dest_fd: Optional<usize>)
 }
 
 #[no_mangle]
-extern "C" fn syswrite(fd: usize, ptr: *const u8, len: usize) -> ErrorStatus {
+extern "C" fn syswrite(
+    fd: usize,
+    offset: isize,
+    ptr: *const u8,
+    len: usize,
+    bytes_written: Optional<usize>,
+) -> ErrorStatus {
     let slice = Slice::new(ptr, len)?.into_slice();
     let file_ref = FileRef::get(fd).ok_or(ErrorStatus::InvaildResource)?;
-
-    while let Err(err) = file_ref.write(slice) {
-        match err {
-            FSError::ResourceBusy => {
-                threading::expose::thread_yeild();
+    loop {
+        match file_ref.write(offset, slice) {
+            Err(FSError::ResourceBusy) => threading::expose::thread_yeild(),
+            Err(err) => return err.into(),
+            Ok(count) => {
+                if let Some(bytes_written) = bytes_written.into_option() {
+                    *bytes_written = count;
+                }
+                return ErrorStatus::None;
             }
-            _ => return err.into(),
         }
     }
-    ErrorStatus::None
 }
 
 #[no_mangle]
 extern "C" fn sysread(
     fd: usize,
+    offset: isize,
     ptr: *mut u8,
     len: usize,
     dest_read: Optional<usize>,
@@ -53,7 +62,7 @@ extern "C" fn sysread(
     let file_ref = FileRef::get(fd).ok_or(ErrorStatus::InvaildResource)?;
 
     loop {
-        match file_ref.read(slice) {
+        match file_ref.read(offset, slice) {
             Err(FSError::ResourceBusy) => threading::expose::thread_yeild(),
             Err(err) => return err.into(),
             Ok(bytes_read) => {
@@ -154,4 +163,16 @@ extern "C" fn syssync(ri: usize) -> ErrorStatus {
             Err(err) => return err.into(),
         }
     }
+}
+
+#[no_mangle]
+extern "C" fn systruncate(ri: usize, len: usize) -> ErrorStatus {
+    let file_ref = FileRef::get(ri).ok_or(ErrorStatus::InvaildResource)?;
+    while let Err(err) = file_ref.truncate(len) {
+        match err {
+            FSError::ResourceBusy => threading::expose::thread_yeild(),
+            _ => return err.into(),
+        }
+    }
+    ErrorStatus::None
 }

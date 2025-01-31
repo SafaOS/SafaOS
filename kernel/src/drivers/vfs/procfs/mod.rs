@@ -151,18 +151,28 @@ impl super::InodeOps for Mutex<ProcInode> {
         }
     }
 
-    fn read(&self, buffer: &mut [u8], offset: usize, count: usize) -> FSResult<usize> {
+    fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
         match &mut self.lock().data {
             ProcInodeData::File(file) => {
                 let file_data = file.get_data();
-                let count = if offset + count > file_data.len() {
-                    file_data.len() - offset
-                } else {
-                    count
-                };
+                if offset >= file_data.len() as isize {
+                    return Err(FSError::InvaildOffset);
+                }
 
-                buffer[..count].copy_from_slice(file_data[offset..offset + count].as_bytes());
-                Ok(count)
+                if offset >= 0 {
+                    let offset = offset as usize;
+                    let count = buffer.len().min(file_data.len() - offset);
+
+                    buffer[..count].copy_from_slice(file_data[offset..offset + count].as_bytes());
+                    Ok(count)
+                } else {
+                    let rev_offset = (-offset) as usize;
+                    if rev_offset > file_data.len() {
+                        return Err(FSError::InvaildOffset);
+                    }
+                    // TODO: this is slower then inlining the code ourselves
+                    self.read((file_data.len() - rev_offset) as isize + 1, buffer)
+                }
             }
             _ => FSResult::Err(FSError::NotAFile),
         }
