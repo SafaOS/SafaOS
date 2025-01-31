@@ -21,50 +21,27 @@ const KernelInfo = struct {
     version: []const u8,
 };
 
-fn get_meminfo() !MemInfo {
-    const meminfo_file = try File.open("proc:/meminfo", .{ .read = true });
-    defer meminfo_file.close();
+fn get_parsed(comptime T: type, comptime path: []const u8) !std.json.Parsed(T) {
+    const file = try File.open(path, .{ .read = true });
+    defer file.close();
 
-    const meminfo_str = try meminfo_file.reader().readUntilEOF();
-    defer allocator.free(meminfo_str);
+    const str = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+    defer allocator.free(str);
 
-    const parsed_meminfo = try std.json.parseFromSlice(MemInfo, allocator, meminfo_str, .{ .ignore_unknown_fields = true, .allocate = .alloc_if_needed });
-    defer parsed_meminfo.deinit();
+    const parsed = try std.json.parseFromSlice(T, allocator, str, .{ .ignore_unknown_fields = true, .allocate = .alloc_if_needed });
 
-    return parsed_meminfo.value;
-}
-
-fn get_cpuinfo() !std.json.Parsed(CpuInfo) {
-    const cpuinfo_file = try File.open("proc:/cpuinfo", .{ .read = true });
-    defer cpuinfo_file.close();
-
-    const cpuinfo_str = try cpuinfo_file.reader().readUntilEOF();
-    defer allocator.free(cpuinfo_str);
-
-    const parsed_cpuinfo = try std.json.parseFromSlice(CpuInfo, allocator, cpuinfo_str, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
-
-    return parsed_cpuinfo;
-}
-
-fn get_kernel_info() !std.json.Parsed(KernelInfo) {
-    const kernelinfo_file = try File.open("proc:/kernelinfo", .{ .read = true });
-    defer kernelinfo_file.close();
-
-    const kernelinfo_str = try kernelinfo_file.reader().readUntilEOF();
-    defer allocator.free(kernelinfo_str);
-
-    const parsed_kernelinfo = try std.json.parseFromSlice(KernelInfo, allocator, kernelinfo_str, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
-
-    return parsed_kernelinfo;
+    return parsed;
 }
 
 pub fn main() !void {
-    const meminfo = try get_meminfo();
+    const parsed_meminfo = try get_parsed(MemInfo, "proc:/meminfo");
+    defer parsed_meminfo.deinit();
+    const meminfo = parsed_meminfo.value;
 
-    const parsed_cpuinfo = try get_cpuinfo();
+    const parsed_cpuinfo = try get_parsed(CpuInfo, "proc:/cpuinfo");
     defer parsed_cpuinfo.deinit();
 
-    const parsed_kernelinfo = try get_kernel_info();
+    const parsed_kernelinfo = try get_parsed(KernelInfo, "proc:/kernelinfo");
     defer parsed_kernelinfo.deinit();
 
     const kernelinfo = parsed_kernelinfo.value;
@@ -78,7 +55,7 @@ pub fn main() !void {
     const logo_file = try File.open("sys:/logo.txt", .{ .read = true });
     defer logo_file.close();
 
-    const logo = try logo_file.reader().readUntilEOF();
+    const logo = try logo_file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(logo);
 
     print("{s}\n", .{logo});

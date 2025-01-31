@@ -1,9 +1,10 @@
 const std_c = @import("std-c");
 const std = @import("std");
 const sys = std_c.sys;
-
+const stdin = std_c.stdin;
 const print = std_c.print;
-const StdinReader = std_c.StdinReader;
+const stdin_reader = std_c.stdin.reader();
+
 pub const allocator = std_c.heap.c_allocator;
 
 const Lexer = @import("Lexer.zig");
@@ -74,7 +75,7 @@ pub fn main() Error!void {
 
     while (true) {
         try prompt();
-        const line = try StdinReader.readUntilDelimiterAlloc(
+        const line = try stdin_reader.readUntilDelimiterAlloc(
             allocator,
             '\n',
             std.math.maxInt(usize),

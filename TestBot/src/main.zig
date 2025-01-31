@@ -89,8 +89,9 @@ fn test_binary(comptime path: []const u8, args: []const Slice(u8)) NativeError!O
 
     const pid = try spawn(path, args, "[TestCase]: " ++ path);
     const status = wait(pid);
-
-    const buffer = try test_log.reader().readUntilEOF();
+    // FIXME: lseek is not implemented
+    test_log.read_offset = 0;
+    const buffer = try test_log.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     return .{ .stdout = buffer, .status = status };
 }
 
@@ -278,7 +279,7 @@ fn run_tests(comptime tests: []const TestCase) Error!void {
 pub fn main() !void {
     // fd 0
     serial = try File.open("dev:/ss", .{ .write = true, .read = true });
-    std_c.stdio.stdout = serial.*;
+    std_c.stdout = serial.*;
 
     const tests = get_tests();
     print("\x1b[36m[TEST]\x1b[0m: TestBot running {} tests ...\n", .{tests.len});

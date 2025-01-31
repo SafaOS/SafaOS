@@ -16,8 +16,7 @@ pub fn main() !void {
     const file = try File.open(filename, .{ .write = true });
     defer file.close();
 
-    const writer = file.writer();
-    try writer.write(data);
+    _ = try file.write(data);
 }
 comptime {
     _ = std_c;

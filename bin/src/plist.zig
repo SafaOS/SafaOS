@@ -38,7 +38,7 @@ pub fn main() !void {
             const file = try File.open(path, .{ .read = true });
             defer file.close();
 
-            const info = try file.reader().readUntilEOF();
+            const info = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
 
             const process_info = try std.json.parseFromSlice(ProccessInfo, allocator, info, .{ .ignore_unknown_fields = true });
             try processes.append(process_info);
