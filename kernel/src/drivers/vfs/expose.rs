@@ -1,9 +1,13 @@
 use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
-use crate::threading::resources::{self, Resource};
+use crate::{
+    threading::resources::{self, Resource},
+    utils::io::{IoError, Readable},
+};
 
 use super::{
-    DirIterDescriptor, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT,
+    DirIterDescriptor, FSError, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path,
+    VFS_STRUCT,
 };
 
 #[derive(Debug)]
@@ -80,6 +84,15 @@ impl Drop for File {
     fn drop(&mut self) {
         self.with_fd(|fd| fd.close());
         resources::remove_resource(self.0).unwrap();
+    }
+}
+
+impl Readable for File {
+    fn read(&self, offset: isize, buf: &mut [u8]) -> Result<usize, IoError> {
+        self.read(offset, buf).map_err(|e| match e {
+            FSError::InvaildOffset => IoError::InvaildOffset,
+            _ => IoError::Generic,
+        })
     }
 }
 
