@@ -28,7 +28,7 @@ fn get_parsed(comptime T: type, comptime path: []const u8) !std.json.Parsed(T) {
     const str = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(str);
 
-    const parsed = try std.json.parseFromSlice(T, allocator, str, .{ .ignore_unknown_fields = true, .allocate = .alloc_if_needed });
+    const parsed = try std.json.parseFromSlice(T, allocator, str, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
 
     return parsed;
 }
