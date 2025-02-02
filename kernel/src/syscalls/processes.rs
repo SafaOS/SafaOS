@@ -36,7 +36,7 @@ extern "C" fn sysspawn(
     let config = config.get()?;
     let (name, argv, flags) = config.as_rust();
     let elf_bytes = Slice::new(elf_ptr, elf_len)?.into_slice();
-    match threading::expose::spawn(name, elf_bytes, argv, flags) {
+    match threading::expose::spawn(name, &elf_bytes, argv, flags) {
         Err(err) => err.into(),
         Ok(pid) => {
             if let Some(dest_pid) = dest_pid.into_option() {

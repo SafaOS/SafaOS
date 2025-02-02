@@ -6,12 +6,12 @@ use crate::{
 };
 
 lazy_static! {
-    pub static ref KERNEL_ELF: Elf<'static> = {
+    static ref KERNEL_ELF_BYTES: &'static [u8] = {
         let kernel_img = limine::kernel_image_info();
-        let kernel_img_bytes = unsafe { core::slice::from_raw_parts(kernel_img.0, kernel_img.1) };
-        let elf = utils::elf::Elf::new(kernel_img_bytes).unwrap();
-        elf
+        unsafe { core::slice::from_raw_parts(kernel_img.0, kernel_img.1) }
     };
+    pub static ref KERNEL_ELF: Elf<'static, &'static [u8]> =
+        utils::elf::Elf::new(&*KERNEL_ELF_BYTES).unwrap();
     pub static ref RSDP_ADDR: usize = limine::rsdp_addr();
 }
 

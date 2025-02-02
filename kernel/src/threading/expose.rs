@@ -10,11 +10,11 @@ use crate::{
     arch::threading::CPUStatus,
     drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
     khalt,
-    memory::{
-        page_allocator::GLOBAL_PAGE_ALLOCATOR,
-        paging::{MapToError, PhysPageTable},
+    memory::paging::{MapToError, PhysPageTable},
+    utils::{
+        elf::{Elf, ElfError},
+        io::Readable,
     },
-    utils::elf::{Elf, ElfError},
 };
 
 use super::{
@@ -121,9 +121,9 @@ pub fn function_spawn(
     Ok(pid)
 }
 
-pub fn spawn(
+pub fn spawn<T: Readable>(
     name: &str,
-    elf_bytes: &[u8],
+    reader: &T,
     argv: &[&str],
     flags: SpawnFlags,
 ) -> Result<usize, ElfError> {
@@ -133,7 +133,7 @@ pub fn spawn(
         String::from("ram:/")
     };
 
-    let elf = Elf::new(elf_bytes)?;
+    let elf = Elf::new(reader)?;
 
     let current_pid = super::with_current(|p| p.pid);
 
@@ -164,11 +164,7 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
         return Err(FSError::NotAFile);
     }
 
-    let mut buffer = Vec::with_capacity_in(stat.size, &*GLOBAL_PAGE_ALLOCATOR);
-    buffer.resize(stat.size, 0);
-
-    file.read(0, &mut buffer)?;
-    spawn(name, &buffer, argv, flags).map_err(|_| FSError::NotExecuteable)
+    spawn(name, &file, argv, flags).map_err(|_| FSError::NotExecuteable)
 }
 
 /// also ensures the cwd ends with /

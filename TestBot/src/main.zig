@@ -210,6 +210,7 @@ pub fn memory_info_test() Error!void {
     const output = try meminfo();
     if (!meminfo_output.eql(&output)) {
         print("\x1b[31m[TestBot]: ", .{});
+        // FIXME: memory leak is misreported thanks to the fact that the libc memory allocator sucks 2 pages of memory is allocated to read ram:/test.txt
         print(
             \\possible memory leak detected
             \\expected:

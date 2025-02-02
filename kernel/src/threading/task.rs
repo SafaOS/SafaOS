@@ -11,7 +11,10 @@ use crate::{
         align_up, frame_allocator,
         paging::{Page, PhysPageTable, PAGE_SIZE},
     },
-    utils::elf::{Elf, ElfError},
+    utils::{
+        elf::{Elf, ElfError},
+        io::Readable,
+    },
     VirtAddr,
 };
 
@@ -242,15 +245,15 @@ impl Task {
     }
 
     /// Creates a new task from an elf
-    pub fn from_elf(
+    pub fn from_elf<T: Readable>(
         name: String,
         pid: Pid,
         ppid: Pid,
         cwd: String,
-        elf: Elf,
+        elf: Elf<T>,
         args: &[&str],
     ) -> Result<Self, ElfError> {
-        let entry_point = elf.header.entry_point;
+        let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;
 

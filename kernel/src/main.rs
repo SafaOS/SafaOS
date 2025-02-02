@@ -6,6 +6,7 @@
 #![feature(pattern)]
 #![feature(box_vec_non_null)]
 #![feature(sync_unsafe_cell)]
+#![feature(vec_into_raw_parts)]
 
 #[cfg(feature = "test")]
 mod test;
@@ -139,13 +140,9 @@ fn print_stack_trace() {
 
             let name = {
                 let sym = KERNEL_ELF.sym_from_value_range(return_address);
-
-                if let Some(sym) = sym {
-                    KERNEL_ELF.string_table_index(sym.name_index)
-                } else {
-                    "??"
-                }
+                sym.map(|sym| KERNEL_ELF.string_table_index(sym.name_index).unwrap())
             };
+            let name = name.as_deref().unwrap_or("???");
 
             cross_println!("  {:#x} <{}>", return_address, name);
             fp = *fp as *const usize;
