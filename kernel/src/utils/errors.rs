@@ -24,6 +24,9 @@ pub enum ErrorStatus {
     InvaildPtr,
     // for operations that requires a vaild utf8 str...
     InvaildStr,
+    // for operations that requires a str that doesn't exceed a max length such as
+    // file names (128 bytes)
+    StrTooLong,
     InvaildPath,
     NoSuchAFileOrDirectory,
     NotAFile,
@@ -83,7 +86,7 @@ impl<T: IntoErr> From<T> for ErrorStatus {
     }
 }
 /// a Result that can be converted to an ErrorStatus
-/// using `?` operator on this will return an ErrorStatus if the Result is an Err
+/// using `?` operator on this will return an ErrorStatus if the Result is an Err else it will return the Ok value (`T`)
 /// this type is a bit of a hack that isn't used much, it helps clean up things with `super::ffi`
 #[derive(Debug, Clone, Copy)]
 pub struct ErrorStatusResult<T>(Result<T, ErrorStatus>);

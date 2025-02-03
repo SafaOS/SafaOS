@@ -8,7 +8,12 @@ pub mod ffi;
 pub mod io;
 pub mod ustar;
 
-use core::{ops::Deref, str::FromStr};
+use core::{
+    borrow::Borrow,
+    fmt::{Debug, Display, Write},
+    ops::Deref,
+    str::FromStr,
+};
 
 use serde::Serialize;
 use spin::{Lazy, Mutex};
@@ -54,8 +59,23 @@ impl<T> Deref for LazyLock<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HeaplessString<const N: usize>(heapless::String<N>);
+impl<const N: usize> HeaplessString<N> {
+    pub const fn new() -> Self {
+        Self(heapless::String::new())
+    }
+}
+
+impl<const N: usize> Write for HeaplessString<N> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.0.write_str(s)
+    }
+
+    fn write_char(&mut self, c: char) -> core::fmt::Result {
+        self.0.write_char(c)
+    }
+}
 
 impl<const N: usize> FromStr for HeaplessString<N> {
     type Err = <heapless::String<N> as FromStr>::Err;
@@ -97,5 +117,23 @@ impl<const N: usize> Serialize for HeaplessString<N> {
         S: serde::Serializer,
     {
         serializer.serialize_str(self.0.as_str().trim_matches('\0'))
+    }
+}
+
+impl<const N: usize> Display for HeaplessString<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+impl<const N: usize> Debug for HeaplessString<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        Debug::fmt(&self.0, f)
+    }
+}
+
+impl<const N: usize> Borrow<str> for HeaplessString<N> {
+    fn borrow(&self) -> &str {
+        &self.0
     }
 }
