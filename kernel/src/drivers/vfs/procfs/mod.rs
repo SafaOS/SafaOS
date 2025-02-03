@@ -1,11 +1,9 @@
-use core::str;
-
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-    sync::Arc,
-    vec::Vec,
+use core::{
+    fmt::Write,
+    str::{self, FromStr},
 };
+
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use hashbrown::HashMap;
 use init::InitStateItem;
 use spin::Mutex;
@@ -13,10 +11,10 @@ use tasks::TaskInfoFile;
 
 use crate::{
     threading::{expose::getpids, Pid},
-    utils::alloc::PageString,
+    utils::{alloc::PageString, HeaplessString},
 };
 
-use super::{FSError, FSResult, Inode, InodeOps};
+use super::{DirIterInodeItem, FSError, FSResult, FileName, Inode, InodeOps};
 
 mod cpuinfo;
 mod init;
@@ -88,15 +86,15 @@ pub struct ProcInode {
 }
 
 enum ProcInodeData {
-    Dir(String, HashMap<String, usize>),
+    Dir(HashMap<FileName, usize>),
     File(ProcFSFile),
 }
 
 impl ProcInode {
-    fn new_dir(inodeid: usize, name: String) -> Self {
+    fn new_dir(inodeid: usize, data: HashMap<FileName, usize>) -> Self {
         Self {
             inodeid,
-            data: ProcInodeData::Dir(name, HashMap::new()),
+            data: ProcInodeData::Dir(data),
         }
     }
 
@@ -115,39 +113,32 @@ impl super::InodeOps for Mutex<ProcInode> {
 
     fn kind(&self) -> super::InodeType {
         match &self.lock().data {
-            ProcInodeData::Dir(_, _) => super::InodeType::Directory,
+            ProcInodeData::Dir(_) => super::InodeType::Directory,
             ProcInodeData::File(_) => super::InodeType::File,
         }
     }
 
     fn contains(&self, name: &str) -> bool {
         match &self.lock().data {
-            ProcInodeData::Dir(_, dir) => dir.contains_key(name),
+            ProcInodeData::Dir(dir) => dir.contains_key(name),
             ProcInodeData::File(_) => false,
         }
     }
 
     fn size(&self) -> FSResult<usize> {
         match &mut self.lock().data {
-            ProcInodeData::Dir(_, dir) => Ok(dir.len()),
+            ProcInodeData::Dir(dir) => Ok(dir.len()),
             ProcInodeData::File(file) => Ok(file.get_data().len()),
         }
     }
 
     fn get(&self, name: &str) -> FSResult<usize> {
         match &self.lock().data {
-            ProcInodeData::Dir(_, dir) => dir
+            ProcInodeData::Dir(dir) => dir
                 .get(name)
                 .copied()
                 .ok_or(FSError::NoSuchAFileOrDirectory),
             ProcInodeData::File(_) => Err(FSError::NotADirectory),
-        }
-    }
-
-    fn name(&self) -> String {
-        match &self.lock().data {
-            ProcInodeData::Dir(name, _) => name.clone(),
-            ProcInodeData::File(file) => file.name().to_string(),
         }
     }
 
@@ -178,12 +169,12 @@ impl super::InodeOps for Mutex<ProcInode> {
         }
     }
 
-    fn open_diriter(&self) -> FSResult<Box<[usize]>> {
+    fn open_diriter(&self) -> FSResult<Box<[DirIterInodeItem]>> {
         match &self.lock().data {
-            ProcInodeData::Dir(_, dir) => {
+            ProcInodeData::Dir(dir) => {
                 let mut inodeids = Vec::with_capacity(dir.len());
-                for inodeid in dir.values() {
-                    inodeids.push(*inodeid);
+                for (name, inodeid) in dir {
+                    inodeids.push((HeaplessString::from_str(name).unwrap(), *inodeid));
                 }
 
                 Ok(inodeids.into_boxed_slice())
@@ -192,14 +183,14 @@ impl super::InodeOps for Mutex<ProcInode> {
         }
     }
 
-    fn insert(&self, name: &str, node: usize) -> FSResult<()> {
+    fn insert(&self, name: FileName, node: usize) -> FSResult<()> {
         match &mut self.lock().data {
-            ProcInodeData::Dir(_, dir) => {
-                if dir.contains_key(name) {
+            ProcInodeData::Dir(dir) => {
+                if dir.contains_key(&name) {
                     return FSResult::Err(FSError::AlreadyExists);
                 }
 
-                dir.insert(name.to_string(), node);
+                dir.insert(name, node);
                 Ok(())
             }
             ProcInodeData::File(_) => FSResult::Err(FSError::NotADirectory),
@@ -208,14 +199,14 @@ impl super::InodeOps for Mutex<ProcInode> {
 
     fn close(&self) {
         match &mut self.lock().data {
-            ProcInodeData::Dir(_, _) => {}
+            ProcInodeData::Dir(_) => {}
             ProcInodeData::File(file) => file.close(),
         }
     }
 
     fn opened(&self) {
         match &mut self.lock().data {
-            ProcInodeData::Dir(_, _) => {}
+            ProcInodeData::Dir(_) => {}
             ProcInodeData::File(file) => file.refresh(),
         }
     }
@@ -234,7 +225,7 @@ impl ProcFS {
         Self {
             inodes: HashMap::from([(
                 0,
-                Arc::new(Mutex::new(ProcInode::new_dir(0, String::new()))),
+                Arc::new(Mutex::new(ProcInode::new_dir(0, HashMap::new()))),
             )]),
             tasks: HashMap::new(),
             next_inodeid: 1,
@@ -254,6 +245,8 @@ impl ProcFS {
 
         for item in init::get_init_state() {
             let (name, inodeid) = fs.append_init_state(item);
+            let name = FileName::from_str(name).unwrap();
+
             root_inode.insert(name, inodeid).unwrap();
         }
         fs
@@ -273,21 +266,19 @@ impl ProcFS {
         (name, inodeid)
     }
 
-    fn append_dir(&mut self, name: &str, items: &[(&str, usize)]) -> usize {
+    fn append_dir(&mut self, name: FileName, items: &[(&str, usize)]) -> usize {
         let inodeid = self.next_inodeid;
         self.next_inodeid += 1;
-        let dir = HashMap::from_iter(
+
+        let data = HashMap::from_iter(
             items
                 .iter()
-                .map(|(name, inodeid)| (name.to_string(), *inodeid)),
+                .map(|(name, inodeid)| (FileName::from_str(name).unwrap(), *inodeid)),
         );
 
         self.inodes.insert(
             inodeid,
-            Arc::new(Mutex::new(ProcInode {
-                inodeid,
-                data: ProcInodeData::Dir(name.to_string(), dir),
-            })),
+            Arc::new(Mutex::new(ProcInode::new_dir(inodeid, data))),
         );
 
         let root_inode = self.inodes.get(&0).unwrap();
@@ -297,9 +288,12 @@ impl ProcFS {
 
     fn append_process(&mut self, pid: Pid) -> usize {
         let info_file = TaskInfoFile::new(pid);
-        let (file_name, file_inode) = self.append_file(info_file);
+        let (info_file_name, info_file_inode) = self.append_file(info_file);
 
-        let inodeid = self.append_dir(&pid.to_string(), &[(file_name, file_inode)]);
+        let mut pid_str = FileName::new();
+        pid_str.write_fmt(format_args!("{}", pid)).unwrap();
+
+        let inodeid = self.append_dir(pid_str, &[(info_file_name, info_file_inode)]);
         self.tasks.insert(pid, inodeid);
         inodeid
     }
@@ -307,7 +301,7 @@ impl ProcFS {
     fn remove_inode(&mut self, inodeid: usize) {
         let inode = self.inodes.remove(&inodeid).unwrap();
         match &inode.lock().data {
-            ProcInodeData::Dir(_, dir) => {
+            ProcInodeData::Dir(dir) => {
                 for (_, inodeid) in dir {
                     self.remove_inode(*inodeid);
                 }
@@ -344,8 +338,11 @@ impl ProcFS {
         for (pid, inodeid) in useless_inodes {
             self.remove_inode(inodeid);
             match &mut self.inodes.get(&0).unwrap().lock().data {
-                ProcInodeData::Dir(_, dir) => {
-                    dir.remove(&pid.to_string());
+                ProcInodeData::Dir(dir) => {
+                    let mut pid_str = FileName::new();
+                    pid_str.write_fmt(format_args!("{}", pid)).unwrap();
+
+                    dir.remove(&pid_str);
                 }
                 ProcInodeData::File(_) => unreachable!(),
             }

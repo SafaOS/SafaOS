@@ -11,6 +11,7 @@ use crate::{
     utils::{
         errors::{ErrorStatus, IntoErr},
         ustar::{self, TarArchiveIter},
+        HeaplessString,
     },
 };
 pub mod procfs;
@@ -27,7 +28,9 @@ use alloc::{
 use expose::DirEntry;
 use lazy_static::lazy_static;
 use spin::{Mutex, RwLock};
+
 pub type Path<'a> = &'a str;
+pub type FileName = HeaplessString<{ DirEntry::MAX_NAME_LEN }>;
 
 lazy_static! {
     pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
@@ -96,6 +99,7 @@ pub enum FSError {
     NotExecuteable,
     ResourceBusy,
     InvaildOffset,
+    InvaildName,
 }
 
 impl IntoErr for FSError {
@@ -111,6 +115,7 @@ impl IntoErr for FSError {
             Self::NotExecuteable => ErrorStatus::NotExecutable,
             Self::ResourceBusy => ErrorStatus::Busy,
             Self::InvaildOffset => ErrorStatus::InvaildOffset,
+            Self::InvaildName => ErrorStatus::StrTooLong,
         }
     }
 }
@@ -123,7 +128,6 @@ pub enum InodeType {
     Device,
 }
 pub trait InodeOps: Send + Sync {
-    fn name(&self) -> String;
     /// gets an Inode from self
     fn get(&self, name: &str) -> FSResult<usize> {
         _ = name;
@@ -161,7 +165,7 @@ pub trait InodeOps: Send + Sync {
 
     /// attempts to insert a node to self
     /// returns an FSError::NotADirectory if not a directory
-    fn insert(&self, name: &str, node: usize) -> FSResult<()> {
+    fn insert(&self, name: FileName, node: usize) -> FSResult<()> {
         _ = name;
         _ = node;
         Err(FSError::OperationNotSupported)
@@ -180,7 +184,7 @@ pub trait InodeOps: Send + Sync {
         self.kind() == InodeType::Directory
     }
 
-    fn open_diriter(&self) -> FSResult<Box<[usize]>> {
+    fn open_diriter(&self) -> FSResult<Box<[DirIterInodeItem]>> {
         Err(FSError::OperationNotSupported)
     }
 
@@ -205,19 +209,20 @@ pub trait InodeOps: Send + Sync {
 pub type Inode = Arc<dyn InodeOps>;
 /// inode type with a known type
 pub type InodeOf<T> = Arc<T>;
+pub type DirIterInodeItem = (HeaplessString<{ DirEntry::MAX_NAME_LEN }>, usize);
 
 #[derive(Debug, Clone)]
 pub struct DirIterDescriptor {
     fs: Arc<dyn FileSystem>,
-    inode_ids: Box<[usize]>,
+    inodes: Box<[DirIterInodeItem]>,
     index: usize,
 }
 
 impl DirIterDescriptor {
-    const fn new(fs: Arc<dyn FileSystem>, inode_ids: Box<[usize]>) -> Self {
+    const fn new(fs: Arc<dyn FileSystem>, inodes: Box<[DirIterInodeItem]>) -> Self {
         Self {
             fs,
-            inode_ids,
+            inodes,
             index: 0,
         }
     }
@@ -226,15 +231,15 @@ impl DirIterDescriptor {
         let index = self.index;
         self.index += 1;
 
-        if index >= self.inode_ids.len() {
+        if index >= self.inodes.len() {
             return None;
         }
 
-        let inode_id = self.inode_ids[index];
+        let (ref name, inode_id) = self.inodes[index];
         let inode = (*self.fs).get_inode(inode_id);
 
         match inode {
-            Some(inode) => Some(DirEntry::get_from_inode(inode)),
+            Some(inode) => Some(DirEntry::get_from_inode(inode, name)),
             None => self.next(),
         }
     }

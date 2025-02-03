@@ -1,77 +1,71 @@
+use core::str::FromStr;
+
 use alloc::boxed::Box;
-use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec;
-use alloc::{collections::btree_map::BTreeMap, string::String, vec::Vec};
+use alloc::{collections::btree_map::BTreeMap, vec::Vec};
 use spin::{Mutex, RwLock};
 
 use crate::devices::Device;
 use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
+use crate::utils::HeaplessString;
 
-use super::InodeOf;
+use super::{DirIterInodeItem, FileName, InodeOf};
 use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType, Path};
 
+/// The data of a RamInode
+// you cannot just lock the whole enum because Devices' manage their own locks
 pub enum RamInodeData {
-    Data(Vec<u8, PageAlloc>),
-    Children(BTreeMap<String, usize>),
+    Data(Mutex<Vec<u8, PageAlloc>>),
+    Children(Mutex<BTreeMap<FileName, usize>>),
     HardLink(Inode),
     Device(&'static dyn Device),
 }
 
 pub struct RamInode {
-    name: String,
     data: RamInodeData,
     inodeid: usize,
 }
 impl RamInode {
-    fn new(name: String, data: RamInodeData, inodeid: usize) -> Mutex<Self> {
-        Mutex::new(Self {
-            name,
-            data,
-            inodeid,
-        })
+    fn new(data: RamInodeData, inodeid: usize) -> Self {
+        Self { data, inodeid }
     }
 
-    fn new_file(name: String, data: &[u8], inodeid: usize) -> InodeOf<Mutex<Self>> {
+    fn new_file(data: &[u8], inodeid: usize) -> InodeOf<Self> {
         Arc::new(RamInode::new(
-            name,
-            RamInodeData::Data(data.to_vec_in(&*GLOBAL_PAGE_ALLOCATOR)),
+            RamInodeData::Data(Mutex::new(data.to_vec_in(&*GLOBAL_PAGE_ALLOCATOR))),
             inodeid,
         ))
     }
 
-    fn new_dir(name: String, inodeid: usize) -> InodeOf<Mutex<Self>> {
+    fn new_dir(inodeid: usize) -> InodeOf<Self> {
         Arc::new(RamInode::new(
-            name,
-            RamInodeData::Children(BTreeMap::new()),
+            RamInodeData::Children(Mutex::new(BTreeMap::new())),
             inodeid,
         ))
     }
 
-    fn new_device(
-        name: String,
-        device: &'static dyn Device,
-        inodeid: usize,
-    ) -> InodeOf<Mutex<Self>> {
-        Arc::new(RamInode::new(name, RamInodeData::Device(device), inodeid))
+    fn new_device(device: &'static dyn Device, inodeid: usize) -> InodeOf<Self> {
+        Arc::new(RamInode::new(RamInodeData::Device(device), inodeid))
     }
 
-    fn new_hardlink(name: String, inode: Inode, inodeid: usize) -> InodeOf<Mutex<Self>> {
-        Arc::new(RamInode::new(name, RamInodeData::HardLink(inode), inodeid))
+    fn new_hardlink(inode: Inode, inodeid: usize) -> InodeOf<Self> {
+        Arc::new(RamInode::new(RamInodeData::HardLink(inode), inodeid))
     }
 }
 
-impl InodeOps for Mutex<RamInode> {
+impl InodeOps for RamInode {
     fn size(&self) -> FSResult<usize> {
-        match self.lock().data {
-            RamInodeData::Data(ref data) => Ok(data.len()),
+        match self.data {
+            RamInodeData::Data(ref data) => Ok(data.lock().len()),
             RamInodeData::Device(ref device) => device.size(),
             _ => Err(FSError::NotAFile),
         }
     }
-    fn get(&self, name: Path) -> FSResult<usize> {
-        match self.lock().data {
+    fn get(&self, name: &str) -> FSResult<usize> {
+        match self.data {
             RamInodeData::Children(ref tree) => tree
+                .lock()
                 .get(name)
                 .copied()
                 .ok_or(FSError::NoSuchAFileOrDirectory),
@@ -82,8 +76,8 @@ impl InodeOps for Mutex<RamInode> {
     }
 
     fn contains(&self, name: Path) -> bool {
-        match self.lock().data {
-            RamInodeData::Children(ref tree) => tree.contains_key(name),
+        match self.data {
+            RamInodeData::Children(ref tree) => tree.lock().contains_key(name),
             RamInodeData::HardLink(ref inode) => inode.contains(name),
             RamInodeData::Device(ref device) => device.contains(name),
             _ => false,
@@ -91,9 +85,9 @@ impl InodeOps for Mutex<RamInode> {
     }
 
     fn truncate(&self, size: usize) -> FSResult<()> {
-        match self.lock().data {
-            RamInodeData::Data(ref mut data) => {
-                data.truncate(size);
+        match self.data {
+            RamInodeData::Data(ref data) => {
+                data.lock().truncate(size);
                 Ok(())
             }
             RamInodeData::HardLink(ref inode) => inode.truncate(size),
@@ -103,8 +97,10 @@ impl InodeOps for Mutex<RamInode> {
     }
 
     fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
-        match self.lock().data {
+        match self.data {
             RamInodeData::Data(ref data) => {
+                let data = data.lock();
+
                 if offset >= data.len() as isize {
                     return Err(FSError::InvaildOffset);
                 }
@@ -131,8 +127,10 @@ impl InodeOps for Mutex<RamInode> {
     }
 
     fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
-        match self.lock().data {
-            RamInodeData::Data(ref mut data) => {
+        match self.data {
+            RamInodeData::Data(ref data) => {
+                let mut data = data.lock();
+
                 if offset >= 0 {
                     let offset = offset as usize;
                     if data.len() < buffer.len() + offset {
@@ -156,14 +154,16 @@ impl InodeOps for Mutex<RamInode> {
         }
     }
 
-    fn insert(&self, name: &str, node: usize) -> FSResult<()> {
-        match self.lock().data {
-            RamInodeData::Children(ref mut tree) => {
-                if tree.contains_key(name) {
+    fn insert(&self, name: FileName, node: usize) -> FSResult<()> {
+        match self.data {
+            RamInodeData::Children(ref tree) => {
+                let mut tree = tree.lock();
+
+                if tree.contains_key(&name) {
                     return Err(FSError::AlreadyExists);
                 }
 
-                tree.insert(name.to_string(), node);
+                tree.insert(name, node);
                 Ok(())
             }
             RamInodeData::HardLink(ref inode) => inode.insert(name, node),
@@ -173,7 +173,7 @@ impl InodeOps for Mutex<RamInode> {
     }
 
     fn kind(&self) -> InodeType {
-        match self.lock().data {
+        match self.data {
             RamInodeData::Children(_) => InodeType::Directory,
             RamInodeData::Data(_) => InodeType::File,
             RamInodeData::Device(_) => InodeType::Device,
@@ -181,17 +181,17 @@ impl InodeOps for Mutex<RamInode> {
         }
     }
 
-    fn name(&self) -> String {
-        self.lock().name.clone()
-    }
-
     fn inodeid(&self) -> usize {
-        self.lock().inodeid
+        self.inodeid
     }
-    fn open_diriter(&self) -> FSResult<Box<[usize]>> {
-        match self.lock().data {
+    fn open_diriter(&self) -> FSResult<Box<[DirIterInodeItem]>> {
+        match self.data {
             RamInodeData::Children(ref data) => {
-                Ok(data.iter().map(|(_, inodeid)| *inodeid).collect())
+                let data = data.lock();
+                Ok(data
+                    .iter()
+                    .map(|(name, inodeid)| (HeaplessString::from_str(name).unwrap(), *inodeid))
+                    .collect())
             }
             RamInodeData::HardLink(ref inode) => inode.open_diriter(),
             RamInodeData::Device(ref device) => device.open_diriter(),
@@ -200,7 +200,7 @@ impl InodeOps for Mutex<RamInode> {
     }
 
     fn sync(&self) -> FSResult<()> {
-        match self.lock().data {
+        match self.data {
             RamInodeData::HardLink(ref inode) => inode.sync(),
             RamInodeData::Device(ref device) => device.sync(),
             _ => Ok(()),
@@ -209,24 +209,21 @@ impl InodeOps for Mutex<RamInode> {
 }
 
 pub struct RamFS {
-    inodes: Vec<Arc<Mutex<RamInode>>>,
+    inodes: Vec<Arc<RamInode>>,
 }
 
 impl RamFS {
     pub fn new() -> Self {
         Self {
-            inodes: vec![RamInode::new_dir("/".to_string(), 0)],
+            inodes: vec![RamInode::new_dir(0)],
         }
     }
 
-    fn make_hardlink(&mut self, inodeid: usize, name: String) -> usize {
+    fn make_hardlink(&mut self, inodeid: usize, with_inodeid: usize) {
         let inode = self.inodes.get_mut(inodeid).unwrap();
         let inode = inode.clone();
-        let inodeid = self.inodes.len();
-
         self.inodes
-            .push(RamInode::new_hardlink(name, inode, inodeid));
-        inodeid
+            .push(RamInode::new_hardlink(inode, with_inodeid));
     }
 }
 
@@ -245,42 +242,55 @@ impl FileSystem for RwLock<RamFS> {
     }
 
     fn create(&self, path: Path) -> FSResult<()> {
-        let inodeid = self.read().inodes.len();
-
         let (resloved, name) = self.reslove_path_uncreated(path)?;
+        let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
+
+        let mut write = self.write();
+        let inodeid = write.inodes.len();
+
         resloved.insert(name, inodeid)?;
 
-        let node = RamInode::new_file(name.to_string(), &[], inodeid);
-        self.write().inodes.push(node);
+        let node = RamInode::new_file(&[], inodeid);
+        write.inodes.push(node);
 
         Ok(())
     }
 
     fn createdir(&self, path: Path) -> FSResult<()> {
-        let inodeid = self.read().inodes.len();
+        let (parent, name) = self.reslove_path_uncreated(path)?;
+        let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
 
-        let (resloved, name) = self.reslove_path_uncreated(path)?;
-        resloved.insert(name, inodeid)?;
+        let mut write = self.write();
 
-        let node = RamInode::new_dir(name.to_string(), inodeid);
-        self.write().inodes.push(node.clone());
+        let parent_hardlink_inodeid = write.inodes.len();
+        let parent_inodeid = parent.inodeid();
+        let created_inodeid = parent_hardlink_inodeid + 1;
 
-        let inodeid = self
-            .write()
-            .make_hardlink(resloved.inodeid(), "..".to_string());
-        node.insert("..", inodeid)?;
+        // inserting the new dir in the parent dir
+        parent.insert(name, created_inodeid)?;
+        let new_node = RamInode::new_dir(created_inodeid);
 
+        // making the previous dir inode a hardlink
+        write.make_hardlink(parent_inodeid, parent_hardlink_inodeid);
+        // inserting the previous dir
+        let hardlink_name = unsafe { FileName::from_str("..").unwrap_unchecked() };
+        new_node.insert(hardlink_name, parent_hardlink_inodeid)?;
+
+        write.inodes.push(new_node);
         Ok(())
     }
 
     fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
-        let inodeid = self.read().inodes.len();
-
         let (resloved, name) = self.reslove_path_uncreated(path)?;
+        let name = FileName::from_str(name).map_err(|()| FSError::InvaildName)?;
+
+        let mut write = self.write();
+        let inodeid = write.inodes.len();
+
         resloved.insert(name, inodeid)?;
 
-        let node = RamInode::new_device(name.to_string(), device, inodeid);
-        self.write().inodes.push(node);
+        let node = RamInode::new_device(device, inodeid);
+        write.inodes.push(node);
         Ok(())
     }
 }

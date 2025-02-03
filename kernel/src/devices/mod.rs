@@ -1,10 +1,7 @@
 pub mod serial;
 pub mod tty;
 
-use alloc::{
-    format,
-    string::{String, ToString},
-};
+use alloc::format;
 
 use crate::{
     arch::serial::SERIAL,
@@ -42,10 +39,6 @@ pub trait CharDevice: Send + Sync {
 }
 
 impl<T: CharDevice> InodeOps for T {
-    fn name(&self) -> String {
-        self.name().to_string()
-    }
-
     fn kind(&self) -> crate::drivers::vfs::InodeType {
         crate::drivers::vfs::InodeType::Device
     }

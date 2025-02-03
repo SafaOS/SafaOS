@@ -71,8 +71,9 @@ impl File {
     }
 
     pub fn direntry(&self) -> DirEntry {
-        let node = self.with_fd(|fd| fd.node.clone());
-        DirEntry::get_from_inode(node)
+        // let node = self.with_fd(|fd| fd.node.clone());
+        // DirEntry::get_from_inode(node)
+        todo!("DirEntry::get_from_inode not yet implemented because it is impossible to get the name of the inode")
     }
 
     pub fn sync(&self) -> FSResult<()> {
@@ -139,27 +140,25 @@ pub fn createdir(path: Path) -> FSResult<()> {
     VFS_STRUCT.read().createdir(path)
 }
 
-pub const MAX_NAME_LEN: usize = 128;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct DirEntry {
     pub kind: InodeType,
     pub size: usize,
     pub name_length: usize,
-    pub name: [u8; 128],
+    pub name: [u8; Self::MAX_NAME_LEN],
 }
 
 impl DirEntry {
-    pub fn get_from_inode(inode: Inode) -> Self {
-        let name = inode.name();
+    pub const MAX_NAME_LEN: usize = 128;
+    pub fn get_from_inode(inode: Inode, name: &str) -> Self {
         let name_slice = name.as_bytes();
 
         let kind = inode.kind();
         let size = inode.size().unwrap_or(0);
 
         let name_length = name_slice.len();
-        let mut name = [0u8; MAX_NAME_LEN];
+        let mut name = [0u8; Self::MAX_NAME_LEN];
 
         name[..name_length].copy_from_slice(name_slice);
 

@@ -8,7 +8,7 @@ use bitflags::bitflags;
 
 use crate::{
     arch::threading::CPUStatus,
-    drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
+    drivers::vfs::{expose::File, FSError, FSResult, VFS_STRUCT},
     khalt,
     memory::paging::{MapToError, PhysPageTable},
     utils::{
@@ -157,12 +157,12 @@ pub fn spawn<T: Readable>(
 /// spawns an elf process from a path
 pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Result<usize, FSError> {
     let file = File::open(path)?;
-
-    let stat = file.direntry();
-
-    if stat.kind != InodeType::File {
-        return Err(FSError::NotAFile);
-    }
+    //FIXME: fix this
+    // let stat = file.direntry();
+    //
+    // if stat.kind != InodeType::File {
+    //     return Err(FSError::NotAFile);
+    // }
 
     spawn(name, &file, argv, flags).map_err(|_| FSError::NotExecuteable)
 }
