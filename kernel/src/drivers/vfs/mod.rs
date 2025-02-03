@@ -36,7 +36,7 @@ lazy_static! {
 #[derive(Clone)]
 pub struct FileDescriptor {
     mountpoint: Arc<dyn FileSystem>,
-    pub node: Inode,
+    node: Inode,
 }
 
 impl FileDescriptor {
@@ -46,6 +46,33 @@ impl FileDescriptor {
 
     pub fn close(&mut self) {
         self.node.close();
+    }
+
+    #[inline(always)]
+    pub fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
+        self.node.read(offset, buffer)
+    }
+
+    #[inline(always)]
+    pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
+        self.node.write(offset, buffer)
+    }
+
+    #[inline(always)]
+    pub fn truncate(&self, len: usize) -> FSResult<()> {
+        self.node.truncate(len)
+    }
+
+    #[inline(always)]
+    pub fn sync(&self) -> FSResult<()> {
+        self.node.sync()
+    }
+
+    #[inline(always)]
+    pub fn open_diriter(&self) -> FSResult<DirIterDescriptor> {
+        let inodes = self.node.open_diriter()?;
+        let fs = self.mountpoint.clone();
+        Ok(DirIterDescriptor::new(fs, inodes))
     }
 }
 
@@ -296,27 +323,6 @@ pub trait FileSystem: Send + Sync {
         Ok((resloved, name))
     }
 
-    /// attempts to read `buffer.len` bytes from file_descriptor returns the actual count of the bytes read
-    /// shouldn't read directories!
-    fn read(
-        &self,
-        file_descriptor: &mut FileDescriptor,
-        offset: isize,
-        buffer: &mut [u8],
-    ) -> FSResult<usize> {
-        file_descriptor.node.read(offset, buffer)
-    }
-    /// attempts to write `buffer.len` bytes to `file_descriptor`
-    /// shouldn't write to directories!
-    fn write(
-        &self,
-        file_descriptor: &mut FileDescriptor,
-        offset: isize,
-        buffer: &[u8],
-    ) -> FSResult<usize> {
-        file_descriptor.node.write(offset, buffer)
-    }
-
     /// creates an empty file named `name` in `path`
     fn create(&self, path: Path) -> FSResult<()> {
         _ = path;
@@ -485,13 +491,6 @@ impl VFS {
         node.opened();
         Ok(FileDescriptor::new(mountpoint.clone(), node))
     }
-
-    fn open_diriter(&self, file_descriptor: &mut FileDescriptor) -> FSResult<DirIterDescriptor> {
-        let inodes = file_descriptor.node.open_diriter()?;
-        let fs = file_descriptor.mountpoint.clone();
-
-        Ok(DirIterDescriptor::new(fs, inodes))
-    }
 }
 
 impl FileSystem for VFS {
@@ -518,30 +517,6 @@ impl FileSystem for VFS {
     fn on_open(&self, path: Path) -> FSResult<()> {
         _ = path;
         FSResult::Err(FSError::OperationNotSupported)
-    }
-
-    fn read(
-        &self,
-        file_descriptor: &mut FileDescriptor,
-        offset: isize,
-        buffer: &mut [u8],
-    ) -> FSResult<usize> {
-        file_descriptor
-            .mountpoint
-            .clone()
-            .read(file_descriptor, offset, buffer)
-    }
-
-    fn write(
-        &self,
-        file_descriptor: &mut FileDescriptor,
-        offset: isize,
-        buffer: &[u8],
-    ) -> FSResult<usize> {
-        file_descriptor
-            .mountpoint
-            .clone()
-            .write(file_descriptor, offset, buffer)
     }
 
     fn create(&self, path: Path) -> FSResult<()> {
