@@ -15,27 +15,22 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
     }
 
     fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
-        if self
-            .try_write()
-            .is_none_or(|tty| !tty.stdin_buffer.ends_with('\n'))
-        {
-            self.write().enable_input();
-            return Err(FSError::ResourceBusy);
+        let lock = self.try_write();
+
+        if let Some(mut tty) = lock {
+            tty.enable_input();
+
+            if tty.stdin_buffer.ends_with('\n') {
+                tty.disable_input();
+                let count = tty.stdin_buffer.len().min(buffer.len());
+                buffer[..count].copy_from_slice(&tty.stdin_buffer.as_bytes()[..count]);
+                tty.stdin_buffer.drain(..count);
+
+                return Ok(count);
+            }
         }
 
-        self.write().disable_input();
-
-        let stdin_buffer = &mut self.write().stdin_buffer;
-
-        let count = if stdin_buffer.len() <= buffer.len() {
-            stdin_buffer.len()
-        } else {
-            buffer.len()
-        };
-
-        buffer[..count].copy_from_slice(&stdin_buffer.as_str().as_bytes()[..count]);
-        stdin_buffer.drain(..count);
-        Ok(count)
+        Err(FSError::ResourceBusy)
     }
 
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
