@@ -3,7 +3,9 @@ pub mod expose;
 use core::fmt::Debug;
 
 use crate::{
-    debug, limine,
+    debug,
+    devices::{self, Device},
+    limine,
     threading::expose::getcwd,
     time,
     utils::{
@@ -11,7 +13,6 @@ use crate::{
         ustar::{self, TarArchiveIter},
     },
 };
-pub mod devicefs;
 pub mod procfs;
 pub mod ramfs;
 
@@ -334,6 +335,13 @@ pub trait FileSystem: Send + Sync {
         _ = path;
         Err(FSError::OperationNotSupported)
     }
+
+    /// mounts a device to `path`
+    fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+        _ = path;
+        _ = device;
+        Err(FSError::OperationNotSupported)
+    }
 }
 
 impl Debug for dyn FileSystem {
@@ -373,7 +381,9 @@ impl VFS {
         let ramfs = RwLock::new(ramfs::RamFS::new());
         this.mount(b"ram", ramfs).unwrap();
         // devices
-        this.mount(b"dev", devicefs::DeviceFS::new()).unwrap();
+        this.mount(b"dev", RwLock::new(ramfs::RamFS::new()))
+            .unwrap();
+        devices::init(&this);
         // processes
         this.mount(b"proc", Mutex::new(procfs::ProcFS::create()))
             .unwrap();
@@ -533,5 +543,11 @@ impl FileSystem for VFS {
         let (mountpoint, path) = self.get_from_path(path)?;
 
         mountpoint.createdir(&path)
+    }
+
+    fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+        let (mountpoint, path) = self.get_from_path(path)?;
+
+        mountpoint.mount_device(&path, device)
     }
 }
