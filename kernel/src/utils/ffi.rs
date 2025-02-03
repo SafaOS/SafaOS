@@ -75,7 +75,7 @@ impl<'a, T> Slice<T> {
     /// ptr must be aligned
     /// panics if ptr is invaild
     pub fn new(ptr: *const T, len: usize) -> ErrorStatusResult<Self> {
-        if !(ptr.is_aligned() || ptr.is_null()) {
+        if !ptr.is_aligned() {
             ErrorStatusResult::err(ErrorStatus::InvaildPtr)
         } else {
             ErrorStatusResult::ok(Self { ptr, len })
@@ -112,7 +112,7 @@ impl<'a, T> SliceMut<T> {
     /// ptr must be aligned
     /// panics if ptr is invaild
     pub fn new(ptr: *mut T, len: usize) -> ErrorStatusResult<Self> {
-        if !(ptr.is_aligned() || ptr.is_null()) {
+        if !ptr.is_aligned() {
             ErrorStatusResult::err(ErrorStatus::InvaildPtr)
         } else {
             ErrorStatusResult::ok(Self { ptr, len })
