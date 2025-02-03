@@ -8,7 +8,7 @@ pub mod ffi;
 pub mod io;
 pub mod ustar;
 
-use core::ops::Deref;
+use core::{ops::Deref, str::FromStr};
 
 use serde::Serialize;
 use spin::{Lazy, Mutex};
@@ -56,6 +56,15 @@ impl<T> Deref for LazyLock<T> {
 
 #[derive(Debug, Clone)]
 pub struct HeaplessString<const N: usize>(heapless::String<N>);
+
+impl<const N: usize> FromStr for HeaplessString<N> {
+    type Err = <heapless::String<N> as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(heapless::String::from_str(s)?))
+    }
+}
+
 impl<const N: usize> From<heapless::String<N>> for HeaplessString<N> {
     fn from(s: heapless::String<N>) -> Self {
         Self(s)
