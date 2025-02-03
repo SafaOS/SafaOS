@@ -8,6 +8,7 @@ use super::ProcFSFile;
 struct KernelInfo {
     name: &'static str,
     version: &'static str,
+    uptime: u64,
 }
 
 impl KernelInfo {
@@ -15,6 +16,7 @@ impl KernelInfo {
         Self {
             name: KERNEL_CODE_NAME,
             version: KERNEL_CODE_VERSION,
+            uptime: crate::time!(),
         }
     }
 }
@@ -22,7 +24,7 @@ pub struct KernelInfoFile;
 
 impl KernelInfoFile {
     pub fn new() -> ProcFSFile {
-        ProcFSFile::new_static("kernelinfo", 0, Self::fetch)
+        ProcFSFile::new("kernelinfo", 0, Self::fetch)
     }
 
     fn fetch(_: &mut ProcFSFile) -> Option<PageString> {
