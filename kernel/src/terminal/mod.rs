@@ -155,6 +155,7 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
             KeyCode::PageUp => self.interface.scroll_up(),
             KeyCode::KeyC if key.flags.contains(KeyFlags::CTRL | KeyFlags::SHIFT) => {
                 self.clear();
+                self.interface.set_cursor(1, 1);
                 pspawn("Shell", "sys:/bin/Shell", &[], SpawnFlags::CLONE_RESOURCES).unwrap();
             }
             KeyCode::Backspace if self.settings.contains(TTYSettings::RECIVE_INPUT) => {

@@ -13,7 +13,7 @@ fn main() {
     let mut cmd = std::process::Command::new("qemu-system-x86_64");
     if uefi {
         cmd.arg("-display")
-            .arg("sdl")
+            .arg("gtk")
             .arg("-bios")
             .arg(ovmf_prebuilt::ovmf_pure_efi());
         cmd.arg("-drive")

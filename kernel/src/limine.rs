@@ -118,7 +118,7 @@ pub fn get_framebuffer() -> (&'static mut [u8], FrameBufferInfo) {
     let info = FrameBufferInfo {
         bytes_per_pixel,
         stride: first.pitch() as usize / bytes_per_pixel,
-        pixel_format,
+        _pixel_format: pixel_format,
     };
 
     assert_eq!(info.bytes_per_pixel, 4);

@@ -20,7 +20,7 @@ pub struct FrameBufferInfo {
     /// number of pixels between start of a line and another
     pub stride: usize,
     pub bytes_per_pixel: usize,
-    pub pixel_format: PixelFormat,
+    pub _pixel_format: PixelFormat,
 }
 
 pub struct FrameBuffer {
@@ -47,11 +47,8 @@ impl FrameBuffer {
 
     pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {
         let index = x + y * self.info.stride;
-        let mut bytes = color.bytes();
+        let bytes = color.bytes();
 
-        if self.info.pixel_format == PixelFormat::Rgb {
-            bytes.reverse();
-        }
         self.buffer
             [index * self.info.bytes_per_pixel..index * self.info.bytes_per_pixel + bytes.len()]
             .copy_from_slice(&bytes);
@@ -116,10 +113,13 @@ impl FrameBuffer {
         self.buffer_display_index = pixel * self.info.bytes_per_pixel;
     }
 
-    #[inline(always)]
-    /// clears the framebuffer
-    pub fn clear(&mut self) {
-        self.buffer.fill(0);
+    pub fn fill(&mut self, color: RGB) {
+        let bytes = color.bytes();
+
+        for i in 0..self.buffer.len() / self.info.bytes_per_pixel {
+            self.buffer[i * self.info.bytes_per_pixel..i * self.info.bytes_per_pixel + bytes.len()]
+                .copy_from_slice(&bytes);
+        }
     }
 }
 

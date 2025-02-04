@@ -22,10 +22,10 @@ pub fn prompt() Error!void {
 
     const cwd_len = try sys.io.zgetcwd(cwd_buffer);
 
-    print("\x1B[38;2;255;0;193m{s}\x1B[0m ", .{cwd_buffer[0..cwd_len]});
+    print("\x1B[35m{s}\x1B[0m ", .{cwd_buffer[0..cwd_len]});
 
     if (ret != 0) {
-        print("\x1B[38;2;255;0;0m[{}]\x1B[0m ", .{ret});
+        print("\x1B[91m[{}]\x1B[0m ", .{ret});
     }
 
     print("# ", .{});
