@@ -3,7 +3,8 @@ use core::str::FromStr;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec;
-use alloc::{collections::btree_map::BTreeMap, vec::Vec};
+use alloc::vec::Vec;
+use hashbrown::HashMap;
 use spin::{Mutex, RwLock};
 
 use crate::devices::Device;
@@ -17,7 +18,7 @@ use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType, Path};
 // you cannot just lock the whole enum because Devices' manage their own locks
 pub enum RamInodeData {
     Data(Mutex<Vec<u8, PageAlloc>>),
-    Children(Mutex<BTreeMap<FileName, usize>>),
+    Children(Mutex<HashMap<FileName, usize>>),
     HardLink(Inode),
     Device(&'static dyn Device),
 }
@@ -40,7 +41,7 @@ impl RamInode {
 
     fn new_dir(inodeid: usize) -> InodeOf<Self> {
         Arc::new(RamInode::new(
-            RamInodeData::Children(Mutex::new(BTreeMap::new())),
+            RamInodeData::Children(Mutex::new(HashMap::new())),
             inodeid,
         ))
     }
