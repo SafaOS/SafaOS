@@ -31,9 +31,9 @@ impl RamInode {
         Self { data, inodeid }
     }
 
-    fn new_file(data: &[u8], inodeid: usize) -> InodeOf<Self> {
+    fn new_file(inodeid: usize) -> InodeOf<Self> {
         Arc::new(RamInode::new(
-            RamInodeData::Data(Mutex::new(data.to_vec_in(&*GLOBAL_PAGE_ALLOCATOR))),
+            RamInodeData::Data(Mutex::new(Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR))),
             inodeid,
         ))
     }
@@ -219,11 +219,36 @@ impl RamFS {
         }
     }
 
-    fn make_hardlink(&mut self, inodeid: usize, with_inodeid: usize) {
-        let inode = self.inodes.get_mut(inodeid).unwrap();
-        let inode = inode.clone();
+    fn make_hardlink(&mut self, pointer_inodeid: usize) -> usize {
+        let inodeid = self.inodes.len();
+
+        let pointer_inode = self.inodes.get_mut(pointer_inodeid).unwrap();
+        let pointer_inode = pointer_inode.clone();
+
         self.inodes
-            .push(RamInode::new_hardlink(inode, with_inodeid));
+            .push(RamInode::new_hardlink(pointer_inode, inodeid));
+        inodeid
+    }
+
+    fn make_file(&mut self) -> usize {
+        let inodeid = self.inodes.len();
+        let node = RamInode::new_file(inodeid);
+        self.inodes.push(node.clone());
+        inodeid
+    }
+
+    fn make_device(&mut self, device: &'static dyn Device) -> usize {
+        let inodeid = self.inodes.len();
+        let node = RamInode::new_device(device, inodeid);
+        self.inodes.push(node.clone());
+        inodeid
+    }
+
+    fn make_directory(&mut self) -> Inode {
+        let inodeid = self.inodes.len();
+        let node = RamInode::new_dir(inodeid);
+        self.inodes.push(node.clone());
+        node
     }
 }
 
@@ -242,17 +267,13 @@ impl FileSystem for RwLock<RamFS> {
     }
 
     fn create(&self, path: Path) -> FSResult<()> {
-        let (resloved, name) = self.reslove_path_uncreated(path)?;
+        let (parent, name) = self.reslove_path_uncreated(path)?;
         let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
 
         let mut write = self.write();
-        let inodeid = write.inodes.len();
+        let new_node = write.make_file();
 
-        resloved.insert(name, inodeid)?;
-
-        let node = RamInode::new_file(&[], inodeid);
-        write.inodes.push(node);
-
+        parent.insert(name, new_node)?;
         Ok(())
     }
 
@@ -261,36 +282,26 @@ impl FileSystem for RwLock<RamFS> {
         let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
 
         let mut write = self.write();
-
-        let parent_hardlink_inodeid = write.inodes.len();
-        let parent_inodeid = parent.inodeid();
-        let created_inodeid = parent_hardlink_inodeid + 1;
+        let new_node = write.make_directory();
 
         // inserting the new dir in the parent dir
-        parent.insert(name, created_inodeid)?;
-        let new_node = RamInode::new_dir(created_inodeid);
-
+        parent.insert(name, new_node.inodeid())?;
         // making the previous dir inode a hardlink
-        write.make_hardlink(parent_inodeid, parent_hardlink_inodeid);
+        let parent_hardlink_inodeid = write.make_hardlink(parent.inodeid());
         // inserting the previous dir
         let hardlink_name = unsafe { FileName::from_str("..").unwrap_unchecked() };
         new_node.insert(hardlink_name, parent_hardlink_inodeid)?;
-
-        write.inodes.push(new_node);
         Ok(())
     }
 
     fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
-        let (resloved, name) = self.reslove_path_uncreated(path)?;
+        let (parent, name) = self.reslove_path_uncreated(path)?;
         let name = FileName::from_str(name).map_err(|()| FSError::InvaildName)?;
 
         let mut write = self.write();
-        let inodeid = write.inodes.len();
+        let new_node = write.make_device(device);
 
-        resloved.insert(name, inodeid)?;
-
-        let node = RamInode::new_device(device, inodeid);
-        write.inodes.push(node);
+        parent.insert(name, new_node)?;
         Ok(())
     }
 }
