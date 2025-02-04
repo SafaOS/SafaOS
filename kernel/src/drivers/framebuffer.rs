@@ -3,7 +3,7 @@ use lazy_static::lazy_static;
 use spin::RwLock;
 
 use crate::{
-    limine,
+    debug, limine,
     memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR},
     utils::display::RGB,
 };
@@ -35,6 +35,8 @@ impl FrameBuffer {
         let (video_buffer, info) = limine::get_framebuffer();
         let mut buffer = Vec::with_capacity_in(video_buffer.len() * 4, &*GLOBAL_PAGE_ALLOCATOR);
         buffer.resize(video_buffer.len() * 4, 0);
+        debug!(FrameBuffer, "created ({}KiB)", buffer.len() / 1024);
+
         Self {
             info,
             buffer_display_index: 0,

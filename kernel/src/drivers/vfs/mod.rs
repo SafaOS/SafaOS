@@ -6,6 +6,7 @@ use crate::{
     debug,
     devices::{self, Device},
     limine,
+    memory::{frame_allocator, paging::PAGE_SIZE},
     threading::expose::getcwd,
     time,
     utils::{
@@ -385,6 +386,8 @@ impl VFS {
             VFS,
             "Creating a new VFS with default initial filesystems ..."
         );
+
+        let moment_memory_usage = frame_allocator::mapped_frames();
         let the_now = time!();
 
         // ramfs
@@ -404,8 +407,18 @@ impl VFS {
         this.unpack_tar(&mut ramfs, &mut ramdisk)
             .expect("failed unpacking ramdisk archive");
         this.mount(b"sys", ramfs).expect("failed mounting");
+
         let elapsed = time!() - the_now;
-        debug!(VFS, "done in ({}ms) ...", elapsed);
+        let used_memory = frame_allocator::mapped_frames() - moment_memory_usage;
+        let total_memory_used = frame_allocator::mapped_frames();
+
+        debug!(
+            VFS,
+            "done in ({}ms) ({}KiB mapped, {}KiB total) ...",
+            elapsed,
+            used_memory * PAGE_SIZE / 1024,
+            total_memory_used * PAGE_SIZE / 1024
+        );
         this
     }
     /// mounts a file system as a drive
