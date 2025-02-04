@@ -113,13 +113,18 @@ impl FrameBuffer {
         self.buffer_display_index = pixel * self.info.bytes_per_pixel;
     }
 
-    pub fn fill(&mut self, color: RGB) {
-        let bytes = color.bytes();
+    fn buffer_u32(&mut self) -> &mut [u32] {
+        let ptr = self.buffer.as_mut_ptr() as *mut u32;
+        let len = self.buffer.len() / 4;
+        unsafe { core::slice::from_raw_parts_mut(ptr, len) }
+    }
 
-        for i in 0..self.buffer.len() / self.info.bytes_per_pixel {
-            self.buffer[i * self.info.bytes_per_pixel..i * self.info.bytes_per_pixel + bytes.len()]
-                .copy_from_slice(&bytes);
-        }
+    /// FIXME: assumes that [`self.info.bytes_per_pixel`] == 4
+    pub fn fill(&mut self, color: RGB) {
+        assert_eq!(self.info.bytes_per_pixel, 4);
+        let color: u32 = color.into();
+        let buffer = self.buffer_u32();
+        buffer.fill(color);
     }
 }
 
