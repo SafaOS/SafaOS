@@ -483,7 +483,11 @@ impl<'a, T: Readable> Elf<'a, T> {
 
                     page_table.map_to(page, frame, entry_flags)?;
 
-                    let slice = slice::from_raw_parts_mut(frame.virt_addr() as *mut u8, PAGE_SIZE);
+                    let slice = slice::from_raw_parts_mut(
+                        frame.virt_addr() as *mut usize,
+                        PAGE_SIZE / size_of::<usize>(),
+                    );
+
                     slice.fill(0x0);
                 }
 

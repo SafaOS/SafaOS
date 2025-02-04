@@ -34,7 +34,9 @@ impl FrameBuffer {
     pub fn new() -> Self {
         let (video_buffer, info) = limine::get_framebuffer();
         let mut buffer = Vec::with_capacity_in(video_buffer.len() * 4, &*GLOBAL_PAGE_ALLOCATOR);
-        buffer.resize(video_buffer.len() * 4, 0);
+        unsafe {
+            buffer.set_len(video_buffer.len() * 4);
+        }
         debug!(FrameBuffer, "created ({}KiB)", buffer.len() / 1024);
 
         Self {
@@ -124,7 +126,18 @@ impl FrameBuffer {
         assert_eq!(self.info.bytes_per_pixel, 4);
         let color: u32 = color.into();
         let buffer = self.buffer_u32();
-        buffer.fill(color);
+
+        buffer[0] = color;
+
+        let mut filled = 1;
+        while filled < buffer.len() {
+            let reamining = buffer.len() - filled;
+            let chunk_size = filled.min(reamining);
+
+            let (left, right) = buffer.split_at_mut(filled);
+            right[..chunk_size].copy_from_slice(&left[..chunk_size]);
+            filled += chunk_size;
+        }
     }
 }
 
