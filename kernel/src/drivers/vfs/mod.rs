@@ -78,6 +78,11 @@ impl FileDescriptor {
         let fs = self.mountpoint.clone();
         Ok(DirIterDescriptor::new(fs, inodes))
     }
+
+    #[inline(always)]
+    pub fn kind(&self) -> InodeType {
+        self.node.kind()
+    }
 }
 
 impl Drop for FileDescriptor {

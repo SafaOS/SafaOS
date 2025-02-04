@@ -40,7 +40,7 @@ syscall_table:
     .quad sysdiriter_close
     .quad sysdiriter_next
     .quad syswait
-    .quad sysfstat
+    .quad deprecated_syscall
     .quad sysspawn
     .quad syschdir
     .quad sysgetcwd

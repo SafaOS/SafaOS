@@ -145,15 +145,6 @@ extern "C" fn sysdiriter_next(
 }
 
 #[no_mangle]
-extern "C" fn sysfstat(ri: usize, direntry_ptr: RequiredMut<vfs::expose::DirEntry>) -> ErrorStatus {
-    let file_ref = FileRef::get(ri).ok_or(ErrorStatus::InvaildResource)?;
-    let direntry = file_ref.direntry();
-
-    *direntry_ptr.get()? = direntry;
-    ErrorStatus::None
-}
-
-#[no_mangle]
 extern "C" fn syssync(ri: usize) -> ErrorStatus {
     let file_ref = FileRef::get(ri).ok_or(ErrorStatus::InvaildResource)?;
     loop {

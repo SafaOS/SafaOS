@@ -70,14 +70,12 @@ impl File {
         Ok(DirIter(resources::add_resource(Resource::DirIter(diriter))))
     }
 
-    pub fn direntry(&self) -> DirEntry {
-        // let node = self.with_fd(|fd| fd.node.clone());
-        // DirEntry::get_from_inode(node)
-        todo!("DirEntry::get_from_inode not yet implemented because it is impossible to get the name of the inode")
-    }
-
     pub fn sync(&self) -> FSResult<()> {
         self.with_fd(|fd| fd.sync())
+    }
+
+    pub fn kind(&self) -> InodeType {
+        self.with_fd(|fd| fd.kind())
     }
 }
 
