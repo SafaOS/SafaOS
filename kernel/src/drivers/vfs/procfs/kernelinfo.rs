@@ -4,10 +4,17 @@ use crate::{utils::alloc::PageString, KERNEL_CODE_NAME, KERNEL_CODE_VERSION};
 
 use super::ProcFSFile;
 
+const COMPILE_TIME: &str = compile_time::time_str!();
+const COMPILE_DATE: &str = compile_time::date_str!();
+
 #[derive(Serialize)]
 struct KernelInfo {
     name: &'static str,
     version: &'static str,
+    /// the date the kernel was compiled as year-month-day
+    compile_date: &'static str,
+    /// the time the kernel was compiled as hour:minute:second
+    compile_time: &'static str,
     uptime: u64,
 }
 
@@ -16,6 +23,8 @@ impl KernelInfo {
         Self {
             name: KERNEL_CODE_NAME,
             version: KERNEL_CODE_VERSION,
+            compile_date: COMPILE_DATE,
+            compile_time: COMPILE_TIME,
             uptime: crate::time!(),
         }
     }
