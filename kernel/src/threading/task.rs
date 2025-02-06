@@ -344,19 +344,20 @@ impl serde::Serialize for Name {
 #[derive(Serialize, Debug, Clone)]
 #[repr(C)]
 pub struct TaskInfo {
-    ppid: Pid,
-    pid: Pid,
     name: Name,
 
-    last_resource_id: usize,
-    exit_code: usize,
-    at: VirtAddr,
-    stack_addr: VirtAddr,
+    pub ppid: Pid,
+    pub pid: Pid,
 
-    killed_by: Pid,
-    data_start: VirtAddr,
-    data_break: VirtAddr,
-    is_alive: bool,
+    pub last_resource_id: usize,
+    pub exit_code: usize,
+    pub at: VirtAddr,
+    pub stack_addr: VirtAddr,
+
+    pub killed_by: Pid,
+    pub data_start: VirtAddr,
+    pub data_break: VirtAddr,
+    pub is_alive: bool,
 }
 
 impl From<&Task> for TaskInfo {

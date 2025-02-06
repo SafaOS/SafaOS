@@ -8,6 +8,7 @@ use core::arch::asm;
 use lazy_static::lazy_static;
 
 use alloc::{rc::Rc, string::String, vec::Vec};
+use slab::Slab;
 use spin::{RwLock, RwLockReadGuard};
 use task::{Task, TaskInfo};
 
@@ -20,7 +21,7 @@ use crate::{
 
 pub struct Scheduler {
     tasks: LinkedList<Rc<Task>>,
-    pids: Vec<Pid>,
+    pids: Slab<()>,
 }
 
 unsafe impl Send for Scheduler {}
@@ -30,7 +31,7 @@ impl Scheduler {
     pub fn new() -> Self {
         Self {
             tasks: LinkedList::new(),
-            pids: Vec::new(),
+            pids: Slab::new(),
         }
     }
 
@@ -83,9 +84,8 @@ impl Scheduler {
     /// appends a task to the end of the scheduler taskes list
     /// returns the pid of the added task
     fn add_task(&mut self, mut task: Task) -> usize {
-        let pid = self.pids.len();
+        let pid = self.pids.insert(());
         task.pid = pid;
-        self.pids.push(pid);
         self.tasks.push(Rc::new(task));
 
         debug!(
@@ -124,9 +124,15 @@ impl Scheduler {
 
     /// attempt to remove a task where executing `condition` on returns true, returns the removed task info
     pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
-        self.tasks
+        let result = self
+            .tasks
             .remove_where(|task| condition(task))
-            .map(|task| TaskInfo::from(&*task))
+            .map(|task| TaskInfo::from(&*task));
+
+        if let Some(ref info) = result {
+            self.pids.remove(info.pid);
+        }
+        result
     }
 
     #[inline(always)]
@@ -136,8 +142,15 @@ impl Scheduler {
     }
 
     #[inline(always)]
-    pub fn pids(&self) -> &[Pid] {
-        &self.pids
+    pub fn pids(&self) -> Vec<Pid> {
+        let next = self.pids.vacant_key();
+        let mut vec = Vec::with_capacity(next);
+        self.pids
+            .iter()
+            .take(next)
+            .map(|(key, ())| key)
+            .collect_into(&mut vec);
+        vec
     }
 }
 

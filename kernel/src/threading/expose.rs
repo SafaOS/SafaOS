@@ -232,9 +232,6 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
 pub fn pkill(pid: Pid) -> Result<(), ()> {
     let current = super::current();
     let current_pid = current.pid;
-    if pid < current_pid {
-        return Err(());
-    }
 
     let (process_ppid, process_pid) = super::find(|p| p.pid == pid)
         .map(|process| (process.ppid.load(Ordering::Relaxed), process.pid))

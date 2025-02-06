@@ -324,7 +324,7 @@ impl ProcFS {
         let schd = threading::schd();
         let getpids = schd.pids();
         // O(N)
-        for pid in getpids {
+        for pid in &getpids {
             if !self.tasks.contains_key(pid) {
                 self.append_process(*pid);
             }
