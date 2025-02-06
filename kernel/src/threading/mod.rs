@@ -143,13 +143,11 @@ impl Scheduler {
 
     #[inline(always)]
     pub fn pids(&self) -> Vec<Pid> {
-        let next = self.pids.vacant_key();
-        let mut vec = Vec::with_capacity(next);
-        self.pids
-            .iter()
-            .take(next)
-            .map(|(key, ())| key)
-            .collect_into(&mut vec);
+        let mut vec = Vec::with_capacity(self.pids.len());
+        for task in self.tasks.clone_iter() {
+            vec.push(task.pid);
+        }
+
         vec
     }
 }
