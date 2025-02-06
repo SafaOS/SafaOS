@@ -4,7 +4,9 @@
 use alloc::vec::Vec;
 use spin::Mutex;
 
-use crate::{debug, drivers::vfs, memory::paging::PhysPageTable, serial};
+use crate::{
+    debug, drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yeild,
+};
 
 pub struct Eve {
     clean_up_list: Vec<PhysPageTable>,
@@ -20,17 +22,18 @@ impl Eve {
     pub fn add_cleanup(&mut self, page_table: PhysPageTable) {
         self.clean_up_list.push(page_table);
     }
-
-    pub fn one_shot(&mut self) {
-        self.clean_up_list.pop();
-    }
-
-    pub fn relaxed(&self) -> bool {
-        self.clean_up_list.is_empty()
-    }
 }
 
 pub static EVE: Mutex<Eve> = Mutex::new(Eve::new());
+
+fn one_shot() -> Option<PhysPageTable> {
+    loop {
+        match EVE.try_lock() {
+            Some(mut eve) => return eve.clean_up_list.pop(),
+            None => thread_yeild(),
+        }
+    }
+}
 
 /// the main loop of Eve
 /// it will run until doomsday
@@ -57,19 +60,21 @@ pub fn main() -> ! {
     }
 
     loop {
-        // TODO: figure out a better method to save cpu time
-        // this is a hack to prevent deadlocks
-        unsafe { core::arch::asm!("cli") }
-        let mut eve = EVE.lock();
-        if !eve.relaxed() {
-            eve.one_shot();
-        }
-        drop(eve);
-        unsafe { core::arch::asm!("sti") }
+        one_shot();
     }
 }
 
 /// adds a page table to the list of page tables that need to be cleaned up
 pub fn add_cleanup(page_table: PhysPageTable) {
-    EVE.lock().add_cleanup(page_table);
+    loop {
+        match EVE.try_lock() {
+            Some(mut eve) => {
+                eve.add_cleanup(page_table);
+                return;
+            }
+            None => {
+                thread_yeild();
+            }
+        }
+    }
 }
