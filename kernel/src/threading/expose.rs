@@ -1,9 +1,6 @@
-use core::arch::asm;
+use core::{arch::asm, sync::atomic::Ordering};
 
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::string::{String, ToString};
 use bitflags::bitflags;
 
 use crate::{
@@ -25,7 +22,10 @@ use super::{
 
 #[no_mangle]
 pub fn thread_exit(code: usize) -> ! {
-    super::with_current(|current| current.kill(code, None));
+    let current = super::current();
+    current.kill(code, None);
+    drop(current);
+
     // enables interrupts if they were disabled to give control back to the scheduler
     #[cfg(target_arch = "x86_64")]
     unsafe {
@@ -51,10 +51,8 @@ pub fn wait(pid: usize) -> usize {
         // cycles through the processes one by one untils it finds the process with `pid`
         // returns the exit code of the process if it's a zombie and cleans it up
         // if it's not a zombie it will be caught by the next above loop
-        let found = super::find(
-            |process| process.pid == pid,
-            |process| process.state().exit_code(),
-        );
+        let found = super::find(|process| process.pid == pid);
+        let found = found.map(|process| process.state().map(|state| state.exit_code()).flatten());
 
         return match found {
             Some(Some(exit_code)) => {
@@ -73,12 +71,10 @@ pub fn wait(pid: usize) -> usize {
 
 #[no_mangle]
 pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
-    super::find(|p| p.pid == pid, |p| TaskInfo::from(&*p))
+    let found = super::find(|p| p.pid == pid);
+    found.map(|p| TaskInfo::from(&*p))
 }
 
-pub fn getpids() -> Vec<Pid> {
-    super::map(|process| process.pid)
-}
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     #[repr(C)]
@@ -107,7 +103,7 @@ pub fn function_spawn(
     let task = Task::new(name.to_string(), 0, 0, cwd, page_table, context, 0);
 
     if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        let mut state = task.state_mut();
+        let mut state = task.state_mut().unwrap();
 
         let TaskState::Alive { resources, .. } = &mut *state else {
             unreachable!()
@@ -117,7 +113,7 @@ pub fn function_spawn(
         resources.overwrite_resources(clone);
     }
 
-    let pid = super::add_task(task);
+    let pid = super::add(task);
     Ok(pid)
 }
 
@@ -135,12 +131,13 @@ pub fn spawn<T: Readable>(
 
     let elf = Elf::new(reader)?;
 
-    let current_pid = super::with_current(|p| p.pid);
+    let current = super::current();
+    let current_pid = current.pid;
 
     let task = Task::from_elf(name.to_string(), 0, current_pid, cwd, elf, argv)?;
 
     if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        let mut state = task.state_mut();
+        let mut state = task.state_mut().unwrap();
 
         let TaskState::Alive { resources, .. } = &mut *state else {
             unreachable!()
@@ -150,7 +147,7 @@ pub fn spawn<T: Readable>(
         resources.overwrite_resources(clone);
     }
 
-    let pid = super::add_task(task);
+    let pid = super::add(task);
     Ok(pid)
 }
 
@@ -170,24 +167,25 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
 #[no_mangle]
 pub fn chdir(new_dir: &str) -> FSResult<()> {
     let new_dir = VFS_STRUCT.read().verify_path_dir(new_dir)?;
+    let current = super::current();
 
-    super::with_current(move |current| {
-        let mut state = current.state_mut();
-        let cwd = state.cwd_mut();
-
-        *cwd = new_dir;
-        // TODO: implement a Path type with abillity to append paths to prevent this, and also to
-        // prevent path's like ram:/dir/../dir/ from existing idiots
-        if !cwd.ends_with('/') {
-            cwd.push('/');
-        }
-        Ok(())
-    })
+    let mut state = current.state_mut().unwrap();
+    let cwd = state.cwd_mut();
+    *cwd = new_dir;
+    // TODO: implement a Path type with abillity to append paths to prevent this, and also to
+    // prevent path's like ram:/dir/../dir/ from existing idiots
+    if !cwd.ends_with('/') {
+        cwd.push('/');
+    }
+    Ok(())
 }
 
 #[no_mangle]
 pub fn getcwd() -> String {
-    super::with_current(|current| current.state().cwd().to_string())
+    let current = super::current();
+    let state = current.state().unwrap();
+    let cwd = state.cwd();
+    cwd.to_string()
 }
 
 fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: usize) -> bool {
@@ -199,7 +197,11 @@ fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: us
         if process_ppid == terminator_pid {
             return true;
         }
-        process_ppid = super::find(|p| p.pid == process_ppid, |process| process.ppid).unwrap_or(0);
+
+        let pprocess = super::find(|p| p.pid == process_ppid);
+        process_ppid = pprocess
+            .map(|process| process.ppid.load(Ordering::Relaxed))
+            .unwrap_or(0);
     }
 
     false
@@ -216,22 +218,28 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
     // prevents orphan processes from being left behind
     // TODO: figure out if orphan processes should be killed
     super::for_each(|p| {
-        if p.ppid == process_pid {
-            p.ppid = terminator_pid;
-        }
+        _ = p.ppid.compare_exchange(
+            process_pid,
+            terminator_pid,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
     });
 }
 
 #[no_mangle]
 /// can only Err if pid doesn't belong to process
 pub fn pkill(pid: Pid) -> Result<(), ()> {
-    let current_pid = super::with_current(|current| current.pid);
+    let current = super::current();
+    let current_pid = current.pid;
     if pid < current_pid {
         return Err(());
     }
 
-    let (process_ppid, process_pid) =
-        super::find(|p| p.pid == pid, |process| (process.ppid, process.pid)).ok_or(())?;
+    let (process_ppid, process_pid) = super::find(|p| p.pid == pid)
+        .map(|process| (process.ppid.load(Ordering::Relaxed), process.pid))
+        .ok_or(())?;
+
     if can_terminate(process_ppid, process_pid, current_pid) {
         terminate(process_pid, current_pid);
         return Ok(());
@@ -244,6 +252,9 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
 /// returns the new program break ptr
 /// on fail returns null
 pub fn sbrk(amount: isize) -> *mut u8 {
-    super::with_current(|current| current.state_mut().extend_data_by(amount))
+    let current = super::current();
+    let mut state = current.state_mut().unwrap();
+    state
+        .extend_data_by(amount)
         .unwrap_or(core::ptr::null_mut())
 }

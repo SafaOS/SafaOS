@@ -1,4 +1,8 @@
-use core::{mem::ManuallyDrop, sync::atomic::AtomicBool};
+use core::{
+    cell::UnsafeCell,
+    mem::ManuallyDrop,
+    sync::atomic::{AtomicBool, AtomicUsize},
+};
 
 use alloc::string::String;
 use serde::Serialize;
@@ -201,13 +205,15 @@ impl TaskState {
 }
 
 pub struct Task {
-    state: RwLock<TaskState>,
-
-    name: String,
+    /// constant
     pub pid: Pid,
-    pub ppid: Pid,
-    pub context: CPUStatus,
-    pub is_alive: AtomicBool,
+    /// Task may change it's parent pid
+    pub ppid: AtomicUsize,
+    state: RwLock<TaskState>,
+    name: String,
+    /// context must only be changed by the scheduler, so it is not protected by a lock
+    context: UnsafeCell<CPUStatus>,
+    is_alive: AtomicBool,
 }
 
 impl Task {
@@ -230,9 +236,9 @@ impl Task {
         Self {
             name,
             pid,
-            ppid,
+            ppid: AtomicUsize::new(ppid),
             is_alive: AtomicBool::new(true),
-            context,
+            context: UnsafeCell::new(context),
             state: RwLock::new(TaskState::Alive {
                 root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
@@ -266,12 +272,12 @@ impl Task {
         &self.name
     }
 
-    pub fn state(&self) -> RwLockReadGuard<TaskState> {
-        self.state.read()
+    pub fn state(&self) -> Option<RwLockReadGuard<TaskState>> {
+        self.state.try_read()
     }
 
-    pub fn state_mut(&self) -> RwLockWriteGuard<TaskState> {
-        self.state.write()
+    pub fn state_mut(&self) -> Option<RwLockWriteGuard<TaskState>> {
+        self.state.try_write()
     }
 
     /// kills the task
@@ -292,6 +298,26 @@ impl Task {
             exit_code,
             killed_by
         );
+    }
+
+    pub unsafe fn set_context(&self, context: CPUStatus) {
+        *self.context.get() = context;
+    }
+
+    pub fn context(&self) -> &CPUStatus {
+        unsafe { &*self.context.get() }
+    }
+
+    fn at(&self) -> VirtAddr {
+        unsafe { (*self.context.get()).at() }
+    }
+
+    fn stack_at(&self) -> VirtAddr {
+        unsafe { (*self.context.get()).stack_at() }
+    }
+
+    pub(super) fn is_alive(&self) -> bool {
+        self.is_alive.load(core::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -318,27 +344,27 @@ impl serde::Serialize for Name {
 #[derive(Serialize, Debug, Clone)]
 #[repr(C)]
 pub struct TaskInfo {
-    pub ppid: Pid,
-    pub pid: Pid,
+    ppid: Pid,
+    pid: Pid,
     name: Name,
 
-    pub last_resource_id: usize,
-    pub exit_code: usize,
-    pub at: VirtAddr,
-    pub stack_addr: VirtAddr,
+    last_resource_id: usize,
+    exit_code: usize,
+    at: VirtAddr,
+    stack_addr: VirtAddr,
 
-    pub killed_by: Pid,
-    pub data_start: VirtAddr,
-    pub data_break: VirtAddr,
-    pub is_alive: bool,
+    killed_by: Pid,
+    data_start: VirtAddr,
+    data_break: VirtAddr,
+    is_alive: bool,
 }
 
 impl From<&Task> for TaskInfo {
     fn from(task: &Task) -> Self {
-        let at = task.context.at();
-        let stack_addr = task.context.stack_at();
+        let at = task.at();
+        let stack_addr = task.stack_at();
 
-        let state = task.state();
+        let state = task.state().unwrap();
 
         let (exit_code, data_start, data_break, killed_by, last_resource_id) = match &*state {
             TaskState::Alive {
@@ -363,13 +389,14 @@ impl From<&Task> for TaskInfo {
             ),
         };
 
-        let is_alive = task.is_alive.load(core::sync::atomic::Ordering::Relaxed);
+        let is_alive = task.is_alive();
+        let ppid = task.ppid.load(core::sync::atomic::Ordering::Relaxed);
 
         let mut name = [0u8; 64];
         name[..task.name().len()].copy_from_slice(task.name().as_bytes());
 
         Self {
-            ppid: task.ppid,
+            ppid,
             pid: task.pid,
             name: name.into(),
             last_resource_id,

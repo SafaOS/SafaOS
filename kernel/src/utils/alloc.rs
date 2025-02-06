@@ -326,11 +326,6 @@ impl<T> LinkedList<T> {
         unsafe { Some(&mut (*last.as_ptr()).inner) }
     }
 
-    pub fn current_mut(&mut self) -> Option<&mut T> {
-        let current = self.current?;
-        unsafe { Some(&mut (*current.as_ptr()).inner) }
-    }
-
     /// returns an iterator that 'continues' the list which means calling `next` on the iterator
     /// would advance then return the current element, it currently wraps around the list
     pub fn continue_iter(&mut self) -> LinkedListContinue<T> {
@@ -349,23 +344,6 @@ impl<T> LinkedList<T> {
         };
 
         LinkedListCloneIter {
-            list,
-            marker: PhantomData,
-        }
-    }
-
-    /// returns an iterator that acts like a clone of the list
-    /// iterating over the list will yield the same values as iterating over the original list
-    pub fn clone_iter_mut(&mut self) -> LinkedListCloneIterMut<T> {
-        let list = Self {
-            head: self.head,
-            tail: self.tail,
-            current: self.head,
-            prev: self.prev,
-            len: self.len,
-        };
-
-        LinkedListCloneIterMut {
             list,
             marker: PhantomData,
         }

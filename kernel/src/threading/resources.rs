@@ -122,46 +122,35 @@ pub fn get_resource<DO, R>(ri: usize, then: DO) -> Option<R>
 where
     DO: FnOnce(MutexGuard<Resource>) -> R,
 {
-    super::with_current(|current| {
-        current
-            .state()
-            .resource_manager()
-            .unwrap()
-            .get(ri)
-            .filter(|r| !matches!(**r, Resource::Null))
-            .map(then)
-    })
+    let current = super::current();
+    let state = current.state().unwrap();
+
+    state.resource_manager().unwrap().get(ri).map(then)
 }
 
 /// adds a resource to the current process
 pub fn add_resource(resource: Resource) -> usize {
-    super::with_current(move |current| {
-        current
-            .state_mut()
-            .resource_manager_mut()
-            .unwrap()
-            .add_resource(resource)
-    })
+    let current_task = super::current();
+    let mut current = current_task.state_mut().unwrap();
+
+    current
+        .resource_manager_mut()
+        .unwrap()
+        .add_resource(resource)
 }
 
 /// removes a resource from the current process with `ri`
 pub fn remove_resource(ri: usize) -> Option<()> {
-    super::with_current(move |current| {
-        current
-            .state_mut()
-            .resource_manager_mut()
-            .unwrap()
-            .remove_resource(ri)
-    })
+    let current_task = super::current();
+    let mut current = current_task.state_mut().unwrap();
+
+    current.resource_manager_mut().unwrap().remove_resource(ri)
 }
 
 /// clones the resources of the current process
 pub fn clone_resources() -> Vec<ResourceItem> {
-    super::with_current(|current| {
-        current
-            .state_mut()
-            .resource_manager_mut()
-            .unwrap()
-            .clone_resources()
-    })
+    let current_task = super::current();
+    let mut current = current_task.state_mut().unwrap();
+
+    current.resource_manager_mut().unwrap().clone_resources()
 }

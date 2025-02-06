@@ -7,8 +7,8 @@ pub type Pid = usize;
 use core::arch::asm;
 use lazy_static::lazy_static;
 
-use alloc::{string::String, vec::Vec};
-use spin::RwLock;
+use alloc::{rc::Rc, string::String, vec::Vec};
+use spin::{RwLock, RwLockReadGuard};
 use task::{Task, TaskInfo};
 
 use crate::{
@@ -19,8 +19,8 @@ use crate::{
 };
 
 pub struct Scheduler {
-    tasks: LinkedList<Task>,
-    next_pid: usize,
+    tasks: LinkedList<Rc<Task>>,
+    pids: Vec<Pid>,
 }
 
 unsafe impl Send for Scheduler {}
@@ -30,7 +30,7 @@ impl Scheduler {
     pub fn new() -> Self {
         Self {
             tasks: LinkedList::new(),
-            next_pid: 0,
+            pids: Vec::new(),
         }
     }
 
@@ -51,44 +51,42 @@ impl Scheduler {
             context,
             0,
         );
-        add_task(task);
+        self::add(task);
 
         // getting the context of the first task
         // like this so the scheduler read lock is released
-        let context = with_current(|task| task.context);
+        let context = *self::current().context();
 
         debug!(Scheduler, "INITED ...");
         unsafe { restore_cpu_status(&context) }
     }
 
-    /// gets a mutable reference to the current task
-    fn current(&mut self) -> &mut Task {
-        unsafe { self.tasks.current_mut().unwrap_unchecked() }
+    #[inline(always)]
+    fn current(&self) -> &Rc<Task> {
+        unsafe { self.tasks.current().unwrap_unchecked() }
     }
 
     /// context switches into next task, takes current context outputs new context
     pub unsafe fn switch(&mut self, context: CPUStatus) -> CPUStatus {
         unsafe { asm!("cli") }
 
-        self.current().context = context;
+        self.current().set_context(context);
         for task in self.tasks.continue_iter() {
-            if task.is_alive.load(core::sync::atomic::Ordering::Relaxed) {
+            if task.is_alive() {
                 break;
             }
         }
 
-        self.current().context
+        *self.current().context()
     }
 
     /// appends a task to the end of the scheduler taskes list
     /// returns the pid of the added task
     fn add_task(&mut self, mut task: Task) -> usize {
-        let pid = self.next_pid;
+        let pid = self.pids.len();
         task.pid = pid;
-        task.is_alive
-            .store(true, core::sync::atomic::Ordering::Relaxed);
-        self.next_pid += 1;
-        self.tasks.push(task);
+        self.pids.push(pid);
+        self.tasks.push(Rc::new(task));
 
         debug!(
             Scheduler,
@@ -99,49 +97,27 @@ impl Scheduler {
         pid
     }
 
-    /// executes `then` on the current task
-    fn with_current<T, R>(&self, then: T) -> R
-    where
-        T: FnOnce(&Task) -> R,
-    {
-        unsafe { then(self.tasks.current().unwrap_unchecked()) }
-    }
-
-    /// finds a task where executing `condition` on returns true, then executes `then` on it
-    /// returns the result of `then` if a task was found
-    fn find<C, T, R>(&self, condition: C, mut then: T) -> Option<R>
+    /// finds a task where executing `condition` on returns true and returns it
+    fn find<C>(&self, condition: C) -> Option<Rc<Task>>
     where
         C: Fn(&Task) -> bool,
-        T: FnMut(&Task) -> R,
     {
         for task in self.tasks.clone_iter() {
             if condition(task) {
-                return Some(then(task));
+                return Some(task.clone());
             }
         }
 
         None
     }
 
-    /// Executes `then` on a all tasks and returns a vector of the results
-    pub fn map<T, R>(&self, mut then: T) -> Vec<R>
-    where
-        T: FnMut(&Task) -> R,
-    {
-        let mut results = Vec::with_capacity(self.tasks.len());
-        for task in self.tasks.clone_iter() {
-            results.push(then(task));
-        }
-        results
-    }
-
     /// iterates through all taskes and executes `then` on each of them
     /// executed on all taskes
-    fn for_each<T>(&mut self, mut then: T)
+    fn for_each<T>(&self, then: T)
     where
-        T: FnMut(&mut Task),
+        T: Fn(&Task),
     {
-        for task in self.tasks.clone_iter_mut() {
+        for task in self.tasks.clone_iter() {
             then(task);
         }
     }
@@ -150,13 +126,18 @@ impl Scheduler {
     pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
         self.tasks
             .remove_where(|task| condition(task))
-            .map(|task| TaskInfo::from(&task))
+            .map(|task| TaskInfo::from(&*task))
     }
 
     #[inline(always)]
     /// wether or not has been properly initialized using `init`
     pub fn inited(&self) -> bool {
         self.tasks.len() > 0
+    }
+
+    #[inline(always)]
+    pub fn pids(&self) -> &[Pid] {
+        &self.pids
     }
 }
 
@@ -175,47 +156,38 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
-/// acquires lock on scheduler and executes `then` on the current task
-fn with_current<T, R>(then: T) -> R
-where
-    T: FnOnce(&Task) -> R,
-{
-    SCHEDULER.read().with_current(then)
+fn current() -> Rc<Task> {
+    SCHEDULER.read().current().clone()
 }
 
-/// acquires lock on scheduler and finds a task where executing `condition` on returns true, then executes `then` on it
-/// returns the result of `then` if a task was found
-fn find<C, T, R>(condition: C, then: T) -> Option<R>
+/// acquires lock on scheduler and finds a task where executing `condition` on returns true
+fn find<C>(condition: C) -> Option<Rc<Task>>
 where
     C: Fn(&Task) -> bool,
-    T: FnMut(&Task) -> R,
 {
-    SCHEDULER.read().find(condition, then)
-}
-
-/// acquires lock on scheduler and executes `then` on a all tasks and returns a vector of the results
-pub fn map<T, R>(then: T) -> Vec<R>
-where
-    T: FnMut(&Task) -> R,
-{
-    SCHEDULER.read().map(then)
+    SCHEDULER.read().find(condition)
 }
 
 /// acquires lock on scheduler
 /// executes `then` on each task
 fn for_each<T>(then: T)
 where
-    T: FnMut(&mut Task),
+    T: Fn(&Task),
 {
-    SCHEDULER.write().for_each(then)
+    SCHEDULER.read().for_each(then)
 }
 
 /// acquires lock on scheduler and adds a task to it
-fn add_task(task: Task) -> usize {
+fn add(task: Task) -> usize {
     SCHEDULER.write().add_task(task)
 }
 
+/// returns the result of `then` if a task was found
 /// acquires lock on scheduler and removes a task from it where `condition` on the task returns true
 fn remove(condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
     SCHEDULER.write().remove(condition)
+}
+
+pub fn schd() -> RwLockReadGuard<'static, Scheduler> {
+    SCHEDULER.read()
 }
