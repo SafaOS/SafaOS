@@ -10,7 +10,7 @@ use spin::Mutex;
 use tasks::TaskInfoFile;
 
 use crate::{
-    threading::{expose::getpids, Pid},
+    threading::{self, Pid},
     utils::{alloc::PageString, HeaplessString},
 };
 
@@ -321,9 +321,10 @@ impl ProcFS {
     }
 
     pub fn update_processes(&mut self) {
-        let getpids = getpids();
+        let schd = threading::schd();
+        let getpids = schd.pids();
         // O(N)
-        for pid in &getpids {
+        for pid in getpids {
             if !self.tasks.contains_key(pid) {
                 self.append_process(*pid);
             }
