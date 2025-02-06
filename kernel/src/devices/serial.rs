@@ -3,6 +3,7 @@ use core::fmt::Write;
 use crate::{
     arch::serial::Serial,
     drivers::vfs::{FSError, FSResult},
+    threading::expose::thread_yeild,
     utils::Locked,
 };
 
@@ -19,11 +20,14 @@ impl CharDevice for Locked<Serial> {
 
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
         let str = unsafe { core::str::from_utf8_unchecked(buffer) };
-
-        self.try_lock()
-            .ok_or(FSError::ResourceBusy)?
-            .write_str(str)
-            .unwrap();
-        FSResult::Ok(buffer.len())
+        loop {
+            match self.try_lock() {
+                Some(mut writer) => {
+                    writer.write_str(str).unwrap();
+                    return Ok(buffer.len());
+                }
+                None => thread_yeild(),
+            }
+        }
     }
 }

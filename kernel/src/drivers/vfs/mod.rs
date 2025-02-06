@@ -103,7 +103,6 @@ pub enum FSError {
     InvaildPath,
     AlreadyExists,
     NotExecuteable,
-    ResourceBusy,
     InvaildOffset,
     InvaildName,
 }
@@ -119,7 +118,6 @@ impl IntoErr for FSError {
             Self::InvaildDrive => ErrorStatus::NoSuchAFileOrDirectory,
             Self::AlreadyExists => ErrorStatus::AlreadyExists,
             Self::NotExecuteable => ErrorStatus::NotExecutable,
-            Self::ResourceBusy => ErrorStatus::Busy,
             Self::InvaildOffset => ErrorStatus::InvaildOffset,
             Self::InvaildName => ErrorStatus::StrTooLong,
         }

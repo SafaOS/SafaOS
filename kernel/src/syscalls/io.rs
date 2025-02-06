@@ -1,10 +1,9 @@
+// TODO: re-design this module
 use crate::{
     drivers::vfs::{
         self,
         expose::{DirIter, DirIterRef, File, FileRef},
-        FSError,
     },
-    threading,
     utils::{
         errors::ErrorStatus,
         ffi::{Optional, RequiredMut, Slice, SliceMut},
@@ -32,22 +31,17 @@ extern "C" fn syswrite(
     offset: isize,
     ptr: *const u8,
     len: usize,
-    bytes_written: Optional<usize>,
+    dest_wrote: Optional<usize>,
 ) -> ErrorStatus {
     let slice = Slice::new(ptr, len)?.into_slice();
     let file_ref = FileRef::get(fd).ok_or(ErrorStatus::InvaildResource)?;
-    loop {
-        match file_ref.write(offset, slice) {
-            Err(FSError::ResourceBusy) => threading::expose::thread_yeild(),
-            Err(err) => return err.into(),
-            Ok(count) => {
-                if let Some(bytes_written) = bytes_written.into_option() {
-                    *bytes_written = count;
-                }
-                return ErrorStatus::None;
-            }
-        }
+
+    let bytes_wrote = file_ref.write(offset, slice).map_err(|err| err.into())?;
+    if let Some(dest_wrote) = dest_wrote.into_option() {
+        *dest_wrote = bytes_wrote;
     }
+
+    ErrorStatus::None
 }
 
 #[no_mangle]
@@ -61,18 +55,12 @@ extern "C" fn sysread(
     let slice = SliceMut::new(ptr, len)?.into_slice();
     let file_ref = FileRef::get(fd).ok_or(ErrorStatus::InvaildResource)?;
 
-    loop {
-        match file_ref.read(offset, slice) {
-            Err(FSError::ResourceBusy) => threading::expose::thread_yeild(),
-            Err(err) => return err.into(),
-            Ok(bytes_read) => {
-                if let Some(dest_read) = dest_read.into_option() {
-                    *dest_read = bytes_read;
-                }
-                return ErrorStatus::None;
-            }
-        }
+    let bytes_read = file_ref.read(offset, slice).map_err(|err| err.into())?;
+    if let Some(dest_read) = dest_read.into_option() {
+        *dest_read = bytes_read;
     }
+
+    ErrorStatus::None
 }
 
 #[no_mangle]
@@ -147,23 +135,15 @@ extern "C" fn sysdiriter_next(
 #[no_mangle]
 extern "C" fn syssync(ri: usize) -> ErrorStatus {
     let file_ref = FileRef::get(ri).ok_or(ErrorStatus::InvaildResource)?;
-    loop {
-        match file_ref.sync() {
-            Err(FSError::ResourceBusy) => threading::expose::thread_yeild(),
-            Ok(()) => return ErrorStatus::None,
-            Err(err) => return err.into(),
-        }
-    }
+
+    file_ref.sync().map_err(|e| e.into())?;
+    ErrorStatus::None
 }
 
 #[no_mangle]
 extern "C" fn systruncate(ri: usize, len: usize) -> ErrorStatus {
     let file_ref = FileRef::get(ri).ok_or(ErrorStatus::InvaildResource)?;
-    while let Err(err) = file_ref.truncate(len) {
-        match err {
-            FSError::ResourceBusy => threading::expose::thread_yeild(),
-            _ => return err.into(),
-        }
-    }
+
+    file_ref.truncate(len).map_err(|e| e.into())?;
     ErrorStatus::None
 }
