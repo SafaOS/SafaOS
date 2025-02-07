@@ -17,5 +17,9 @@ members = ["kernel", "macros"]
 
 [profile.release]
 debug = true
+opt-level = 2
+lto = true
 [profile.dev]
 debug = true
+lto = true
+opt-level = 1

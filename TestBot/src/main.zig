@@ -6,7 +6,7 @@ const std = @import("std");
 const File = std_c.stdio.FILE;
 const Slice = std_c.sys.raw.Slice;
 const spawn = std_c.sys.utils.zpspwan;
-const wait = std_c.syscalls.wait;
+const wait = std_c.sys.utils.wait;
 
 const allocator = std_c.heap.c_allocator;
 var serial: *File = undefined;
@@ -88,7 +88,7 @@ fn test_binary(comptime path: []const u8, args: []const Slice(u8)) NativeError!O
     defer test_log.close();
 
     const pid = try spawn(path, args, "[TestCase]: " ++ path);
-    const status = wait(pid);
+    const status = try wait(pid);
     // FIXME: lseek is not implemented
     test_log.read_offset = 0;
     const buffer = try test_log.reader().readAllAlloc(allocator, std.math.maxInt(usize));

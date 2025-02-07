@@ -11,6 +11,7 @@ const Token = @import("Lexer.zig").Token;
 const Dir = std_c.dirent.DIR;
 
 const zpspawn = sys.utils.zpspwan;
+const wait = sys.utils.wait;
 const environment = @import("environment.zig");
 
 const ExecuteBuiltin = @import("builtin.zig").executeBuiltin;
@@ -41,10 +42,6 @@ fn spawn(name: []const u8, argv: []const Slice(u8)) Error!u64 {
     }
 
     return error.NoSuchAFileOrDirectory;
-}
-
-fn wait(pid: u64) usize {
-    return std_c.syscalls.wait(pid);
 }
 
 pub fn repl(tokens: []const Token) Error!usize {
