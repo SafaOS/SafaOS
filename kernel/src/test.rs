@@ -55,6 +55,7 @@ pub mod testing_module {
         let msg = msg.as_ptr();
 
         unsafe {
+            // writing "Hello from syswrite!\n" to the terminal
             asm!(
                 "mov rax, 3
                 mov rdi, 1
@@ -63,6 +64,14 @@ pub mod testing_module {
                 mov rcx, r10
                 mov r8, 0
                 int 0x80", in("r9") msg, in("r10") len
+            );
+            // sync
+            asm!(
+                "
+                mov rax, 17
+                mov rdi, 1
+                int 0x80
+            "
             )
         }
     }
@@ -90,7 +99,13 @@ pub mod testing_module {
     }
     fn spawn() {
         unsafe { core::arch::asm!("cli") }
-        let pid = pspawn("TEST_CASE", "sys:/bin/true", &[], SpawnFlags::empty()).unwrap();
+        let pid = pspawn(
+            "TEST_CASE",
+            "sys:/bin/true",
+            &[],
+            SpawnFlags::CLONE_RESOURCES,
+        )
+        .unwrap();
         let ret = wait(pid);
 
         assert_eq!(ret, 1);

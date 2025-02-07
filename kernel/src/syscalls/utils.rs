@@ -1,53 +1,35 @@
-use crate::{
-    threading,
-    utils::{
-        errors::ErrorStatus,
-        ffi::{Optional, Slice, SliceMut},
-    },
-};
+use crate::{threading, utils::errors::ErrorStatus, VirtAddr};
 
-/// for now
-#[no_mangle]
-extern "C" fn sysexit(code: usize) {
-    threading::expose::thread_exit(code);
+pub fn sysexit(code: usize) -> ! {
+    threading::expose::thread_exit(code)
 }
 
-#[no_mangle]
-extern "C" fn sysyield() {
+pub fn sysyield() {
     threading::expose::thread_yeild()
 }
 
-#[no_mangle]
-extern "C" fn syschdir(path_ptr: *const u8, path_len: usize) -> ErrorStatus {
-    let path = Slice::new(path_ptr, path_len)?.into_str();
-
-    if let Err(err) = threading::expose::chdir(path) {
-        err.into()
-    } else {
-        ErrorStatus::None
-    }
+pub fn syschdir(path: &str) -> Result<(), ErrorStatus> {
+    threading::expose::chdir(path).map_err(|err| err.into())
 }
 
-#[no_mangle]
-extern "C" fn sysgetcwd(path_ptr: *mut u8, len: usize, dest_len: Optional<usize>) -> ErrorStatus {
-    let path = SliceMut::new(path_ptr, len)?.into_slice();
+pub fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
     let got = threading::expose::getcwd().into_bytes();
-
-    if got.len() > len {
-        return ErrorStatus::Generic;
+    if got.len() > path.len() {
+        return Err(ErrorStatus::Generic);
     }
 
     path[..got.len()].copy_from_slice(&got);
 
-    if let Some(dest_len) = dest_len.into_option() {
+    if let Some(dest_len) = dest_len {
         *dest_len = got.len();
     }
 
-    ErrorStatus::None
+    Ok(())
 }
 
 // on fail returns null for unknown reasons
-#[no_mangle]
-extern "C" fn syssbrk(amount: isize) -> *mut u8 {
-    threading::expose::sbrk(amount)
+pub fn syssbrk(amount: isize, results: &mut VirtAddr) -> Result<(), ErrorStatus> {
+    let res = threading::expose::sbrk(amount)?;
+    *results = res as VirtAddr;
+    Ok(())
 }

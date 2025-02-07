@@ -2,11 +2,11 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 #![feature(allocator_api)]
-#![feature(try_trait_v2)]
 #![feature(pattern)]
 #![feature(box_vec_non_null)]
 #![feature(vec_into_raw_parts)]
 #![feature(iter_collect_into)]
+#![feature(naked_functions)]
 
 #[cfg(feature = "test")]
 mod test;

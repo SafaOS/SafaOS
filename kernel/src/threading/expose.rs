@@ -10,6 +10,7 @@ use crate::{
     memory::paging::{MapToError, PhysPageTable},
     utils::{
         elf::{Elf, ElfError},
+        errors::ErrorStatus,
         io::Readable,
     },
 };
@@ -248,10 +249,8 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
 /// extends program break by `amount`
 /// returns the new program break ptr
 /// on fail returns null
-pub fn sbrk(amount: isize) -> *mut u8 {
+pub fn sbrk(amount: isize) -> Result<*mut u8, ErrorStatus> {
     let current = super::current();
     let mut state = current.state_mut().unwrap();
-    state
-        .extend_data_by(amount)
-        .unwrap_or(core::ptr::null_mut())
+    state.extend_data_by(amount).ok_or(ErrorStatus::OutOfMemory)
 }

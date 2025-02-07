@@ -141,14 +141,14 @@ impl TaskState {
 
         let pages = crate::memory::align_up(amount, PAGE_SIZE) / PAGE_SIZE;
 
-        if is_negative {
-            for _ in 0..pages {
-                self.page_unextend_data()?;
-            }
+        let func = if is_negative {
+            Self::page_unextend_data
         } else {
-            for _ in 0..pages {
-                self.page_extend_data()?;
-            }
+            Self::page_extend_data
+        };
+
+        for _ in 0..pages {
+            func(self)?;
         }
 
         match self {
