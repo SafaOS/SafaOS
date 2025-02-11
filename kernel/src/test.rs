@@ -140,5 +140,7 @@ pub fn main() -> ! {
     serial!("finished initing ...\n");
     println!("finished running tests...");
     println!("\x1B[38;2;0;255;0mBoot success! press ctrl + shift + C to start the shell\x1B[0m");
+    // interrupts are typically disabled during syscalls
+    unsafe { core::arch::asm!("cli") }
     thread_exit(0)
 }
