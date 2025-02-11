@@ -20,8 +20,6 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
             let lock = self.try_write();
 
             if let Some(mut tty) = lock {
-                tty.enable_input();
-
                 if tty.stdin_buffer.ends_with('\n') {
                     tty.disable_input();
                     let count = tty.stdin_buffer.len().min(buffer.len());
@@ -30,6 +28,8 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
 
                     return Ok(count);
                 }
+
+                tty.enable_input();
             }
 
             thread_yeild();
