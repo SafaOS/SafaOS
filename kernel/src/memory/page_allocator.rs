@@ -67,7 +67,7 @@ impl PageAllocator {
     pub fn find_pages(&mut self, page_count: usize) -> Option<(*mut u8, usize)> {
         let bitmap = self.bitmap.as_mut_slice();
 
-        if page_count <= usize::BITS as usize {
+        if page_count < usize::BITS as usize {
             let iter = bitmap
                 .iter_mut()
                 .enumerate()

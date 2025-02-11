@@ -7,11 +7,14 @@ pub mod testing_module {
     use alloc::vec::Vec;
 
     use crate::memory::frame_allocator;
+    use crate::memory::paging::PAGE_SIZE;
     use crate::println;
     use crate::threading::expose::pspawn;
     use crate::threading::expose::wait;
     use crate::threading::expose::SpawnFlags;
+    use crate::utils::alloc::PageVec;
     use core::arch::asm;
+    use core::mem::MaybeUninit;
 
     fn serial() {}
     fn print() {}
@@ -45,6 +48,15 @@ pub mod testing_module {
         }
 
         println!("{:#?}\nAllocated Vec with len {}", test, test.len());
+    }
+
+    fn page_allocator_test() {
+        let mut test = PageVec::with_capacity(50);
+
+        let page = [MaybeUninit::<u8>::uninit(); PAGE_SIZE];
+        for _ in 0..50 {
+            test.push(page);
+        }
     }
 
     #[cfg(target_arch = "x86_64")]
