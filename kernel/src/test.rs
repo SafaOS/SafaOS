@@ -1,16 +1,20 @@
 use macros::test_module;
 
+use crate::{println, serial, threading::expose::thread_exit};
+
 #[test_module]
 pub mod testing_module {
     use alloc::vec::Vec;
 
-    use crate::cross_println;
     use crate::memory::frame_allocator;
+    use crate::memory::paging::PAGE_SIZE;
     use crate::println;
     use crate::threading::expose::pspawn;
     use crate::threading::expose::wait;
     use crate::threading::expose::SpawnFlags;
+    use crate::utils::alloc::PageVec;
     use core::arch::asm;
+    use core::mem::MaybeUninit;
 
     fn serial() {}
     fn print() {}
@@ -46,6 +50,15 @@ pub mod testing_module {
         println!("{:#?}\nAllocated Vec with len {}", test, test.len());
     }
 
+    fn page_allocator_test() {
+        let mut test = PageVec::with_capacity(50);
+
+        let page = [MaybeUninit::<u8>::uninit(); PAGE_SIZE];
+        for _ in 0..50 {
+            test.push(page);
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     // syscall tests
     fn syscall() {
@@ -54,12 +67,23 @@ pub mod testing_module {
         let msg = msg.as_ptr();
 
         unsafe {
+            // writing "Hello from syswrite!\n" to the terminal
             asm!(
                 "mov rax, 3
                 mov rdi, 1
-                mov rsi, r9
-                mov rdx, r10
+                mov rsi, 0
+                mov rdx, r9
+                mov rcx, r10
+                mov r8, 0
                 int 0x80", in("r9") msg, in("r10") len
+            );
+            // sync
+            asm!(
+                "
+                mov rax, 17
+                mov rdi, 1
+                int 0x80
+            "
             )
         }
     }
@@ -73,21 +97,27 @@ pub mod testing_module {
         }
 
         for i in 1..frames.capacity() {
-            assert_ne!(frames[i - 1].start_address, frames[i].start_address);
+            assert_ne!(frames[i - 1].start_address(), frames[i].start_address());
         }
 
-        let first_frame = frames[0];
+        let last_frame = frames[frames.len() - 1];
         for frame in frames.iter() {
             frame_allocator::deallocate_frame(*frame);
         }
         let allocated = frame_allocator::allocate_frame().unwrap();
-        assert_eq!(allocated, first_frame);
+        assert_eq!(allocated, last_frame);
 
         frame_allocator::deallocate_frame(allocated);
     }
     fn spawn() {
         unsafe { core::arch::asm!("cli") }
-        let pid = pspawn("TEST_CASE", "sys:/bin/true", &[], SpawnFlags::empty()).unwrap();
+        let pid = pspawn(
+            "TEST_CASE",
+            "sys:/bin/true",
+            &[],
+            SpawnFlags::CLONE_RESOURCES,
+        )
+        .unwrap();
         let ret = wait(pid);
 
         assert_eq!(ret, 1);
@@ -102,4 +132,15 @@ pub mod testing_module {
         assert_eq!(ret, 0);
         unsafe { core::arch::asm!("sti") }
     }
+}
+
+pub fn main() -> ! {
+    testing_module::test_main();
+    // printing this to the serial makes `test.sh` know that the kernel tests were succesful
+    serial!("finished initing ...\n");
+    println!("finished running tests...");
+    println!("\x1B[38;2;0;255;0mBoot success! press ctrl + shift + C to start the shell\x1B[0m");
+    // interrupts are typically disabled during syscalls
+    unsafe { core::arch::asm!("cli") }
+    thread_exit(0)
 }

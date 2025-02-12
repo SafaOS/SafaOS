@@ -60,5 +60,5 @@ impl Write for Serial {
 }
 
 pub fn _serial(args: fmt::Arguments) {
-    SERIAL.inner.lock().write_fmt(args).unwrap();
+    SERIAL.lock().write_fmt(args).unwrap();
 }

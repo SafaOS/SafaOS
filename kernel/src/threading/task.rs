@@ -1,15 +1,24 @@
+use core::{
+    cell::UnsafeCell,
+    mem::ManuallyDrop,
+    sync::atomic::{AtomicBool, AtomicUsize},
+};
+
 use alloc::string::String;
 use serde::Serialize;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     arch::threading::CPUStatus,
-    debug, hddm,
+    debug, eve,
     memory::{
         align_up, frame_allocator,
         paging::{Page, PhysPageTable, PAGE_SIZE},
     },
-    utils::elf::{Elf, ElfError},
+    utils::{
+        elf::{Elf, ElfError},
+        io::Readable,
+    },
     VirtAddr,
 };
 
@@ -17,7 +26,7 @@ use super::{resources::ResourceManager, Pid};
 
 pub enum TaskState {
     Alive {
-        root_page_table: PhysPageTable,
+        root_page_table: ManuallyDrop<PhysPageTable>,
         resources: ResourceManager,
 
         data_pages: usize,
@@ -90,7 +99,7 @@ impl TaskState {
                     )
                     .ok()?;
 
-                let addr = frame.start_address | hddm();
+                let addr = frame.virt_addr();
                 let ptr = addr as *mut u8;
                 let slice = unsafe { core::slice::from_raw_parts_mut(ptr, PAGE_SIZE) };
 
@@ -132,14 +141,14 @@ impl TaskState {
 
         let pages = crate::memory::align_up(amount, PAGE_SIZE) / PAGE_SIZE;
 
-        if is_negative {
-            for _ in 0..pages {
-                self.page_unextend_data()?;
-            }
+        let func = if is_negative {
+            Self::page_unextend_data
         } else {
-            for _ in 0..pages {
-                self.page_extend_data()?;
-            }
+            Self::page_extend_data
+        };
+
+        for _ in 0..pages {
+            func(self)?;
         }
 
         match self {
@@ -163,9 +172,13 @@ impl TaskState {
                 data_start,
                 data_break,
                 resources,
+                root_page_table,
                 ..
             } => {
                 let last_resource_id = resources.next_ri();
+
+                let root_page_table = unsafe { ManuallyDrop::take(root_page_table) };
+                eve::add_cleanup(root_page_table);
 
                 *self = TaskState::Zombie {
                     exit_code,
@@ -191,22 +204,16 @@ impl TaskState {
     }
 }
 
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskStatus {
-    /// in queue ready to be scheduled
-    Ready,
-    /// not available for scheduling
-    Busy,
-}
-
 pub struct Task {
-    state: RwLock<TaskState>,
-
-    name: String,
+    /// constant
     pub pid: Pid,
-    pub ppid: Pid,
-    pub status: TaskStatus,
-    pub context: CPUStatus,
+    /// Task may change it's parent pid
+    pub ppid: AtomicUsize,
+    state: RwLock<TaskState>,
+    name: String,
+    /// context must only be changed by the scheduler, so it is not protected by a lock
+    context: UnsafeCell<CPUStatus>,
+    is_alive: AtomicBool,
 }
 
 impl Task {
@@ -229,11 +236,11 @@ impl Task {
         Self {
             name,
             pid,
-            ppid,
-            status: TaskStatus::Ready,
-            context,
+            ppid: AtomicUsize::new(ppid),
+            is_alive: AtomicBool::new(true),
+            context: UnsafeCell::new(context),
             state: RwLock::new(TaskState::Alive {
-                root_page_table,
+                root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
                 data_pages: 0,
                 data_start: data_break,
@@ -244,15 +251,15 @@ impl Task {
     }
 
     /// Creates a new task from an elf
-    pub fn from_elf(
+    pub fn from_elf<T: Readable>(
         name: String,
         pid: Pid,
         ppid: Pid,
         cwd: String,
-        elf: Elf,
+        elf: Elf<T>,
         args: &[&str],
     ) -> Result<Self, ElfError> {
-        let entry_point = elf.header.entry_point;
+        let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;
 
@@ -265,12 +272,12 @@ impl Task {
         &self.name
     }
 
-    pub fn state(&self) -> RwLockReadGuard<TaskState> {
-        self.state.read()
+    pub fn state(&self) -> Option<RwLockReadGuard<TaskState>> {
+        self.state.try_read()
     }
 
-    pub fn state_mut(&self) -> RwLockWriteGuard<TaskState> {
-        self.state.write()
+    pub fn state_mut(&self) -> Option<RwLockWriteGuard<TaskState>> {
+        self.state.try_write()
     }
 
     /// kills the task
@@ -280,6 +287,9 @@ impl Task {
         let killed_by = killed_by.unwrap_or(self.pid);
 
         state.die(exit_code, killed_by);
+        self.is_alive
+            .store(false, core::sync::atomic::Ordering::Relaxed);
+
         debug!(
             Task,
             "Task {} ({}) TERMINATED with code {} by {}",
@@ -288,6 +298,26 @@ impl Task {
             exit_code,
             killed_by
         );
+    }
+
+    pub unsafe fn set_context(&self, context: CPUStatus) {
+        *self.context.get() = context;
+    }
+
+    pub fn context(&self) -> &CPUStatus {
+        unsafe { &*self.context.get() }
+    }
+
+    fn at(&self) -> VirtAddr {
+        unsafe { (*self.context.get()).at() }
+    }
+
+    fn stack_at(&self) -> VirtAddr {
+        unsafe { (*self.context.get()).stack_at() }
+    }
+
+    pub(super) fn is_alive(&self) -> bool {
+        self.is_alive.load(core::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -314,10 +344,10 @@ impl serde::Serialize for Name {
 #[derive(Serialize, Debug, Clone)]
 #[repr(C)]
 pub struct TaskInfo {
+    name: Name,
+
     pub ppid: Pid,
     pub pid: Pid,
-    name: Name,
-    pub status: TaskStatus,
 
     pub last_resource_id: usize,
     pub exit_code: usize,
@@ -332,45 +362,44 @@ pub struct TaskInfo {
 
 impl From<&Task> for TaskInfo {
     fn from(task: &Task) -> Self {
-        let at = task.context.at();
-        let stack_addr = task.context.stack_at();
+        let at = task.at();
+        let stack_addr = task.stack_at();
 
-        let state = task.state();
+        let state = task.state().unwrap();
 
-        let (exit_code, data_start, data_break, killed_by, last_resource_id, is_alive) =
-            match &*state {
-                TaskState::Alive {
-                    data_start,
-                    data_break,
-                    resources,
-                    ..
-                } => (0, *data_start, *data_break, 0, resources.next_ri(), true),
-                TaskState::Zombie {
-                    data_start,
-                    data_break,
-                    exit_code,
-                    killed_by,
-                    last_resource_id,
-                    ..
-                } => (
-                    *exit_code,
-                    *data_start,
-                    *data_break,
-                    *killed_by,
-                    *last_resource_id,
-                    false,
-                ),
-            };
+        let (exit_code, data_start, data_break, killed_by, last_resource_id) = match &*state {
+            TaskState::Alive {
+                data_start,
+                data_break,
+                resources,
+                ..
+            } => (0, *data_start, *data_break, 0, resources.next_ri()),
+            TaskState::Zombie {
+                data_start,
+                data_break,
+                exit_code,
+                killed_by,
+                last_resource_id,
+                ..
+            } => (
+                *exit_code,
+                *data_start,
+                *data_break,
+                *killed_by,
+                *last_resource_id,
+            ),
+        };
+
+        let is_alive = task.is_alive();
+        let ppid = task.ppid.load(core::sync::atomic::Ordering::Relaxed);
 
         let mut name = [0u8; 64];
         name[..task.name().len()].copy_from_slice(task.name().as_bytes());
 
         Self {
-            ppid: task.ppid,
+            ppid,
             pid: task.pid,
             name: name.into(),
-            status: task.status,
-
             last_resource_id,
             exit_code,
             at,

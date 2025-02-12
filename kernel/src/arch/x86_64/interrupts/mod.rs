@@ -1,6 +1,7 @@
 pub mod apic;
 pub mod handlers;
 mod idt;
+mod pit;
 
 use core::{arch::asm, fmt::Display};
 use idt::IDTDesc;
@@ -34,11 +35,8 @@ impl Display for TrapFrame {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let sym = KERNEL_ELF.sym_from_value_range(self.insturaction as usize);
 
-        let name = if let Some(sym) = sym {
-            KERNEL_ELF.string_table_index(sym.name_index)
-        } else {
-            "??"
-        };
+        let name = sym.map(|sym| KERNEL_ELF.string_table_index(sym.name_index).unwrap());
+        let name = name.as_deref().unwrap_or("???");
 
         writeln!(f, "---- Trap Frame ----")?;
         writeln!(f, "at {:#X} <{}>", self.insturaction, name)?;
@@ -61,12 +59,8 @@ impl Display for TrapFrame {
 impl Display for InterruptFrame {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let sym = KERNEL_ELF.sym_from_value_range(self.insturaction as usize);
-
-        let name = if let Some(sym) = sym {
-            KERNEL_ELF.string_table_index(sym.name_index)
-        } else {
-            "??"
-        };
+        let name = sym.map(|sym| KERNEL_ELF.string_table_index(sym.name_index).unwrap());
+        let name = name.as_deref().unwrap_or("???");
 
         writeln!(f, "---- Interrupt Frame ----")?;
         writeln!(f, "at {:#X} <{}>", self.insturaction, name)?;

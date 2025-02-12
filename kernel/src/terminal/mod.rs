@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 use core::fmt::Write;
-use framebuffer::FRAMEBUFFER_TTY_INTERFACE;
+use framebuffer::FrameBufferTTY;
 use lazy_static::lazy_static;
 use spin::RwLock;
 
@@ -10,7 +10,7 @@ use crate::{
         HandleKey,
     },
     threading::expose::{pspawn, SpawnFlags},
-    utils::{alloc::PageString, Locked},
+    utils::alloc::PageString,
 };
 
 pub mod framebuffer;
@@ -54,55 +54,64 @@ bitflags! {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-pub struct TTY<'a> {
+pub struct TTY<T: TTYInterface> {
+    /// stores the stdout buffer for write operations peformed on the tty device, allows to write to the tty at once instead of a peice by piece
+    stdout_buffer: PageString,
+    /// stores the stdin buffer for read operations peformed on the tty device
     pub stdin_buffer: PageString,
-
     pub settings: TTYSettings,
-    interface: &'a Locked<dyn TTYInterface>,
+    interface: T,
 }
 
-impl Write for TTY<'_> {
+impl<T: TTYInterface> Write for TTY<T> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
-            self.interface.inner.lock().write_str(s)?;
-        }
+        self.stdout_buffer.push_str(s);
         Ok(())
     }
 
     fn write_char(&mut self, c: char) -> core::fmt::Result {
-        if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
-            self.interface.inner.lock().write_char(c)?;
+        self.stdout_buffer.push_char(c);
+        Ok(())
+    }
+
+    fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> core::fmt::Result {
+        if let Some(s) = args.as_str() {
+            _ = self.write_str(s);
+            self.sync();
+        } else {
+            self.stdout_buffer.write_fmt(args)?;
+            self.sync();
         }
         Ok(())
     }
 }
 
-impl<'a> TTY<'a> {
-    pub fn new(interface: &'a Locked<dyn TTYInterface>) -> Self {
+impl<T: TTYInterface> TTY<T> {
+    pub fn new(interface: T) -> Self {
         Self {
             stdin_buffer: PageString::new(),
+            stdout_buffer: PageString::with_capacity(4096),
             interface,
             settings: TTYSettings::DRAW_GRAPHICS,
         }
     }
 
     pub fn clear(&mut self) {
-        let mut interface = self.interface.inner.lock();
-        interface.clear();
-        interface.set_cursor(0, 0);
+        self.interface.clear();
+        self.interface.set_cursor(0, 0);
     }
 
     pub fn enable_input(&mut self) {
         if !self.settings.contains(TTYSettings::RECIVE_INPUT) {
             self.settings |= TTYSettings::RECIVE_INPUT;
-            _ = self.write_char('_');
+            _ = self.interface.write_char('_');
         }
     }
 
     pub fn disable_input(&mut self) {
         if self.settings.contains(TTYSettings::RECIVE_INPUT) {
             self.settings &= !TTYSettings::RECIVE_INPUT;
-            self.interface.inner.lock().backspace();
+            self.interface.backspace();
         }
     }
 
@@ -110,34 +119,43 @@ impl<'a> TTY<'a> {
         if !self.stdin_buffer.is_empty() {
             if self.settings.contains(TTYSettings::RECIVE_INPUT) {
                 // removes the cursor `_`
-                self.interface.inner.lock().backspace();
+                self.interface.backspace();
             }
             // backspace
-            self.interface.inner.lock().backspace();
+            self.interface.backspace();
             self.stdin_buffer.pop();
 
             if self.settings.contains(TTYSettings::RECIVE_INPUT) {
                 // puts the cursor `_`
-                _ = self.write_char('_');
+                _ = self.interface.write_char('_');
             }
+        }
+    }
+
+    /// syncs the buffer by actually writing it to the interface
+    pub fn sync(&mut self) {
+        if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
+            self.interface
+                .write_str(self.stdout_buffer.as_str())
+                .unwrap();
+            self.stdout_buffer.clear();
         }
     }
 }
 
 lazy_static! {
-    pub static ref FRAMEBUFFER_TERMINAL: RwLock<TTY<'static>> = {
-        let interface: &'static Locked<dyn TTYInterface> = &*FRAMEBUFFER_TTY_INTERFACE;
-        RwLock::new(TTY::new(interface))
-    };
+    pub static ref FRAMEBUFFER_TERMINAL: RwLock<TTY<FrameBufferTTY<'static>>> =
+        RwLock::new(TTY::new(FrameBufferTTY::new()));
 }
 
-impl HandleKey for TTY<'_> {
+impl<T: TTYInterface> HandleKey for TTY<T> {
     fn handle_key(&mut self, key: Key) {
         match key.code {
-            KeyCode::PageDown => self.interface.inner.lock().scroll_down(),
-            KeyCode::PageUp => self.interface.inner.lock().scroll_up(),
+            KeyCode::PageDown => self.interface.scroll_down(),
+            KeyCode::PageUp => self.interface.scroll_up(),
             KeyCode::KeyC if key.flags.contains(KeyFlags::CTRL | KeyFlags::SHIFT) => {
                 self.clear();
+                self.interface.set_cursor(1, 1);
                 pspawn("Shell", "sys:/bin/Shell", &[], SpawnFlags::CLONE_RESOURCES).unwrap();
             }
             KeyCode::Backspace if self.settings.contains(TTYSettings::RECIVE_INPUT) => {
@@ -146,14 +164,14 @@ impl HandleKey for TTY<'_> {
             _ => {
                 if self.settings.contains(TTYSettings::RECIVE_INPUT) {
                     // remove the cursor `_`
-                    self.interface.inner.lock().backspace();
+                    self.interface.backspace();
                     let char = key.map_key();
                     if char != '\0' {
-                        let _ = self.write_char(char);
+                        let _ = self.interface.write_char(char);
                         self.stdin_buffer.push_char(char);
                     }
                     // put the cursor back
-                    _ = self.write_char('_');
+                    _ = self.interface.write_char('_');
                 }
             }
         }
@@ -164,5 +182,10 @@ impl HandleKey for TTY<'_> {
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub fn _print(args: core::fmt::Arguments) {
-    FRAMEBUFFER_TERMINAL.write().write_fmt(args).unwrap();
+    unsafe {
+        FRAMEBUFFER_TERMINAL
+            .write()
+            .write_fmt(args)
+            .unwrap_unchecked();
+    }
 }

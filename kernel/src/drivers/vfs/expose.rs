@@ -1,9 +1,13 @@
 use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
-use crate::threading::resources::{self, Resource};
+use crate::{
+    threading::resources::{self, Resource},
+    utils::io::{IoError, Readable},
+};
 
 use super::{
-    DirIterDescriptor, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path, VFS_STRUCT,
+    DirIterDescriptor, FSError, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path,
+    VFS_STRUCT,
 };
 
 #[derive(Debug)]
@@ -35,12 +39,18 @@ impl File {
         Ok(Self(fd_ri))
     }
 
-    pub fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
-        self.with_fd(|fd| VFS_STRUCT.read().read(fd, buffer))
+    pub fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
+        self.with_fd(|fd| fd.read(offset, buffer))
     }
 
-    pub fn write(&self, buffer: &[u8]) -> FSResult<usize> {
-        self.with_fd(|fd| VFS_STRUCT.read().write(fd, buffer))
+    pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
+        self.with_fd(|fd| fd.write(offset, buffer))
+    }
+
+    pub fn truncate(&self, len: usize) -> FSResult<()> {
+        // TODO: work more on truncating, for now we are using the node directly
+        // i am not really sure if the VFS layer is even needed anymore because even reads and writes are just directing to the node
+        self.with_fd(|fd| fd.truncate(len))
     }
 
     pub fn from_fd(fd: usize) -> Option<Self> {
@@ -55,14 +65,17 @@ impl File {
     }
 
     pub fn diriter_open(&self) -> FSResult<DirIter> {
-        let diriter = self.with_fd(|fd| VFS_STRUCT.read().open_diriter(fd))?;
+        let diriter = self.with_fd(|fd| fd.open_diriter())?;
 
         Ok(DirIter(resources::add_resource(Resource::DirIter(diriter))))
     }
 
-    pub fn direntry(&self) -> DirEntry {
-        let node = self.with_fd(|fd| fd.node.clone());
-        DirEntry::get_from_inode(node)
+    pub fn sync(&self) -> FSResult<()> {
+        self.with_fd(|fd| fd.sync())
+    }
+
+    pub fn kind(&self) -> InodeType {
+        self.with_fd(|fd| fd.kind())
     }
 }
 
@@ -70,6 +83,15 @@ impl Drop for File {
     fn drop(&mut self) {
         self.with_fd(|fd| fd.close());
         resources::remove_resource(self.0).unwrap();
+    }
+}
+
+impl Readable for File {
+    fn read(&self, offset: isize, buf: &mut [u8]) -> Result<usize, IoError> {
+        self.read(offset, buf).map_err(|e| match e {
+            FSError::InvaildOffset => IoError::InvaildOffset,
+            _ => IoError::Generic,
+        })
     }
 }
 
@@ -116,27 +138,25 @@ pub fn createdir(path: Path) -> FSResult<()> {
     VFS_STRUCT.read().createdir(path)
 }
 
-pub const MAX_NAME_LEN: usize = 128;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct DirEntry {
     pub kind: InodeType,
     pub size: usize,
     pub name_length: usize,
-    pub name: [u8; 128],
+    pub name: [u8; Self::MAX_NAME_LEN],
 }
 
 impl DirEntry {
-    pub fn get_from_inode(inode: Inode) -> Self {
-        let name = inode.name();
+    pub const MAX_NAME_LEN: usize = 128;
+    pub fn get_from_inode(inode: Inode, name: &str) -> Self {
         let name_slice = name.as_bytes();
 
         let kind = inode.kind();
         let size = inode.size().unwrap_or(0);
 
         let name_length = name_slice.len();
-        let mut name = [0u8; MAX_NAME_LEN];
+        let mut name = [0u8; Self::MAX_NAME_LEN];
 
         name[..name_length].copy_from_slice(name_slice);
 

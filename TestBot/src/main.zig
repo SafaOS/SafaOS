@@ -6,7 +6,7 @@ const std = @import("std");
 const File = std_c.stdio.FILE;
 const Slice = std_c.sys.raw.Slice;
 const spawn = std_c.sys.utils.zpspwan;
-const wait = std_c.syscalls.wait;
+const wait = std_c.sys.utils.wait;
 
 const allocator = std_c.heap.c_allocator;
 var serial: *File = undefined;
@@ -88,9 +88,10 @@ fn test_binary(comptime path: []const u8, args: []const Slice(u8)) NativeError!O
     defer test_log.close();
 
     const pid = try spawn(path, args, "[TestCase]: " ++ path);
-    const status = wait(pid);
-
-    const buffer = try test_log.reader().readUntilEOF();
+    const status = try wait(pid);
+    // FIXME: lseek is not implemented
+    test_log.read_offset = 0;
+    const buffer = try test_log.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     return .{ .stdout = buffer, .status = status };
 }
 
@@ -209,6 +210,7 @@ pub fn memory_info_test() Error!void {
     const output = try meminfo();
     if (!meminfo_output.eql(&output)) {
         print("\x1b[31m[TestBot]: ", .{});
+        // FIXME: memory leak is misreported thanks to the fact that the libc memory allocator sucks 2 pages of memory is allocated to read ram:/test.txt
         print(
             \\possible memory leak detected
             \\expected:
@@ -278,7 +280,7 @@ fn run_tests(comptime tests: []const TestCase) Error!void {
 pub fn main() !void {
     // fd 0
     serial = try File.open("dev:/ss", .{ .write = true, .read = true });
-    std_c.stdio.stdout = serial.*;
+    std_c.stdout = serial.*;
 
     const tests = get_tests();
     print("\x1b[36m[TEST]\x1b[0m: TestBot running {} tests ...\n", .{tests.len});

@@ -1,15 +1,18 @@
-use core::{
-    alloc::{GlobalAlloc, Layout},
-    mem::MaybeUninit,
-};
+use core::alloc::{GlobalAlloc, Layout};
 
-use crate::{debug, memory::frame_allocator, utils::Locked};
+use crate::{
+    debug,
+    limine::get_phy_offset_end,
+    memory::{frame_allocator, paging::MapToError},
+    utils::{LazyLock, Locked},
+};
 
 use super::{
     align_up,
     paging::{current_root_table, EntryFlags, Page},
-    VirtAddr,
 };
+
+pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
 
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -94,10 +97,6 @@ fn actual_size(size: usize) -> usize {
 }
 
 impl BuddyAllocator<'_> {
-    pub const unsafe fn new() -> MaybeUninit<Self> {
-        MaybeUninit::zeroed()
-    }
-
     /// unsafe because size has to be a power of 2, has to contain Block header size and
     /// self.heap_end .. self.heap_end + size shall be mapped and not used by anything
     /// adds a free block with size `size` to the end of the allocator
@@ -133,13 +132,31 @@ impl BuddyAllocator<'_> {
         unsafe { Some(self.add_free(size)) }
     }
 
-    pub unsafe fn init(&mut self, possible_start: VirtAddr, size: usize) {
+    pub fn create() -> Result<Self, MapToError> {
+        let possible_start = get_phy_offset_end();
+
         let start = align_up(possible_start, size_of::<Block>());
         let start = align_up(start, 2);
 
         let diff = start - possible_start;
-        let size = align_down_to_power_of_2(size - diff);
+        let size = align_down_to_power_of_2(INIT_HEAP_SIZE - diff);
         let end = start + size;
+
+        let page_range = {
+            let heap_start_page = Page::containing_address(start);
+            let heap_end_page = Page::containing_address(end);
+            Page::iter_pages(heap_start_page, heap_end_page)
+        };
+
+        let flags = EntryFlags::PRESENT | EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE;
+        for page in page_range {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+
+            unsafe {
+                current_root_table().map_to(page, frame, flags)?;
+            };
+        }
 
         debug!(
             BuddyAllocator,
@@ -150,13 +167,18 @@ impl BuddyAllocator<'_> {
             size
         );
 
-        let head = &mut *(start as *mut Block);
-        head.free = true;
-        head.size = size;
+        unsafe {
+            let head = &mut *(start as *mut Block);
+            head.free = true;
+            head.size = size;
 
-        self.head = &mut *(start as *mut Block);
-        self.tail = head;
-        self.heap_end = end;
+            debug!(BuddyAllocator, "inited ...");
+            Ok(Self {
+                head: &mut *(head as *mut Block),
+                tail: head,
+                heap_end: end,
+            })
+        }
     }
 
     #[inline]
@@ -280,13 +302,18 @@ impl BuddyAllocator<'_> {
     }
 }
 
-unsafe impl GlobalAlloc for Locked<MaybeUninit<BuddyAllocator<'static>>> {
+unsafe impl GlobalAlloc for LazyLock<BuddyAllocator<'static>> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.inner.lock().assume_init_mut().allocmut(layout)
+        self.lock().allocmut(layout)
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         _ = layout;
-        self.inner.lock().assume_init_mut().deallocmut(ptr);
+        self.lock().deallocmut(ptr);
     }
 }
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: LazyLock<BuddyAllocator> = LazyLock::new(|| {
+    Locked::new(BuddyAllocator::create().expect("Failed to create buddy allocator"))
+});

@@ -5,11 +5,11 @@ use macros::display_consts;
 pub struct RGB(u32);
 impl RGB {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        Self(r as u32 | (g as u32) << 8 | (b as u32) << 16)
+        Self((r as u32) << 16 | (g as u32) << 8 | b as u32)
     }
 
     pub const fn r(self) -> u8 {
-        (self.0 & 0xFF) as u8
+        ((self.0 & 0xFF0000) >> 16) as u8
     }
 
     pub const fn g(self) -> u8 {
@@ -17,11 +17,11 @@ impl RGB {
     }
 
     pub const fn b(self) -> u8 {
-        ((self.0 >> 16) & 0xFF) as u8
+        (self.0 & 0xFF) as u8
     }
 
     pub const fn bytes(self) -> [u8; 3] {
-        [self.r(), self.g(), self.b()]
+        [self.b(), self.g(), self.r()]
     }
 
     pub const fn tuple(self) -> (u8, u8, u8) {
@@ -40,6 +40,11 @@ impl RGB {
             ((b as u16 * intensity as u16 + bb as u16 * (255 - intensity) as u16) / 255) as u8,
         )
     }
+
+    pub const fn from_hex(hex: u32) -> Self {
+        assert!(hex <= 0xffffff);
+        Self(hex)
+    }
 }
 
 impl From<RGB> for u32 {
@@ -56,7 +61,7 @@ impl From<u32> for RGB {
 
 impl From<[u8; 3]> for RGB {
     fn from(rgb: [u8; 3]) -> Self {
-        RGB::new(rgb[0], rgb[1], rgb[2])
+        RGB::new(rgb[2], rgb[1], rgb[0])
     }
 }
 
@@ -80,27 +85,27 @@ impl From<RGB> for (u8, u8, u8) {
 
 #[display_consts]
 impl RGB {
-    // COLORS
-    pub const BLACK: RGB = RGB::new(0, 0, 0);
-    pub const WHITE: RGB = RGB::new(211, 215, 207);
+    pub const BLACK: RGB = RGB::from_hex(0x141a21);
+    pub const BRIGHT_BLACK: RGB = RGB::from_hex(0x1d1f21);
 
-    pub const RED: RGB = RGB::new(204, 0, 0);
-    pub const GREEN: RGB = RGB::new(78, 154, 6);
-    pub const BLUE: RGB = RGB::new(114, 159, 207);
+    pub const WHITE: RGB = RGB::from_hex(0xc5c8c6);
+    pub const BRIGHT_WHITE: RGB = RGB::from_hex(0xe2e6e3);
 
-    pub const YELLOW: RGB = RGB::new(196, 160, 0);
-    pub const CYAN: RGB = RGB::new(6, 152, 154);
-    pub const MAGENTA: RGB = RGB::new(117, 80, 123);
+    pub const RED: RGB = RGB::from_hex(0xa02424);
+    pub const BRIGHT_RED: RGB = RGB::from_hex(0xcf2f2f);
 
-    // BRIGHT COLORS
-    pub const BRIGHT_BLACK: RGB = RGB::new(85, 87, 83);
-    pub const BRIGHT_WHITE: RGB = RGB::new(255, 255, 255);
+    pub const GREEN: RGB = RGB::from_hex(0x485e34);
+    pub const BRIGHT_GREEN: RGB = RGB::from_hex(0x719351);
 
-    pub const BRIGHT_RED: RGB = RGB::new(239, 41, 41);
-    pub const BRIGHT_GREEN: RGB = RGB::new(138, 226, 52);
-    pub const BRIGHT_BLUE: RGB = RGB::new(50, 175, 255);
+    pub const BLUE: RGB = RGB::from_hex(0x3d3dd4);
+    pub const BRIGHT_BLUE: RGB = RGB::from_hex(0x3d66d4);
 
-    pub const BRIGHT_YELLOW: RGB = RGB::new(252, 233, 79);
-    pub const BRIGHT_CYAN: RGB = RGB::new(52, 226, 226);
-    pub const BRIGHT_MAGENTA: RGB = RGB::new(173, 127, 168);
+    pub const YELLOW: RGB = RGB::from_hex(0xc4aa37);
+    pub const BRIGHT_YELLOW: RGB = RGB::from_hex(0xc4b15f);
+
+    pub const CYAN: RGB = RGB::from_hex(0x3090a8);
+    pub const BRIGHT_CYAN: RGB = RGB::from_hex(0x36a2bd);
+
+    pub const MAGENTA: RGB = RGB::from_hex(0x973e7f);
+    pub const BRIGHT_MAGENTA: RGB = RGB::from_hex(0xb54a98);
 }

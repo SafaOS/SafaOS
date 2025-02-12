@@ -1,49 +1,65 @@
-use core::fmt::Write;
+use core::{fmt::Write, str};
 
-use alloc::string::String;
 use spin::RwLock;
 
 use crate::{
-    drivers::vfs::{FSError, FSResult},
-    terminal::TTY,
+    drivers::vfs::FSResult,
+    terminal::{TTYInterface, TTY},
+    threading::expose::thread_yeild,
 };
 
 use super::CharDevice;
 
-impl CharDevice for RwLock<TTY<'_>> {
+impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
     fn name(&self) -> &'static str {
         "tty"
     }
 
     fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
-        if self
-            .try_write()
-            .is_none_or(|tty| !tty.stdin_buffer.ends_with('\n'))
-        {
-            self.write().enable_input();
-            return Err(FSError::ResourceBusy);
+        loop {
+            let lock = self.try_write();
+
+            if let Some(mut tty) = lock {
+                if tty.stdin_buffer.ends_with('\n') {
+                    tty.disable_input();
+                    let count = tty.stdin_buffer.len().min(buffer.len());
+                    buffer[..count].copy_from_slice(&tty.stdin_buffer.as_bytes()[..count]);
+                    tty.stdin_buffer.drain(..count);
+
+                    return Ok(count);
+                }
+
+                tty.enable_input();
+            }
+
+            thread_yeild();
         }
-
-        self.write().disable_input();
-
-        let stdin_buffer = &mut self.write().stdin_buffer;
-
-        let count = if stdin_buffer.len() <= buffer.len() {
-            stdin_buffer.len()
-        } else {
-            buffer.len()
-        };
-
-        buffer[..count].copy_from_slice(&stdin_buffer.as_str().as_bytes()[..count]);
-        stdin_buffer.inner.drain(..count);
-        Ok(count)
     }
 
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
-        let _ = self
-            .try_write()
-            .ok_or(FSError::ResourceBusy)?
-            .write_str(&String::from_utf8_lossy(buffer));
-        Ok(buffer.len())
+        let str = unsafe { &str::from_utf8_unchecked(buffer) };
+        loop {
+            let lock = self.try_write();
+
+            match lock {
+                Some(mut tty) => {
+                    tty.write_str(str).unwrap();
+                    return Ok(buffer.len());
+                }
+                None => thread_yeild(),
+            }
+        }
+    }
+
+    fn sync(&self) -> FSResult<()> {
+        loop {
+            match self.try_write() {
+                Some(mut writer) => {
+                    writer.sync();
+                    return Ok(());
+                }
+                None => thread_yeild(),
+            }
+        }
     }
 }

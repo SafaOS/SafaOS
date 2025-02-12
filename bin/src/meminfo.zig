@@ -25,7 +25,7 @@ pub fn main() !void {
     const info_file = try File.open("proc:/meminfo", .{ .read = true });
     defer info_file.close();
 
-    const info_str = try info_file.reader().readUntilEOF();
+    const info_str = try info_file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     const parsed_info = try std.json.parseFromSlice(MemInfo, allocator, info_str, .{ .allocate = .alloc_if_needed, .ignore_unknown_fields = true });
     defer parsed_info.deinit();
 

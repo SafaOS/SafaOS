@@ -1,11 +1,10 @@
-use core::ffi::{c_char, CStr};
-
-use alloc::slice;
+use alloc::vec;
+use alloc::{slice, string::String, vec::Vec};
 use bitflags::bitflags;
 use macros::display_consts;
+use spin::once::Once;
 
 use crate::{
-    hddm,
     memory::{
         copy_to_userspace, frame_allocator,
         paging::{EntryFlags, MapToError, Page, PageTable, PAGE_SIZE},
@@ -13,6 +12,8 @@ use crate::{
     utils::errors::{ErrorStatus, IntoErr},
     VirtAddr,
 };
+
+use super::io::Readable;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ElfType(u16);
@@ -90,7 +91,6 @@ pub enum ElfError {
     NotAnElf,
     NotAnExecutable,
     MapToError,
-    SupportedElfCorrupted,
 }
 
 impl IntoErr for ElfError {
@@ -98,9 +98,10 @@ impl IntoErr for ElfError {
         match self {
             Self::NotAnExecutable | Self::NotAnElf => ErrorStatus::NotExecutable,
             Self::MapToError => ErrorStatus::MMapError,
-            Self::SupportedElfCorrupted => ErrorStatus::Corrupted,
-
-            _ => ErrorStatus::NotSupported,
+            Self::UnsupportedKind
+            | Self::UnsupportedInsturctionSet
+            | Self::UnsupportedClass
+            | Self::UnsupportedEndianness => ErrorStatus::NotSupported,
         }
     }
 }
@@ -156,6 +157,7 @@ pub struct SectionHeader {
     pub flags: usize,
 
     pub addr: VirtAddr,
+    /// offset from the beginning of the file of the section data
     pub offset: usize,
     pub size: usize,
 
@@ -197,72 +199,208 @@ pub struct ProgramHeader {
 }
 
 #[derive(Debug)]
-pub struct Elf<'a> {
-    pub header: &'a ElfHeader,
-    pub sections: &'a [SectionHeader],
-    pub program_headers: &'a [ProgramHeader],
+pub struct Elf<'a, T: Readable> {
+    header: ElfHeader,
+    names_table: Once<Option<SectionHeader>>,
+    strings_table: Once<Option<SectionHeader>>,
+    symbols: Once<Option<Vec<Sym>>>,
+    reader: &'a T,
 }
-impl<'a> Elf<'a> {
-    #[inline]
-    pub fn section_names_table(&self) -> &SectionHeader {
-        &self.sections[self.header.sections_names_section_offset as usize]
+
+struct SectionHeaderIter<'a, T: Readable> {
+    elf: &'a Elf<'a, T>,
+    current: usize,
+}
+
+impl<'a, T: Readable> Iterator for SectionHeaderIter<'a, T> {
+    type Item = SectionHeader;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let section = self.nth(self.current);
+        self.current += 1;
+        section
     }
 
-    pub fn section_names_table_index(&self, name_index: u32) -> &str {
-        if name_index == 0 {
-            return "";
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.elf.get_section(n)
+    }
+}
+
+struct ProgramHeaderIter<'a, T: Readable> {
+    elf: &'a Elf<'a, T>,
+    current: usize,
+}
+
+impl<'a, T: Readable> Iterator for ProgramHeaderIter<'a, T> {
+    type Item = ProgramHeader;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let program = self.nth(self.current);
+        self.current += 1;
+        program
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.elf.get_program(n)
+    }
+}
+
+impl<'a, T: Readable> Elf<'a, T> {
+    pub fn header(&self) -> &ElfHeader {
+        &self.header
+    }
+
+    /// Returns an iterator over the sections in the elf
+    fn get_sections(&'a self) -> SectionHeaderIter<'a, T> {
+        SectionHeaderIter {
+            elf: self,
+            current: 0,
+        }
+    }
+
+    /// Returns an iterator over the program headers in the elf
+    fn get_programs(&'a self) -> ProgramHeaderIter<'a, T> {
+        ProgramHeaderIter {
+            elf: self,
+            current: 0,
+        }
+    }
+
+    /// Returns the offset of the program header at index `n` starting from the beginning of the file
+    #[inline(always)]
+    fn get_program_offset(&self, n: usize) -> Option<usize> {
+        if n >= self.header.program_headers_table_entries_number as usize {
+            return None;
         }
 
-        let name_table = self.section_names_table();
-        let name_ptr = unsafe {
-            (self.header as *const ElfHeader as *const u8)
-                .add(name_table.offset)
-                .add(name_index as usize) as *const c_char
-        };
+        let offset = self.header.program_headers_table_offset as usize
+            + (n * self.header.program_headers_table_entry_size as usize);
 
-        let str = unsafe { CStr::from_ptr(name_ptr) };
-        str.to_str().unwrap()
+        Some(offset)
+    }
+
+    /// Returns the program header at index `n`
+    #[inline(always)]
+    fn get_program(&'a self, n: usize) -> Option<ProgramHeader> {
+        let offset = self.get_program_offset(n)?;
+
+        let mut program_bytes = [0u8; size_of::<ProgramHeader>()];
+        self.reader.read(offset as isize, &mut program_bytes).ok()?;
+        Some(unsafe { core::mem::transmute(program_bytes) })
+    }
+
+    #[inline(always)]
+    fn get_section_offset(&self, n: usize) -> Option<usize> {
+        if n >= self.header.section_table_entries as usize {
+            return None;
+        }
+
+        let offset = self.header.section_header_table_offset as usize
+            + (n * self.header.section_table_entry_size as usize);
+
+        Some(offset)
+    }
+
+    #[inline(always)]
+    pub fn get_section(&self, n: usize) -> Option<SectionHeader> {
+        let offset = self.get_section_offset(n)?;
+
+        let mut section_bytes = [0u8; size_of::<SectionHeader>()];
+        self.reader.read(offset as isize, &mut section_bytes).ok()?;
+        Some(unsafe { core::mem::transmute(section_bytes) })
+    }
+
+    #[inline(always)]
+    pub fn section_names_table(&self) -> Option<&SectionHeader> {
+        self.names_table
+            .call_once(|| self.get_section(self.header.sections_names_section_offset as usize))
+            .as_ref()
+    }
+
+    pub fn section_names_table_index(&self, name_index: u32) -> Option<String> {
+        if name_index == 0 {
+            return None;
+        }
+
+        let name_table = self.section_names_table().unwrap();
+        let section_offset = name_table.offset;
+        let name_offset = section_offset + name_index as usize;
+
+        let mut name = Vec::new();
+        let mut c = [0u8];
+        while let Ok(amount) = self
+            .reader
+            .read((name_offset + name.len()) as isize, &mut c)
+        {
+            if amount != 1 || c[0] == 0 {
+                break;
+            }
+            name.push(c[0]);
+        }
+
+        String::from_utf8(name).ok()
     }
 
     #[inline]
     pub fn string_table(&self) -> Option<&SectionHeader> {
-        self.sections
-            .iter()
-            .find(|&section| self.section_names_table_index(section.name_index) == ".strtab")
+        self.strings_table
+            .call_once(|| {
+                self.get_sections().find(|section| {
+                    self.section_names_table_index(section.name_index)
+                        .is_some_and(|name| name == ".strtab")
+                })
+            })
+            .as_ref()
     }
 
-    pub fn string_table_index(&self, name_index: u32) -> &str {
+    pub fn string_table_index(&self, name_index: u32) -> Option<String> {
         if name_index == 0 {
-            return "";
+            return None;
         }
 
         let str_table = self.string_table().unwrap();
-        let str_ptr = unsafe {
-            (self.header as *const ElfHeader as *const u8)
-                .add(str_table.offset)
-                .add(name_index as usize) as *const c_char
-        };
+        let section_offset = str_table.offset;
+        let str_offset = section_offset + name_index as usize;
 
-        let str = unsafe { CStr::from_ptr(str_ptr) };
-        str.to_str().unwrap()
+        let mut c = [0u8];
+        let mut str = Vec::new();
+        while let Ok(amount) = self.reader.read((str_offset + str.len()) as isize, &mut c) {
+            if amount != 1 || c[0] == 0 {
+                break;
+            }
+            str.push(c[0]);
+        }
+        String::from_utf8(str).ok()
     }
 
     #[inline]
     pub fn symtable(&self) -> Option<&[Sym]> {
-        for section in self.sections {
-            if section.section_type == 2 {
-                let sym_ptr = unsafe {
-                    (self.header as *const ElfHeader as *const u8).add(section.offset) as *const Sym
-                };
+        let func = || {
+            self.get_sections()
+                .find(|section| section.section_type == 2)
+                .map(|section| {
+                    debug_assert_eq!(section.entry_size, size_of::<Sym>());
+                    let symtable_offset = section.offset;
+                    let mut bytes = vec![0u8; section.size as usize];
 
-                let sym_len = section.size / section.entry_size;
+                    self.reader
+                        .read_exact(symtable_offset as isize, &mut bytes)
+                        .ok()?;
 
-                let sym_table = unsafe { slice::from_raw_parts(sym_ptr, sym_len) };
-                return Some(sym_table);
-            }
-        }
+                    let symtable: Vec<Sym> = unsafe {
+                        let (ptr, len, cap) = bytes.into_raw_parts();
+                        Vec::from_raw_parts(
+                            ptr as *mut Sym,
+                            len / section.entry_size,
+                            cap / section.entry_size,
+                        )
+                    };
+                    Some(symtable)
+                })
+                .flatten()
+        };
 
-        None
+        self.symbols.call_once(func).as_deref()
     }
 
     pub fn sym_from_value_range(&self, value: VirtAddr) -> Option<Sym> {
@@ -276,21 +414,15 @@ impl<'a> Elf<'a> {
     }
 
     /// creates an elf from a u8 ptr that lives as long as `bytes`
-    pub fn new(bytes: &[u8]) -> Result<Self, ElfError> {
-        if bytes.len() < size_of::<ElfHeader>() {
+    pub fn new(reader: &'a T) -> Result<Self, ElfError> {
+        let mut header_bytes = [0u8; size_of::<ElfHeader>()];
+        reader
+            .read_exact(0, &mut header_bytes)
+            .map_err(|_| ElfError::NotAnElf)?;
+        let header: ElfHeader = unsafe { core::mem::transmute(header_bytes) };
+        if !header.verify() {
             return Err(ElfError::NotAnElf);
         }
-
-        let bytes_ptr = bytes.as_ptr();
-        let header_ptr = bytes_ptr as *const ElfHeader;
-
-        let header = unsafe {
-            if (*header_ptr).verify() {
-                &*header_ptr
-            } else {
-                return Err(ElfError::NotAnElf);
-            }
-        };
 
         header.supported()?;
 
@@ -304,45 +436,12 @@ impl<'a> Elf<'a> {
             header.program_headers_table_entry_size as usize
         );
 
-        if bytes.len() < header.section_header_table_offset
-            || bytes.len() < header.program_headers_table_offset
-        {
-            return Err(ElfError::SupportedElfCorrupted);
-        }
-
-        let section_header_table_ptr =
-            unsafe { bytes_ptr.add(header.section_header_table_offset) } as *const SectionHeader;
-
-        // TODO: instead make an nth_section function and a section_len function or whateve
-        // because section_header_ptr may be unaligned same for programe headers
-        assert!(section_header_table_ptr.is_aligned());
-
-        let section_header_table = unsafe {
-            slice::from_raw_parts(
-                section_header_table_ptr,
-                header.section_table_entries as usize,
-            )
-        };
-
-        let program_headers_table = if header.program_headers_table_offset != 0 {
-            let program_headers_table_ptr =
-                unsafe { bytes_ptr.add(header.program_headers_table_offset) }
-                    as *const ProgramHeader;
-            assert!(program_headers_table_ptr.is_aligned());
-            unsafe {
-                slice::from_raw_parts(
-                    program_headers_table_ptr,
-                    header.program_headers_table_entries_number as usize,
-                )
-            }
-        } else {
-            &[]
-        };
-
         Ok(Self {
             header,
-            sections: section_header_table,
-            program_headers: program_headers_table,
+            names_table: Once::new(),
+            strings_table: Once::new(),
+            symbols: Once::new(),
+            reader,
         })
     }
 
@@ -354,7 +453,9 @@ impl<'a> Elf<'a> {
         }
 
         let mut program_break = 0;
-        for header in self.program_headers {
+        let mut buf = [0u8; PAGE_SIZE];
+
+        for header in self.get_programs() {
             if header.ptype != ProgramType::LOAD {
                 continue;
             }
@@ -383,15 +484,37 @@ impl<'a> Elf<'a> {
                     page_table.map_to(page, frame, entry_flags)?;
 
                     let slice = slice::from_raw_parts_mut(
-                        (frame.start_address | hddm()) as *mut u8,
-                        PAGE_SIZE,
+                        frame.virt_addr() as *mut usize,
+                        PAGE_SIZE / size_of::<usize>(),
                     );
-                    slice.fill(0);
-                }
-                let file_start = (self.header as *const ElfHeader as *const u8).add(header.offset);
-                let file = slice::from_raw_parts(file_start, header.filez);
 
-                copy_to_userspace(page_table, header.vaddr, file);
+                    slice.fill(0x0);
+                }
+
+                let mut file_offset = header.offset;
+                let mut size = header.filez;
+
+                while let Ok(amount) = self.reader.read(file_offset as isize, &mut buf) {
+                    if amount == 0 {
+                        break;
+                    }
+
+                    let count = amount.min(size);
+                    let buf = &buf[..count];
+
+                    copy_to_userspace(
+                        page_table,
+                        header.vaddr + (file_offset - header.offset),
+                        &buf,
+                    );
+
+                    size -= count;
+                    if size == 0 {
+                        break;
+                    }
+
+                    file_offset += count;
+                }
             }
             program_break = header.vaddr + header.memz + PAGE_SIZE;
         }

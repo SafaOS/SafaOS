@@ -1,8 +1,8 @@
 // TODO: figure out errors
 // for now errors are a big mess
 use super::interrupts::InterruptFrame;
-use crate::{debug, utils::errors::ErrorStatus};
-use core::arch::global_asm;
+use crate::syscalls;
+use core::arch::asm;
 /// used sometimes for debugging syscalls
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -24,87 +24,54 @@ pub struct SyscallContext {
     pub rbx: u64,
     pub frame: InterruptFrame,
 }
-global_asm!(
-    "
-.section .rodata
-syscall_table:
-    .quad sysexit
-    .quad sysyield
-    .quad sysopen
-    .quad syswrite
-    .quad sysread
-    .quad sysclose
-    .quad syscreate
-    .quad syscreatedir
-    .quad sysdiriter_open
-    .quad sysdiriter_close
-    .quad sysdiriter_next
-    .quad syswait
-    .quad sysfstat
-    .quad sysspawn
-    .quad syschdir
-    .quad sysgetcwd
-    .quad deprecated_syscall
-    .quad deprecated_syscall
-    .quad syssbrk
-    .quad syspspawn
-    .quad sysshutdown
-    .quad sysreboot
-syscall_table_end:
-
-SYSCALL_TABLE_INFO:
-    .quad (syscall_table_end - syscall_table) / 8
-.section .text
-.global syscall_base
-
-syscall_base:
-    cmp rax, [SYSCALL_TABLE_INFO]
-    jge unsupported
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    call [syscall_table + rax * 8]
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    iretq
-unsupported:
-    mov rax, {0}
-    iretq
-", const ErrorStatus::InvaildSyscall as u64
-);
-
-extern "x86-interrupt" {
-    pub fn syscall_base();
-}
 
 #[no_mangle]
-extern "C" fn deprecated_syscall(syscall: usize) -> ErrorStatus {
-    debug!(
-        SyscallContext,
-        "deprecated syscall called with syscall {}", syscall
-    );
-    ErrorStatus::InvaildSyscall
+#[naked]
+pub extern "x86-interrupt" fn syscall_base() {
+    unsafe {
+        asm!(
+            "push rbx",
+            "push rcx",
+            "push rdx",
+            "push rsi",
+            "push rdi",
+            "push rbp",
+            "push r8",
+            "push r9",
+            "push r10",
+            "push r11",
+            "push r12",
+            "push r13",
+            "push r14",
+            "push r15",
+            "call syscall_base_mapper",
+            "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop r11",
+            "pop r10",
+            "pop r9",
+            "pop r8",
+            "pop rbp",
+            "pop rdi",
+            "pop rsi",
+            "pop rdx",
+            "pop rcx",
+            "pop rbx",
+            "iretq",
+            options(noreturn)
+        )
+    }
+}
+
+// FIXME: this is extremely unstable and fragile
+// FIXME: returns usize to make sure rax is used instead of ax
+#[no_mangle]
+pub extern "C" fn syscall_base_mapper(a: usize, b: usize, c: usize, d: usize, e: usize) -> usize {
+    let number: usize;
+    unsafe {
+        asm!("mov {}, rax", out(reg) number);
+    }
+    syscalls::syscall(number as u16, a, b, c, d, e) as usize
 }

@@ -3,14 +3,18 @@ pub mod expose;
 use core::fmt::Debug;
 
 use crate::{
-    debug, limine,
+    debug,
+    devices::{self, Device},
+    limine,
+    memory::{frame_allocator, paging::PAGE_SIZE},
     threading::expose::getcwd,
+    time,
     utils::{
         errors::{ErrorStatus, IntoErr},
         ustar::{self, TarArchiveIter},
+        HeaplessString,
     },
 };
-pub mod devicefs;
 pub mod procfs;
 pub mod ramfs;
 
@@ -25,59 +29,60 @@ use alloc::{
 use expose::DirEntry;
 use lazy_static::lazy_static;
 use spin::{Mutex, RwLock};
+
 pub type Path<'a> = &'a str;
+pub type FileName = HeaplessString<{ DirEntry::MAX_NAME_LEN }>;
 
 lazy_static! {
-    pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::new());
-}
-
-pub fn init() {
-    debug!(VFS, "initing ...");
-    let mut vfs = VFS_STRUCT.write();
-    // ramfs
-    let ramfs = RwLock::new(ramfs::RamFS::new());
-    vfs.mount(b"ram", ramfs).unwrap();
-    // devices
-    vfs.mount(b"dev", devicefs::DeviceFS::new()).unwrap();
-    // processes
-    vfs.mount(b"proc", Mutex::new(procfs::ProcFS::create()))
-        .unwrap();
-    // ramdisk
-    let mut ramdisk = limine::get_ramdisk();
-    let mut ramfs = RwLock::new(ramfs::RamFS::new());
-
-    vfs.unpack_tar(&mut ramfs, &mut ramdisk)
-        .expect("failed unpacking ramdisk archive");
-    vfs.mount(b"sys", ramfs).expect("failed mounting");
-
-    debug!(VFS, "done ...");
+    pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
 }
 
 /// Defines a file descriptor resource
 #[derive(Clone)]
 pub struct FileDescriptor {
     mountpoint: Arc<dyn FileSystem>,
-    pub node: Inode,
-    /// acts as a dir entry index for directories
-    /// acts as a byte index for files
-    pub read_pos: usize,
-    /// acts as a byte index for files
-    /// doesn't do anything for directories
-    pub write_pos: usize,
+    node: Inode,
 }
 
 impl FileDescriptor {
     fn new(mountpoint: Arc<dyn FileSystem>, node: Inode) -> Self {
-        Self {
-            mountpoint,
-            node,
-            read_pos: 0,
-            write_pos: 0,
-        }
+        Self { mountpoint, node }
     }
 
     pub fn close(&mut self) {
         self.node.close();
+    }
+
+    #[inline(always)]
+    pub fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
+        self.node.read(offset, buffer)
+    }
+
+    #[inline(always)]
+    pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
+        self.node.write(offset, buffer)
+    }
+
+    #[inline(always)]
+    pub fn truncate(&self, len: usize) -> FSResult<()> {
+        self.node.truncate(len)
+    }
+
+    #[inline(always)]
+    pub fn sync(&self) -> FSResult<()> {
+        self.node.sync()
+    }
+
+    #[inline(always)]
+    pub fn open_diriter(&self) -> FSResult<DirIterDescriptor> {
+        let inodes = self.node.open_diriter()?;
+        let fs = self.mountpoint.clone();
+        Ok(DirIterDescriptor::new(fs, inodes))
+    }
+
+    #[inline(always)]
+    pub fn kind(&self) -> InodeType {
+        self.node.kind()
     }
 }
 
@@ -98,7 +103,8 @@ pub enum FSError {
     InvaildPath,
     AlreadyExists,
     NotExecuteable,
-    ResourceBusy,
+    InvaildOffset,
+    InvaildName,
 }
 
 impl IntoErr for FSError {
@@ -112,7 +118,8 @@ impl IntoErr for FSError {
             Self::InvaildDrive => ErrorStatus::NoSuchAFileOrDirectory,
             Self::AlreadyExists => ErrorStatus::AlreadyExists,
             Self::NotExecuteable => ErrorStatus::NotExecutable,
-            Self::ResourceBusy => ErrorStatus::Busy,
+            Self::InvaildOffset => ErrorStatus::InvaildOffset,
+            Self::InvaildName => ErrorStatus::StrTooLong,
         }
     }
 }
@@ -125,7 +132,6 @@ pub enum InodeType {
     Device,
 }
 pub trait InodeOps: Send + Sync {
-    fn name(&self) -> String;
     /// gets an Inode from self
     fn get(&self, name: &str) -> FSResult<usize> {
         _ = name;
@@ -142,20 +148,20 @@ pub trait InodeOps: Send + Sync {
     fn size(&self) -> FSResult<usize> {
         Err(FSError::OperationNotSupported)
     }
-    /// attempts to read `count` bytes of node data if it is a file
-    /// panics if invaild `offset`
+    /// attempts to read `buffer.len` bytes of node data if it is a file
     /// returns the amount of bytes read
-    fn read(&self, buffer: &mut [u8], offset: usize, count: usize) -> FSResult<usize> {
+    /// offset in negative values acts the same as reading from at the end of the file + offset + 1
+    fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
         _ = buffer;
         _ = offset;
-        _ = count;
         Err(FSError::OperationNotSupported)
     }
     /// attempts to write `buffer.len` bytes from `buffer` into node data if it is a file starting
     /// from offset
     /// extends the nodes data and node size if `buffer.len` + `offset` is greater then node size
     /// returns the amount of bytes written
-    fn write(&self, buffer: &[u8], offset: usize) -> FSResult<usize> {
+    /// offset in negative values acts the same as writing to at the end of the file + offset + 1
+    fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
         _ = buffer;
         _ = offset;
         Err(FSError::OperationNotSupported)
@@ -163,7 +169,7 @@ pub trait InodeOps: Send + Sync {
 
     /// attempts to insert a node to self
     /// returns an FSError::NotADirectory if not a directory
-    fn insert(&self, name: &str, node: usize) -> FSResult<()> {
+    fn insert(&self, name: FileName, node: usize) -> FSResult<()> {
         _ = name;
         _ = node;
         Err(FSError::OperationNotSupported)
@@ -182,7 +188,7 @@ pub trait InodeOps: Send + Sync {
         self.kind() == InodeType::Directory
     }
 
-    fn open_diriter(&self) -> FSResult<Box<[usize]>> {
+    fn open_diriter(&self) -> FSResult<Box<[DirIterInodeItem]>> {
         Err(FSError::OperationNotSupported)
     }
 
@@ -196,25 +202,31 @@ pub trait InodeOps: Send + Sync {
     fn close(&self) {
         _ = self;
     }
+
+    /// syncs the inode reads and writes
+    fn sync(&self) -> FSResult<()> {
+        Ok(())
+    }
 }
 
 /// unknown inode type
 pub type Inode = Arc<dyn InodeOps>;
 /// inode type with a known type
 pub type InodeOf<T> = Arc<T>;
+pub type DirIterInodeItem = (HeaplessString<{ DirEntry::MAX_NAME_LEN }>, usize);
 
 #[derive(Debug, Clone)]
 pub struct DirIterDescriptor {
     fs: Arc<dyn FileSystem>,
-    inode_ids: Box<[usize]>,
+    inodes: Box<[DirIterInodeItem]>,
     index: usize,
 }
 
 impl DirIterDescriptor {
-    const fn new(fs: Arc<dyn FileSystem>, inode_ids: Box<[usize]>) -> Self {
+    const fn new(fs: Arc<dyn FileSystem>, inodes: Box<[DirIterInodeItem]>) -> Self {
         Self {
             fs,
-            inode_ids,
+            inodes,
             index: 0,
         }
     }
@@ -223,15 +235,15 @@ impl DirIterDescriptor {
         let index = self.index;
         self.index += 1;
 
-        if index >= self.inode_ids.len() {
+        if index >= self.inodes.len() {
             return None;
         }
 
-        let inode_id = self.inode_ids[index];
+        let (ref name, inode_id) = self.inodes[index];
         let inode = (*self.fs).get_inode(inode_id);
 
         match inode {
-            Some(inode) => Some(DirEntry::get_from_inode(inode)),
+            Some(inode) => Some(DirEntry::get_from_inode(inode, name)),
             None => self.next(),
         }
     }
@@ -321,41 +333,6 @@ pub trait FileSystem: Send + Sync {
         Ok((resloved, name))
     }
 
-    /// attempts to read `buffer.len` bytes from file_descriptor returns the actual count of the bytes read
-    /// shouldn't read directories!
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        let count = buffer.len();
-        let file_size = file_descriptor.node.size()?;
-
-        let count = if file_descriptor.read_pos + count > file_size {
-            file_size - file_descriptor.read_pos
-        } else {
-            count
-        };
-
-        file_descriptor
-            .node
-            .read(buffer, file_descriptor.read_pos, count)?;
-
-        file_descriptor.read_pos += count;
-        Ok(count)
-    }
-    /// attempts to write `buffer.len` bytes to `file_descriptor`
-    /// shouldn't write to directories!
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        if file_descriptor.write_pos == 0 {
-            file_descriptor.node.truncate(0)?;
-        }
-
-        file_descriptor
-            .node
-            .write(buffer, file_descriptor.write_pos)?;
-
-        file_descriptor.write_pos += buffer.len();
-
-        Ok(buffer.len())
-    }
-
     /// creates an empty file named `name` in `path`
     fn create(&self, path: Path) -> FSResult<()> {
         _ = path;
@@ -365,6 +342,13 @@ pub trait FileSystem: Send + Sync {
     /// creates an empty dir named `name` in `path`
     fn createdir(&self, path: Path) -> FSResult<()> {
         _ = path;
+        Err(FSError::OperationNotSupported)
+    }
+
+    /// mounts a device to `path`
+    fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+        _ = path;
+        _ = device;
         Err(FSError::OperationNotSupported)
     }
 }
@@ -390,6 +374,50 @@ impl VFS {
         Self {
             drivers: BTreeMap::new(),
         }
+    }
+
+    /// Creates a new VFS and mounts the default filesystems
+    pub fn create() -> Self {
+        let mut this = Self::new();
+
+        debug!(
+            VFS,
+            "Creating a new VFS with default initial filesystems ..."
+        );
+
+        let moment_memory_usage = frame_allocator::mapped_frames();
+        let the_now = time!();
+
+        // ramfs
+        let ramfs = RwLock::new(ramfs::RamFS::new());
+        this.mount(b"ram", ramfs).unwrap();
+        // devices
+        this.mount(b"dev", RwLock::new(ramfs::RamFS::new()))
+            .unwrap();
+        devices::init(&this);
+        // processes
+        this.mount(b"proc", Mutex::new(procfs::ProcFS::create()))
+            .unwrap();
+        // ramdisk
+        let mut ramdisk = limine::get_ramdisk();
+        let mut ramfs = RwLock::new(ramfs::RamFS::new());
+
+        this.unpack_tar(&mut ramfs, &mut ramdisk)
+            .expect("failed unpacking ramdisk archive");
+        this.mount(b"sys", ramfs).expect("failed mounting");
+
+        let elapsed = time!() - the_now;
+        let used_memory = frame_allocator::mapped_frames() - moment_memory_usage;
+        let total_memory_used = frame_allocator::mapped_frames();
+
+        debug!(
+            VFS,
+            "done in ({}ms) ({}KiB mapped, {}KiB total) ...",
+            elapsed,
+            used_memory * PAGE_SIZE / 1024,
+            total_memory_used * PAGE_SIZE / 1024
+        );
+        this
     }
     /// mounts a file system as a drive
     /// returns Err(()) if not enough memory or there is an already mounted driver with that
@@ -475,7 +503,7 @@ impl VFS {
                     fs.create(path)?;
 
                     let node = fs.reslove_path(path)?;
-                    node.write(inode.data(), 0)?;
+                    node.write(0, inode.data())?;
                     node.close();
                 }
 
@@ -493,13 +521,6 @@ impl VFS {
         let node = mountpoint.reslove_path(&path)?;
         node.opened();
         Ok(FileDescriptor::new(mountpoint.clone(), node))
-    }
-
-    fn open_diriter(&self, file_descriptor: &mut FileDescriptor) -> FSResult<DirIterDescriptor> {
-        let inodes = file_descriptor.node.open_diriter()?;
-        let fs = file_descriptor.mountpoint.clone();
-
-        Ok(DirIterDescriptor::new(fs, inodes))
     }
 }
 
@@ -529,20 +550,6 @@ impl FileSystem for VFS {
         FSResult::Err(FSError::OperationNotSupported)
     }
 
-    fn read(&self, file_descriptor: &mut FileDescriptor, buffer: &mut [u8]) -> FSResult<usize> {
-        file_descriptor
-            .mountpoint
-            .clone()
-            .read(file_descriptor, buffer)
-    }
-
-    fn write(&self, file_descriptor: &mut FileDescriptor, buffer: &[u8]) -> FSResult<usize> {
-        file_descriptor
-            .mountpoint
-            .clone()
-            .write(file_descriptor, buffer)
-    }
-
     fn create(&self, path: Path) -> FSResult<()> {
         let (mountpoint, path) = self.get_from_path(path)?;
 
@@ -557,5 +564,11 @@ impl FileSystem for VFS {
         let (mountpoint, path) = self.get_from_path(path)?;
 
         mountpoint.createdir(&path)
+    }
+
+    fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+        let (mountpoint, path) = self.get_from_path(path)?;
+
+        mountpoint.mount_device(&path, device)
     }
 }

@@ -3,7 +3,7 @@ use lazy_static::lazy_static;
 use spin::RwLock;
 
 use crate::{
-    limine,
+    debug, limine,
     memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR},
     utils::display::RGB,
 };
@@ -20,7 +20,7 @@ pub struct FrameBufferInfo {
     /// number of pixels between start of a line and another
     pub stride: usize,
     pub bytes_per_pixel: usize,
-    pub pixel_format: PixelFormat,
+    pub _pixel_format: PixelFormat,
 }
 
 pub struct FrameBuffer {
@@ -33,8 +33,12 @@ pub struct FrameBuffer {
 impl FrameBuffer {
     pub fn new() -> Self {
         let (video_buffer, info) = limine::get_framebuffer();
-        let mut buffer = Vec::with_capacity_in(video_buffer.len(), &*GLOBAL_PAGE_ALLOCATOR);
-        buffer.resize(video_buffer.len(), 0);
+        let mut buffer = Vec::with_capacity_in(video_buffer.len() * 4, &*GLOBAL_PAGE_ALLOCATOR);
+        unsafe {
+            buffer.set_len(video_buffer.len() * 4);
+        }
+        debug!(FrameBuffer, "created ({}KiB)", buffer.len() / 1024);
+
         Self {
             info,
             buffer_display_index: 0,
@@ -43,19 +47,10 @@ impl FrameBuffer {
         }
     }
 
-    /// reserves `size` additional bytes to the buffer
-    pub fn increase_buffer(&mut self, size: usize) {
-        self.buffer.reserve(size);
-        self.buffer.resize(self.buffer.len() + size, 0);
-    }
-
     pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {
         let index = x + y * self.info.stride;
-        let mut bytes = color.bytes();
+        let bytes = color.bytes();
 
-        if self.info.pixel_format == PixelFormat::Rgb {
-            bytes.reverse();
-        }
         self.buffer
             [index * self.info.bytes_per_pixel..index * self.info.bytes_per_pixel + bytes.len()]
             .copy_from_slice(&bytes);
@@ -120,10 +115,29 @@ impl FrameBuffer {
         self.buffer_display_index = pixel * self.info.bytes_per_pixel;
     }
 
-    #[inline(always)]
-    /// clears the framebuffer
-    pub fn clear(&mut self) {
-        self.buffer.fill(0);
+    fn buffer_u32(&mut self) -> &mut [u32] {
+        let ptr = self.buffer.as_mut_ptr() as *mut u32;
+        let len = self.buffer.len() / 4;
+        unsafe { core::slice::from_raw_parts_mut(ptr, len) }
+    }
+
+    /// FIXME: assumes that [`self.info.bytes_per_pixel`] == 4
+    pub fn fill(&mut self, color: RGB) {
+        assert_eq!(self.info.bytes_per_pixel, 4);
+        let color: u32 = color.into();
+        let buffer = self.buffer_u32();
+
+        buffer[0] = color;
+
+        let mut filled = 1;
+        while filled < buffer.len() {
+            let reamining = buffer.len() - filled;
+            let chunk_size = filled.min(reamining);
+
+            let (left, right) = buffer.split_at_mut(filled);
+            right[..chunk_size].copy_from_slice(&left[..chunk_size]);
+            filled += chunk_size;
+        }
     }
 }
 

@@ -3,9 +3,9 @@ use core::{arch::asm, fmt::Display};
 use lazy_static::lazy_static;
 
 use crate::{
-    debug, hddm,
+    debug,
     limine::{self, MEMORY_END},
-    memory::frame_allocator::{self, Frame},
+    memory::frame_allocator::{self},
 };
 
 use super::paging::{MapToError, Page, PageTable};
@@ -80,7 +80,7 @@ impl<const N: usize> PageTableBindings<N> {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
-            let virt_start_addr = frame.start_address | hddm();
+            let virt_start_addr = frame.virt_addr();
             let table = unsafe { &mut *(virt_start_addr as *mut PageTable) };
 
             table.zeroize();
@@ -88,7 +88,7 @@ impl<const N: usize> PageTableBindings<N> {
         };
 
         unsafe {
-            self.apply_bindings(super::current_root_table(), table);
+            self.apply_bindings(&mut super::current_root_table(), table);
         }
         Ok(table)
     }
@@ -148,7 +148,6 @@ pub fn init_page_table() {
     let table = create_root_page_table().unwrap();
     set_current_page_table(table);
     // de-allocating the previous root table
-    let virt_addr = previous_table as *mut _ as usize;
-    let frame = Frame::containing_address(virt_addr - limine::get_phy_offset());
+    let frame = previous_table.frame();
     frame_allocator::deallocate_frame(frame)
 }

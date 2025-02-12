@@ -1,9 +1,10 @@
 const std_c = @import("std-c");
 const std = @import("std");
 const sys = std_c.sys;
-
+const stdin = std_c.stdin;
 const print = std_c.print;
-const StdinReader = std_c.StdinReader;
+const stdin_reader = std_c.stdin.reader();
+
 pub const allocator = std_c.heap.c_allocator;
 
 const Lexer = @import("Lexer.zig");
@@ -21,13 +22,14 @@ pub fn prompt() Error!void {
 
     const cwd_len = try sys.io.zgetcwd(cwd_buffer);
 
-    print("\x1B[38;2;255;0;193m{s}\x1B[0m ", .{cwd_buffer[0..cwd_len]});
+    print("\x1B[35m{s}\x1B[0m ", .{cwd_buffer[0..cwd_len]});
 
     if (ret != 0) {
-        print("\x1B[38;2;255;0;0m[{}]\x1B[0m ", .{ret});
+        print("\x1B[91m[{}]\x1B[0m ", .{ret});
     }
 
     print("# ", .{});
+    std_c.stdio.stdout.flush() catch unreachable;
 }
 
 pub fn run(line: []const u8) Error!void {
@@ -73,7 +75,7 @@ pub fn main() Error!void {
 
     while (true) {
         try prompt();
-        const line = try StdinReader.readUntilDelimiterAlloc(
+        const line = try stdin_reader.readUntilDelimiterAlloc(
             allocator,
             '\n',
             std.math.maxInt(usize),

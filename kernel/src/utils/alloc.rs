@@ -1,83 +1,60 @@
+use core::fmt::Write;
 use core::marker::PhantomData;
-use core::ops::RangeBounds;
+use core::ops::{Deref, DerefMut, RangeBounds};
 use core::ptr::NonNull;
 use core::str;
 
 use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
-use crate::memory::{align_up, paging::PAGE_SIZE};
 use alloc::boxed::Box;
 use alloc::str::pattern::{Pattern, ReverseSearcher};
 use alloc::vec::{Drain, Vec};
 
-pub struct PageVec<T> {
-    inner: Vec<T, PageAlloc>,
-}
+pub struct PageVec<T>(Vec<T, PageAlloc>);
 
 impl<T> PageVec<T> {
     pub fn new() -> Self {
-        Self {
-            inner: Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR),
-        }
+        Self(Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR))
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            inner: Vec::with_capacity_in(capacity, &*GLOBAL_PAGE_ALLOCATOR),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.inner.clear();
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    pub fn reserve(&mut self, additional: usize) {
-        let additional = align_up(additional, PAGE_SIZE / core::mem::size_of::<T>());
-        self.inner.reserve(additional);
-    }
-
-    pub fn extend_from_slice(&mut self, other: &[T])
-    where
-        T: Clone,
-    {
-        if self.inner.capacity() == self.inner.len() {
-            self.reserve(other.len());
-        }
-        self.inner.extend_from_slice(other);
-    }
-
-    pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Drain<'_, T, PageAlloc> {
-        self.inner.drain(range)
+        Self(Vec::with_capacity_in(capacity, &*GLOBAL_PAGE_ALLOCATOR))
     }
 }
 
-impl<T> core::ops::Deref for PageVec<T> {
-    type Target = [T];
+impl<T> Deref for PageVec<T> {
+    type Target = Vec<T, PageAlloc>;
 
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        &self.0
+    }
+}
+
+impl<T> DerefMut for PageVec<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> AsMut<Vec<T, PageAlloc>> for PageVec<T> {
+    fn as_mut(&mut self) -> &mut Vec<T, PageAlloc> {
+        &mut self.0
+    }
+}
+
+impl<T> AsRef<Vec<T, PageAlloc>> for PageVec<T> {
+    fn as_ref(&self) -> &Vec<T, PageAlloc> {
+        &self.0
     }
 }
 
 impl<T> From<Vec<T, PageAlloc>> for PageVec<T> {
     fn from(v: Vec<T, PageAlloc>) -> Self {
-        Self { inner: v }
+        Self(v)
     }
 }
 
 pub struct PageString {
-    pub inner: PageVec<u8>,
+    inner: PageVec<u8>,
 }
 
 impl PageString {
@@ -106,12 +83,11 @@ impl PageString {
 
     pub fn pop(&mut self) -> Option<char> {
         let char = self.as_str().chars().next_back()?;
-        self.inner.truncate(self.len() - char.len_utf8());
-        Some(char)
-    }
 
-    pub fn clear(&mut self) {
-        self.inner.clear();
+        let len = self.len();
+        self.inner.truncate(len - char.len_utf8());
+
+        Some(char)
     }
 
     pub fn len(&self) -> usize {
@@ -120,6 +96,10 @@ impl PageString {
 
     pub fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.inner) }
+    }
+
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 
     pub fn ends_with<P>(&self, other: P) -> bool
@@ -132,6 +112,10 @@ impl PageString {
 
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Drain<'_, u8, PageAlloc> {
+        self.inner.drain(range)
     }
 }
 
@@ -149,6 +133,19 @@ impl serde_json::io::Write for PageVec<u8> {
         Ok(())
     }
 }
+
+impl Write for PageString {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.push_str(s);
+        Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> core::fmt::Result {
+        self.push_char(c);
+        Ok(())
+    }
+}
+
 impl serde_json::io::Write for PageString {
     fn write(&mut self, buf: &[u8]) -> serde_json::io::Result<usize> {
         self.inner.write(buf)
@@ -160,6 +157,20 @@ impl serde_json::io::Write for PageString {
 
     fn write_all(&mut self, buf: &[u8]) -> serde_json::io::Result<()> {
         self.inner.write_all(buf)
+    }
+}
+
+impl Deref for PageString {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::str::from_utf8_unchecked(&self.inner) }
+    }
+}
+
+impl DerefMut for PageString {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { core::str::from_utf8_unchecked_mut(&mut self.inner) }
     }
 }
 
@@ -315,13 +326,8 @@ impl<T> LinkedList<T> {
         unsafe { Some(&mut (*last.as_ptr()).inner) }
     }
 
-    pub fn current_mut(&mut self) -> Option<&mut T> {
-        let current = self.current?;
-        unsafe { Some(&mut (*current.as_ptr()).inner) }
-    }
-
     /// returns an iterator that 'continues' the list which means calling `next` on the iterator
-    /// would be the same as calling `next_wrap` on the list, this iterator muttates the list...
+    /// would advance then return the current element, it currently wraps around the list
     pub fn continue_iter(&mut self) -> LinkedListContinue<T> {
         LinkedListContinue { list: self }
     }
@@ -338,23 +344,6 @@ impl<T> LinkedList<T> {
         };
 
         LinkedListCloneIter {
-            list,
-            marker: PhantomData,
-        }
-    }
-
-    /// returns an iterator that acts like a clone of the list
-    /// iterating over the list will yield the same values as iterating over the original list
-    pub fn clone_iter_mut(&mut self) -> LinkedListCloneIterMut<T> {
-        let list = Self {
-            head: self.head,
-            tail: self.tail,
-            current: self.head,
-            prev: self.prev,
-            len: self.len,
-        };
-
-        LinkedListCloneIterMut {
             list,
             marker: PhantomData,
         }
@@ -413,8 +402,12 @@ pub struct LinkedListContinue<'a, T: 'a> {
 
 impl<'a, T> Iterator for LinkedListContinue<'a, T> {
     type Item = &'a mut T;
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.list.next_wrap();
-        unsafe { Some(&mut (*self.list.current?.as_ptr()).inner) }
+        unsafe {
+            let current = &mut (*self.list.current?.as_ptr()).inner;
+            Some(current)
+        }
     }
 }

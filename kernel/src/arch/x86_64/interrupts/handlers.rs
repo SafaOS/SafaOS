@@ -1,3 +1,4 @@
+use super::pit;
 use core::arch::asm;
 
 use super::super::syscalls::syscall_base;
@@ -49,7 +50,9 @@ lazy_static! {
         (14, page_fault_handler, ATTR_TRAP),
         (0x20, threading::context_switch_stub, ATTR_INT, 1),
         (0x21, keyboard_interrupt_handler, ATTR_INT),
-        (0x80, syscall_base, ATTR_INT | ATTR_RING3)
+        (0x22, pit::pit_handler, ATTR_INT),
+        (0x80, syscall_base, ATTR_INT | ATTR_RING3),
+        (0x81, do_nothing, ATTR_INT)
     );
 }
 
@@ -85,7 +88,7 @@ extern "x86-interrupt" fn general_protection_fault_handler(frame: TrapFrame) {
 #[no_mangle]
 extern "x86-interrupt" fn page_fault_handler(frame: TrapFrame) {
     let cr2: u64;
-    unsafe { asm!("mov cr2, {}", out(reg) cr2) }
+    unsafe { asm!("mov {}, cr2", out(reg) cr2) }
 
     panic!("---- Page Fault ----\naddress: {:#x}\n{}", cr2, frame)
 }
@@ -105,5 +108,10 @@ pub fn handle_ps2_keyboard() {
 #[no_mangle]
 pub extern "x86-interrupt" fn keyboard_interrupt_handler() {
     handle_ps2_keyboard();
+    send_eoi();
+}
+
+#[no_mangle]
+pub extern "x86-interrupt" fn do_nothing() {
     send_eoi();
 }

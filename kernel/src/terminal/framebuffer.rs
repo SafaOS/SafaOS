@@ -8,7 +8,6 @@ use crate::utils::{
     ansi::{self, AnsiSequence},
     either::Either,
 };
-use lazy_static::lazy_static;
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
 };
@@ -17,11 +16,13 @@ use spin::RwLock;
 use super::TTYInterface;
 use crate::{
     drivers::framebuffer::{FrameBuffer, FRAMEBUFFER_DRIVER},
-    utils::{display::RGB, Locked},
+    utils::display::RGB,
 };
 
 const DEFAULT_FG_COLOR: RGB = RGB::WHITE;
 const DEFAULT_BG_COLOR: RGB = RGB::BLACK;
+pub const DEFAULT_CURSOR_X: usize = 1;
+pub const DEFAULT_CURSOR_Y: usize = 1;
 
 pub struct FrameBufferTTY<'a> {
     framebuffer: &'a RwLock<FrameBuffer>,
@@ -34,16 +35,14 @@ pub struct FrameBufferTTY<'a> {
 }
 
 impl FrameBufferTTY<'_> {
-    fn new() -> Self {
-        let size_pixels = FRAMEBUFFER_DRIVER.read().width() * FRAMEBUFFER_DRIVER.read().height();
-        let bytes_per_pixel = FRAMEBUFFER_DRIVER.read().info.bytes_per_pixel;
-        let size = size_pixels * bytes_per_pixel;
+    pub fn new() -> Self {
+        let framebuffer = &FRAMEBUFFER_DRIVER;
+        framebuffer.write().fill(DEFAULT_BG_COLOR);
 
-        FRAMEBUFFER_DRIVER.write().increase_buffer(size * 3);
         Self {
-            framebuffer: &FRAMEBUFFER_DRIVER,
-            cursor_x: 0,
-            cursor_y: 0,
+            framebuffer,
+            cursor_x: DEFAULT_CURSOR_X,
+            cursor_y: DEFAULT_CURSOR_Y,
             fg_color: DEFAULT_FG_COLOR,
             bg_color: DEFAULT_BG_COLOR,
         }
@@ -74,11 +73,13 @@ impl FrameBufferTTY<'_> {
         let height = framebuffer.height();
         drop(framebuffer);
 
-        if self.get_x() + raster.width() > stride {
+        if self.get_x() + raster.width() > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2) {
             self.newline();
         }
 
-        if self.get_y() + raster.height() >= cursor / stride + height {
+        if self.get_y() + raster.height()
+            >= (cursor / stride + height) - ((DEFAULT_CURSOR_Y * RASTER_HEIGHT.val()) * 2)
+        {
             self.scroll_down();
         }
 
@@ -97,10 +98,10 @@ impl FrameBufferTTY<'_> {
     }
 
     fn remove_char(&mut self) {
-        if self.cursor_x == 0 && self.cursor_y > 0 {
+        if self.cursor_x == DEFAULT_CURSOR_X && self.cursor_y > DEFAULT_CURSOR_Y {
             self.cursor_x = (self.framebuffer.read().width() / RASTER_WIDTH) - 1;
             self.cursor_y -= 1;
-        } else if self.cursor_x > 0 {
+        } else if self.cursor_x > DEFAULT_CURSOR_X {
             self.cursor_x -= 1;
         }
 
@@ -109,7 +110,7 @@ impl FrameBufferTTY<'_> {
 
         for row in 0..RASTER_HEIGHT.val() {
             for col in 0..RASTER_WIDTH {
-                framebuffer.set_pixel(x + col, y + row, RGB::new(0, 0, 0));
+                framebuffer.set_pixel(x + col, y + row, DEFAULT_BG_COLOR);
             }
         }
     }
@@ -122,7 +123,7 @@ impl FrameBufferTTY<'_> {
         let raster = self.raster(c);
         match c {
             '\n' => self.newline(),
-            '\r' => self.cursor_x = 0,
+            '\r' => self.cursor_x = DEFAULT_CURSOR_X,
             _ => self.draw_raster(raster, self.fg_color, self.bg_color),
         }
     }
@@ -250,7 +251,7 @@ impl Write for FrameBufferTTY<'_> {
 
 impl TTYInterface for FrameBufferTTY<'_> {
     fn newline(&mut self) {
-        self.cursor_x = 0;
+        self.cursor_x = DEFAULT_CURSOR_X;
         self.cursor_y += 1;
     }
 
@@ -283,7 +284,7 @@ impl TTYInterface for FrameBufferTTY<'_> {
 
     fn clear(&mut self) {
         let stride = self.framebuffer.read().info.stride;
-        self.framebuffer.write().clear();
+        self.framebuffer.write().fill(self.bg_color);
 
         let old_cursor = self.framebuffer.read().get_cursor();
         self.framebuffer.write().set_cursor(0);
@@ -293,9 +294,4 @@ impl TTYInterface for FrameBufferTTY<'_> {
 
         self.sync_pixels();
     }
-}
-
-lazy_static! {
-    pub static ref FRAMEBUFFER_TTY_INTERFACE: Locked<FrameBufferTTY<'static>> =
-        Locked::new(FrameBufferTTY::new());
 }

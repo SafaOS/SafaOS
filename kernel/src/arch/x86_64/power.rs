@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::{println, serial};
+use crate::{arch::x86_64::gdt, println, serial};
 
 use super::{
     acpi::{self, FADT},
@@ -38,6 +38,7 @@ pub fn reboot() {
 
     // force-reboot because acpi sucks!
     let x = 0;
+    unsafe { asm!("mov al, {}\nmov ss, ax", in(reg_byte) gdt::KERNEL_DATA_SEG) }
     unsafe { asm!("lidt [{}]", in(reg) &x) };
     unsafe { asm!("int3") };
 
