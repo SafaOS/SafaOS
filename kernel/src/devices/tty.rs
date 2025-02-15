@@ -1,14 +1,23 @@
 use core::{fmt::Write, str};
 
+use int_enum::IntEnum;
 use spin::RwLock;
 
 use crate::{
-    drivers::vfs::FSResult,
-    terminal::{TTYInterface, TTY},
+    drivers::vfs::{CtlArgs, FSError, FSResult},
+    serial,
+    terminal::{TTYInterface, TTYSettings, TTY},
     threading::expose::thread_yeild,
 };
 
 use super::CharDevice;
+
+#[derive(Debug, IntEnum)]
+#[repr(u16)]
+pub enum TTYCtlCmd {
+    GetFlags = 0,
+    SetFlags = 1,
+}
 
 impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
     fn name(&self) -> &'static str {
@@ -20,7 +29,11 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
             let lock = self.try_write();
 
             if let Some(mut tty) = lock {
-                if tty.stdin_buffer.ends_with('\n') {
+                if (tty.stdin_buffer.ends_with('\n')
+                    && tty.settings.contains(TTYSettings::CANONICAL_MODE))
+                    || (!tty.stdin_buffer.is_empty()
+                        && !tty.settings.contains(TTYSettings::CANONICAL_MODE))
+                {
                     tty.disable_input();
                     let count = tty.stdin_buffer.len().min(buffer.len());
                     buffer[..count].copy_from_slice(&tty.stdin_buffer.as_bytes()[..count]);
@@ -51,6 +64,26 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
         }
     }
 
+    fn ctl(&self, cmd: u16, mut args: CtlArgs) -> FSResult<()> {
+        let cmd = TTYCtlCmd::try_from(cmd).map_err(|_| FSError::InvaildCtlCmd)?;
+        match cmd {
+            TTYCtlCmd::GetFlags => {
+                let flags = args.get_ref_to::<TTYSettings>()?;
+                serial!("TTY: GetFlags attempted\n");
+                *flags = self.read().settings;
+                serial!("TTY: GetFlags: {:?}\n", flags);
+                Ok(())
+            }
+            TTYCtlCmd::SetFlags => {
+                let flags: TTYSettings =
+                    TTYSettings::from_bits(args.get_ty()?).ok_or(FSError::InvaildCtlArg)?;
+                serial!("TTY: SetFlags attempted\n");
+                self.write().settings = flags;
+                serial!("TTY: SetFlags: {:?}\n", flags);
+                Ok(())
+            }
+        }
+    }
     fn sync(&self) -> FSResult<()> {
         loop {
             match self.try_write() {

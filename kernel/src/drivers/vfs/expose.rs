@@ -6,8 +6,8 @@ use crate::{
 };
 
 use super::{
-    DirIterDescriptor, FSError, FSResult, FileDescriptor, FileSystem, Inode, InodeType, Path,
-    VFS_STRUCT,
+    CtlArgs, DirIterDescriptor, FSError, FSResult, FileDescriptor, FileSystem, Inode, InodeType,
+    Path, VFS_STRUCT,
 };
 
 #[derive(Debug)]
@@ -76,6 +76,14 @@ impl File {
 
     pub fn kind(&self) -> InodeType {
         self.with_fd(|fd| fd.kind())
+    }
+
+    pub fn ctl<'a>(&'a self, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
+        self.with_fd(|fd| fd.ctl(cmd, args))
+    }
+
+    pub fn size(&self) -> usize {
+        self.with_fd(|fd| fd.size())
     }
 }
 

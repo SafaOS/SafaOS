@@ -9,14 +9,14 @@ use super::keyboard::keys::{Key, KeyCode, KeyFlags};
 #[derive(Clone, Copy)]
 pub struct MappingEntry {
     pub flags: KeyFlags,
-    pub result: char,
+    pub result: &'static str,
 }
 
 impl MappingEntry {
     pub const fn default() -> Self {
         MappingEntry {
             flags: KeyFlags::empty(),
-            result: '\0',
+            result: "",
         }
     }
 }
@@ -37,7 +37,7 @@ impl KeyMapping {
 
 // beatuiful macro to create Mappings
 macro_rules! create_mapping {
-    ($({ $keycode: path,  $({ $($keyflag: path),* })|* } => $char: literal ),* $(,)?) => {
+    ($({ $keycode: path,  $({ $($keyflag: path),* })|* } => $char: expr ),* $(,)?) => {
         {
 
         let mut keymapping: KeyMapping = KeyMapping {keys: [[MappingEntry::default(); 16]; KeyCode::LastKey as usize]};
@@ -47,14 +47,14 @@ macro_rules! create_mapping {
 
             $(
                 while i < mappings.len() {
-                    if mappings[i].result == '\0' {
+                    if mappings[i].result.is_empty() {
                         break;
                     }
                     i+=1;
                 }
                 mappings[i] = MappingEntry {
                     flags: KeyFlags::from_bits_retain(0 $(| $keyflag.bits())*),
-                    result: $char
+                    result: ($char),
                 };
             )*
         )*
@@ -67,207 +67,211 @@ macro_rules! create_mapping {
 // remmber ONLY 16 mapping allowed for each keycode, each should have different flags
 pub const DEFAULT_MAPPING: KeyMapping = create_mapping!(
     // Key Q mappings
-    { KeyCode::KeyQ, {} } => 'q',
-    { KeyCode::KeyQ, { KeyFlags::CAPS_LOCK } | { KeyFlags::SHIFT } } => 'Q',
+    { KeyCode::KeyQ, {} } => "q",
+    { KeyCode::KeyQ, { KeyFlags::CAPS_LOCK } | { KeyFlags::SHIFT } } => "Q",
 
     // Key W mappings
-    { KeyCode::KeyW, {} } => 'w',
-    { KeyCode::KeyW, { KeyFlags::CAPS_LOCK } } => 'W',
+    { KeyCode::KeyW, {} } => "w",
+    { KeyCode::KeyW, { KeyFlags::CAPS_LOCK } } => "W",
 
     // Key E mappings
-    { KeyCode::KeyE, {} } => 'e',
-    { KeyCode::KeyE, { KeyFlags::CAPS_LOCK } } => 'E',
+    { KeyCode::KeyE, {} } => "e",
+    { KeyCode::KeyE, { KeyFlags::CAPS_LOCK } } => "E",
 
     // Key R mappings
-    { KeyCode::KeyR, {} } => 'r',
-    { KeyCode::KeyR, { KeyFlags::CAPS_LOCK } } => 'R',
+    { KeyCode::KeyR, {} } => "r",
+    { KeyCode::KeyR, { KeyFlags::CAPS_LOCK } } => "R",
 
     // Key T mappings
-    { KeyCode::KeyT, {} } => 't',
-    { KeyCode::KeyT, { KeyFlags::CAPS_LOCK } } => 'T',
+    { KeyCode::KeyT, {} } => "t",
+    { KeyCode::KeyT, { KeyFlags::CAPS_LOCK } } => "T",
 
     // Key Y mappings
-    { KeyCode::KeyY, {} } => 'y',
-    { KeyCode::KeyY, { KeyFlags::CAPS_LOCK } } => 'Y',
+    { KeyCode::KeyY, {} } => "y",
+    { KeyCode::KeyY, { KeyFlags::CAPS_LOCK } } => "Y",
 
     // Key U mappings
-    { KeyCode::KeyU, {} } => 'u',
-    { KeyCode::KeyU, { KeyFlags::CAPS_LOCK } } => 'U',
+    { KeyCode::KeyU, {} } => "u",
+    { KeyCode::KeyU, { KeyFlags::CAPS_LOCK } } => "U",
 
     // Key I mappings
-    { KeyCode::KeyI, {} } => 'i',
-    { KeyCode::KeyI, { KeyFlags::CAPS_LOCK } } => 'I',
+    { KeyCode::KeyI, {} } => "i",
+    { KeyCode::KeyI, { KeyFlags::CAPS_LOCK } } => "I",
 
     // Key O mappings
-    { KeyCode::KeyO, {} } => 'o',
-    { KeyCode::KeyO, { KeyFlags::CAPS_LOCK } } => 'O',
+    { KeyCode::KeyO, {} } => "o",
+    { KeyCode::KeyO, { KeyFlags::CAPS_LOCK } } => "O",
 
     // Key P mappings
-    { KeyCode::KeyP, {} } => 'p',
-    { KeyCode::KeyP, { KeyFlags::CAPS_LOCK } } => 'P',
+    { KeyCode::KeyP, {} } => "p",
+    { KeyCode::KeyP, { KeyFlags::CAPS_LOCK } } => "P",
 
     // Key A mappings
-    { KeyCode::KeyA, {} } => 'a',
-    { KeyCode::KeyA, { KeyFlags::CAPS_LOCK } } => 'A',
+    { KeyCode::KeyA, {} } => "a",
+    { KeyCode::KeyA, { KeyFlags::CAPS_LOCK } } => "A",
 
     // Key S mappings
-    { KeyCode::KeyS, {} } => 's',
-    { KeyCode::KeyS, { KeyFlags::CAPS_LOCK } } => 'S',
+    { KeyCode::KeyS, {} } => "s",
+    { KeyCode::KeyS, { KeyFlags::CAPS_LOCK } } => "S",
 
     // Key D mappings
-    { KeyCode::KeyD, {} } => 'd',
-    { KeyCode::KeyD, { KeyFlags::CAPS_LOCK } } => 'D',
+    { KeyCode::KeyD, {} } => "d",
+    { KeyCode::KeyD, { KeyFlags::CAPS_LOCK } } => "D",
 
     // Key F mappings
-    { KeyCode::KeyF, {} } => 'f',
-    { KeyCode::KeyF, { KeyFlags::CAPS_LOCK } } => 'F',
+    { KeyCode::KeyF, {} } => "f",
+    { KeyCode::KeyF, { KeyFlags::CAPS_LOCK } } => "F",
 
     // Key G mappings
-    { KeyCode::KeyG, {} } => 'g',
-    { KeyCode::KeyG, { KeyFlags::CAPS_LOCK } } => 'G',
+    { KeyCode::KeyG, {} } => "g",
+    { KeyCode::KeyG, { KeyFlags::CAPS_LOCK } } => "G",
 
     // Key H mappings
-    { KeyCode::KeyH, {} } => 'h',
-    { KeyCode::KeyH, { KeyFlags::CAPS_LOCK } } => 'H',
+    { KeyCode::KeyH, {} } => "h",
+    { KeyCode::KeyH, { KeyFlags::CAPS_LOCK } } => "H",
 
     // Key J mappings
-    { KeyCode::KeyJ, {} } => 'j',
-    { KeyCode::KeyJ, { KeyFlags::CAPS_LOCK } } => 'J',
+    { KeyCode::KeyJ, {} } => "j",
+    { KeyCode::KeyJ, { KeyFlags::CAPS_LOCK } } => "J",
 
     // Key K mappings
-    { KeyCode::KeyK, {} } => 'k',
-    { KeyCode::KeyK, { KeyFlags::CAPS_LOCK } } => 'K',
+    { KeyCode::KeyK, {} } => "k",
+    { KeyCode::KeyK, { KeyFlags::CAPS_LOCK } } => "K",
 
     // Key L mappings
-    { KeyCode::KeyL, {} } => 'l',
-    { KeyCode::KeyL, { KeyFlags::CAPS_LOCK } } => 'L',
+    { KeyCode::KeyL, {} } => "l",
+    { KeyCode::KeyL, { KeyFlags::CAPS_LOCK } } => "L",
 
     // Key Z mappings
-    { KeyCode::KeyZ, {} } => 'z',
-    { KeyCode::KeyZ, { KeyFlags::CAPS_LOCK } } => 'Z',
+    { KeyCode::KeyZ, {} } => "z",
+    { KeyCode::KeyZ, { KeyFlags::CAPS_LOCK } } => "Z",
 
     // Key X mappings
-    { KeyCode::KeyX, {} } => 'x',
-    { KeyCode::KeyX, { KeyFlags::CAPS_LOCK } } => 'X',
+    { KeyCode::KeyX, {} } => "x",
+    { KeyCode::KeyX, { KeyFlags::CAPS_LOCK } } => "X",
 
     // Key C mappings
-    { KeyCode::KeyC, {} } => 'c',
-    { KeyCode::KeyC, { KeyFlags::CAPS_LOCK } } => 'C',
+    { KeyCode::KeyC, {} } => "c",
+    { KeyCode::KeyC, { KeyFlags::CAPS_LOCK } } => "C",
 
     // Key V mappings
-    { KeyCode::KeyV, {} } => 'v',
-    { KeyCode::KeyV, { KeyFlags::CAPS_LOCK } } => 'V',
+    { KeyCode::KeyV, {} } => "v",
+    { KeyCode::KeyV, { KeyFlags::CAPS_LOCK } } => "V",
 
     // Key B mappings
-    { KeyCode::KeyB, {} } => 'b',
-    { KeyCode::KeyB, { KeyFlags::CAPS_LOCK } } => 'B',
+    { KeyCode::KeyB, {} } => "b",
+    { KeyCode::KeyB, { KeyFlags::CAPS_LOCK } } => "B",
 
     // Key N mappings
-    { KeyCode::KeyN, {} } => 'n',
-    { KeyCode::KeyN, { KeyFlags::CAPS_LOCK } } => 'N',
+    { KeyCode::KeyN, {} } => "n",
+    { KeyCode::KeyN, { KeyFlags::CAPS_LOCK } } => "N",
 
     // Key M mappings
-    { KeyCode::KeyM, {} } => 'm',
-    { KeyCode::KeyM, { KeyFlags::CAPS_LOCK } } => 'M',
+    { KeyCode::KeyM, {} } => "m",
+    { KeyCode::KeyM, { KeyFlags::CAPS_LOCK } } => "M",
 
     // Key 1 mappings
-    { KeyCode::Key1, {} } => '1',
-    { KeyCode::Key1, { KeyFlags::SHIFT } } => '!',
-    { KeyCode::Key1, { KeyFlags::ALT } } => '¡',
+    { KeyCode::Key1, {} } => "1",
+    { KeyCode::Key1, { KeyFlags::SHIFT } } => "!",
+    { KeyCode::Key1, { KeyFlags::ALT } } => "¡",
 
     // Key 2 mappings
-    { KeyCode::Key2, {} } => '2',
-    { KeyCode::Key2, { KeyFlags::SHIFT } } => '@',
-    { KeyCode::Key2, { KeyFlags::ALT } } => '²',
+    { KeyCode::Key2, {} } => "2",
+    { KeyCode::Key2, { KeyFlags::SHIFT } } => "@",
+    { KeyCode::Key2, { KeyFlags::ALT } } => "²",
 
     // Key 3 mappings
-    { KeyCode::Key3, {} } => '3',
-    { KeyCode::Key3, { KeyFlags::SHIFT } } => '#',
-    { KeyCode::Key3, { KeyFlags::ALT } } => '³',
+    { KeyCode::Key3, {} } => "3",
+    { KeyCode::Key3, { KeyFlags::SHIFT } } => "#",
+    { KeyCode::Key3, { KeyFlags::ALT } } => "³",
 
     // Key 4 mappings
-    { KeyCode::Key4, {} } => '4',
-    { KeyCode::Key4, { KeyFlags::SHIFT } } => '$',
+    { KeyCode::Key4, {} } => "4",
+    { KeyCode::Key4, { KeyFlags::SHIFT } } => "$",
 
     // Key 5 mappings
-    { KeyCode::Key5, {} } => '5',
-    { KeyCode::Key5, { KeyFlags::SHIFT } } => '%',
+    { KeyCode::Key5, {} } => "5",
+    { KeyCode::Key5, { KeyFlags::SHIFT } } => "%",
 
     // Key 6 mappings
-    { KeyCode::Key6, {} } => '6',
-    { KeyCode::Key6, { KeyFlags::SHIFT } } => '^',
+    { KeyCode::Key6, {} } => "6",
+    { KeyCode::Key6, { KeyFlags::SHIFT } } => "^",
 
     // Key 7 mappings
-    { KeyCode::Key7, {} } => '7',
-    { KeyCode::Key7, { KeyFlags::SHIFT } } => '&',
+    { KeyCode::Key7, {} } => "7",
+    { KeyCode::Key7, { KeyFlags::SHIFT } } => "&",
 
     // Key 8 mappings
-    { KeyCode::Key8, {} } => '8',
-    { KeyCode::Key8, { KeyFlags::SHIFT } } => '*',
+    { KeyCode::Key8, {} } => "8",
+    { KeyCode::Key8, { KeyFlags::SHIFT } } => "*",
 
     // Key 9 mappings
-    { KeyCode::Key9, {} } => '9',
-    { KeyCode::Key9, { KeyFlags::SHIFT } } => '(',
+    { KeyCode::Key9, {} } => "9",
+    { KeyCode::Key9, { KeyFlags::SHIFT } } => "(",
 
     // Key 0 mappings
-    { KeyCode::Key0, {} } => '0',
-    { KeyCode::Key0, { KeyFlags::SHIFT } } => ')',
+    { KeyCode::Key0, {} } => "0",
+    { KeyCode::Key0, { KeyFlags::SHIFT } } => ")",
 
     // Minus mappings
-    { KeyCode::Minus, {} } => '-',
-    { KeyCode::Minus, { KeyFlags::SHIFT } } => '_',
+    { KeyCode::Minus, {} } => "-",
+    { KeyCode::Minus, { KeyFlags::SHIFT } } => "_",
 
     // Equals mappings
-    { KeyCode::Equals, {} } => '=',
-    { KeyCode::Equals, { KeyFlags::SHIFT } } => '+',
+    { KeyCode::Equals, {} } => "=",
+    { KeyCode::Equals, { KeyFlags::SHIFT } } => "+",
 
     // Backspace mappings
-    { KeyCode::Backspace, {} } => '\x08', // backspace character
+    { KeyCode::Backspace, {} } => "\x08", // backspace character
 
     // Tab mappings
-    { KeyCode::Tab, {} } => '\t', // tab character
+    { KeyCode::Tab, {} } => "\t", // tab character
 
     // Enter mappings
-    { KeyCode::Return, {} } => '\n', // newline character
+    { KeyCode::Return, {} } => "\n", // newline character
 
     // Space mappings
-    { KeyCode::Space, {} } => ' ',
+    { KeyCode::Space, {} } => " ",
 
     // Left brace mappings
-    { KeyCode::LeftBrace, {} } => '[',
-    { KeyCode::LeftBrace, { KeyFlags::SHIFT } } => '{',
+    { KeyCode::LeftBrace, {} } => "[",
+    { KeyCode::LeftBrace, { KeyFlags::SHIFT } } => "{",
 
     // Right brace mappings
-    { KeyCode::RightBrace, {} } => ']',
-    { KeyCode::RightBrace, { KeyFlags::SHIFT } } => '}',
+    { KeyCode::RightBrace, {} } => "]",
+    { KeyCode::RightBrace, { KeyFlags::SHIFT } } => "}",
 
     // Backslash mappings
-    { KeyCode::BackSlash, {} } => '\\',
-    { KeyCode::BackSlash, { KeyFlags::SHIFT } } => '|',
+    { KeyCode::BackSlash, {} } => "\\",
+    { KeyCode::BackSlash, { KeyFlags::SHIFT } } => "|",
 
     // Semicolon mappings
-    { KeyCode::Semicolon, {} } => ';',
-    { KeyCode::Semicolon, { KeyFlags::SHIFT } } => ':',
+    { KeyCode::Semicolon, {} } => ";",
+    { KeyCode::Semicolon, { KeyFlags::SHIFT } } => ":",
 
     // Single quote mappings
-    { KeyCode::DoubleQuote, {} } => '\'',
-    { KeyCode::DoubleQuote, { KeyFlags::SHIFT } } => '"',
+    { KeyCode::DoubleQuote, {} } => "\"",
+    { KeyCode::DoubleQuote, { KeyFlags::SHIFT } } => "\"",
 
     // Comma mappings
-    { KeyCode::Comma, {} } => ',',
-    { KeyCode::Comma, { KeyFlags::SHIFT } } => '<',
+    { KeyCode::Comma, {} } => ",",
+    { KeyCode::Comma, { KeyFlags::SHIFT } } => "<",
 
     // Dot mappings
-    { KeyCode::Dot, {} } => '.',
-    { KeyCode::Dot, { KeyFlags::SHIFT } } => '>',
+    { KeyCode::Dot, {} } => ".",
+    { KeyCode::Dot, { KeyFlags::SHIFT } } => ">",
 
     // Slash mappings
-    { KeyCode::Slash, {} } => '/',
-    { KeyCode::Slash, { KeyFlags::SHIFT } } => '?',
+    { KeyCode::Slash, {} } => "/",
+    { KeyCode::Slash, { KeyFlags::SHIFT } } => "?",
+    { KeyCode::Up, {}} => "\x1b[A",
+    { KeyCode::Down, {}} => "\x1b[B",
+    { KeyCode::Left, {}} => "\x1b[D",
+    { KeyCode::Right, {}} => "\x1b[C",
 );
 
 impl Key {
-    pub fn map_key(&self) -> char {
+    pub fn map_key(&self) -> &'static str {
         let mappings = DEFAULT_MAPPING.get_const(self.code);
         let mut best_mapping = None;
         let mut most_flags = KeyFlags::empty().bits();
@@ -279,7 +283,7 @@ impl Key {
 
             let flags_sim = (mapping.flags & self.flags).bits();
 
-            if mapping.result != '\0'
+            if mapping.result.is_empty()
                 && ((mapping.flags.is_empty() && best_mapping.is_none()) || flags_sim > most_flags)
             {
                 most_flags = flags_sim;
@@ -291,6 +295,6 @@ impl Key {
             return mapping.result;
         }
 
-        '\0'
+        ""
     }
 }

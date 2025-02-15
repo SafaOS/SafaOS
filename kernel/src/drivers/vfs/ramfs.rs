@@ -207,6 +207,14 @@ impl InodeOps for RamInode {
             _ => Ok(()),
         }
     }
+
+    fn ctl<'a>(&'a self, cmd: u16, args: super::CtlArgs<'a>) -> FSResult<()> {
+        match self.data {
+            RamInodeData::HardLink(ref inode) => inode.ctl(cmd, args),
+            RamInodeData::Device(ref device) => device.ctl(cmd, args),
+            _ => Err(FSError::OperationNotSupported),
+        }
+    }
 }
 
 pub struct RamFS {

@@ -6,7 +6,7 @@ use alloc::format;
 use crate::{
     arch::serial::SERIAL,
     debug,
-    drivers::vfs::{FSResult, FileSystem, InodeOps, VFS},
+    drivers::vfs::{CtlArgs, FSError, FSResult, FileSystem, InodeOps, VFS},
     terminal::FRAMEBUFFER_TERMINAL,
     time,
 };
@@ -33,6 +33,11 @@ pub trait CharDevice: Send + Sync {
     fn name(&self) -> &'static str;
     fn read(&self, buffer: &mut [u8]) -> FSResult<usize>;
     fn write(&self, buffer: &[u8]) -> FSResult<usize>;
+    fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
+        _ = cmd;
+        _ = args;
+        Err(FSError::OperationNotSupported)
+    }
     fn sync(&self) -> FSResult<()> {
         Ok(())
     }
@@ -57,6 +62,10 @@ impl<T: CharDevice> InodeOps for T {
 
     fn sync(&self) -> crate::drivers::vfs::FSResult<()> {
         CharDevice::sync(self)
+    }
+
+    fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
+        CharDevice::ctl(self, cmd, args)
     }
 }
 

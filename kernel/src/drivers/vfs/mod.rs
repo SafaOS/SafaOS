@@ -84,6 +84,16 @@ impl FileDescriptor {
     pub fn kind(&self) -> InodeType {
         self.node.kind()
     }
+
+    #[inline(always)]
+    pub fn ctl<'a>(&'a self, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
+        self.node.ctl(cmd, args)
+    }
+
+    #[inline(always)]
+    pub fn size(&self) -> usize {
+        self.node.size().unwrap_or(0)
+    }
 }
 
 impl Drop for FileDescriptor {
@@ -105,6 +115,10 @@ pub enum FSError {
     NotExecuteable,
     InvaildOffset,
     InvaildName,
+    /// Ctl
+    InvaildCtlCmd,
+    InvaildCtlArg,
+    NotEnoughArguments,
 }
 
 impl IntoErr for FSError {
@@ -119,11 +133,54 @@ impl IntoErr for FSError {
             Self::AlreadyExists => ErrorStatus::AlreadyExists,
             Self::NotExecuteable => ErrorStatus::NotExecutable,
             Self::InvaildOffset => ErrorStatus::InvaildOffset,
+            Self::InvaildCtlCmd | Self::InvaildCtlArg => ErrorStatus::Generic,
             Self::InvaildName => ErrorStatus::StrTooLong,
+            Self::NotEnoughArguments => ErrorStatus::NotEnoughArguments,
         }
     }
 }
 pub type FSResult<T> = Result<T, FSError>;
+
+#[derive(Debug)]
+pub struct CtlArgs<'a> {
+    index: usize,
+    args: &'a [usize],
+}
+
+pub trait CtlArg: Sized {
+    fn try_from(value: usize) -> Option<Self>;
+}
+
+impl<T: TryFrom<usize>> CtlArg for T {
+    fn try_from(value: usize) -> Option<Self> {
+        TryFrom::try_from(value).ok()
+    }
+}
+
+impl<'a> CtlArgs<'a> {
+    pub fn new(args: &'a [usize]) -> Self {
+        Self { index: 0, args }
+    }
+
+    pub fn get_ref_to<'b, T>(&mut self) -> FSResult<&'b mut T> {
+        let it = self.get_ty::<usize>()? as *mut T;
+
+        if it.is_null() || !it.is_aligned() {
+            return Err(FSError::InvaildCtlArg);
+        }
+        Ok(unsafe { &mut *it })
+    }
+
+    pub fn get_ty<T: CtlArg>(&mut self) -> FSResult<T> {
+        let it = self
+            .args
+            .get(self.index)
+            .ok_or(FSError::NotEnoughArguments)?;
+        self.index += 1;
+        T::try_from(*it).ok_or(FSError::InvaildCtlArg)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum InodeType {
@@ -131,6 +188,7 @@ pub enum InodeType {
     Directory,
     Device,
 }
+
 pub trait InodeOps: Send + Sync {
     /// gets an Inode from self
     fn get(&self, name: &str) -> FSResult<usize> {
@@ -206,6 +264,12 @@ pub trait InodeOps: Send + Sync {
     /// syncs the inode reads and writes
     fn sync(&self) -> FSResult<()> {
         Ok(())
+    }
+
+    fn ctl<'a>(&'a self, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
+        _ = cmd;
+        _ = args;
+        Err(FSError::OperationNotSupported)
     }
 }
 

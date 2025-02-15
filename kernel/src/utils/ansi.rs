@@ -65,9 +65,7 @@ impl PreAnsiSequence {
                     return Some(Left(self));
                 };
 
-                *number *= 10;
-                *number += digit;
-
+                *number = number.saturating_mul(10).saturating_add(digit);
                 Left(self)
             }
             _ => return None,

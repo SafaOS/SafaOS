@@ -50,6 +50,8 @@ bitflags! {
         // TODO: maybe the cursor should be the job of the shell?
         const RECIVE_INPUT = 1 << 0;
         const DRAW_GRAPHICS = 1 << 1;
+        const CANONICAL_MODE = 1 << 2;
+        const ECHO_INPUT = 1 << 3;
     }
 }
 
@@ -92,7 +94,9 @@ impl<T: TTYInterface> TTY<T> {
             stdin_buffer: PageString::new(),
             stdout_buffer: PageString::with_capacity(4096),
             interface,
-            settings: TTYSettings::DRAW_GRAPHICS,
+            settings: TTYSettings::DRAW_GRAPHICS
+                | TTYSettings::CANONICAL_MODE
+                | TTYSettings::ECHO_INPUT,
         }
     }
 
@@ -165,10 +169,12 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                 if self.settings.contains(TTYSettings::RECIVE_INPUT) {
                     // remove the cursor `_`
                     self.interface.backspace();
-                    let char = key.map_key();
-                    if char != '\0' {
-                        let _ = self.interface.write_char(char);
-                        self.stdin_buffer.push_char(char);
+                    let mapped = key.map_key();
+                    if !mapped.is_empty() {
+                        if self.settings.contains(TTYSettings::ECHO_INPUT) {
+                            let _ = self.interface.write_str(mapped);
+                        }
+                        self.stdin_buffer.push_str(mapped);
                     }
                     // put the cursor back
                     _ = self.interface.write_char('_');

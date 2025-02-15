@@ -1,7 +1,10 @@
 use crate::{
     arch::power,
     debug,
-    drivers::vfs::expose::{DirEntry, DirIter, DirIterRef, File, FileRef},
+    drivers::vfs::{
+        expose::{DirEntry, DirIter, DirIterRef, File, FileRef},
+        CtlArgs,
+    },
     threading::expose::SpawnFlags,
     utils::errors::ErrorStatus,
     VirtAddr,
@@ -191,6 +194,8 @@ pub enum SyscallTable {
     SysCreateDir = 7,
     SysSync = 16,
     SysTruncate = 17,
+    SysCtl = 12,
+    SysFSize = 22,
 
     SysCHDir = 14,
     SysGetCWD = 15,
@@ -285,6 +290,16 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 let fd = FileRef::make(a)?;
                 io::syssync(fd)
             }
+            SyscallTable::SysFSize => {
+                let fd = FileRef::make(a)?;
+                let dest_size: Option<&mut usize> = Option::make(b as *mut usize)?;
+                let file_size = fd.size();
+
+                if let Some(size) = dest_size {
+                    *size = file_size;
+                }
+                Ok(())
+            }
             // processes
             SyscallTable::SysPSpawn => {
                 #[inline(always)]
@@ -336,6 +351,13 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 let dest_pid = Option::make(d as *mut usize)?;
 
                 processes::syspspawn(name, path, argv, flags, dest_pid)
+            }
+            SyscallTable::SysCtl => {
+                let fd = FileRef::make(a)?;
+                let cmd = b as u16;
+                let args = <&[usize]>::make((c as *const usize, d))?;
+                let args = CtlArgs::new(args);
+                Ok(fd.ctl(cmd, args)?)
             }
             SyscallTable::SysWait => {
                 let dest_code = Option::make(b as *mut usize)?;
