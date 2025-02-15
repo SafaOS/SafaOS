@@ -15,8 +15,8 @@ const std = @import("std");
 pub const panic = libc.panic;
 pub const print = libc.stdio.zprintf;
 
-pub extern var stdin: libc.stdio.File;
-pub extern var stdout: libc.stdio.File;
+pub extern var stdin: *libc.stdio.File;
+pub extern var stdout: *libc.stdio.File;
 
 comptime {
     _ = libc;

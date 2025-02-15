@@ -1,9 +1,7 @@
 const std_c = @import("std-c");
 const std = @import("std");
 const sys = std_c.sys;
-const stdin = std_c.stdin;
 const print = std_c.print;
-const stdin_reader = std_c.stdin.reader();
 
 pub const allocator = std_c.heap.c_allocator;
 
@@ -51,6 +49,7 @@ pub fn run(line: []const u8) Error!void {
 }
 
 pub fn main() Error!void {
+    const stdin_reader = std_c.stdin.reader();
     print("\x1B[38;2;255;192;203m", .{});
     print(
         \\  ,---.             ,---.           ,-----.   ,---.   
