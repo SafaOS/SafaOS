@@ -23,6 +23,8 @@ pub trait TTYInterface: Send + Sync + Write {
     /// removes the character at the current cursor position
     /// and moves the cursor to the left
     fn backspace(&mut self);
+    fn draw_cursor(&mut self);
+    fn hide_cursor(&mut self);
     /// sets the cursor to x y
     /// which are in characters
     fn set_cursor(&mut self, x: usize, y: usize);
@@ -108,31 +110,22 @@ impl<T: TTYInterface> TTY<T> {
     pub fn enable_input(&mut self) {
         if !self.settings.contains(TTYSettings::RECIVE_INPUT) {
             self.settings |= TTYSettings::RECIVE_INPUT;
-            _ = self.interface.write_char('_');
+            self.interface.draw_cursor();
         }
     }
 
     pub fn disable_input(&mut self) {
         if self.settings.contains(TTYSettings::RECIVE_INPUT) {
             self.settings &= !TTYSettings::RECIVE_INPUT;
-            self.interface.backspace();
+            self.interface.hide_cursor();
         }
     }
 
     pub fn peform_backspace(&mut self) {
         if !self.stdin_buffer.is_empty() {
-            if self.settings.contains(TTYSettings::RECIVE_INPUT) {
-                // removes the cursor `_`
-                self.interface.backspace();
-            }
             // backspace
             self.interface.backspace();
             self.stdin_buffer.pop();
-
-            if self.settings.contains(TTYSettings::RECIVE_INPUT) {
-                // puts the cursor `_`
-                _ = self.interface.write_char('_');
-            }
         }
     }
 
@@ -162,14 +155,18 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                 self.interface.set_cursor(1, 1);
                 pspawn("Shell", "sys:/bin/Shell", &[], SpawnFlags::CLONE_RESOURCES).unwrap();
             }
-            KeyCode::Backspace if self.settings.contains(TTYSettings::RECIVE_INPUT) => {
+            KeyCode::Backspace
+                if self.settings.contains(TTYSettings::RECIVE_INPUT)
+                    && self.settings.contains(TTYSettings::CANONICAL_MODE) =>
+            {
+                self.interface.hide_cursor();
                 self.peform_backspace();
+                self.interface.draw_cursor();
             }
             _ => {
                 if self.settings.contains(TTYSettings::RECIVE_INPUT) {
-                    // remove the cursor `_`
-                    self.interface.backspace();
                     let mapped = key.map_key();
+                    self.interface.hide_cursor();
                     if !mapped.is_empty() {
                         if self.settings.contains(TTYSettings::ECHO_INPUT) {
                             let _ = self.interface.write_str(mapped);
@@ -177,7 +174,7 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                         self.stdin_buffer.push_str(mapped);
                     }
                     // put the cursor back
-                    _ = self.interface.write_char('_');
+                    self.interface.draw_cursor();
                 }
             }
         }

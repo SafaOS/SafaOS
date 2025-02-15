@@ -5,7 +5,6 @@ use spin::RwLock;
 
 use crate::{
     drivers::vfs::{CtlArgs, FSError, FSResult},
-    serial,
     terminal::{TTYInterface, TTYSettings, TTY},
     threading::expose::thread_yeild,
 };
@@ -69,17 +68,13 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
         match cmd {
             TTYCtlCmd::GetFlags => {
                 let flags = args.get_ref_to::<TTYSettings>()?;
-                serial!("TTY: GetFlags attempted\n");
                 *flags = self.read().settings;
-                serial!("TTY: GetFlags: {:?}\n", flags);
                 Ok(())
             }
             TTYCtlCmd::SetFlags => {
                 let flags: TTYSettings =
                     TTYSettings::from_bits(args.get_ty()?).ok_or(FSError::InvaildCtlArg)?;
-                serial!("TTY: SetFlags attempted\n");
                 self.write().settings = flags;
-                serial!("TTY: SetFlags: {:?}\n", flags);
                 Ok(())
             }
         }

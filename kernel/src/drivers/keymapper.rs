@@ -250,8 +250,12 @@ pub const DEFAULT_MAPPING: KeyMapping = create_mapping!(
     { KeyCode::Semicolon, { KeyFlags::SHIFT } } => ":",
 
     // Single quote mappings
-    { KeyCode::DoubleQuote, {} } => "\"",
+    { KeyCode::DoubleQuote, {} } => "'",
     { KeyCode::DoubleQuote, { KeyFlags::SHIFT } } => "\"",
+
+    // Back quote mappings
+    { KeyCode::BackQuote, {} } => "`",
+    { KeyCode::BackQuote, { KeyFlags::SHIFT } } => "~",
 
     // Comma mappings
     { KeyCode::Comma, {} } => ",",
@@ -283,7 +287,7 @@ impl Key {
 
             let flags_sim = (mapping.flags & self.flags).bits();
 
-            if mapping.result.is_empty()
+            if !mapping.result.is_empty()
                 && ((mapping.flags.is_empty() && best_mapping.is_none()) || flags_sim > most_flags)
             {
                 most_flags = flags_sim;

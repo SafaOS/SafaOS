@@ -1,6 +1,7 @@
 const RASTER_HEIGHT: RasterHeight = RasterHeight::Size20;
 const FONT_WEIGHT: FontWeight = FontWeight::Regular;
 const RASTER_WIDTH: usize = get_raster_width(FONT_WEIGHT, RASTER_HEIGHT);
+const CURSOR_CHAR: char = '_';
 
 use core::fmt::Write;
 
@@ -32,6 +33,7 @@ pub struct FrameBufferTTY<'a> {
     cursor_y: usize,
     fg_color: RGB,
     bg_color: RGB,
+    show_cursor: bool,
 }
 
 impl FrameBufferTTY<'_> {
@@ -45,6 +47,7 @@ impl FrameBufferTTY<'_> {
             cursor_y: DEFAULT_CURSOR_Y,
             fg_color: DEFAULT_FG_COLOR,
             bg_color: DEFAULT_BG_COLOR,
+            show_cursor: true,
         }
     }
     #[inline(always)]
@@ -66,7 +69,8 @@ impl FrameBufferTTY<'_> {
         )
     }
 
-    fn draw_raster(&mut self, raster: RasterizedChar, fg_color: RGB, bg_color: RGB) {
+    #[inline(always)]
+    fn check_draw_raster(&mut self, raster: &RasterizedChar) {
         let framebuffer = self.framebuffer.read();
         let stride = framebuffer.info.stride;
         let cursor = framebuffer.get_cursor();
@@ -82,6 +86,39 @@ impl FrameBufferTTY<'_> {
         {
             self.scroll_down();
         }
+    }
+
+    // TODO: refactor all the draw and remove functions
+    fn draw_raster_opaque(
+        &mut self,
+        raster: RasterizedChar,
+        fg_color: RGB,
+        bg_color: RGB,
+        x: usize,
+        y: usize,
+    ) {
+        let mut framebuffer = self.framebuffer.write();
+        let stride = framebuffer.info.stride;
+
+        let (x, y) = if x * RASTER_WIDTH + raster.width()
+            > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2)
+        {
+            (0, (y + 1) * RASTER_HEIGHT.val())
+        } else {
+            (x * RASTER_WIDTH, y * RASTER_HEIGHT.val())
+        };
+
+        for (row, rows) in raster.raster().iter().enumerate() {
+            for (col, byte) in rows.iter().enumerate() {
+                let color = fg_color.with_alpha(*byte, bg_color);
+                if color != bg_color {
+                    framebuffer.set_pixel(x + col, y + row, color);
+                }
+            }
+        }
+    }
+    fn draw_raster(&mut self, raster: RasterizedChar, fg_color: RGB, bg_color: RGB) {
+        self.check_draw_raster(&raster);
 
         let (x, y) = self.get_pixel_at();
         let mut framebuffer = self.framebuffer.write();
@@ -95,6 +132,26 @@ impl FrameBufferTTY<'_> {
         }
 
         self.cursor_x += 1;
+    }
+
+    fn remove_char_opaque(&mut self, c: char, bg_color: RGB, x: usize, y: usize) {
+        let raster = self.raster(c);
+        let mut framebuffer = self.framebuffer.write();
+        let stride = framebuffer.info.stride;
+        let (x, y) = if x * RASTER_WIDTH + raster.width()
+            > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2)
+        {
+            (0, (y + 1) * RASTER_HEIGHT.val())
+        } else {
+            (x * RASTER_WIDTH, y * RASTER_HEIGHT.val())
+        };
+        for (row, rows) in raster.raster().iter().enumerate() {
+            for (col, byte) in rows.iter().enumerate() {
+                if *byte != 0 {
+                    framebuffer.set_pixel(x + col, y + row, bg_color);
+                }
+            }
+        }
     }
 
     fn remove_char(&mut self) {
@@ -293,5 +350,25 @@ impl TTYInterface for FrameBufferTTY<'_> {
         self.cursor_y -= diff;
 
         self.sync_pixels();
+    }
+
+    fn hide_cursor(&mut self) {
+        if self.show_cursor {
+            self.remove_char_opaque(CURSOR_CHAR, self.bg_color, self.cursor_x, self.cursor_y);
+            self.sync_pixels();
+            self.show_cursor = false;
+        }
+    }
+    fn draw_cursor(&mut self) {
+        let raster = self.raster(CURSOR_CHAR);
+        self.draw_raster_opaque(
+            raster,
+            RGB::WHITE,
+            self.bg_color,
+            self.cursor_x,
+            self.cursor_y,
+        );
+        self.sync_pixels();
+        self.show_cursor = true;
     }
 }
