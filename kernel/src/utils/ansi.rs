@@ -1,5 +1,4 @@
 use super::{bstr::BStr, either::Either};
-use alloc::vec::Vec;
 
 /// A complete ANSII escape sequence
 #[derive(Debug)]
@@ -13,20 +12,20 @@ pub enum AnsiSequence {
     CursorBackward(u8),
 
     EraseDisplay,
-    SetGraphicsMode(Vec<u8>),
+    SetGraphicsMode(heapless::Vec<u8, 10>),
 }
 
 #[derive(Debug)]
 /// A sequence that is parsed into a [`AnsiSequence`]
 struct PreAnsiSequence {
     /// the characters that have been parsed so far, separated by ';' and is a u8 number
-    numbers: Vec<u8>,
+    numbers: heapless::Vec<u8, 10>,
 }
 
 impl PreAnsiSequence {
     fn new() -> Self {
         Self {
-            numbers: Vec::with_capacity(5),
+            numbers: heapless::Vec::new(),
         }
     }
 
@@ -52,7 +51,7 @@ impl PreAnsiSequence {
             b'm' => Right(AnsiSequence::SetGraphicsMode(self.numbers)),
 
             b';' => {
-                self.numbers.push(0);
+                self.numbers.push(0).unwrap();
                 Left(self)
             }
 
@@ -60,7 +59,7 @@ impl PreAnsiSequence {
                 let digit = (c as char).to_digit(10).unwrap() as u8;
 
                 let Some(number) = self.numbers.last_mut() else {
-                    self.numbers.push(digit);
+                    self.numbers.push(digit).unwrap();
                     return Some(Left(self));
                 };
 
@@ -73,16 +72,19 @@ impl PreAnsiSequence {
 
     /// Parses the given string into an [`AnsiSequence`]
     /// returns None if the string is not a valid ansi sequence
-    /// returns the last index of the sequence and the parsed sequence if successful
-    fn parse_seq(chars: &BStr) -> Option<(usize, AnsiSequence)> {
-        let chars = chars.as_bytes().iter().enumerate();
+    /// returns the last index of the sequence in `str` and the parsed sequence if successful
+    fn parse_seq(str: &BStr) -> Option<(usize, AnsiSequence)> {
+        if !matches!(str.get(..2), Some(b"\x1b[")) {
+            return None;
+        }
+
         let mut pre_ansi = PreAnsiSequence::new();
 
-        for (i, c) in chars {
+        for (i, c) in str[2..].into_iter().enumerate() {
             let parsed = pre_ansi.add_char(*c)?;
 
             if let Either::Right(ansi) = parsed {
-                return Some((i, ansi));
+                return Some((i + 2, ansi));
             }
 
             pre_ansi = parsed.unwrap_left();
@@ -107,35 +109,28 @@ impl<'a> Iterator for AnsiiParser<'a> {
 
     // TODO: clean this up
     fn next(&mut self) -> Option<Self::Item> {
-        // we are using bytes here because chars are not guaranteed to be valid utf-8 and we need
-        // accurate positioning
-        let mut chars = self.text;
+        if self.text.is_empty() {
+            return None;
+        }
+        let mut chars = self.text.into_iter().copied().enumerate();
 
-        if Some(&b'\x1b') == chars.first() {
-            // has to be skipped to avoid an infinite loop
-            chars = &chars[1..];
-            if Some(&b'[') == chars.first() {
-                if let Some((i, seq)) = PreAnsiSequence::parse_seq(&chars[1..]) {
-                    self.text = &self.text[i + 3..];
-                    return Some(Either::Left(seq));
+        while let Some((i, c)) = chars.next() {
+            if c == b'\x1b' {
+                if i == 0 {
+                    if let Some((end, seq)) = PreAnsiSequence::parse_seq(&self.text) {
+                        self.text = &self.text[end + 1..];
+                        return Some(Either::Left(seq));
+                    }
+                } else {
+                    let str = &self.text[..i];
+                    self.text = &self.text[i..];
+                    return Some(Either::Right(str));
                 }
             }
         }
 
-        let mut end = 0;
-        loop {
-            if chars.is_empty() && end == 0 {
-                break None;
-            }
-
-            if chars.is_empty() || chars.first() == Some(&b'\x1b') {
-                let str = &self.text[..end];
-                self.text = &self.text[end..];
-                break Some(Either::Right(str));
-            }
-
-            chars = &chars[1..];
-            end += 1;
-        }
+        let str = self.text;
+        self.text = BStr::new(b"");
+        Some(Either::Right(str))
     }
 }
