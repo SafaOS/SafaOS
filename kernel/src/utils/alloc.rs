@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 use alloc::str::pattern::{Pattern, ReverseSearcher};
 use alloc::vec::{Drain, Vec};
 
-use super::bstr::BStr;
+use bstr::BStr;
 
 pub struct PageVec<T>(Vec<T, PageAlloc>);
 
@@ -87,7 +87,7 @@ impl PageBString {
 
     #[inline]
     pub fn push_bstr(&mut self, s: &BStr) {
-        self.inner.extend_from_slice(s.as_bytes());
+        self.inner.extend_from_slice(s);
     }
 
     #[inline]

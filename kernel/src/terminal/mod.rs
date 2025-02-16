@@ -10,11 +10,9 @@ use crate::{
         HandleKey,
     },
     threading::expose::{pspawn, SpawnFlags},
-    utils::{
-        alloc::{PageBString, PageString},
-        bstr::BStr,
-    },
+    utils::alloc::{PageBString, PageString},
 };
+use bstr::BStr;
 
 pub mod framebuffer;
 

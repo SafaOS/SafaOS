@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bstr = { version = "1.11.0", default-features = false, features = ["alloc", "unicode"] }
 noto-sans-mono-bitmap = { version = "0.3.0", features = [
     "size_20",
 ] }

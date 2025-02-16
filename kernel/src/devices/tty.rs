@@ -7,10 +7,10 @@ use crate::{
     drivers::vfs::{CtlArgs, FSError, FSResult},
     terminal::{TTYInterface, TTYSettings, TTY},
     threading::expose::thread_yeild,
-    utils::bstr::BStr,
 };
 
 use super::CharDevice;
+use bstr::BStr;
 
 #[derive(Debug, IntEnum)]
 #[repr(u16)]
@@ -50,7 +50,7 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
     }
 
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
-        let str = BStr::from_bytes(buffer);
+        let str = BStr::new(buffer);
         loop {
             let lock = self.try_write();
 

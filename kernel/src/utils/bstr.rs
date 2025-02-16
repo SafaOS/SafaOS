@@ -99,3 +99,7 @@ impl Display for BStr {
         Ok(())
     }
 }
+
+pub struct Chars<T: Iterator<Item = u8>> {
+    inner: T,
+}

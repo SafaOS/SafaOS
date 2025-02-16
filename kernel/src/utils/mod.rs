@@ -1,6 +1,5 @@
 pub mod alloc;
 pub mod ansi;
-pub mod bstr;
 pub mod display;
 pub mod either;
 pub mod elf;

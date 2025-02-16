@@ -1,4 +1,5 @@
-use super::{bstr::BStr, either::Either};
+use super::either::Either;
+use bstr::BStr;
 
 /// A complete ANSII escape sequence
 #[derive(Debug)]

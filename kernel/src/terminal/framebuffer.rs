@@ -5,9 +5,9 @@ const CURSOR_CHAR: char = '_';
 
 use crate::utils::{
     ansi::{self, AnsiSequence},
-    bstr::BStr,
     either::Either,
 };
+use bstr::BStr;
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
 };
