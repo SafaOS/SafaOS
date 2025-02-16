@@ -1,4 +1,4 @@
-use core::{fmt::Write, str};
+use core::str;
 
 use int_enum::IntEnum;
 use spin::RwLock;
@@ -7,6 +7,7 @@ use crate::{
     drivers::vfs::{CtlArgs, FSError, FSResult},
     terminal::{TTYInterface, TTYSettings, TTY},
     threading::expose::thread_yeild,
+    utils::bstr::BStr,
 };
 
 use super::CharDevice;
@@ -49,13 +50,13 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
     }
 
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
-        let str = unsafe { &str::from_utf8_unchecked(buffer) };
+        let str = BStr::from_bytes(buffer);
         loop {
             let lock = self.try_write();
 
             match lock {
                 Some(mut tty) => {
-                    tty.write_str(str).unwrap();
+                    tty.write_bstr(str);
                     return Ok(buffer.len());
                 }
                 None => thread_yeild(),

@@ -9,6 +9,8 @@ use alloc::boxed::Box;
 use alloc::str::pattern::{Pattern, ReverseSearcher};
 use alloc::vec::{Drain, Vec};
 
+use super::bstr::BStr;
+
 pub struct PageVec<T>(Vec<T, PageAlloc>);
 
 impl<T> PageVec<T> {
@@ -50,6 +52,64 @@ impl<T> AsRef<Vec<T, PageAlloc>> for PageVec<T> {
 impl<T> From<Vec<T, PageAlloc>> for PageVec<T> {
     fn from(v: Vec<T, PageAlloc>) -> Self {
         Self(v)
+    }
+}
+
+/// a non-utf8 string that uses the page allocator
+pub struct PageBString {
+    inner: PageVec<u8>,
+}
+
+impl PageBString {
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            inner: PageVec::with_capacity(capacity),
+        }
+    }
+
+    #[inline]
+    pub fn push_str(&mut self, s: &str) {
+        self.inner.extend_from_slice(s.as_bytes());
+    }
+
+    #[inline]
+    pub fn push_char(&mut self, c: char) {
+        let mut dst = [0; 4];
+        let fake_str = c.encode_utf8(&mut dst);
+        self.push_str(fake_str);
+    }
+
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_slice()
+    }
+
+    #[inline]
+    pub fn push_bstr(&mut self, s: &BStr) {
+        self.inner.extend_from_slice(s.as_bytes());
+    }
+
+    #[inline]
+    pub fn as_bstr(&self) -> &BStr {
+        BStr::new(self.as_bytes())
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+}
+
+impl core::fmt::Write for PageBString {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.push_str(s);
+        Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> core::fmt::Result {
+        self.push_char(c);
+        Ok(())
     }
 }
 
@@ -96,10 +156,6 @@ impl PageString {
 
     pub fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.inner) }
-    }
-
-    pub fn clear(&mut self) {
-        self.inner.clear();
     }
 
     pub fn ends_with<P>(&self, other: P) -> bool

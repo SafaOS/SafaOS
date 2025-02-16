@@ -3,10 +3,9 @@ const FONT_WEIGHT: FontWeight = FontWeight::Regular;
 const RASTER_WIDTH: usize = get_raster_width(FONT_WEIGHT, RASTER_HEIGHT);
 const CURSOR_CHAR: char = '_';
 
-use core::fmt::Write;
-
 use crate::utils::{
     ansi::{self, AnsiSequence},
+    bstr::BStr,
     either::Either,
 };
 use noto_sans_mono_bitmap::{
@@ -280,33 +279,30 @@ impl FrameBufferTTY<'_> {
         }
     }
 
-    fn write_str_unsynced(&mut self, s: &str) {
+    fn write_str_unsynced(&mut self, s: &BStr) {
         ansi::AnsiiParser::new(s).for_each(|output| match output {
             Either::Left(escape) => self.handle_escape_sequence(escape),
             Either::Right(text) => {
-                for c in text.chars() {
-                    self.putc_unsynced(c);
+                for chunk in text.utf8_chunks() {
+                    let valid = chunk.valid();
+                    for c in valid.chars() {
+                        self.putc_unsynced(c);
+                    }
+                    if !chunk.invalid().is_empty() {
+                        self.putc_unsynced('\u{FFFD}');
+                    }
                 }
             }
         });
     }
 }
 
-impl Write for FrameBufferTTY<'_> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+impl TTYInterface for FrameBufferTTY<'_> {
+    fn write_str(&mut self, s: &BStr) {
         self.write_str_unsynced(s);
         self.sync_pixels();
-        Ok(())
     }
 
-    fn write_char(&mut self, c: char) -> core::fmt::Result {
-        self.putc_unsynced(c);
-        self.sync_pixels();
-        Ok(())
-    }
-}
-
-impl TTYInterface for FrameBufferTTY<'_> {
     fn newline(&mut self) {
         self.cursor_x = DEFAULT_CURSOR_X;
         self.cursor_y += 1;

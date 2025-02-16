@@ -1,6 +1,5 @@
+use super::{bstr::BStr, either::Either};
 use alloc::vec::Vec;
-
-use super::either::Either;
 
 /// A complete ANSII escape sequence
 #[derive(Debug)]
@@ -32,33 +31,33 @@ impl PreAnsiSequence {
     }
 
     /// Parses the next character into ethier a [`PreAnsiSequence`] or an [`AnsiSequence`] if successful otherwise it returns None if the character is not excepted
-    fn add_char(mut self, c: char) -> Option<Either<Self, AnsiSequence>> {
+    fn add_char(mut self, c: u8) -> Option<Either<Self, AnsiSequence>> {
         use Either::*;
         Some(match c {
-            'H' => match self.numbers[..] {
+            b'H' => match self.numbers[..] {
                 [y, x] => Right(AnsiSequence::CursorPos(x, y)),
                 [y] => Right(AnsiSequence::CursorPos(1, y)),
                 [] => Right(AnsiSequence::CursorPos(1, 1)),
                 _ => return None,
             },
 
-            'A' => Right(AnsiSequence::CursorUp(self.numbers.pop().unwrap_or(1))),
-            'B' => Right(AnsiSequence::CursorDown(self.numbers.pop().unwrap_or(1))),
-            'C' => Right(AnsiSequence::CursorForward(self.numbers.pop().unwrap_or(1))),
-            'D' => Right(AnsiSequence::CursorBackward(
+            b'A' => Right(AnsiSequence::CursorUp(self.numbers.pop().unwrap_or(1))),
+            b'B' => Right(AnsiSequence::CursorDown(self.numbers.pop().unwrap_or(1))),
+            b'C' => Right(AnsiSequence::CursorForward(self.numbers.pop().unwrap_or(1))),
+            b'D' => Right(AnsiSequence::CursorBackward(
                 self.numbers.pop().unwrap_or(1),
             )),
 
-            'J' => Right(AnsiSequence::EraseDisplay),
-            'm' => Right(AnsiSequence::SetGraphicsMode(self.numbers)),
+            b'J' => Right(AnsiSequence::EraseDisplay),
+            b'm' => Right(AnsiSequence::SetGraphicsMode(self.numbers)),
 
-            ';' => {
+            b';' => {
                 self.numbers.push(0);
                 Left(self)
             }
 
-            '0'..='9' => {
-                let digit = c.to_digit(10).unwrap() as u8;
+            b'0'..=b'9' => {
+                let digit = (c as char).to_digit(10).unwrap() as u8;
 
                 let Some(number) = self.numbers.last_mut() else {
                     self.numbers.push(digit);
@@ -75,12 +74,12 @@ impl PreAnsiSequence {
     /// Parses the given string into an [`AnsiSequence`]
     /// returns None if the string is not a valid ansi sequence
     /// returns the last index of the sequence and the parsed sequence if successful
-    fn parse_seq(chars: &str) -> Option<(usize, AnsiSequence)> {
-        let chars = chars.chars().enumerate();
+    fn parse_seq(chars: &BStr) -> Option<(usize, AnsiSequence)> {
+        let chars = chars.as_bytes().iter().enumerate();
         let mut pre_ansi = PreAnsiSequence::new();
 
         for (i, c) in chars {
-            let parsed = pre_ansi.add_char(c)?;
+            let parsed = pre_ansi.add_char(*c)?;
 
             if let Either::Right(ansi) = parsed {
                 return Some((i, ansi));
@@ -94,25 +93,27 @@ impl PreAnsiSequence {
 }
 
 pub struct AnsiiParser<'a> {
-    text: &'a str,
+    text: &'a BStr,
 }
 
 impl<'a> AnsiiParser<'a> {
-    pub fn new(text: &'a str) -> Self {
+    pub fn new(text: &'a BStr) -> Self {
         Self { text }
     }
 }
 
 impl<'a> Iterator for AnsiiParser<'a> {
-    type Item = Either<AnsiSequence, &'a str>;
+    type Item = Either<AnsiSequence, &'a BStr>;
 
+    // TODO: clean this up
     fn next(&mut self) -> Option<Self::Item> {
-        let mut chars = self.text.chars().peekable();
+        // we are using bytes here because chars are not guaranteed to be valid utf-8 and we need
+        // accurate positioning
+        let mut chars = self.text;
 
-        if Some(&'\x1b') == chars.peek() {
-            chars.next();
-            if Some(&'[') == chars.peek() {
-                if let Some((i, seq)) = PreAnsiSequence::parse_seq(&self.text[2..]) {
+        if Some(&b'\x1b') == chars.first() {
+            if Some(&b'[') == chars.get(1) {
+                if let Some((i, seq)) = PreAnsiSequence::parse_seq(&chars[2..]) {
                     self.text = &self.text[i + 3..];
                     return Some(Either::Left(seq));
                 }
@@ -121,17 +122,17 @@ impl<'a> Iterator for AnsiiParser<'a> {
 
         let mut end = 0;
         loop {
-            let peek = chars.peek();
-            if peek.is_none() && end == 0 {
+            if chars.is_empty() && end == 0 {
                 break None;
-            } else if peek.is_none() || peek.is_some_and(|c| *c == '\x1b') {
+            }
+
+            if chars.is_empty() || chars.first() == Some(&b'\x1b') {
                 let str = &self.text[..end];
                 self.text = &self.text[end..];
-
                 break Some(Either::Right(str));
             }
 
-            chars.next();
+            chars = &chars[1..];
             end += 1;
         }
     }

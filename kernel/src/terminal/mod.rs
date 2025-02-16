@@ -10,7 +10,10 @@ use crate::{
         HandleKey,
     },
     threading::expose::{pspawn, SpawnFlags},
-    utils::alloc::PageString,
+    utils::{
+        alloc::{PageBString, PageString},
+        bstr::BStr,
+    },
 };
 
 pub mod framebuffer;
@@ -19,7 +22,8 @@ pub mod framebuffer;
 /// a tty is a user-visible device that can be written to, and that user-input can be read from
 /// it is recommened for the tty to support ansii escape sequences, some stuff will be managed by a
 /// higher-level tty implementation `TTY` only writing to the tty is required
-pub trait TTYInterface: Send + Sync + Write {
+pub trait TTYInterface: Send + Sync {
+    fn write_str(&mut self, s: &BStr);
     /// removes the character at the current cursor position
     /// and moves the cursor to the left
     fn backspace(&mut self);
@@ -60,7 +64,7 @@ bitflags! {
 #[allow(clippy::upper_case_acronyms)]
 pub struct TTY<T: TTYInterface> {
     /// stores the stdout buffer for write operations peformed on the tty device, allows to write to the tty at once instead of a peice by piece
-    stdout_buffer: PageString,
+    stdout_buffer: PageBString,
     /// stores the stdin buffer for read operations peformed on the tty device
     pub stdin_buffer: PageString,
     pub settings: TTYSettings,
@@ -69,7 +73,7 @@ pub struct TTY<T: TTYInterface> {
 
 impl<T: TTYInterface> Write for TTY<T> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.stdout_buffer.push_str(s);
+        self.write_bstr(s.into());
         Ok(())
     }
 
@@ -94,7 +98,7 @@ impl<T: TTYInterface> TTY<T> {
     pub fn new(interface: T) -> Self {
         Self {
             stdin_buffer: PageString::new(),
-            stdout_buffer: PageString::with_capacity(4096),
+            stdout_buffer: PageBString::with_capacity(4096),
             interface,
             settings: TTYSettings::DRAW_GRAPHICS
                 | TTYSettings::CANONICAL_MODE
@@ -132,11 +136,13 @@ impl<T: TTYInterface> TTY<T> {
     /// syncs the buffer by actually writing it to the interface
     pub fn sync(&mut self) {
         if self.settings.contains(TTYSettings::DRAW_GRAPHICS) {
-            self.interface
-                .write_str(self.stdout_buffer.as_str())
-                .unwrap();
+            self.interface.write_str(self.stdout_buffer.as_bstr());
             self.stdout_buffer.clear();
         }
+    }
+
+    pub fn write_bstr(&mut self, s: &BStr) {
+        self.stdout_buffer.push_bstr(s);
     }
 }
 
@@ -163,20 +169,21 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                 self.peform_backspace();
                 self.interface.draw_cursor();
             }
-            _ => {
-                if self.settings.contains(TTYSettings::RECIVE_INPUT) {
-                    let mapped = key.map_key();
+            _ if self.settings.contains(TTYSettings::RECIVE_INPUT) => {
+                let mapped = key.map_key();
+                if mapped.is_empty() {
+                    return;
+                }
+                self.stdin_buffer.push_str(mapped);
+
+                if self.settings.contains(TTYSettings::ECHO_INPUT) {
                     self.interface.hide_cursor();
-                    if !mapped.is_empty() {
-                        if self.settings.contains(TTYSettings::ECHO_INPUT) {
-                            let _ = self.interface.write_str(mapped);
-                        }
-                        self.stdin_buffer.push_str(mapped);
-                    }
-                    // put the cursor back
+                    let _ = self.interface.write_str(mapped.into());
                     self.interface.draw_cursor();
                 }
             }
+
+            _ => {}
         }
     }
 }
