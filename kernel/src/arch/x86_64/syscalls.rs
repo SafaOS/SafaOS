@@ -3,6 +3,7 @@
 use super::interrupts::InterruptFrame;
 use crate::syscalls;
 use core::arch::asm;
+use core::arch::naked_asm;
 /// used sometimes for debugging syscalls
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -27,9 +28,9 @@ pub struct SyscallContext {
 
 #[no_mangle]
 #[naked]
-pub extern "x86-interrupt" fn syscall_base() {
+pub extern "x86-interrupt" fn syscall_base() -> ! {
     unsafe {
-        asm!(
+        naked_asm!(
             "push rbx",
             "push rcx",
             "push rdx",
@@ -60,7 +61,6 @@ pub extern "x86-interrupt" fn syscall_base() {
             "pop rcx",
             "pop rbx",
             "iretq",
-            options(noreturn)
         )
     }
 }
