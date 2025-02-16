@@ -112,8 +112,10 @@ impl<'a> Iterator for AnsiiParser<'a> {
         let mut chars = self.text;
 
         if Some(&b'\x1b') == chars.first() {
-            if Some(&b'[') == chars.get(1) {
-                if let Some((i, seq)) = PreAnsiSequence::parse_seq(&chars[2..]) {
+            // has to be skipped to avoid an infinite loop
+            chars = &chars[1..];
+            if Some(&b'[') == chars.first() {
+                if let Some((i, seq)) = PreAnsiSequence::parse_seq(&chars[1..]) {
                     self.text = &self.text[i + 3..];
                     return Some(Either::Left(seq));
                 }

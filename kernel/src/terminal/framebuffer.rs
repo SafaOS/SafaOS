@@ -289,7 +289,7 @@ impl FrameBufferTTY<'_> {
                         self.putc_unsynced(c);
                     }
                     if !chunk.invalid().is_empty() {
-                        self.putc_unsynced('\u{FFFD}');
+                        self.putc_unsynced(char::REPLACEMENT_CHARACTER);
                     }
                 }
             }
