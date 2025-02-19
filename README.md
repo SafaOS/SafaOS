@@ -5,6 +5,8 @@
 [![License](https://img.shields.io/github/license/SafaOS/SafaOS?color=red)](https://github.com/SafaOS/SafaOS/blob/main/LICENSE) [![Issues](https://img.shields.io/github/issues/SafaOS/SafaOS)](https://github.com/SafaOS/SafaOS/issues) ![Stars](https://img.shields.io/github/stars/SafaOS/SafaOS?style=flat-square)
 </div>
 
+![Screenshot](https://observerunit.github.io/priv/imgs/screenshots/Safa190225.png)
+
 An open-source non-Unix-like open-source OS, written from scratch in Zig and Rust for fun,
 the main language is Rust, Zig is used for lower-level userspace stuff (not used in the kernel at all) for now, as an alternative to C
 **star the repo!**
