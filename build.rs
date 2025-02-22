@@ -44,18 +44,10 @@ impl ExecuteCommand for Command {
 
 fn limine_make() {
     if !fs::exists("limine").unwrap() {
-        Command::new("git")
-            .arg("clone")
-            .arg("https://github.com/limine-bootloader/limine.git")
-            .arg("--branch=v8.x-binary")
-            .arg("--depth=1")
-            .execute_command();
+        execute("git clone https://github.com/limine-bootloader/limine.git --branch=v8.x-binary --depth=1");
     }
 
-    Command::new("make")
-        .arg("-C")
-        .arg("limine")
-        .execute_command();
+    execute_at("limine", "make");
 }
 
 fn setup_iso_root() {
@@ -99,32 +91,31 @@ fn put_boot_files() {
 
 fn make_iso() {
     // command too long ):
-    // TODO: use cmd on windows
+    execute(&format!(
+        "xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
+            -no-emul-boot -boot-load-size 4 -boot-info-table \
+            --efi-boot boot/limine/limine-uefi-cd.bin \
+            -efi-boot-part --efi-boot-image --protective-msdos-label \
+            iso_root -o {ISO_PATH}"
+    ));
+}
+
+fn execute(command: &str) {
+    // FIXME: use cmd on windows
     Command::new("bash")
         .arg("-c")
-        .arg(format!(
-            "xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
-		-no-emul-boot -boot-load-size 4 -boot-info-table \
-		--efi-boot boot/limine/limine-uefi-cd.bin \
-		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		iso_root -o {ISO_PATH}"
-        ))
+        .arg(command)
         .execute_command();
 }
 
+fn execute_at(dir: &'static str, command: &str) {
+    execute(&format!("cd {dir} && {command}"));
+}
+
 fn compile_programs() {
-    Command::new("bash")
-        .arg("-c")
-        .arg("cd Shell && zig build")
-        .execute_command();
-    Command::new("bash")
-        .arg("-c")
-        .arg("cd bin && zig build")
-        .execute_command();
-    Command::new("bash")
-        .arg("-c")
-        .arg("cd TestBot && zig build")
-        .execute_command();
+    execute_at("Shell", "zig build");
+    execute_at("bin", "zig build");
+    execute_at("TestBot", "zig build");
 }
 
 fn make_ramdisk() {
@@ -172,12 +163,7 @@ fn cleanup() {
 }
 
 fn submodules_init() {
-    let _ = Command::new("git")
-        .arg("submodule")
-        .arg("update")
-        .arg("--init")
-        .arg("--recursive")
-        .execute_command();
+    execute("git submodule update --init --recursive");
 }
 /// TODO: spilt into more functions and make it work on other oses like windows
 fn main() {
