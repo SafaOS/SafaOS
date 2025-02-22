@@ -479,16 +479,19 @@ impl<'a, T: Readable> Elf<'a, T> {
 
             unsafe {
                 for page in Page::iter_pages(start_page, end_page) {
-                    let frame = frame_allocator::allocate_frame().ok_or(ElfError::MapToError)?;
+                    if page_table.get_frame(page).is_none() {
+                        let frame =
+                            frame_allocator::allocate_frame().ok_or(ElfError::MapToError)?;
 
-                    page_table.map_to(page, frame, entry_flags)?;
+                        page_table.map_to(page, frame, entry_flags)?;
 
-                    let slice = slice::from_raw_parts_mut(
-                        frame.virt_addr() as *mut usize,
-                        PAGE_SIZE / size_of::<usize>(),
-                    );
+                        let slice = slice::from_raw_parts_mut(
+                            frame.virt_addr() as *mut usize,
+                            PAGE_SIZE / size_of::<usize>(),
+                        );
 
-                    slice.fill(0x0);
+                        slice.fill(0x0);
+                    }
                 }
 
                 let mut file_offset = header.offset;
