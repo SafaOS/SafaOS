@@ -22,8 +22,8 @@ jobs:
       run: sudo apt update -y && sudo apt install xorriso qemu-system -y
     - name: Setup
       run: rustup target add x86_64-unknown-none
-    - name: Build
-      run: cargo build --verbose
+    - name: Build kernel
+      run: cd kernel && cargo build --verbose
     - uses: actions/upload-artifact@v4
       with:
         name: x86_64-iso
