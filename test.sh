@@ -1,8 +1,9 @@
 #!/bin/bash
 # This script simply runs the OS with qemu, no-gui, and no-kvm then checks if the serial output 
 # contains a successful output (returns 0) or a kernel panic (returns 1)
+SAFA_RUNNER_PATH=$(printf "%s" $(cargo build --manifest-path=safa-runner/Cargo.toml --message-format=json-render-diagnostics) | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable')
 
-cargo run -- no-kvm no-gui > TEST.log.txt &
+$SAFA_RUNNER_PATH no-gui no-kvm > TEST.log.txt &
 PID=$!
 
 function cleanup {

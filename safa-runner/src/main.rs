@@ -1,12 +1,9 @@
-use std::env::args;
-
-// code for running qemu and testing, kernel src avalible at kernel
-
 fn main() {
-    let mut args = args();
+    safa_builder::build();
+    let mut args = std::env::args();
     args.next();
 
-    let iso_path = env!("ISO_PATH");
+    let iso_path = "safaos.iso";
 
     let uefi = true;
 

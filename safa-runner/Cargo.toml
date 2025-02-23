@@ -1,0 +1,10 @@
+[workspace]
+[package]
+name = "safa-runner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+safa-builder = { path = "../safa-builder" }
+ovmf-prebuilt = "0.1.0-alpha.1"
+
