@@ -21,7 +21,7 @@ jobs:
     - name: Install deps
       run: sudo apt update -y && sudo apt install xorriso qemu-system -y
     - name: Setup
-      run: rustup target add x86_64-unknown-none
+      run: rustup update && rustup target add x86_64-unknown-none
     - name: Build
       run: cd kernel && cargo build --verbose
     - name: ls
