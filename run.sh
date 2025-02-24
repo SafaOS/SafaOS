@@ -1,3 +1,4 @@
+#!/bin/bash
 # A script to build and run SafaOS using qemu
 # arguments:
 # no-kvm: runs qemu without kvm
