@@ -1,9 +1,0 @@
-[workspace]
-[package]
-name = "safa-builder"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-tar = "0.4"
-
