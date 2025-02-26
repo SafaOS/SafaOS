@@ -23,35 +23,35 @@ you need:
 
 simply run
 ```
-cargo build
+./build.sh
 ```
 
-this should make an iso with the name: `safaos.iso` if successful
-## Running with OSHelper
-the main crate called `SafaOS` (let's call it OsHelper), is a simple "helper" that builds the iso, and provides a wrapper around `qemu-system-x86_64` to run the iso.
+this should make an iso with the name: `safaos.iso` if successful,
+you can also find pre-built artifact isos built using github actions, check the latest successful build for the main branch.
+## Running
 you'll need:
 
 - qemu-system-x86_64
 
 ```
-cargo run
+./run.sh
 ```
 or to run without kvm
 ```
-cargo run -- no-kvm
+./run.sh no-kvm
 ```
 otherwise you have the iso `safaos.iso` feel free to do whatever you want with it
 
 ### Debugging
-you can also use the OsHelper to debug:
+you can also use the `run.sh` script to debug:
 ```
-cargo run -- debugger no-kvm
+./run.sh debugger no-kvm
 ```
 (doesn't work with kvm for now)
 and then connect to port 1234 with a gdb client i recommend using `rust-lldb`.
 
 ### Additional Information
-avalable arguments for the OsHelper are:
+avalable arguments for the `run.sh` script are:
 
 - `no-kvm`: disables kvm
 - `no-gui`: disables gui

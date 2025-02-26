@@ -13,11 +13,11 @@ pkg/
 build/
 *.img
 *.bin
-Cargo.lock
 
-/target
+target
 /.cache
 
 iso_root
 safaos.iso
 limine
+last_build.log

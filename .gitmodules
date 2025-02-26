@@ -1,3 +1,6 @@
 [submodule "libc"]
 	path = libc
 	url = https://github.com/SafaOS/libc
+[submodule "common"]
+	path = common
+	url = https://github.com/SafaOS/common
