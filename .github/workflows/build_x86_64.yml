@@ -23,7 +23,7 @@ jobs:
     - name: Setup
       run: rustup update && rustup target add x86_64-unknown-none
     - name: Build
-      run: cd kernel && cargo build --verbose
+      run: ./init.sh && ./build.sh
     - name: ls
       run: pwd && ls
     - name: Run tests

@@ -4,9 +4,12 @@
 
 # TODO: make the build script more lazy so that it doesn't rebuild everything everytime
 set -eo pipefail
+echo "Note that ./init.sh must be run at least once before running this script"
 
 ISO_PATH="safaos.iso"
 ISO_BUILD_DIR="iso_root"
+
+RUSTC_TOOLCHAIN=$(cd common && ./get-rustc.sh && cd ..)
 
 function build_ramdisk {
     RAMDISK_BUILTIN=(
@@ -63,6 +66,16 @@ function cargo_build {
 
     cd "$AT"
     json=$(cargo build $ARGS --message-format=json-render-diagnostics)
+    printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
+}
+
+function cargo_build_safaos {
+    CWD=$(pwd)
+    AT=$1
+    ARGS="${@:2}"
+
+    cd "$AT"
+    json=$(cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics)
     printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
 }
 
