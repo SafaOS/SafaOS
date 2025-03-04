@@ -65,6 +65,8 @@ function cargo_build {
     ARGS="${@:2}"
 
     cd "$AT"
+
+    rustup show active-toolchain || rustup toolchain install
     json=$(cargo build $ARGS --message-format=json-render-diagnostics)
     printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
 }
