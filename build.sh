@@ -64,9 +64,8 @@ function cargo_build {
     AT=$1
     ARGS="${@:2}"
 
-    cd "$AT"
+    cd "$AT" && $(rustup show active-toolchain || rustup toolchain install)
 
-    rustup show active-toolchain || rustup toolchain install
     json=$(cargo build $ARGS --message-format=json-render-diagnostics)
     printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
 }
@@ -79,7 +78,6 @@ function cargo_build_safaos {
     
     cd "$AT"
 
-    rustup show active-toolchain || rustup toolchain install
     json=$(cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics)
     printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
 }
