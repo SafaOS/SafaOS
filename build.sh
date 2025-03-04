@@ -74,8 +74,10 @@ function cargo_build_safaos {
     CWD=$(pwd)
     AT=$1
     ARGS="${@:2}"
-
+    
     cd "$AT"
+
+    rustup toolchain install || true
     json=$(cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics)
     printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
 }
