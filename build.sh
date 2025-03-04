@@ -10,6 +10,7 @@ ISO_PATH="safaos.iso"
 ISO_BUILD_DIR="iso_root"
 
 RUSTC_TOOLCHAIN=$(cd common && ./get-rustc.sh && cd ..)
+RAMDISK=()
 
 function build_ramdisk {
     RAMDISK_BUILTIN=(
@@ -18,7 +19,6 @@ function build_ramdisk {
         "Shell/zig-out/bin/Shell" "bin/Shell"
     )
 
-    RAMDISK=()
     cd ramdisk-include
     RAMDISK_INCLUDE=(*)
     cd ..
@@ -49,7 +49,6 @@ function build_ramdisk {
 }
 
 rm -vrf $ISO_BUILD_DIR
-git submodule update --init --recursive
 
 if ! (test -d "limine") ; then
     git clone https://github.com/limine-bootloader/limine.git --branch=v8.x-binary --depth=1
@@ -59,6 +58,7 @@ make -C limine
 mkdir -pv $ISO_BUILD_DIR/boot/limine
 mkdir -pv $ISO_BUILD_DIR/EFI/BOOT
 
+# TODO: release vs debug mode and such
 function cargo_build {
     CWD=$(pwd)
     AT=$1
@@ -69,6 +69,7 @@ function cargo_build {
     printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
 }
 
+# TODO: release vs debug mode and such
 function cargo_build_safaos {
     CWD=$(pwd)
     AT=$1
@@ -90,6 +91,8 @@ function zig_build {
 }
 
 function build_programs {
+    SHELL=$(cargo_build_safaos "SafaShell" --release)
+    RAMDISK+=("$SHELL" "safa")
     zig_build "Shell"
     zig_build "TestBot"
     zig_build "bin"
