@@ -6,7 +6,7 @@ use crate::memory::{translate, PhysAddr};
 use bitflags::bitflags;
 use core::{
     arch::asm,
-    fmt::Debug,
+    fmt::{Debug, LowerHex},
     ops::{Deref, DerefMut, Index, IndexMut},
 };
 
@@ -22,6 +22,13 @@ use super::{
 pub struct Page {
     pub start_address: VirtAddr,
 }
+
+impl LowerHex for Page {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Page({:#x})", self.start_address)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IterPage {
     start: Page,

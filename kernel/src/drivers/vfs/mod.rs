@@ -466,8 +466,10 @@ impl VFS {
         let mut ramdisk = limine::get_ramdisk();
         let mut ramfs = RwLock::new(ramfs::RamFS::new());
 
+        debug!(VFS, "Unpacking ramdisk ...");
         this.unpack_tar(&mut ramfs, &mut ramdisk)
             .expect("failed unpacking ramdisk archive");
+        debug!(VFS, "Mounting ramdisk ...");
         this.mount(b"sys", ramfs).expect("failed mounting");
 
         let elapsed = time!() - the_now;
@@ -561,6 +563,9 @@ impl VFS {
     fn unpack_tar(&self, fs: &mut dyn FileSystem, tar: &mut TarArchiveIter) -> FSResult<()> {
         while let Some(inode) = tar.next() {
             let path = inode.name();
+            if cfg!(debug_assertions) {
+                debug!(VFS, "Unpacking ({}) {path} ...", inode.kind);
+            }
 
             match inode.kind {
                 ustar::Type::NORMAL => {
