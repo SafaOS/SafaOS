@@ -16,7 +16,6 @@ function build_ramdisk {
     RAMDISK_BUILTIN=(
         "bin/zig-out/bin/" "bin/"
         "TestBot/zig-out/bin/TestBot" "bin/TestBot"
-        "Shell/zig-out/bin/Shell" "bin/Shell"
     )
 
     cd ramdisk-include
@@ -58,13 +57,19 @@ make -C limine
 mkdir -pv $ISO_BUILD_DIR/boot/limine
 mkdir -pv $ISO_BUILD_DIR/EFI/BOOT
 
+function install_toolchain {
+    rustup show active-toolchain > /dev/null || rustup toolchain install
+    return 0
+}
+
 # TODO: release vs debug mode and such
 function cargo_build {
     CWD=$(pwd)
     AT=$1
     ARGS="${@:2}"
 
-    cd "$AT" && $(rustup show active-toolchain || rustup toolchain install)
+    cd "$AT"
+    install_toolchain
 
     json=$(cargo build $ARGS --message-format=json-render-diagnostics)
     printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
@@ -93,7 +98,8 @@ function zig_build {
 }
 
 function build_programs {
-    zig_build "Shell"
+    SHELL=$(cargo_build_safaos "SafaShell" --release)
+    RAMDISK+=("$SHELL" "safa")
     zig_build "TestBot"
     zig_build "bin"
 }
