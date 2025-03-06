@@ -3,10 +3,7 @@
 //! makes use of memmory mapping and `FrameAllocator` (TODO: check if these are possible reasons it
 //! is slow)
 
-use core::{
-    alloc::{AllocError, Allocator},
-    error::Error,
-};
+use core::alloc::{AllocError, Allocator};
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -90,13 +87,13 @@ impl PageAllocator {
                 }
 
                 let mut bit = 0;
-                while byte_ref & mask != 0 && bit < usize::BITS {
+                while byte_ref & mask != 0 && bit <= usize::BITS - page_count as u32 {
                     let leading_ones = byte_ref.trailing_ones();
                     byte_ref >>= leading_ones;
                     bit += leading_ones;
                 }
 
-                if bit < usize::BITS {
+                if bit <= usize::BITS - page_count as u32 {
                     *bytes |= mask << bit;
 
                     if self.next_small_allocation_index < i + 1 {
