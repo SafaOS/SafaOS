@@ -98,7 +98,7 @@ function zig_build {
 }
 
 function build_programs {
-    SHELL=$(cargo_build_safaos "SafaShell" --release)
+    SHELL=$(cargo_build_safaos "Shell" --release)
     RAMDISK+=("$SHELL" "safa")
     zig_build "TestBot"
     zig_build "bin"
