@@ -5,5 +5,5 @@
 	path = common
 	url = https://github.com/SafaOS/common
 [submodule "SafaShell"]
-	path = SafaShell
+	path = Shell
 	url = https://github.com/SafaOS/Shell
