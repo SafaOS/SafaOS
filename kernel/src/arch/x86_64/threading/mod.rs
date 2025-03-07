@@ -139,6 +139,7 @@ impl CPUStatus {
             EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
         )?;
 
+        // FIXME: dynamically size the argv area based on the length of the args
         // allocate the argv area
         page_table.alloc_map(
             ARGV_START,
@@ -159,26 +160,23 @@ impl CPUStatus {
 
             for arg in argv {
                 let arg = arg.as_bytes();
-                let len = arg.len();
-
-                copy_to_userspace(page_table, start_addr, &len.to_ne_bytes());
-                start_addr += USIZE_BYTES;
-
                 copy_to_userspace(page_table, start_addr, arg);
                 // null-terminate arg
-                copy_to_userspace(page_table, start_addr + len, b"\0");
-                start_addr += len + 1;
+                copy_to_userspace(page_table, start_addr + arg.len(), b"\0");
+                start_addr += arg.len() + 1;
             }
 
+            let mut start_addr = start_addr.next_multiple_of(USIZE_BYTES);
             let argv_addr = start_addr;
             let mut current_argv_ptr = ARGV_START + USIZE_BYTES /* after argc */;
             // argv**
             for arg in argv {
                 copy_to_userspace(page_table, start_addr, &current_argv_ptr.to_ne_bytes());
                 start_addr += USIZE_BYTES;
+                copy_to_userspace(page_table, start_addr, &arg.len().to_ne_bytes());
+                start_addr += USIZE_BYTES;
 
-                current_argv_ptr += USIZE_BYTES; // skip the len
-                current_argv_ptr += arg.len() + 1; // skip the data
+                current_argv_ptr += arg.len() + 1; // skip the data (and null terminator)
             }
 
             // _start looks like: extern "C" _start(argc: u64, argv: *const (len, str))
