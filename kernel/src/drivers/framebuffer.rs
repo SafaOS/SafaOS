@@ -126,18 +126,7 @@ impl FrameBuffer {
         assert_eq!(self.info.bytes_per_pixel, 4);
         let color: u32 = color.into();
         let buffer = self.buffer_u32();
-
-        buffer[0] = color;
-
-        let mut filled = 1;
-        while filled < buffer.len() {
-            let reamining = buffer.len() - filled;
-            let chunk_size = filled.min(reamining);
-
-            let (left, right) = buffer.split_at_mut(filled);
-            right[..chunk_size].copy_from_slice(&left[..chunk_size]);
-            filled += chunk_size;
-        }
+        buffer.fill(color);
     }
 }
 
