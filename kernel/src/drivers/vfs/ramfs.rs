@@ -9,10 +9,11 @@ use spin::{Mutex, RwLock};
 
 use crate::devices::Device;
 use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
+use crate::utils::path::PathParts;
 use crate::utils::HeaplessString;
 
 use super::{DirIterInodeItem, FileName, InodeOf};
-use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType, Path};
+use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType};
 
 /// The data of a RamInode
 // you cannot just lock the whole enum because Devices' manage their own locks
@@ -76,7 +77,7 @@ impl InodeOps for RamInode {
         }
     }
 
-    fn contains(&self, name: Path) -> bool {
+    fn contains(&self, name: &str) -> bool {
         match self.data {
             RamInodeData::Children(ref tree) => tree.lock().contains_key(name),
             RamInodeData::HardLink(ref inode) => inode.contains(name),
@@ -275,7 +276,7 @@ impl FileSystem for RwLock<RamFS> {
             .map(|x| x as Inode)
     }
 
-    fn create(&self, path: Path) -> FSResult<()> {
+    fn create(&self, path: PathParts) -> FSResult<()> {
         let (parent, name) = self.reslove_path_uncreated(path)?;
         let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
 
@@ -286,7 +287,7 @@ impl FileSystem for RwLock<RamFS> {
         Ok(())
     }
 
-    fn createdir(&self, path: Path) -> FSResult<()> {
+    fn createdir(&self, path: PathParts) -> FSResult<()> {
         let (parent, name) = self.reslove_path_uncreated(path)?;
         let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
 
@@ -303,7 +304,7 @@ impl FileSystem for RwLock<RamFS> {
         Ok(())
     }
 
-    fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+    fn mount_device(&self, path: PathParts, device: &'static dyn Device) -> FSResult<()> {
         let (parent, name) = self.reslove_path_uncreated(path)?;
         let name = FileName::from_str(name).map_err(|()| FSError::InvaildName)?;
 

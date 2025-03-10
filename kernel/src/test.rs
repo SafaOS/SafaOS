@@ -1,9 +1,10 @@
-use macros::test_module;
-
 use crate::{println, serial, threading::expose::thread_exit};
+use macros::test_module;
 
 #[test_module]
 pub mod testing_module {
+    use crate::alloc::string::ToString;
+    use crate::make_path;
     use alloc::vec::Vec;
 
     use crate::memory::frame_allocator;
@@ -112,8 +113,8 @@ pub mod testing_module {
     fn spawn() {
         unsafe { core::arch::asm!("cli") }
         let pid = pspawn(
-            "TEST_CASE",
-            "sys:/bin/true",
+            "TEST_CASE".to_string(),
+            make_path!("sys", "/bin/true"),
             &[],
             SpawnFlags::CLONE_RESOURCES,
         )
@@ -126,7 +127,13 @@ pub mod testing_module {
 
     fn userspace() {
         unsafe { core::arch::asm!("cli") }
-        let pid = pspawn("TEST_BOT", "sys:/bin/TestBot", &[], SpawnFlags::empty()).unwrap();
+        let pid = pspawn(
+            "TEST_BOT".to_string(),
+            make_path!("sys", "/bin/TestBot"),
+            &[],
+            SpawnFlags::empty(),
+        )
+        .unwrap();
         let ret = wait(pid);
 
         assert_eq!(ret, 0);

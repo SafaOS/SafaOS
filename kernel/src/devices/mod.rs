@@ -1,19 +1,18 @@
 pub mod serial;
 pub mod tty;
 
-use alloc::format;
-
 use crate::{
     arch::serial::SERIAL,
     debug,
-    drivers::vfs::{CtlArgs, FSError, FSResult, FileSystem, InodeOps, VFS},
+    drivers::vfs::{CtlArgs, FSError, FSResult, InodeOps, VFS},
+    make_path,
     terminal::FRAMEBUFFER_TERMINAL,
     time,
 };
 
 pub fn add_device(vfs: &VFS, device: &'static dyn Device) {
-    let path = format!("dev:/{}", Device::name(device));
-    vfs.mount_device(&path, device).unwrap();
+    let path = make_path!("dev", device.name());
+    vfs.mount_device(path, device).unwrap();
 }
 
 pub fn init(vfs: &VFS) {

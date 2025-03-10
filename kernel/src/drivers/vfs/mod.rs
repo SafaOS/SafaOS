@@ -7,10 +7,10 @@ use crate::{
     devices::{self, Device},
     limine,
     memory::{frame_allocator, paging::PAGE_SIZE},
-    threading::expose::getcwd,
     time,
     utils::{
         errors::{ErrorStatus, IntoErr},
+        path::{CowPath, PathParts},
         ustar::{self, TarArchiveIter},
         HeaplessString,
     },
@@ -18,19 +18,17 @@ use crate::{
 pub mod procfs;
 pub mod ramfs;
 
+use crate::utils::path::Path;
 use alloc::{
-    borrow::ToOwned,
     boxed::Box,
     collections::btree_map::{BTreeMap, Entry},
     string::{String, ToString},
     sync::Arc,
-    vec::Vec,
 };
 use expose::DirEntry;
 use lazy_static::lazy_static;
 use spin::{Mutex, RwLock};
 
-pub type Path<'a> = &'a str;
 pub type FileName = HeaplessString<{ DirEntry::MAX_NAME_LEN }>;
 
 lazy_static! {
@@ -331,29 +329,13 @@ pub trait FileSystem: Send + Sync {
 
     /// goes trough path to get the inode it refers to
     /// will err if there is no such a file or directory or path is straight up invaild
-    fn reslove_path(&self, path: Path) -> FSResult<Inode> {
-        let mut path = path.split(&['/', '\\']).peekable();
-
+    fn reslove_path(&self, path: PathParts) -> FSResult<Inode> {
         let mut current_inode = self.root_inode();
-
-        if path.peek() == Some(&"") {
-            path.next();
+        if path.is_empty() {
+            return Ok(current_inode);
         }
 
-        // skips drive if it is provided
-        if path.peek().is_some_and(|peek| peek.contains(':')) {
-            path.next();
-        }
-
-        while let Some(depth) = path.next() {
-            if depth.is_empty() {
-                if path.next().is_none() {
-                    break;
-                } else {
-                    return Err(FSError::InvaildPath);
-                }
-            }
-
+        for depth in path.iter() {
             if depth == "." {
                 continue;
             }
@@ -376,19 +358,13 @@ pub trait FileSystem: Send + Sync {
     /// goes trough path to get the inode it refers to
     /// will err if there is no such a file or directory or path is straight up invaild
     /// assumes that the last depth in path is the filename and returns it alongside the parent dir
-    fn reslove_path_uncreated<'a>(&self, path: Path<'a>) -> FSResult<(Inode, &'a str)> {
-        let path = path.trim_end_matches('/');
+    fn reslove_path_uncreated<'a>(&self, path: PathParts<'a>) -> FSResult<(Inode, &'a str)> {
+        let (name, path) = path.spilt_into_name();
 
-        let (name, path) = {
-            let beginning = path.bytes().rposition(|c| c == b'/');
-
-            if let Some(idx) = beginning {
-                (&path[idx + 1..], &path[..idx])
-            } else {
-                (path, "/")
-            }
+        let name = match name {
+            Some(name) if !name.is_empty() => name,
+            _ => return Err(FSError::InvaildPath),
         };
-
         let resloved = self.reslove_path(path)?;
         if resloved.kind() != InodeType::Directory {
             return Err(FSError::NotADirectory);
@@ -398,19 +374,19 @@ pub trait FileSystem: Send + Sync {
     }
 
     /// creates an empty file named `name` in `path`
-    fn create(&self, path: Path) -> FSResult<()> {
+    fn create(&self, path: PathParts) -> FSResult<()> {
         _ = path;
         Err(FSError::OperationNotSupported)
     }
 
     /// creates an empty dir named `name` in `path`
-    fn createdir(&self, path: Path) -> FSResult<()> {
+    fn createdir(&self, path: PathParts) -> FSResult<()> {
         _ = path;
         Err(FSError::OperationNotSupported)
     }
 
     /// mounts a device to `path`
-    fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+    fn mount_device(&self, path: PathParts, device: &'static dyn Device) -> FSResult<()> {
         _ = path;
         _ = device;
         Err(FSError::OperationNotSupported)
@@ -430,13 +406,13 @@ impl Debug for dyn InodeOps {
 }
 #[allow(clippy::upper_case_acronyms)]
 pub struct VFS {
-    drivers: BTreeMap<Vec<u8>, Arc<dyn FileSystem>>,
+    drives: BTreeMap<String, Arc<dyn FileSystem>>,
 }
 
 impl VFS {
     pub fn new() -> Self {
         Self {
-            drivers: BTreeMap::new(),
+            drives: BTreeMap::new(),
         }
     }
 
@@ -454,13 +430,12 @@ impl VFS {
 
         // ramfs
         let ramfs = RwLock::new(ramfs::RamFS::new());
-        this.mount(b"ram", ramfs).unwrap();
+        this.mount("ram", ramfs).unwrap();
         // devices
-        this.mount(b"dev", RwLock::new(ramfs::RamFS::new()))
-            .unwrap();
+        this.mount("dev", RwLock::new(ramfs::RamFS::new())).unwrap();
         devices::init(&this);
         // processes
-        this.mount(b"proc", Mutex::new(procfs::ProcFS::create()))
+        this.mount("proc", Mutex::new(procfs::ProcFS::create()))
             .unwrap();
         // ramdisk
         let mut ramdisk = limine::get_ramdisk();
@@ -470,7 +445,7 @@ impl VFS {
         this.unpack_tar(&mut ramfs, &mut ramdisk)
             .expect("failed unpacking ramdisk archive");
         debug!(VFS, "Mounting ramdisk ...");
-        this.mount(b"sys", ramfs).expect("failed mounting");
+        this.mount("sys", ramfs).expect("failed mounting");
 
         let elapsed = time!() - the_now;
         let used_memory = frame_allocator::mapped_frames() - moment_memory_usage;
@@ -488,10 +463,8 @@ impl VFS {
     /// mounts a file system as a drive
     /// returns Err(()) if not enough memory or there is an already mounted driver with that
     /// name
-    fn mount<F: FileSystem + 'static>(&mut self, name: &[u8], value: F) -> Result<(), ()> {
-        let name = name.to_vec();
-
-        if let Entry::Vacant(entry) = self.drivers.entry(name) {
+    fn mount<F: FileSystem + 'static>(&mut self, name: &str, value: F) -> Result<(), ()> {
+        if let Entry::Vacant(entry) = self.drives.entry(name.to_string()) {
             entry.insert(Arc::new(value));
             Ok(())
         } else {
@@ -499,70 +472,52 @@ impl VFS {
         }
     }
 
-    /// gets a drive from `self` named "`name`"
-    /// or "`name`:" imuttabily
-    pub(self) fn get_with_name(&self, name: &[u8]) -> Option<&Arc<dyn FileSystem>> {
-        let mut name = name;
-
-        if name.ends_with(b":") {
-            name = &name[..name.len() - 1];
-        }
-
-        self.drivers.get(name)
-    }
-
     /// gets the drive name from `path` then gets the drive
     /// path must be absolute starting with DRIVE_NAME:/
-    /// also handles relative path
-    pub(self) fn get_from_path(&self, path: Path) -> FSResult<(&Arc<dyn FileSystem>, String)> {
-        let mut spilt_path = path.split(&['/', '\\']);
-
-        let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
-        let full_path = if !(drive.ends_with(':')) {
-            &(getcwd().to_owned() + path)
-        } else {
-            path
-        };
-
-        self.get_from_path_checked(full_path)
+    #[must_use]
+    #[inline]
+    fn get_from_path(&self, path: Path) -> FSResult<&Arc<dyn FileSystem>> {
+        let drive = path
+            .drive()
+            .expect("drive was not put in the final absolute path using path::to_absolute_cwd");
+        let drive = self.drives.get(drive).ok_or(FSError::InvaildDrive)?;
+        Ok(drive)
     }
-
-    /// get_from_path but path cannot be realtive to cwd
-    pub(self) fn get_from_path_checked(
+    /// gets the drive name from `path` then gets the drive
+    /// path can be relative unlike [`Self::get_from_path`]
+    /// returns the mountpoint and the relative path
+    #[inline(always)]
+    #[must_use = "it is bad to call this function without using the returned Absolute path"]
+    fn get_from_path_relative<'a>(
         &self,
-        path: Path,
-    ) -> FSResult<(&Arc<dyn FileSystem>, String)> {
-        let mut spilt_path = path.split(&['/', '\\']);
+        path: Path<'a>,
+    ) -> FSResult<(&Arc<dyn FileSystem>, CowPath<'a>)> {
+        let path = path.to_absolute_cwd();
+        let mountpoint = self.get_from_path(path.as_path())?;
 
-        let drive = spilt_path.next().ok_or(FSError::InvaildDrive)?;
-        if !(drive.ends_with(':')) {
-            return Err(FSError::InvaildDrive);
-        }
-
-        Ok((
-            self.get_with_name(drive.as_bytes())
-                .ok_or(FSError::InvaildDrive)?,
-            path.to_string(),
-        ))
+        Ok((mountpoint, path))
     }
 
     /// checks if a path is a vaild dir returns Err if path has an error
-    /// handles relative paths
-    /// returns the absolute path if it is a dir
-    pub fn verify_path_dir(&self, path: Path) -> FSResult<String> {
-        let (mountpoint, path) = self.get_from_path(path)?;
-
-        let res = mountpoint.reslove_path(&path)?;
+    /// assumes that the path is absolute
+    pub fn verify_path_dir(&self, path: Path) -> FSResult<()> {
+        assert!(path.is_absolute());
+        let mountpoint = self.get_from_path(path)?;
+        let res = match path.parts() {
+            Some(parts) => mountpoint.reslove_path(parts)?,
+            // mountpoints are always directories
+            None => return Ok(()),
+        };
 
         if !res.is_dir() {
             return Err(FSError::NotADirectory);
         }
-        Ok(path)
+        Ok(())
     }
 
     fn unpack_tar(&self, fs: &mut dyn FileSystem, tar: &mut TarArchiveIter) -> FSResult<()> {
         while let Some(inode) = tar.next() {
-            let path = inode.name();
+            let path = PathParts::new(inode.name());
             if cfg!(debug_assertions) {
                 debug!(VFS, "Unpacking ({}) {path} ...", inode.kind);
             }
@@ -576,7 +531,7 @@ impl VFS {
                     node.close();
                 }
 
-                ustar::Type::DIR => fs.createdir(path.trim_end_matches('/'))?,
+                ustar::Type::DIR => fs.createdir(path)?,
 
                 _ => return Err(FSError::OperationNotSupported),
             };
@@ -585,59 +540,30 @@ impl VFS {
     }
 
     fn open(&self, path: Path) -> FSResult<FileDescriptor> {
-        let (mountpoint, path) = self.get_from_path(path)?;
-        mountpoint.on_open(&path)?;
-        let node = mountpoint.reslove_path(&path)?;
+        let (mountpoint, cow_path) = self.get_from_path_relative(path)?;
+        let path = cow_path.as_path();
+
+        mountpoint.on_open(path)?;
+        let node = mountpoint.reslove_path(path.parts().unwrap_or_default())?;
         node.opened();
         Ok(FileDescriptor::new(mountpoint.clone(), node))
     }
-}
 
-impl FileSystem for VFS {
-    fn name(&self) -> &'static str {
-        "vfs"
-    }
-
-    fn get_inode(&self, _: usize) -> Option<Inode> {
-        unreachable!()
-    }
-
-    fn root_inode(&self) -> Inode {
-        unreachable!()
-    }
-
-    fn reslove_path(&self, _: Path) -> FSResult<Inode> {
-        FSResult::Err(FSError::OperationNotSupported)
-    }
-
-    fn reslove_path_uncreated<'a>(&self, _: Path<'a>) -> FSResult<(Inode, &'a str)> {
-        FSResult::Err(FSError::OperationNotSupported)
-    }
-
-    fn on_open(&self, path: Path) -> FSResult<()> {
-        _ = path;
-        FSResult::Err(FSError::OperationNotSupported)
-    }
-
-    fn create(&self, path: Path) -> FSResult<()> {
-        let (mountpoint, path) = self.get_from_path(path)?;
-
-        if path.ends_with('/') {
-            return Err(FSError::NotAFile);
-        }
-
-        mountpoint.create(&path)
+    fn create_path(&self, path: Path) -> FSResult<()> {
+        let (mountpoint, cow_path) = self.get_from_path_relative(path)?;
+        let path = cow_path.as_path();
+        mountpoint.create(path.parts().unwrap_or_default())
     }
 
     fn createdir(&self, path: Path) -> FSResult<()> {
-        let (mountpoint, path) = self.get_from_path(path)?;
-
-        mountpoint.createdir(&path)
+        let (mountpoint, cow_path) = self.get_from_path_relative(path)?;
+        let path = cow_path.as_path();
+        mountpoint.createdir(path.parts().unwrap_or_default())
     }
 
-    fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
-        let (mountpoint, path) = self.get_from_path(path)?;
-
-        mountpoint.mount_device(&path, device)
+    pub fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+        let (mountpoint, cow_path) = self.get_from_path_relative(path)?;
+        let path = cow_path.as_path();
+        mountpoint.mount_device(path.parts().unwrap_or_default(), device)
     }
 }

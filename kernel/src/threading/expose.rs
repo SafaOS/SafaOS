@@ -12,6 +12,7 @@ use crate::{
         elf::{Elf, ElfError},
         errors::ErrorStatus,
         io::Readable,
+        path::{Path, PathBuf},
     },
 };
 
@@ -95,7 +96,7 @@ pub fn function_spawn(
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
         getcwd()
     } else {
-        String::from("ram:/")
+        unsafe { Path::new_unchecked("ram:/").into_owned() }
     };
 
     let mut page_table = PhysPageTable::create()?;
@@ -119,7 +120,7 @@ pub fn function_spawn(
 }
 
 pub fn spawn<T: Readable>(
-    name: &str,
+    name: String,
     reader: &T,
     argv: &[&str],
     flags: SpawnFlags,
@@ -127,7 +128,7 @@ pub fn spawn<T: Readable>(
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
         getcwd()
     } else {
-        String::from("ram:/")
+        unsafe { Path::new_unchecked("ram:/").into_owned() }
     };
 
     let elf = Elf::new(reader)?;
@@ -135,7 +136,7 @@ pub fn spawn<T: Readable>(
     let current = super::current();
     let current_pid = current.pid;
 
-    let task = Task::from_elf(name.to_string(), 0, current_pid, cwd, elf, argv)?;
+    let task = Task::from_elf(name, 0, current_pid, cwd, elf, argv)?;
 
     if flags.contains(SpawnFlags::CLONE_RESOURCES) {
         let mut state = task.state_mut().unwrap();
@@ -153,7 +154,12 @@ pub fn spawn<T: Readable>(
 }
 
 /// spawns an elf process from a path
-pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Result<usize, FSError> {
+pub fn pspawn(
+    name: String,
+    path: Path,
+    argv: &[&str],
+    flags: SpawnFlags,
+) -> Result<usize, FSError> {
     let file = File::open(path)?;
 
     if file.kind() != InodeType::File {
@@ -166,27 +172,26 @@ pub fn pspawn(name: &str, path: &str, argv: &[&str], flags: SpawnFlags) -> Resul
 /// also ensures the cwd ends with /
 /// will only Err if new_dir doesn't exists or is not a directory
 #[no_mangle]
-pub fn chdir(new_dir: &str) -> FSResult<()> {
-    let new_dir = VFS_STRUCT.read().verify_path_dir(new_dir)?;
+pub fn chdir(new_dir: Path) -> FSResult<()> {
+    let new_dir = new_dir.to_absolute_cwd();
+    let new_dir = new_dir.into_owned();
+
+    VFS_STRUCT.read().verify_path_dir(new_dir.as_path())?;
     let current = super::current();
 
     let mut state = current.state_mut().unwrap();
     let cwd = state.cwd_mut();
     *cwd = new_dir;
-    // TODO: implement a Path type with abillity to append paths to prevent this, and also to
-    // prevent path's like ram:/dir/../dir/ from existing idiots
-    if !cwd.ends_with('/') {
-        cwd.push('/');
-    }
     Ok(())
 }
 
+// TODO: this depends on the existence of the current process we can remove unnecessary allocations
 #[no_mangle]
-pub fn getcwd() -> String {
+pub fn getcwd() -> PathBuf {
     let current = super::current();
     let state = current.state().unwrap();
     let cwd = state.cwd();
-    cwd.to_string()
+    cwd.into_owned()
 }
 
 fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: usize) -> bool {

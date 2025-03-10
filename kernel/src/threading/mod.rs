@@ -16,7 +16,7 @@ use crate::{
     arch::threading::{restore_cpu_status, CPUStatus},
     debug,
     memory::paging::PhysPageTable,
-    utils::alloc::LinkedList,
+    utils::{alloc::LinkedList, path::Path},
 };
 
 pub struct Scheduler {
@@ -47,7 +47,7 @@ impl Scheduler {
             String::from(name),
             0,
             0,
-            String::from("ram:/"),
+            unsafe { Path::new_unchecked("ram:/") }.into_owned(),
             page_table,
             context,
             0,

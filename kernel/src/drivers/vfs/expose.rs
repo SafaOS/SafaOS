@@ -6,8 +6,8 @@ use crate::{
 };
 
 use super::{
-    CtlArgs, DirIterDescriptor, FSError, FSResult, FileDescriptor, FileSystem, Inode, InodeType,
-    Path, VFS_STRUCT,
+    CtlArgs, DirIterDescriptor, FSError, FSResult, FileDescriptor, Inode, InodeType, Path,
+    VFS_STRUCT,
 };
 
 #[derive(Debug)]
@@ -138,7 +138,7 @@ impl Deref for FileRef {
 
 #[no_mangle]
 pub fn create(path: Path) -> FSResult<()> {
-    VFS_STRUCT.read().create(path)
+    VFS_STRUCT.read().create_path(path)
 }
 
 #[no_mangle]

@@ -1,3 +1,4 @@
+use alloc::string::String;
 use bitflags::bitflags;
 use core::fmt::Write;
 use framebuffer::FrameBufferTTY;
@@ -9,6 +10,7 @@ use crate::{
         keys::{Key, KeyCode, KeyFlags},
         HandleKey,
     },
+    make_path,
     threading::expose::{pspawn, SpawnFlags},
     utils::{
         alloc::{PageBString, PageString},
@@ -159,7 +161,14 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
             KeyCode::KeyC if key.flags.contains(KeyFlags::CTRL | KeyFlags::SHIFT) => {
                 self.clear();
                 self.interface.set_cursor(1, 1);
-                pspawn("Shell", "sys:/safa", &["-i"], SpawnFlags::CLONE_RESOURCES).unwrap();
+                pspawn(
+                    String::from("Shell"),
+                    // Maybe we can make a const function or a macro for this
+                    make_path!("sys", "safa"),
+                    &["-i"],
+                    SpawnFlags::CLONE_RESOURCES,
+                )
+                .unwrap();
             }
             KeyCode::Backspace
                 if self.settings.contains(TTYSettings::RECIVE_INPUT)

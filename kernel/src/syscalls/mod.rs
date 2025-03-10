@@ -6,7 +6,7 @@ use crate::{
         CtlArgs,
     },
     threading::expose::SpawnFlags,
-    utils::errors::ErrorStatus,
+    utils::{errors::ErrorStatus, path::Path},
     VirtAddr,
 };
 use int_enum::IntEnum;
@@ -149,6 +149,14 @@ impl SyscallFFI for &str {
     }
 }
 
+impl SyscallFFI for Path<'_> {
+    type Args = (*const u8, usize);
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        let str = <&str>::make(args)?;
+        Ok(Path::new(str)?)
+    }
+}
+
 impl SyscallFFI for FileRef {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
@@ -196,6 +204,7 @@ pub enum SyscallTable {
     SysTruncate = 17,
     SysCtl = 12,
     SysFSize = 22,
+    SysGetDirEntry = 23,
 
     SysCHDir = 14,
     SysGetCWD = 15,
@@ -237,12 +246,12 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 utils::sysgetcwd(path, dest_len)
             }
             SyscallTable::SysCHDir => {
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 utils::syschdir(path)
             }
             // io
             SyscallTable::SysOpen => {
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 let dest_fd = Option::make(c as *mut usize)?;
                 io::sysopen(path, dest_fd)
             }
@@ -260,11 +269,11 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 io::sysdiriter_next(diriter_rd, direntry)
             }
             SyscallTable::SysCreate => {
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 io::syscreate(path)
             }
             SyscallTable::SysCreateDir => {
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 io::syscreatedir(path)
             }
             SyscallTable::SysWrite => {
@@ -345,7 +354,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                     }
                 }
 
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 let config = <&SpawnConfig>::make(c as *const SpawnConfig)?;
                 let (name, argv, flags) = config.as_rust()?;
                 let dest_pid = Option::make(d as *mut usize)?;
