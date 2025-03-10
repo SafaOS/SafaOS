@@ -73,5 +73,6 @@ pub extern "C" fn syscall_base_mapper(a: usize, b: usize, c: usize, d: usize, e:
     unsafe {
         asm!("mov {}, rax", out(reg) number);
     }
-    syscalls::syscall(number as u16, a, b, c, d, e) as usize
+    let u16: u16 = syscalls::syscall(number as u16, a, b, c, d, e).into();
+    u16 as usize
 }

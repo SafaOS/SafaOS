@@ -1,3 +1,5 @@
+use safa_utils::errors::SysResult;
+
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
@@ -47,7 +49,7 @@ mod utils;
 /// this function is the final non-arch-specific layer between the kernel and the syscalls
 /// it maps from arguments to syscall arguments
 /// the way arguments are mapped is defined by the [`SyscallFFI`] trait
-pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) -> ErrorStatus {
+pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) -> SysResult {
     #[inline(always)]
     fn inner(
         number: u16,
@@ -224,10 +226,6 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
     }
 
     // maps the results to an ErrorStatus
-    let value = match inner(number, a, b, c, d, e) {
-        Ok(()) => ErrorStatus::None,
-        Err(err) => err,
-    };
-
+    let value = inner(number, a, b, c, d, e).into();
     value
 }
