@@ -120,7 +120,7 @@ impl<'a> PathParts<'a> {
     /// Spilts the path into the inner most child and the rest of the path
     pub fn spilt_into_name(self) -> (Option<&'a str>, PathParts<'a>) {
         let inner = self.inner.trim_matches('/');
-        if inner.is_empty() {
+        if inner.is_empty() || inner == "/" {
             return (None, self);
         }
 

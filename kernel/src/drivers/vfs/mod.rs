@@ -361,10 +361,7 @@ pub trait FileSystem: Send + Sync {
     fn reslove_path_uncreated<'a>(&self, path: PathParts<'a>) -> FSResult<(Inode, &'a str)> {
         let (name, path) = path.spilt_into_name();
 
-        let name = match name {
-            Some(name) if !name.is_empty() => name,
-            _ => return Err(FSError::InvaildPath),
-        };
+        let name = name.ok_or(FSError::InvaildPath)?;
         let resloved = self.reslove_path(path)?;
         if resloved.kind() != InodeType::Directory {
             return Err(FSError::NotADirectory);
