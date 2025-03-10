@@ -1,10 +1,12 @@
+extern crate alloc;
+
 use core::fmt::Write;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut, RangeBounds};
 use core::ptr::NonNull;
 use core::str;
 
-use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
+use crate::memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc};
 use alloc::boxed::Box;
 use alloc::str::pattern::{Pattern, ReverseSearcher};
 use alloc::vec::{Drain, Vec};

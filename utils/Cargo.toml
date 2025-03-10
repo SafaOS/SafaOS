@@ -1,0 +1,10 @@
+[package]
+name = "safa-utils"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+heapless = "0.8.0"
+macros = { path = "../macros" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+int-enum = "1.1"

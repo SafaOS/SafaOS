@@ -5,10 +5,11 @@ use crate::{
     arch::serial::SERIAL,
     debug,
     drivers::vfs::{CtlArgs, FSError, FSResult, InodeOps, VFS},
-    make_path,
     terminal::FRAMEBUFFER_TERMINAL,
     time,
 };
+
+use safa_utils::make_path;
 
 pub fn add_device(vfs: &VFS, device: &'static dyn Device) {
     let path = make_path!("dev", device.name());

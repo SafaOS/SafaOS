@@ -489,7 +489,7 @@ impl VFS {
         &self,
         path: Path<'a>,
     ) -> FSResult<(&Arc<dyn FileSystem>, CowPath<'a>)> {
-        let path = path.to_absolute_cwd();
+        let path = path.to_absolute_with(|| CowPath::Owned(crate::threading::expose::getcwd()));
         let mountpoint = self.get_from_path(path.as_path())?;
 
         Ok((mountpoint, path))

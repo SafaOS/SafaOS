@@ -10,13 +10,13 @@ use crate::{
         keys::{Key, KeyCode, KeyFlags},
         HandleKey,
     },
-    make_path,
     threading::expose::{pspawn, SpawnFlags},
     utils::{
         alloc::{PageBString, PageString},
         bstr::BStr,
     },
 };
+use safa_utils::make_path;
 
 pub mod framebuffer;
 

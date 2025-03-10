@@ -1,13 +1,12 @@
 //! Eve is the kernel's main loop (PID 0)
 //! it is responsible for managing a few things related to it's children
 
-use alloc::vec::Vec;
-use spin::Mutex;
-
 use crate::{
-    debug, drivers::vfs, make_path, memory::paging::PhysPageTable, serial,
-    threading::expose::thread_yeild,
+    debug, drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yeild,
 };
+use alloc::vec::Vec;
+use safa_utils::make_path;
+use spin::Mutex;
 
 pub struct Eve {
     clean_up_list: Vec<PhysPageTable>,

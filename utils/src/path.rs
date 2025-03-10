@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use core::fmt::Display;
 
 use alloc::{
@@ -5,8 +7,6 @@ use alloc::{
     format,
     string::{String, ToString},
 };
-
-use crate::threading;
 
 use super::errors::{ErrorStatus, IntoErr};
 
@@ -20,19 +20,19 @@ use super::errors::{ErrorStatus, IntoErr};
 #[macro_export]
 macro_rules! make_path {
     () => {
-        use $crate::utils::path::Path;
+        use $crate::path::Path;
         Path::empty()
     };
     ($path:literal) => {
         unsafe {
-            use $crate::utils::path::{Path, PathParts};
+            use $crate::path::{Path, PathParts};
             let parts = PathParts::new($path);
             Path::from_raw_parts(None, Some(parts))
         }
     };
     ($drive:literal, $path:expr) => {
         unsafe {
-            use $crate::utils::path::{Path, PathParts};
+            use $crate::path::{Path, PathParts};
             // common mistake to put a colon at the end of the drive
             debug_assert!(!$drive.ends_with(':'));
             let parts = PathParts::new($path);
@@ -127,11 +127,7 @@ impl<'a> PathParts<'a> {
 
         let name_position = inner.char_indices().rev().find_map(|(i, c)| {
             // since we are trimming the path first we can assume there is at least one char after `/`
-            if c == '/' {
-                Some(i + 1)
-            } else {
-                None
-            }
+            if c == '/' { Some(i + 1) } else { None }
         });
 
         let name_index = match name_position {
@@ -287,7 +283,7 @@ impl<'a> Path<'a> {
 
     #[inline]
     pub unsafe fn new_unchecked(path: &'a str) -> Self {
-        Self::new(path).unwrap_unchecked()
+        unsafe { Self::new(path).unwrap_unchecked() }
     }
 
     pub fn parts(&self) -> Option<PathParts<'a>> {
@@ -322,14 +318,17 @@ impl<'a> Path<'a> {
         self.drive.is_some()
     }
 
-    /// converts the path to an absolute path if it is relative, the resulted path is absolute to the CWD
-    pub fn to_absolute_cwd(self) -> CowPath<'a> {
+    /// converts the path to an absolute path if it is relative, the resulted path is going to be absolute to the results of `abs_other`
+    pub fn to_absolute_with(self, abs_other: impl FnOnce() -> CowPath<'a>) -> CowPath<'a> {
         if self.is_absolute() {
             CowPath::Borrowed(self)
         } else {
-            let cwd = threading::expose::getcwd();
-            let cwd = cwd.as_path();
-            let joined = unsafe { cwd.join(self).unwrap_unchecked() };
+            let abs_other = abs_other();
+            let abs_other = abs_other.as_path();
+
+            assert!(abs_other.is_absolute());
+
+            let joined = unsafe { abs_other.join(self).unwrap_unchecked() };
             CowPath::Owned(joined)
         }
     }

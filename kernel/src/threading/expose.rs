@@ -2,6 +2,7 @@ use core::{arch::asm, sync::atomic::Ordering};
 
 use alloc::string::{String, ToString};
 use bitflags::bitflags;
+use safa_utils::path::CowPath;
 
 use crate::{
     arch::threading::CPUStatus,
@@ -173,7 +174,7 @@ pub fn pspawn(
 /// will only Err if new_dir doesn't exists or is not a directory
 #[no_mangle]
 pub fn chdir(new_dir: Path) -> FSResult<()> {
-    let new_dir = new_dir.to_absolute_cwd();
+    let new_dir = new_dir.to_absolute_with(|| CowPath::Owned(getcwd()));
     let new_dir = new_dir.into_owned();
 
     VFS_STRUCT.read().verify_path_dir(new_dir.as_path())?;

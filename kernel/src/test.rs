@@ -4,7 +4,6 @@ use macros::test_module;
 #[test_module]
 pub mod testing_module {
     use crate::alloc::string::ToString;
-    use crate::make_path;
     use alloc::vec::Vec;
 
     use crate::memory::frame_allocator;
@@ -16,6 +15,7 @@ pub mod testing_module {
     use crate::utils::alloc::PageVec;
     use core::arch::asm;
     use core::mem::MaybeUninit;
+    use safa_utils::make_path;
 
     fn serial() {}
     fn print() {}

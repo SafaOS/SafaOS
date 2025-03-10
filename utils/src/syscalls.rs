@@ -1,7 +1,5 @@
 use int_enum::IntEnum;
 
-use crate::drivers::vfs::expose::{DirIter, DirIterRef, File, FileRef};
-
 use super::{errors::ErrorStatus, path::Path};
 
 /// Safely converts FFI [`Self::Args`] into [`Self`] for being passed to a syscall
@@ -139,34 +137,6 @@ impl SyscallFFI for Path<'_> {
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         let str = <&str>::make(args)?;
         Ok(Path::new(str)?)
-    }
-}
-
-impl SyscallFFI for FileRef {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        FileRef::get(args).ok_or(ErrorStatus::InvaildResource)
-    }
-}
-
-impl SyscallFFI for File {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        File::from_fd(args).ok_or(ErrorStatus::InvaildResource)
-    }
-}
-
-impl SyscallFFI for DirIterRef {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIterRef::get(args).ok_or(ErrorStatus::InvaildResource)
-    }
-}
-
-impl SyscallFFI for DirIter {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIter::from_ri(args).ok_or(ErrorStatus::InvaildResource)
     }
 }
 

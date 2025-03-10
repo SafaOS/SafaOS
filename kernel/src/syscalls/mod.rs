@@ -10,11 +10,34 @@ use crate::{
     utils::{errors::ErrorStatus, path::Path},
     VirtAddr,
 };
-// TODO: make a proc-macro that generates the syscalls from rust functions
-// for example it should generate a pointer and a length from a slice argument checking if it is vaild and
-// returning invaild ptr if it is not
-// it should also support optional pointer-arguments using Option<T>
-// and we should do something about functions that takes a struct
+
+impl SyscallFFI for FileRef {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        FileRef::get(args).ok_or(ErrorStatus::InvaildResource)
+    }
+}
+
+impl SyscallFFI for File {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        File::from_fd(args).ok_or(ErrorStatus::InvaildResource)
+    }
+}
+
+impl SyscallFFI for DirIterRef {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        DirIterRef::get(args).ok_or(ErrorStatus::InvaildResource)
+    }
+}
+
+impl SyscallFFI for DirIter {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        DirIter::from_ri(args).ok_or(ErrorStatus::InvaildResource)
+    }
+}
 mod io;
 mod processes;
 mod utils;
