@@ -176,6 +176,11 @@ impl DirEntry {
         }
     }
 
+    #[inline(always)]
+    pub fn get_from_path(path: Path) -> FSResult<Self> {
+        VFS_STRUCT.read().get_direntry(path)
+    }
+
     pub const unsafe fn zeroed() -> Self {
         core::mem::zeroed()
     }

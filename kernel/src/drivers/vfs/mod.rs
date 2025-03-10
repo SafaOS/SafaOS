@@ -563,4 +563,18 @@ impl VFS {
         let path = cow_path.as_path();
         mountpoint.mount_device(path.parts().unwrap_or_default(), device)
     }
+
+    pub fn get_direntry(&self, path: Path) -> FSResult<DirEntry> {
+        let (mountpoint, cow_path) = self.get_from_path_relative(path)?;
+        let path = cow_path.as_path();
+        let parts = path.parts().unwrap_or_default();
+
+        let inode = mountpoint.reslove_path(parts)?;
+        let (name, _) = parts.spilt_into_name();
+        if let Some(name) = name {
+            Ok(DirEntry::get_from_inode(inode, name))
+        } else {
+            Ok(DirEntry::get_from_inode(inode, ""))
+        }
+    }
 }

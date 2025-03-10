@@ -250,6 +250,12 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 utils::syschdir(path)
             }
             // io
+            SyscallTable::SysGetDirEntry => {
+                let path = <Path>::make((a as *const u8, b))?;
+                let direntry = <&mut DirEntry>::make(c as *mut DirEntry)?;
+                *direntry = DirEntry::get_from_path(path)?;
+                Ok(())
+            }
             SyscallTable::SysOpen => {
                 let path = <Path>::make((a as *const u8, b))?;
                 let dest_fd = Option::make(c as *mut usize)?;
