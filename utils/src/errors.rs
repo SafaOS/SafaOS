@@ -78,6 +78,16 @@ impl TryFrom<u16> for SysResult {
     }
 }
 
+impl From<SysResult> for Result<(), ErrorStatus> {
+    #[inline(always)]
+    fn from(value: SysResult) -> Self {
+        match value {
+            SysResult::Sucess => Ok(()),
+            SysResult::Error(err) => Err(err),
+        }
+    }
+}
+
 impl Into<u16> for SysResult {
     #[inline(always)]
     fn into(self) -> u16 {
