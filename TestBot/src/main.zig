@@ -72,7 +72,7 @@ fn make_args(args: anytype) []const Slice(u8) {
     comptime var i: usize = 0;
 
     const info = @typeInfo(@TypeOf(args));
-    const fields = info.Struct.fields;
+    const fields = info.@"struct".fields;
     var args_array: [fields.len]Slice(u8) = undefined;
 
     inline for (fields) |field| {
@@ -264,7 +264,7 @@ fn get_tests() []const TestCase {
 
     // tests are ran in the order they are defined in
     comptime var tests: []const TestCase = &[_]TestCase{};
-    inline for (info.Struct.decls) |decl| {
+    inline for (info.@"struct".decls) |decl| {
         const func = @field(@This(), decl.name);
         if (@TypeOf(func) == fn () Error!void)
             tests = tests ++ &[_]TestCase{.{ .name = decl.name, .func = func }};
