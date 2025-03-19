@@ -12,20 +12,20 @@ pub enum AnsiSequence {
     CursorBackward(u8),
 
     EraseDisplay,
-    SetGraphicsMode(heapless::Vec<u8, 10>),
+    SetGraphicsMode(arrayvec::ArrayVec<u8, 10>),
 }
 
 #[derive(Debug)]
 /// A sequence that is parsed into a [`AnsiSequence`]
 struct PreAnsiSequence {
     /// the characters that have been parsed so far, separated by ';' and is a u8 number
-    numbers: heapless::Vec<u8, 10>,
+    numbers: arrayvec::ArrayVec<u8, 10>,
 }
 
 impl PreAnsiSequence {
     fn new() -> Self {
         Self {
-            numbers: heapless::Vec::new(),
+            numbers: arrayvec::ArrayVec::new(),
         }
     }
 
@@ -51,7 +51,7 @@ impl PreAnsiSequence {
             b'm' => Right(AnsiSequence::SetGraphicsMode(self.numbers)),
 
             b';' => {
-                self.numbers.push(0).unwrap();
+                self.numbers.push(0);
                 Left(self)
             }
 
@@ -59,7 +59,7 @@ impl PreAnsiSequence {
                 let digit = (c as char).to_digit(10).unwrap() as u8;
 
                 let Some(number) = self.numbers.last_mut() else {
-                    self.numbers.push(digit).unwrap();
+                    self.numbers.push(digit);
                     return Some(Left(self));
                 };
 
