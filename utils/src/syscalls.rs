@@ -1,5 +1,3 @@
-use int_enum::IntEnum;
-
 use super::{errors::ErrorStatus, path::Path};
 
 /// Safely converts FFI [`Self::Args`] into [`Self`] for being passed to a syscall
@@ -140,7 +138,7 @@ impl SyscallFFI for Path<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum SyscallTable {
     SysExit = 0,
@@ -170,4 +168,20 @@ pub enum SyscallTable {
 
     SysShutdown = 20,
     SysReboot = 21,
+}
+
+impl SyscallTable {
+    // update when a new Syscall Num is added
+    const MAX: u16 = Self::SysReboot as u16;
+}
+
+impl TryFrom<u16> for SyscallTable {
+    type Error = ();
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        if value <= Self::MAX {
+            Ok(unsafe { core::mem::transmute(value) })
+        } else {
+            Err(())
+        }
+    }
 }

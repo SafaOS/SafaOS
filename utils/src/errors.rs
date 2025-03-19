@@ -1,7 +1,5 @@
-use int_enum::IntEnum;
-
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum ErrorStatus {
     // use when no ErrorStatus is avalible for xyz and you cannot add a new one
@@ -40,7 +38,11 @@ pub enum ErrorStatus {
     NotEnoughArguments = 0x16,
     OutOfMemory = 0x17,
 }
+
 impl ErrorStatus {
+    // update when a new error is added
+    const MAX: u16 = Self::OutOfMemory as u16;
+
     #[inline(always)]
     /// Gives a string description of the error
     pub fn as_str(&self) -> &'static str {
@@ -69,6 +71,18 @@ impl ErrorStatus {
             Busy => "Resource Busy",
             NotEnoughArguments => "Not Enough Arguments",
             OutOfMemory => "Out of Memory",
+        }
+    }
+}
+
+impl TryFrom<u16> for ErrorStatus {
+    type Error = ();
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        if value > 0 && value <= Self::MAX {
+            Ok(unsafe { core::mem::transmute(value) })
+        } else {
+            Err(())
         }
     }
 }

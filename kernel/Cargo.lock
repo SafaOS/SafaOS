@@ -253,7 +253,6 @@ name = "safa-utils"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
- "int-enum",
 ]
 
 [[package]]
