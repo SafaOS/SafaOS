@@ -1,5 +1,3 @@
-use macros::display_consts;
-
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RGB(u32);
@@ -83,7 +81,6 @@ impl From<RGB> for (u8, u8, u8) {
     }
 }
 
-#[display_consts]
 impl RGB {
     pub const BLACK: RGB = RGB::from_hex(0x141a21);
     pub const BRIGHT_BLACK: RGB = RGB::from_hex(0x1d1f21);

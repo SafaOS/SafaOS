@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macros = { path = "../macros" }
 int-enum = "1.1"
 
 arrayvec = { version = "0.7.6", git = "https://github.com/ObserverUnit/arrayvec", default-features = false }

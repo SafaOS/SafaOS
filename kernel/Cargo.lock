@@ -11,6 +11,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "arrayvec"
 version = "0.7.6"
+source = "git+https://github.com/ObserverUnit/arrayvec#e5e58b2fc46256a699f601cb5ed869101e909326"
 
 [[package]]
 name = "autocfg"
@@ -253,7 +254,6 @@ version = "0.1.0"
 dependencies = [
  "arrayvec",
  "int-enum",
- "macros",
 ]
 
 [[package]]

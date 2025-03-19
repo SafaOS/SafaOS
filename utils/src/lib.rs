@@ -7,4 +7,3 @@ pub mod errors;
 pub mod io;
 pub mod path;
 pub mod syscalls;
-pub mod ustar;

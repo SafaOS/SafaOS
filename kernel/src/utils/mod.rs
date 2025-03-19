@@ -11,6 +11,7 @@ use core::{
 pub use safa_utils::*;
 pub mod alloc;
 pub mod elf;
+pub mod ustar;
 
 use spin::{Lazy, Mutex};
 
