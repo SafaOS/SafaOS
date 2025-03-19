@@ -1,3 +1,4 @@
+#[cfg(not(feature = "rustc-dep-of-std"))]
 extern crate alloc;
 
 use core::fmt::Display;
@@ -127,7 +128,11 @@ impl<'a> PathParts<'a> {
 
         let name_position = inner.char_indices().rev().find_map(|(i, c)| {
             // since we are trimming the path first we can assume there is at least one char after `/`
-            if c == '/' { Some(i + 1) } else { None }
+            if c == '/' {
+                Some(i + 1)
+            } else {
+                None
+            }
         });
 
         let name_index = match name_position {
@@ -148,7 +153,7 @@ pub struct OwnedPathParts {
 }
 
 impl OwnedPathParts {
-    pub fn as_path_parts(&self) -> PathParts {
+    pub fn as_path_parts(&self) -> PathParts<'_> {
         PathParts {
             inner: self.inner.as_str(),
         }
@@ -162,7 +167,7 @@ pub struct PathBuf {
 }
 
 impl PathBuf {
-    pub fn as_path(&self) -> Path {
+    pub fn as_path(&self) -> Path<'_> {
         Path {
             drive: self.drive.as_deref(),
             path: self.path.as_ref().map(|x| x.as_path_parts()),

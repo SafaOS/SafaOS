@@ -23,7 +23,7 @@ impl BStr {
     }
     #[inline]
     // TODO: implement Chars method for faster utf8 iteration
-    pub fn utf8_chunks(&self) -> Utf8Chunks {
+    pub fn utf8_chunks(&self) -> Utf8Chunks<'_> {
         self.inner.utf8_chunks()
     }
     #[inline]
