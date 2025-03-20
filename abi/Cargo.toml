@@ -1,0 +1,18 @@
+[package]
+name = "safa-abi"
+version = "0.1.0"
+edition = "2021"
+description = "an ABI over some of the SafaOS's structures kernel"
+repository = "https://github.com/SafaOS/SafaOS"
+categories = ["os"]
+keywords = ["kernel", "libos"]
+license = "MIT"
+
+[dependencies]
+core = { version = "1.0.0", optional = true, package = "rustc-std-workspace-core" }
+alloc = { version = "1.0.0", optional = true, package = "rustc-std-workspace-alloc" }
+compiler_builtins = { version = "0.1", optional = true }
+
+[features]
+default = []
+rustc-dep-of-std = ["core", "alloc", "compiler_builtins/rustc-dep-of-std"]

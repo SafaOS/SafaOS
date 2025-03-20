@@ -1,4 +1,3 @@
-#[cfg(not(feature = "rustc-dep-of-std"))]
 extern crate alloc;
 
 use core::fmt::Display;

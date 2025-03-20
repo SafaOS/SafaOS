@@ -3,7 +3,7 @@ pub mod ansi;
 pub mod bstr;
 pub mod display;
 pub mod either;
-pub mod errors;
+pub use safa_abi::errors;
 pub mod io;
 pub mod path;
 pub mod syscalls;

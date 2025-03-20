@@ -11,7 +11,8 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "arrayvec"
 version = "0.7.6"
-source = "git+https://github.com/ObserverUnit/arrayvec#e5e58b2fc46256a699f601cb5ed869101e909326"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "autocfg"
@@ -249,10 +250,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ea1a2d0a644769cc99faa24c3ad26b379b786fe7c36fd3c546254801650e6dd"
 
 [[package]]
-name = "safa-utils"
+name = "safa-abi"
 version = "0.1.0"
+
+[[package]]
+name = "safa-utils"
+version = "0.2.0"
 dependencies = [
  "arrayvec",
+ "safa-abi",
 ]
 
 [[package]]
