@@ -85,6 +85,10 @@ impl File {
     pub fn size(&self) -> usize {
         self.with_fd(|fd| fd.size())
     }
+
+    pub fn attrs(&self) -> FileAttr {
+        self.with_fd(|fd| fd.attrs())
+    }
 }
 
 impl Drop for File {
@@ -148,9 +152,24 @@ pub fn createdir(path: Path) -> FSResult<()> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
-pub struct DirEntry {
+pub struct FileAttr {
     pub kind: InodeType,
     pub size: usize,
+}
+
+impl FileAttr {
+    pub fn from_inode(inode: &Inode) -> Self {
+        Self {
+            kind: inode.kind(),
+            size: inode.size().unwrap_or(0),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct DirEntry {
+    pub attrs: FileAttr,
     pub name_length: usize,
     pub name: [u8; Self::MAX_NAME_LEN],
 }
@@ -158,19 +177,16 @@ pub struct DirEntry {
 impl DirEntry {
     pub const MAX_NAME_LEN: usize = 128;
     pub fn get_from_inode(inode: Inode, name: &str) -> Self {
+        let attrs = FileAttr::from_inode(&inode);
+
         let name_slice = name.as_bytes();
-
-        let kind = inode.kind();
-        let size = inode.size().unwrap_or(0);
-
         let name_length = name_slice.len();
         let mut name = [0u8; Self::MAX_NAME_LEN];
 
         name[..name_length].copy_from_slice(name_slice);
 
         Self {
-            kind,
-            size,
+            attrs,
             name_length,
             name,
         }

@@ -1,6 +1,6 @@
 [package]
 name = "safa-abi"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "an ABI over some of the SafaOS's structures kernel"
 repository = "https://github.com/SafaOS/SafaOS"

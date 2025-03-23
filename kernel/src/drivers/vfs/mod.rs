@@ -25,7 +25,7 @@ use alloc::{
     string::{String, ToString},
     sync::Arc,
 };
-use expose::DirEntry;
+use expose::{DirEntry, FileAttr};
 use lazy_static::lazy_static;
 use spin::{Mutex, RwLock};
 
@@ -91,6 +91,11 @@ impl FileDescriptor {
     #[inline(always)]
     pub fn size(&self) -> usize {
         self.node.size().unwrap_or(0)
+    }
+
+    #[inline(always)]
+    pub fn attrs(&self) -> FileAttr {
+        FileAttr::from_inode(&self.node)
     }
 }
 
@@ -179,13 +184,8 @@ impl<'a> CtlArgs<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum InodeType {
-    File,
-    Directory,
-    Device,
-}
+// InodeType implementition
+pub use safa_utils::abi::io::InodeType;
 
 pub trait InodeOps: Send + Sync {
     /// gets an Inode from self

@@ -16,7 +16,9 @@ pub enum SyscallTable {
     SysSync = 16,
     SysTruncate = 17,
     SysCtl = 12,
+    // TODO: remove in favor of FAttrs
     SysFSize = 22,
+    SysFAttrs = 24,
     SysGetDirEntry = 23,
 
     SysCHDir = 14,

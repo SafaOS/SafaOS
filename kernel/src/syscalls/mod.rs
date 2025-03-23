@@ -1,5 +1,6 @@
 use safa_utils::errors::SysResult;
 
+use crate::drivers::vfs::expose::FileAttr;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
@@ -139,6 +140,15 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
 
                 if let Some(size) = dest_size {
                     *size = file_size;
+                }
+                Ok(())
+            }
+            SyscallTable::SysFAttrs => {
+                let fd = FileRef::make(a)?;
+                let dest_attrs: Option<&mut FileAttr> = Option::make(b as *mut FileAttr)?;
+
+                if let Some(attrs) = dest_attrs {
+                    *attrs = fd.attrs();
                 }
                 Ok(())
             }
