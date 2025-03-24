@@ -129,7 +129,7 @@ pub mod testing_module {
         unsafe { core::arch::asm!("cli") }
         let pid = pspawn(
             "TEST_BOT".to_string(),
-            make_path!("sys", "/bin/TestBot"),
+            make_path!("sys", "safa-tests"),
             &[],
             SpawnFlags::empty(),
         )

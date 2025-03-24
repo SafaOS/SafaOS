@@ -15,7 +15,6 @@ RAMDISK=()
 function build_ramdisk {
     RAMDISK_BUILTIN=(
         "bin/zig-out/bin/" "bin/"
-        "TestBot/zig-out/bin/TestBot" "bin/TestBot"
     )
 
     cd ramdisk-include
@@ -100,7 +99,9 @@ function zig_build {
 function build_programs {
     SHELL=$(cargo_build_safaos "Shell" --release)
     RAMDISK+=("$SHELL" "safa")
-    zig_build "TestBot"
+
+    TESTS=$(cargo_build_safaos "tests" --release)
+    RAMDISK+=("$TESTS" "safa-tests")
     zig_build "bin"
 }
 
