@@ -88,7 +88,7 @@ impl TryFrom<u16> for ErrorStatus {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SysResult {
-    Sucess,
+    Success,
     Error(ErrorStatus),
 }
 
@@ -103,7 +103,7 @@ impl From<Result<(), ErrorStatus>> for SysResult {
     #[inline(always)]
     fn from(value: Result<(), ErrorStatus>) -> Self {
         match value {
-            Ok(()) => SysResult::Sucess,
+            Ok(()) => SysResult::Success,
             Err(err) => SysResult::Error(err),
         }
     }
@@ -114,7 +114,7 @@ impl TryFrom<u16> for SysResult {
     #[inline(always)]
     fn try_from(value: u16) -> Result<Self, ()> {
         match value {
-            0 => Ok(SysResult::Sucess),
+            0 => Ok(SysResult::Success),
             other => {
                 let err = ErrorStatus::try_from(other).map_err(|_| ())?;
                 Ok(SysResult::Error(err))
@@ -127,7 +127,7 @@ impl From<SysResult> for Result<(), ErrorStatus> {
     #[inline(always)]
     fn from(value: SysResult) -> Self {
         match value {
-            SysResult::Sucess => Ok(()),
+            SysResult::Success => Ok(()),
             SysResult::Error(err) => Err(err),
         }
     }
@@ -137,7 +137,7 @@ impl Into<u16> for SysResult {
     #[inline(always)]
     fn into(self) -> u16 {
         match self {
-            SysResult::Sucess => 0,
+            SysResult::Success => 0,
             SysResult::Error(err) => err as u16,
         }
     }
@@ -150,5 +150,18 @@ pub trait IntoErr {
 impl<T: IntoErr> From<T> for ErrorStatus {
     fn from(value: T) -> Self {
         value.into_err()
+    }
+}
+
+#[cfg(feature = "std")]
+mod std_only {
+    use super::SysResult;
+    use std::process::ExitCode;
+    use std::process::Termination;
+    impl Termination for SysResult {
+        fn report(self) -> ExitCode {
+            let u16: u16 = self.into();
+            ExitCode::from(u16 as u8)
+        }
     }
 }
