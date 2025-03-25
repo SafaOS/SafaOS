@@ -164,7 +164,7 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                 pspawn(
                     String::from("Shell"),
                     // Maybe we can make a const function or a macro for this
-                    make_path!("sys", "safa"),
+                    make_path!("sys", "bin/safa"),
                     &["-i"],
                     SpawnFlags::CLONE_RESOURCES,
                 )

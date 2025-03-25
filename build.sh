@@ -14,7 +14,7 @@ RAMDISK=()
 
 function build_ramdisk {
     RAMDISK_BUILTIN=(
-        "bin/zig-out/bin/" "bin/"
+        "bin/zig-out/bin/" ""
     )
 
     cd ramdisk-include
@@ -36,7 +36,9 @@ function build_ramdisk {
     mkdir -pv $ISO_BUILD_DIR/boot/ramdisk
 
     while [ ! -z  "$1" ] ; do
-        cp -rv "$1" "$ISO_BUILD_DIR/boot/ramdisk/$2"
+        O_PATH="$ISO_BUILD_DIR/boot/ramdisk/$2"
+        mkdir -pv $(dirname $O_PATH)
+        cp -rv "$1" "$O_PATH"
         shift 2
     done
 
@@ -98,10 +100,10 @@ function zig_build {
 
 function build_programs {
     SHELL=$(cargo_build_safaos "Shell" --release)
-    RAMDISK+=("$SHELL" "safa")
+    RAMDISK+=("$SHELL" "bin/safa")
 
     TESTS=$(cargo_build_safaos "tests" --release)
-    RAMDISK+=("$TESTS" "safa-tests")
+    RAMDISK+=("$TESTS" "bin/safa-tests")
     zig_build "bin"
 }
 
