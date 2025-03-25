@@ -13,10 +13,33 @@ use std::{
 
 const TEST_LOG_PATH: &str = "ram:/test.log";
 
+#[macro_export]
+macro_rules! print {
+   ($($arg:tt)*) => ($crate::serial_write(format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! println {
+    () => (print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+macro_rules! log {
+    ($($arg:tt)*) => {
+        $crate::println!("\x1b[36m[TEST]\x1b[0m: {}", format_args!($($arg)*));
+    };
+}
+
+macro_rules! log_fail {
+    ($($arg:tt)*) => {
+        $crate::println!("\x1b[31m[FAILED]: {}\x1b[0m", format_args!($($arg)*));
+    };
+}
+
 use safa_api::errors::ErrorStatus;
 
 fn panic_hook(info: &PanicHookInfo) {
-    println!("\x1b[31m[FAILED]\n{}\x1b[0m", info);
+    log_fail!("{info}");
 }
 
 struct SerialFd(UnsafeCell<File>);
@@ -43,17 +66,6 @@ fn serial() -> &'static mut File {
 
 fn serial_write(args: Arguments<'_>) {
     serial().write_fmt(args).expect("failed to write to serial");
-}
-
-#[macro_export]
-macro_rules! print {
-   ($($arg:tt)*) => ($crate::serial_write(format_args!($($arg)*)));
-}
-
-#[macro_export]
-macro_rules! println {
-    () => (print!("\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,7 +210,7 @@ impl Test {
     }
 
     fn execute(&self) {
-        println!("\x1b[36m[TEST]\x1b[0m: Running test `{}`", self.name);
+        log!("Running test \"{}\"", self.name);
         match self.inner {
             TestInner::Typical {
                 path,
@@ -214,9 +226,10 @@ impl Test {
 
 const TEST_LIST: &[Test] = &[
     Test::new("Writing to Stdout", "sys:/bin/echo", &["hello"], "hello\n"),
-    Test::new_special("[info capture]", || unsafe {
+    Test::new_special("[startup info capture]", || unsafe {
         let output = execute_binary("sys:/bin/meminfo", &["-k"]);
         MEMORY_INFO_CAPTURE.put(output);
+        // Don't assert for success because if it fails the reason why it failed might be more visible from later tests
     }),
     Test::new("Creating Directories", "sys:/bin/mkdir", &["test"], ""),
     Test::new("Creating Files", "sys:/bin/touch", &["test/test_file"], ""),
@@ -265,12 +278,11 @@ const TEST_LIST: &[Test] = &[
         );
 
         if output.stdout() != expected.stdout() {
-            println!("\x1b[36m[TEST]\x1b[0m: Possible Memory Leak Detected");
-            println!(
-                "\x1b[31mexpected (memory info output):\n{}got:\n{}\x1b[0m",
-                expected.stdout(),
-                output.stdout()
-            )
+            log_fail!(
+                "Possible Memory Leak Detected\nexpected (`meminfo -k` output):\n{}\nbut got:\n{}",
+                expected.stdout().trim_end_matches('\n'),
+                output.stdout().trim_end_matches('\n'),
+            );
         }
     }),
 ];
@@ -298,15 +310,17 @@ impl MemoryInfoCapture {
 unsafe impl Sync for MemoryInfoCapture {}
 unsafe impl Send for MemoryInfoCapture {}
 
+// Capturing MemoryInfo at startup to detect memory leaks
+// Capture happens in the second test, (makes sure process spawning is working before capture)
 static MEMORY_INFO_CAPTURE: MemoryInfoCapture = MemoryInfoCapture::new();
 
 fn main() {
+    // makes sure panic uses the custom println
     std::panic::set_hook(Box::new(panic_hook));
     // DON'T REMOVE! MAKES SURE SERIAL IS FD 0
-    println!("Hello, world running {} tests!", TEST_LIST.len());
+    log!("Running {} tests", TEST_LIST.len());
     for test in TEST_LIST {
         test.execute();
     }
-
-    println!("\x1b[36m[TEST]\x1b[0m: Done running all tests!");
+    log!("Done running all tests");
 }
