@@ -13,9 +13,7 @@ RUSTC_TOOLCHAIN=$(cd common && ./get-rustc.sh && cd ..)
 RAMDISK=()
 
 function build_ramdisk {
-    RAMDISK_BUILTIN=(
-        "bin/zig-out/bin/" ""
-    )
+    RAMDISK_BUILTIN=()
 
     cd ramdisk-include
     RAMDISK_INCLUDE=(*)
@@ -72,8 +70,7 @@ function cargo_build {
     cd "$AT"
     install_toolchain
 
-    json=$(cargo build $ARGS --message-format=json-render-diagnostics)
-    printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
+    cargo build $ARGS --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
 }
 
 # TODO: release vs debug mode and such
@@ -84,8 +81,7 @@ function cargo_build_safaos {
     
     cd "$AT"
 
-    json=$(cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics)
-    printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
+    cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
 }
 
 function zig_build {
@@ -104,6 +100,16 @@ function build_programs {
 
     TESTS=$(cargo_build_safaos "tests" --release)
     RAMDISK+=("$TESTS" "bin/safa-tests")
+
+    BINUTILS=$(cargo_build_safaos "binutils" --release)
+
+    for bin in $BINUTILS;
+    do
+        base=$(basename $bin)
+        RAMDISK+=("$bin" "bin/$base")
+
+    done
+
     zig_build "bin"
 }
 

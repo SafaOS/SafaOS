@@ -227,7 +227,7 @@ impl Test {
 const TEST_LIST: &[Test] = &[
     Test::new("Writing to Stdout", "sys:/bin/echo", &["hello"], "hello\n"),
     Test::new_special("[startup info capture]", || unsafe {
-        let output = execute_binary("sys:/bin/meminfo", &["-k"]);
+        let output = execute_binary("sys:/bin/meminfo", &["-k", "-r"]);
         MEMORY_INFO_CAPTURE.put(output);
         // Don't assert for success because if it fails the reason why it failed might be more visible from later tests
     }),
@@ -267,7 +267,7 @@ const TEST_LIST: &[Test] = &[
         assert!(file_list.contains(&"test_file"));
     }),
     Test::new_special("[memory leak detection]", || {
-        let output = execute_binary("sys:/bin/meminfo", &["-k"]);
+        let output = execute_binary("sys:/bin/meminfo", &["-k", "-r"]);
         let expected = unsafe { MEMORY_INFO_CAPTURE.get() };
 
         assert!(
