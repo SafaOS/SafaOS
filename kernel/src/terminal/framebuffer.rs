@@ -199,6 +199,9 @@ impl FrameBufferTTY<'_> {
                     self.bg_color = DEFAULT_BG_COLOR;
                 }
 
+                39 => self.fg_color = DEFAULT_FG_COLOR,
+                49 => self.bg_color = DEFAULT_BG_COLOR,
+
                 // 30-37 foreground colors
                 30 => self.fg_color = RGB::BLACK,
                 31 => self.fg_color = RGB::RED,

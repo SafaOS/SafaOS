@@ -102,7 +102,6 @@ impl InodeOps for RamInode {
         match self.data {
             RamInodeData::Data(ref data) => {
                 let data = data.lock();
-
                 if offset >= data.len() as isize {
                     return Err(FSError::InvaildOffset);
                 }
@@ -115,11 +114,14 @@ impl InodeOps for RamInode {
                     Ok(count)
                 } else {
                     let rev_offset = (-offset) as usize;
-                    if rev_offset > data.len() {
+                    let len = data.len();
+                    if rev_offset > len + 1 {
                         return Err(FSError::InvaildOffset);
                     }
+
+                    drop(data);
                     // TODO: this is slower then inlining the code ourselves
-                    self.read((data.len() - rev_offset) as isize + 1, buffer)
+                    self.read(((len + 1) - rev_offset) as isize, buffer)
                 }
             }
             RamInodeData::HardLink(ref inode) => inode.read(offset, buffer),
@@ -143,11 +145,14 @@ impl InodeOps for RamInode {
                     Ok(buffer.len())
                 } else {
                     let rev_offset = (-offset) as usize;
-                    if rev_offset > data.len() {
+                    let len = data.len();
+
+                    if rev_offset > len + 1 {
                         return Err(FSError::InvaildOffset);
                     }
-                    // TODO: this is slower then inlining the code ourselves
-                    self.write((data.len() - rev_offset) as isize + 1, buffer)
+
+                    drop(data);
+                    self.write(((len + 1) - rev_offset) as isize, buffer)
                 }
             }
             RamInodeData::HardLink(ref inode) => inode.write(offset, buffer),
