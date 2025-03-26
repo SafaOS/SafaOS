@@ -84,16 +84,6 @@ function cargo_build_safaos {
     cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
 }
 
-function zig_build {
-    CWD=$(pwd)
-    AT=$1
-    ARGS="${@:2}"
-
-    cd "$AT"
-    zig build $ARGS
-    cd "$CWD"
-}
-
 function build_programs {
     SHELL=$(cargo_build_safaos "Shell" --release)
     RAMDISK+=("$SHELL" "bin/safa")
@@ -109,8 +99,6 @@ function build_programs {
         RAMDISK+=("$bin" "bin/$base")
 
     done
-
-    zig_build "bin"
 }
 
 build_programs
