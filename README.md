@@ -7,11 +7,9 @@
 [![License](https://img.shields.io/github/license/SafaOS/SafaOS?color=red)](https://github.com/SafaOS/SafaOS/blob/main/LICENSE) [![Issues](https://img.shields.io/github/issues/SafaOS/SafaOS)](https://github.com/SafaOS/SafaOS/issues) ![Stars](https://img.shields.io/github/stars/SafaOS/SafaOS?style=flat-square)
 </div>
 
-![Screenshot](https://observerunit.github.io/priv/imgs/screenshots/Safa190225.png)
+![Screenshot](https://observerunit.github.io/priv/imgs/screenshots/SafaOS-270325.png)
 
-An open-source non-Unix-like open-source OS, written from scratch in Zig and Rust for fun,
-the main language is Rust, Zig is used for lower-level userspace stuff (not used in the kernel at all) for now, as an alternative to C
-**star the repo!**
+An open-source non-Unix-like OS, written from scratch in Rust for fun.
 
 ## Building
 you need: 
@@ -72,8 +70,11 @@ you'll need:
 the script will return a non-zero exit code if any testing fails
 
 ## Current Features
-there is a bunch of userspace programs written in zig in the `bin/` directory they are compiled with zig and then copied to the ramdisk as `sys:/bin/`, you can check them out for almost everything the OS is currently capable of, (also checkout the `Shell/`)
+there is a bunch of userspace programs written in rust in the `binutils/` directory they are compiled and then copied to the ramdisk as `sys:/bin/`, you can check them out alongside the `tests` for almost everything the kernel is currently capable of.
+
+> aside from the rust stdandard library another method to interact with the kernel is through the [safa-api](github.com/SafaOS/safa-api) which provides low-level wrapper functions around the syscalls, and also some high-level wrappers (such as a userspace allocator which is a very high-level wrapper around the sbrk syscall, ofc the raw sbrk syscall is still exposed), the problem is it is currently not documented.
 
 ## Credits
-currently uses [limine](https://limine-bootloader.org/) bootloader
+currently uses the [limine](https://limine-bootloader.org/) bootloader.
+
 special thanks to the developers of [MinOS](https://github.com/Dcraftbg/MinOS/), [TacOS](https://github.com/UnmappedStack/TacOS), and [BananaOS](https://github.com/Bananymous/banan-os) for helping develop this (this is my first ever OSDev project)
