@@ -81,7 +81,7 @@ pub mod testing_module {
             // sync
             asm!(
                 "
-                mov rax, 17
+                mov rax, 0x10
                 mov rdi, 1
                 int 0x80
             "

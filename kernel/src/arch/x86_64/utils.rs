@@ -1,4 +1,4 @@
-use core::{arch::asm, sync::atomic::AtomicU64};
+use core::{arch::asm, cell::SyncUnsafeCell};
 
 use serde::Serialize;
 use spin::Lazy;
@@ -135,13 +135,13 @@ impl CpuInfo {
 
 pub static CPU_INFO: Lazy<CpuInfo> = Lazy::new(|| CpuInfo::fetch());
 
-pub static TICKS_PER_20MS: AtomicU64 = AtomicU64::new(1);
-pub static APIC_TIMER_TICKS_PER_20MS: AtomicU64 = AtomicU64::new(1);
+pub static TICKS_PER_MS: SyncUnsafeCell<u64> = SyncUnsafeCell::new(1);
+pub static APIC_TIMER_TICKS_PER_MS: SyncUnsafeCell<u64> = SyncUnsafeCell::new(1);
 
 #[inline(always)]
-/// Returns the number of clock cpu cycles per 20ms
-pub fn ticks_per_20ms() -> u64 {
-    TICKS_PER_20MS.load(core::sync::atomic::Ordering::Relaxed)
+/// Returns the number of clock cpu cycles per 1ms
+pub fn ticks_per_ms() -> u64 {
+    unsafe { core::ptr::read_volatile(TICKS_PER_MS.get()) }
 }
 
 #[inline(always)]
@@ -149,8 +149,7 @@ pub fn ticks_per_20ms() -> u64 {
 #[allow(unused)]
 /// Returns the number of milliseconds since the CPU was started
 pub fn time() -> u64 {
+    let ticks_per_ms = ticks_per_ms();
     let ticks = unsafe { core::arch::x86_64::_rdtsc() };
-
-    let ticks_per_ms = ticks_per_20ms() / 20;
     ticks / ticks_per_ms
 }

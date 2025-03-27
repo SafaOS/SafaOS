@@ -7,6 +7,7 @@
 #![feature(vec_into_raw_parts)]
 #![feature(iter_collect_into)]
 #![feature(naked_functions)]
+#![feature(sync_unsafe_cell)]
 
 #[cfg(feature = "test")]
 mod test;

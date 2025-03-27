@@ -32,3 +32,4 @@ test = []
 panic = "abort"
 [profile.release]
 panic = "abort"
+debug = "line-tables-only"
