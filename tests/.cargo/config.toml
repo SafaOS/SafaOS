@@ -1,0 +1,3 @@
+[build]
+target = "x86_64-unknown-safaos"
+rustflags = ["-C", "force-unwind-tables"]

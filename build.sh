@@ -4,18 +4,17 @@
 
 # TODO: make the build script more lazy so that it doesn't rebuild everything everytime
 set -eo pipefail
+echo "Note that ./init.sh must be run at least once before running this script"
 
 ISO_PATH="safaos.iso"
 ISO_BUILD_DIR="iso_root"
 
-function build_ramdisk {
-    RAMDISK_BUILTIN=(
-        "bin/zig-out/bin/" "bin/"
-        "TestBot/zig-out/bin/TestBot" "bin/TestBot"
-        "Shell/zig-out/bin/Shell" "bin/Shell"
-    )
+RUSTC_TOOLCHAIN=$(cd common && ./get-rustc.sh && cd ..)
+RAMDISK=()
 
-    RAMDISK=()
+function build_ramdisk {
+    RAMDISK_BUILTIN=()
+
     cd ramdisk-include
     RAMDISK_INCLUDE=(*)
     cd ..
@@ -35,7 +34,9 @@ function build_ramdisk {
     mkdir -pv $ISO_BUILD_DIR/boot/ramdisk
 
     while [ ! -z  "$1" ] ; do
-        cp -rv "$1" "$ISO_BUILD_DIR/boot/ramdisk/$2"
+        O_PATH="$ISO_BUILD_DIR/boot/ramdisk/$2"
+        mkdir -pv $(dirname $O_PATH)
+        cp -rv "$1" "$O_PATH"
         shift 2
     done
 
@@ -46,7 +47,6 @@ function build_ramdisk {
 }
 
 rm -vrf $ISO_BUILD_DIR
-git submodule update --init --recursive
 
 if ! (test -d "limine") ; then
     git clone https://github.com/limine-bootloader/limine.git --branch=v8.x-binary --depth=1
@@ -56,30 +56,49 @@ make -C limine
 mkdir -pv $ISO_BUILD_DIR/boot/limine
 mkdir -pv $ISO_BUILD_DIR/EFI/BOOT
 
+function install_toolchain {
+    rustup show active-toolchain > /dev/null || rustup toolchain install
+    return 0
+}
+
+# TODO: release vs debug mode and such
 function cargo_build {
     CWD=$(pwd)
     AT=$1
     ARGS="${@:2}"
 
     cd "$AT"
-    json=$(cargo build $ARGS --message-format=json-render-diagnostics)
-    printf "%s" "$json" | jq -js '[.[] | select(.reason == "compiler-artifact") | select(.executable != null)] | last | .executable'
+    install_toolchain
+
+    cargo build $ARGS --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
 }
 
-function zig_build {
+# TODO: release vs debug mode and such
+function cargo_build_safaos {
     CWD=$(pwd)
     AT=$1
     ARGS="${@:2}"
-
+    
     cd "$AT"
-    zig build $ARGS
-    cd "$CWD"
+
+    cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
 }
 
 function build_programs {
-    zig_build "Shell"
-    zig_build "TestBot"
-    zig_build "bin"
+    SHELL=$(cargo_build_safaos "Shell" --release)
+    RAMDISK+=("$SHELL" "bin/safa")
+
+    TESTS=$(cargo_build_safaos "tests" --release)
+    RAMDISK+=("$TESTS" "bin/safa-tests")
+
+    BINUTILS=$(cargo_build_safaos "binutils" --release)
+
+    for bin in $BINUTILS;
+    do
+        base=$(basename $bin)
+        RAMDISK+=("$bin" "bin/$base")
+
+    done
 }
 
 build_programs

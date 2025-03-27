@@ -1,6 +1,8 @@
+use alloc::{format, string::ToString};
+
 use crate::{
     threading::{self, expose::SpawnFlags},
-    utils::errors::ErrorStatus,
+    utils::{errors::ErrorStatus, path::Path},
 };
 
 pub fn syswait(pid: usize, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
@@ -13,12 +15,16 @@ pub fn syswait(pid: usize, dest_code: Option<&mut usize>) -> Result<(), ErrorSta
 
 pub fn syspspawn(
     name: Option<&str>,
-    path: &str,
+    path: Path,
     argv: &[&str],
     flags: SpawnFlags,
     dest_pid: Option<&mut usize>,
 ) -> Result<(), ErrorStatus> {
-    let name = name.or(argv.first().map(|v| &**v)).unwrap_or(path);
+    let name = name.map(|s| s.to_string());
+    // we are using _else because it is expensive to allocate all of this
+    let name = name
+        .or_else(|| argv.first().map(|s| s.to_string()))
+        .unwrap_or_else(|| format!("{path}"));
 
     let results = threading::expose::pspawn(name, path, argv, flags)?;
     if let Some(dest_pid) = dest_pid {

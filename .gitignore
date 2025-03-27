@@ -20,4 +20,5 @@ target
 iso_root
 safaos.iso
 limine
-last_build.log
+test.txt
+.vscode

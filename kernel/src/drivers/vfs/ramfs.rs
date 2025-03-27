@@ -9,10 +9,11 @@ use spin::{Mutex, RwLock};
 
 use crate::devices::Device;
 use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
+use crate::utils::path::PathParts;
 use crate::utils::HeaplessString;
 
 use super::{DirIterInodeItem, FileName, InodeOf};
-use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType, Path};
+use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType};
 
 /// The data of a RamInode
 // you cannot just lock the whole enum because Devices' manage their own locks
@@ -76,7 +77,7 @@ impl InodeOps for RamInode {
         }
     }
 
-    fn contains(&self, name: Path) -> bool {
+    fn contains(&self, name: &str) -> bool {
         match self.data {
             RamInodeData::Children(ref tree) => tree.lock().contains_key(name),
             RamInodeData::HardLink(ref inode) => inode.contains(name),
@@ -101,7 +102,6 @@ impl InodeOps for RamInode {
         match self.data {
             RamInodeData::Data(ref data) => {
                 let data = data.lock();
-
                 if offset >= data.len() as isize {
                     return Err(FSError::InvaildOffset);
                 }
@@ -114,11 +114,14 @@ impl InodeOps for RamInode {
                     Ok(count)
                 } else {
                     let rev_offset = (-offset) as usize;
-                    if rev_offset > data.len() {
+                    let len = data.len();
+                    if rev_offset > len + 1 {
                         return Err(FSError::InvaildOffset);
                     }
+
+                    drop(data);
                     // TODO: this is slower then inlining the code ourselves
-                    self.read((data.len() - rev_offset) as isize + 1, buffer)
+                    self.read(((len + 1) - rev_offset) as isize, buffer)
                 }
             }
             RamInodeData::HardLink(ref inode) => inode.read(offset, buffer),
@@ -142,11 +145,14 @@ impl InodeOps for RamInode {
                     Ok(buffer.len())
                 } else {
                     let rev_offset = (-offset) as usize;
-                    if rev_offset > data.len() {
+                    let len = data.len();
+
+                    if rev_offset > len + 1 {
                         return Err(FSError::InvaildOffset);
                     }
-                    // TODO: this is slower then inlining the code ourselves
-                    self.write((data.len() - rev_offset) as isize + 1, buffer)
+
+                    drop(data);
+                    self.write(((len + 1) - rev_offset) as isize, buffer)
                 }
             }
             RamInodeData::HardLink(ref inode) => inode.write(offset, buffer),
@@ -275,7 +281,7 @@ impl FileSystem for RwLock<RamFS> {
             .map(|x| x as Inode)
     }
 
-    fn create(&self, path: Path) -> FSResult<()> {
+    fn create(&self, path: PathParts) -> FSResult<()> {
         let (parent, name) = self.reslove_path_uncreated(path)?;
         let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
 
@@ -286,7 +292,7 @@ impl FileSystem for RwLock<RamFS> {
         Ok(())
     }
 
-    fn createdir(&self, path: Path) -> FSResult<()> {
+    fn createdir(&self, path: PathParts) -> FSResult<()> {
         let (parent, name) = self.reslove_path_uncreated(path)?;
         let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
 
@@ -303,7 +309,7 @@ impl FileSystem for RwLock<RamFS> {
         Ok(())
     }
 
-    fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+    fn mount_device(&self, path: PathParts, device: &'static dyn Device) -> FSResult<()> {
         let (parent, name) = self.reslove_path_uncreated(path)?;
         let name = FileName::from_str(name).map_err(|()| FSError::InvaildName)?;
 

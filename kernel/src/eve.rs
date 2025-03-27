@@ -1,12 +1,12 @@
 //! Eve is the kernel's main loop (PID 0)
 //! it is responsible for managing a few things related to it's children
 
-use alloc::vec::Vec;
-use spin::Mutex;
-
 use crate::{
     debug, drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yeild,
 };
+use alloc::vec::Vec;
+use safa_utils::make_path;
+use spin::Mutex;
 
 pub struct Eve {
     clean_up_list: Vec<PhysPageTable>,
@@ -39,8 +39,9 @@ fn one_shot() -> Option<PhysPageTable> {
 /// it will run until doomsday
 pub fn main() -> ! {
     debug!(Eve, "Eve has been awaken ...");
-    let stdin = vfs::expose::File::open("dev:/tty").unwrap();
-    let stdout = vfs::expose::File::open("dev:/tty").unwrap();
+    // TODO: make a macro or a const function to do this automatically
+    let stdin = vfs::expose::File::open(make_path!("dev", "tty")).unwrap();
+    let stdout = vfs::expose::File::open(make_path!("dev", "tty")).unwrap();
     serial!(
         "Hello, world!, running tests... stdin: {:?}, stdout: {:?}\n",
         stdin,

@@ -1,3 +1,7 @@
+use safa_utils::errors::SysResult;
+
+use crate::drivers::vfs::expose::FileAttr;
+use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
     debug,
@@ -6,148 +10,9 @@ use crate::{
         CtlArgs,
     },
     threading::expose::SpawnFlags,
-    utils::errors::ErrorStatus,
+    utils::{errors::ErrorStatus, path::Path},
     VirtAddr,
 };
-use int_enum::IntEnum;
-// TODO: make a proc-macro that generates the syscalls from rust functions
-// for example it should generate a pointer and a length from a slice argument checking if it is vaild and
-// returning invaild ptr if it is not
-// it should also support optional pointer-arguments using Option<T>
-// and we should do something about functions that takes a struct
-mod io;
-mod processes;
-mod utils;
-
-/// Safely converts FFI [`Self::Args`] into [`Self`] for being passed to a syscall
-trait SyscallFFI: Sized {
-    type Args;
-
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus>;
-}
-
-/// converts `*const T` into `None` if the pointer is null if it is not aligned it will return an
-/// [`ErrorStatus::InvaildPtr`]
-impl<T> SyscallFFI for Option<&T> {
-    type Args = *const T;
-
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        if args.is_null() {
-            Ok(None)
-        } else if !args.is_aligned() {
-            return Err(ErrorStatus::InvaildPtr);
-        } else {
-            Ok(unsafe { Some(&*args) })
-        }
-    }
-}
-
-/// converts `*mut T` into `None` if the pointer is null if it is not aligned it will return an
-/// [`ErrorStatus::InvaildPtr`]
-impl<T> SyscallFFI for Option<&mut T> {
-    type Args = *mut T;
-
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        if args.is_null() {
-            Ok(None)
-        } else if !args.is_aligned() {
-            return Err(ErrorStatus::InvaildPtr);
-        } else {
-            Ok(unsafe { Some(&mut *args) })
-        }
-    }
-}
-
-impl<T> SyscallFFI for Option<&[T]> {
-    type Args = (*const T, usize);
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        let (ptr, len) = args;
-        let slice = <&[T]>::make((ptr, len))?;
-        if slice.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(slice))
-        }
-    }
-}
-
-impl SyscallFFI for Option<&str> {
-    type Args = (*const u8, usize);
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        let (ptr, len) = args;
-        let opt = <Option<&[u8]>>::make((ptr, len))?;
-
-        if let Some(slice) = opt {
-            let str = core::str::from_utf8(slice).map_err(|_| ErrorStatus::InvaildStr)?;
-            Ok(Some(str))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-/// converts `&T` into `Err` if the pointer is null or not aligned
-impl<T> SyscallFFI for &T {
-    type Args = *const T;
-
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        if args.is_null() || !args.is_aligned() {
-            Err(ErrorStatus::InvaildPtr)
-        } else {
-            Ok(unsafe { &*args })
-        }
-    }
-}
-
-/// converts `&mut T` into `Err` if the pointer is null or not aligned
-impl<T> SyscallFFI for &mut T {
-    type Args = *mut T;
-
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        if args.is_null() || !args.is_aligned() {
-            Err(ErrorStatus::InvaildPtr)
-        } else {
-            Ok(unsafe { &mut *args })
-        }
-    }
-}
-
-/// for an `&[T]` it will return `Err` if the pointer is null or not aligned
-impl<T> SyscallFFI for &[T] {
-    type Args = (*const T, usize);
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        let (ptr, len) = args;
-        if ptr.is_null() {
-            Ok(&[])
-        } else if !ptr.is_aligned() {
-            return Err(ErrorStatus::InvaildPtr);
-        } else {
-            Ok(unsafe { core::slice::from_raw_parts(ptr, len) })
-        }
-    }
-}
-
-impl<T> SyscallFFI for &mut [T] {
-    type Args = (*mut T, usize);
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        let (ptr, len) = args;
-        if ptr.is_null() {
-            Ok(&mut [])
-        } else if !ptr.is_aligned() {
-            return Err(ErrorStatus::InvaildPtr);
-        } else {
-            Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
-        }
-    }
-}
-
-impl SyscallFFI for &str {
-    type Args = (*const u8, usize);
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        let slice: &[u8] = SyscallFFI::make(args)?;
-        core::str::from_utf8(slice).map_err(|_| ErrorStatus::InvaildPtr)
-    }
-}
 
 impl SyscallFFI for FileRef {
     type Args = usize;
@@ -176,44 +41,16 @@ impl SyscallFFI for DirIter {
         DirIter::from_ri(args).ok_or(ErrorStatus::InvaildResource)
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
-#[repr(u16)]
-pub enum SyscallTable {
-    SysExit = 0,
-    SysYield = 1,
-
-    SysOpen = 2,
-    SysDirIterOpen = 8,
-    SysClose = 5,
-    SysDirIterClose = 9,
-    SysDirIterNext = 10,
-    SysWrite = 3,
-    SysRead = 4,
-    SysCreate = 6,
-    SysCreateDir = 7,
-    SysSync = 16,
-    SysTruncate = 17,
-    SysCtl = 12,
-    SysFSize = 22,
-
-    SysCHDir = 14,
-    SysGetCWD = 15,
-    SysSbrk = 18,
-
-    SysPSpawn = 19,
-    SysWait = 11,
-
-    SysShutdown = 20,
-    SysReboot = 21,
-}
+mod io;
+mod processes;
+mod utils;
 
 #[inline(always)]
 /// takes the number of the syscall and the arguments and returns an error as a u16 if it fails
 /// this function is the final non-arch-specific layer between the kernel and the syscalls
 /// it maps from arguments to syscall arguments
 /// the way arguments are mapped is defined by the [`SyscallFFI`] trait
-pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) -> ErrorStatus {
+pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) -> SysResult {
     #[inline(always)]
     fn inner(
         number: u16,
@@ -237,12 +74,18 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 utils::sysgetcwd(path, dest_len)
             }
             SyscallTable::SysCHDir => {
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 utils::syschdir(path)
             }
             // io
+            SyscallTable::SysGetDirEntry => {
+                let path = <Path>::make((a as *const u8, b))?;
+                let direntry = <&mut DirEntry>::make(c as *mut DirEntry)?;
+                *direntry = DirEntry::get_from_path(path)?;
+                Ok(())
+            }
             SyscallTable::SysOpen => {
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 let dest_fd = Option::make(c as *mut usize)?;
                 io::sysopen(path, dest_fd)
             }
@@ -260,11 +103,11 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 io::sysdiriter_next(diriter_rd, direntry)
             }
             SyscallTable::SysCreate => {
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 io::syscreate(path)
             }
             SyscallTable::SysCreateDir => {
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 io::syscreatedir(path)
             }
             SyscallTable::SysWrite => {
@@ -297,6 +140,15 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
 
                 if let Some(size) = dest_size {
                     *size = file_size;
+                }
+                Ok(())
+            }
+            SyscallTable::SysFAttrs => {
+                let fd = FileRef::make(a)?;
+                let dest_attrs: Option<&mut FileAttr> = Option::make(b as *mut FileAttr)?;
+
+                if let Some(attrs) = dest_attrs {
+                    *attrs = fd.attrs();
                 }
                 Ok(())
             }
@@ -345,7 +197,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                     }
                 }
 
-                let path = <&str>::make((a as *const u8, b))?;
+                let path = <Path>::make((a as *const u8, b))?;
                 let config = <&SpawnConfig>::make(c as *const SpawnConfig)?;
                 let (name, argv, flags) = config.as_rust()?;
                 let dest_pid = Option::make(d as *mut usize)?;
@@ -384,10 +236,6 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
     }
 
     // maps the results to an ErrorStatus
-    let value = match inner(number, a, b, c, d, e) {
-        Ok(()) => ErrorStatus::None,
-        Err(err) => err,
-    };
-
+    let value = inner(number, a, b, c, d, e).into();
     value
 }

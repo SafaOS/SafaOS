@@ -69,7 +69,7 @@ impl Inode {
 
     #[inline]
     unsafe fn data_ptr(this: *const Self) -> *const u8 {
-        this.byte_add(512) as *const u8
+        unsafe { this.byte_add(512) as *const u8 }
     }
 
     #[inline]
@@ -79,12 +79,11 @@ impl Inode {
 
     #[inline]
     pub unsafe fn next(this: *const Self) -> *const Inode {
-        let filesize = (*this).size();
+        let filesize = unsafe { (*this).size() };
 
         let at = (filesize + 511) / 512;
         let next = (at + 1) * 512;
-
-        this.byte_add(next)
+        unsafe { this.byte_add(next) }
     }
 }
 
@@ -108,7 +107,7 @@ impl TarArchiveIter<'_> {
     /// makes a new tar archive from ptr
     /// unsafe because ptr has to be mapped and non-null
     pub unsafe fn new(ptr: *const u8) -> Self {
-        let at = &*(ptr as *const Inode);
+        let at = unsafe { &*(ptr as *const Inode) };
         assert!(at.verify());
 
         Self { at: Some(at) }

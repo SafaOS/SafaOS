@@ -18,6 +18,7 @@ use crate::{
     utils::{
         elf::{Elf, ElfError},
         io::Readable,
+        path::{Path, PathBuf},
     },
     VirtAddr,
 };
@@ -33,7 +34,7 @@ pub enum TaskState {
         data_start: VirtAddr,
         data_break: VirtAddr,
 
-        cwd: String,
+        cwd: PathBuf,
     },
     Zombie {
         exit_code: usize,
@@ -43,7 +44,7 @@ pub enum TaskState {
         data_break: VirtAddr,
 
         last_resource_id: usize,
-        cwd: String,
+        cwd: PathBuf,
     },
 }
 
@@ -62,17 +63,15 @@ impl TaskState {
         }
     }
 
-    pub fn cwd(&self) -> &str {
+    pub fn cwd(&self) -> Path {
         match self {
-            TaskState::Alive { cwd, .. } => cwd,
-            TaskState::Zombie { cwd, .. } => cwd,
+            TaskState::Alive { cwd, .. } | TaskState::Zombie { cwd, .. } => cwd.as_path(),
         }
     }
 
-    pub fn cwd_mut(&mut self) -> &mut String {
+    pub fn cwd_mut(&mut self) -> &mut PathBuf {
         match self {
-            TaskState::Alive { cwd, .. } => cwd,
-            TaskState::Zombie { cwd, .. } => cwd,
+            TaskState::Alive { cwd, .. } | TaskState::Zombie { cwd, .. } => cwd,
         }
     }
 
@@ -224,12 +223,11 @@ impl Task {
         name: String,
         pid: Pid,
         ppid: Pid,
-        cwd: String,
+        cwd: PathBuf,
         root_page_table: PhysPageTable,
         context: CPUStatus,
         data_break: VirtAddr,
     ) -> Self {
-        assert!(cwd.len() < 128);
         assert!(name.len() < 64);
         let data_break = align_up(data_break, PAGE_SIZE);
 
@@ -255,7 +253,7 @@ impl Task {
         name: String,
         pid: Pid,
         ppid: Pid,
-        cwd: String,
+        cwd: PathBuf,
         elf: Elf<T>,
         args: &[&str],
     ) -> Result<Self, ElfError> {

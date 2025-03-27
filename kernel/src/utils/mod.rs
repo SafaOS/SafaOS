@@ -1,12 +1,5 @@
-pub mod alloc;
-pub mod ansi;
-pub mod bstr;
-pub mod display;
-pub mod either;
-pub mod elf;
-pub mod errors;
-pub mod io;
-pub mod ustar;
+//! This mod is a wrapper around the [`safa_utils`] crate
+//! with a few additions
 
 use core::{
     borrow::Borrow,
@@ -15,7 +8,11 @@ use core::{
     str::FromStr,
 };
 
-use serde::Serialize;
+pub use safa_utils::*;
+pub mod alloc;
+pub mod elf;
+pub mod ustar;
+
 use spin::{Lazy, Mutex};
 
 pub struct Locked<T: ?Sized> {
@@ -58,6 +55,8 @@ impl<T> Deref for LazyLock<T> {
         &self.inner
     }
 }
+
+use serde::Serialize;
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HeaplessString<const N: usize>(heapless::String<N>);

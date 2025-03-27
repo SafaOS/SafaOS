@@ -77,26 +77,30 @@ impl PageAllocator {
             for (i, bytes) in iter {
                 let mut byte_ref = *bytes;
 
+                if byte_ref == usize::MAX {
+                    continue;
+                }
+
                 if byte_ref == 0 {
                     *bytes = mask;
                     return Some((self.get_addr(i, 0), page_count));
                 }
 
                 let mut bit = 0;
-
-                while byte_ref & mask != 0 && bit < usize::BITS as usize {
-                    byte_ref >>= page_count;
-                    bit += page_count;
+                while byte_ref & mask != 0 && bit <= usize::BITS - page_count as u32 {
+                    let leading_ones = byte_ref.trailing_ones();
+                    byte_ref >>= leading_ones;
+                    bit += leading_ones;
                 }
 
-                if bit < usize::BITS as usize {
+                if bit <= usize::BITS - page_count as u32 {
                     *bytes |= mask << bit;
 
                     if self.next_small_allocation_index < i + 1 {
                         self.next_small_allocation_index = i + 1;
                     }
 
-                    let addr = self.get_addr(i, bit);
+                    let addr = self.get_addr(i, bit as usize);
                     return Some((addr, page_count));
                 }
             }

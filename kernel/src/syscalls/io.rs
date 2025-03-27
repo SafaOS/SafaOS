@@ -3,10 +3,10 @@ use crate::{
         self,
         expose::{DirIterRef, FileRef},
     },
-    utils::errors::ErrorStatus,
+    utils::{errors::ErrorStatus, path::Path},
 };
 
-pub fn sysopen(path: &str, dest_fd: Option<&mut usize>) -> Result<(), ErrorStatus> {
+pub fn sysopen(path: Path, dest_fd: Option<&mut usize>) -> Result<(), ErrorStatus> {
     let file_ref = FileRef::open(path)?;
     if let Some(dest_fd) = dest_fd {
         *dest_fd = file_ref.ri();
@@ -43,11 +43,11 @@ pub fn sysread(
     Ok(())
 }
 
-pub fn syscreate(path: &str) -> Result<(), ErrorStatus> {
+pub fn syscreate(path: Path) -> Result<(), ErrorStatus> {
     vfs::expose::create(path).map_err(|err| err.into())
 }
 
-pub fn syscreatedir(path: &str) -> Result<(), ErrorStatus> {
+pub fn syscreatedir(path: Path) -> Result<(), ErrorStatus> {
     vfs::expose::createdir(path).map_err(|err| err.into())
 }
 
