@@ -1,6 +1,6 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use lazy_static::lazy_static;
-use spin::RwLock;
+use spin::{mutex::Mutex, MutexGuard};
 
 use crate::{
     debug, limine,
@@ -15,30 +15,30 @@ pub enum PixelFormat {
     /// TODO: use
     Bgr,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct FrameBufferInfo {
     /// number of pixels between start of a line and another
     pub stride: usize,
+    pub height: usize,
     pub bytes_per_pixel: usize,
     pub _pixel_format: PixelFormat,
 }
 
-pub struct FrameBuffer {
-    pub info: FrameBufferInfo,
+pub struct FrameBuffer<'a> {
+    info: FrameBufferInfo,
     buffer_display_index: usize,
-    buffer: Vec<u32, PageAlloc>,
-    video_buffer: &'static mut [u32],
+    buffer: Box<[u32], PageAlloc>,
+    video_buffer: &'a mut [u32],
 }
 
-impl FrameBuffer {
-    pub fn new() -> Self {
-        let (video_buffer, info) = limine::get_framebuffer();
-        assert_eq!(info.bytes_per_pixel, 4);
-
+impl<'a> FrameBuffer<'a> {
+    pub fn new(video_buffer: &'a mut [u32], info: FrameBufferInfo) -> Self {
         let mut buffer = Vec::with_capacity_in(video_buffer.len() * 4, &*GLOBAL_PAGE_ALLOCATOR);
         unsafe {
-            buffer.set_len(video_buffer.len() * 4);
+            buffer.set_len(buffer.capacity());
         }
+
+        let buffer = buffer.into_boxed_slice();
         debug!(FrameBuffer, "created ({}KiB)", buffer.len() / 1024);
 
         Self {
@@ -92,16 +92,6 @@ impl FrameBuffer {
     }
 
     #[inline(always)]
-    pub fn width(&self) -> usize {
-        self.info.stride
-    }
-
-    #[inline(always)]
-    pub fn height(&self) -> usize {
-        self.video_buffer.len() / self.width()
-    }
-
-    #[inline(always)]
     /// sets the cursor to `pixel` in pixels
     pub fn set_cursor(&mut self, pixel: usize) {
         self.buffer_display_index = pixel;
@@ -113,7 +103,39 @@ impl FrameBuffer {
         self.buffer.fill(color);
     }
 }
+pub struct FrameBufferDriver {
+    info: FrameBufferInfo,
+    inner: Mutex<FrameBuffer<'static>>,
+}
+
+impl FrameBufferDriver {
+    pub fn create() -> Self {
+        let (video_buffer, info) = limine::get_framebuffer();
+        assert_eq!(info.bytes_per_pixel, 4);
+        let framebuffer = FrameBuffer::new(video_buffer, info);
+
+        Self {
+            info,
+            inner: Mutex::new(framebuffer),
+        }
+    }
+
+    #[inline(always)]
+    pub fn width(&self) -> usize {
+        self.info.stride
+    }
+
+    #[inline(always)]
+    pub fn height(&self) -> usize {
+        self.info.height
+    }
+
+    #[inline]
+    pub fn buffer(&self) -> MutexGuard<FrameBuffer<'static>> {
+        self.inner.lock()
+    }
+}
 
 lazy_static! {
-    pub static ref FRAMEBUFFER_DRIVER: RwLock<FrameBuffer> = RwLock::new(FrameBuffer::new());
+    pub static ref FRAMEBUFFER_DRIVER: FrameBufferDriver = FrameBufferDriver::create();
 }

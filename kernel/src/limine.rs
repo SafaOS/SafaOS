@@ -115,9 +115,13 @@ pub fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
     };
 
     let bytes_per_pixel = align_up(first.bpp() as usize, 8) / 8;
+    let stride = first.pitch() as usize / bytes_per_pixel;
+    let height = first.height() as usize;
+
     let info = FrameBufferInfo {
         bytes_per_pixel,
-        stride: first.pitch() as usize / bytes_per_pixel,
+        stride,
+        height,
         _pixel_format: pixel_format,
     };
 
