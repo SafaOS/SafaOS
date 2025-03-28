@@ -150,6 +150,9 @@ pub fn ticks_per_ms() -> u64 {
 /// Returns the number of milliseconds since the CPU was started
 pub fn time() -> u64 {
     let ticks_per_ms = ticks_per_ms();
-    let ticks = unsafe { core::arch::x86_64::_rdtsc() };
+    let ticks = unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    };
     ticks / ticks_per_ms
 }

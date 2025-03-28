@@ -23,7 +23,6 @@ pub extern "x86-interrupt" fn pit_handler() {
     send_eoi();
 }
 
-#[inline(always)]
 /// prepares the PIT to sleep for `ms` milliseconds
 /// make sure that timer is disabled until [`sleep`] is called
 pub fn prepare_sleep(ms: u32) {
