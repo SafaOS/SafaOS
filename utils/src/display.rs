@@ -2,6 +2,11 @@
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RGB(u32);
 impl RGB {
+    #[inline(always)]
+    pub const fn into_u32(self) -> u32 {
+        self.0
+    }
+
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self((r as u32) << 16 | (g as u32) << 8 | b as u32)
     }
@@ -46,8 +51,9 @@ impl RGB {
 }
 
 impl From<RGB> for u32 {
+    #[inline(always)]
     fn from(rgb: RGB) -> Self {
-        rgb.0
+        rgb.into_u32()
     }
 }
 

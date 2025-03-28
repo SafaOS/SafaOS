@@ -105,7 +105,7 @@ pub fn get_phy_offset_end() -> usize {
     get_phy_offset() + *MEMORY_END
 }
 
-pub fn get_framebuffer() -> (&'static mut [u8], FrameBufferInfo) {
+pub fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
     let mut buffers = FRAMEBUFFER_REQUEST.get_response().unwrap().framebuffers();
     let first = buffers.next().unwrap();
 
@@ -123,8 +123,8 @@ pub fn get_framebuffer() -> (&'static mut [u8], FrameBufferInfo) {
 
     assert_eq!(info.bytes_per_pixel, 4);
 
-    let size = (first.width() * first.height() * first.bpp() as u64 / 8) as usize;
-    let buffer = unsafe { slice::from_raw_parts_mut(first.addr(), size) };
+    let size = (first.width() * first.height() * first.bpp() as u64 / 8 / 4) as usize;
+    let buffer = unsafe { slice::from_raw_parts_mut(first.addr() as *mut u32, size) };
 
     (buffer, info)
 }

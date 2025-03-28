@@ -72,18 +72,16 @@ impl FrameBufferTTY<'_> {
     fn check_draw_raster(&mut self, raster: &RasterizedChar) {
         let framebuffer = self.framebuffer.read();
         let stride = framebuffer.info.stride;
-        let cursor = framebuffer.get_cursor();
         let height = framebuffer.height();
         drop(framebuffer);
 
-        if self.get_x() + raster.width() > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2) {
+        if self.get_x() + raster.width() * 2 > stride {
             self.newline();
         }
 
-        if self.get_y() + raster.height()
-            >= (cursor / stride + height) - ((DEFAULT_CURSOR_Y * RASTER_HEIGHT.val()) * 2)
-        {
+        if self.get_y() + raster.height() * 2 >= height {
             self.scroll_down();
+            self.cursor_y -= 1;
         }
     }
 
@@ -99,10 +97,11 @@ impl FrameBufferTTY<'_> {
         let mut framebuffer = self.framebuffer.write();
         let stride = framebuffer.info.stride;
 
-        let (x, y) = if x * RASTER_WIDTH + raster.width()
-            > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2)
-        {
-            (0, (y + 1) * RASTER_HEIGHT.val())
+        let (x, y) = if (x * RASTER_WIDTH) + raster.width() * 2 > stride {
+            (
+                DEFAULT_CURSOR_X * RASTER_WIDTH,
+                (y + 1) * RASTER_HEIGHT.val(),
+            )
         } else {
             (x * RASTER_WIDTH, y * RASTER_HEIGHT.val())
         };
@@ -125,7 +124,6 @@ impl FrameBufferTTY<'_> {
         for (row, rows) in raster.raster().iter().enumerate() {
             for (col, byte) in rows.iter().enumerate() {
                 let color = fg_color.with_alpha(*byte, bg_color);
-
                 framebuffer.set_pixel(x + col, y + row, color);
             }
         }
@@ -136,14 +134,8 @@ impl FrameBufferTTY<'_> {
     fn remove_char_opaque(&mut self, c: char, bg_color: RGB, x: usize, y: usize) {
         let raster = self.raster(c);
         let mut framebuffer = self.framebuffer.write();
-        let stride = framebuffer.info.stride;
-        let (x, y) = if x * RASTER_WIDTH + raster.width()
-            > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2)
-        {
-            (0, (y + 1) * RASTER_HEIGHT.val())
-        } else {
-            (x * RASTER_WIDTH, y * RASTER_HEIGHT.val())
-        };
+        let (x, y) = (x * RASTER_WIDTH, y * RASTER_HEIGHT.val());
+
         for (row, rows) in raster.raster().iter().enumerate() {
             for (col, byte) in rows.iter().enumerate() {
                 if *byte != 0 {
@@ -339,15 +331,9 @@ impl TTYInterface for FrameBufferTTY<'_> {
     }
 
     fn clear(&mut self) {
-        let stride = self.framebuffer.read().info.stride;
         self.framebuffer.write().fill(self.bg_color);
-
-        let old_cursor = self.framebuffer.read().get_cursor();
         self.framebuffer.write().set_cursor(0);
-
-        let diff = old_cursor / stride / RASTER_HEIGHT.val();
-        self.cursor_y -= diff;
-
+        self.cursor_y = 0;
         self.sync_pixels();
     }
 
