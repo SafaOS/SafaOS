@@ -7,8 +7,8 @@ pub type Pid = usize;
 use core::arch::asm;
 use lazy_static::lazy_static;
 
+use crate::utils::types::Name;
 use alloc::{rc::Rc, vec::Vec};
-use safa_utils::Name;
 use slab::Slab;
 use spin::{RwLock, RwLockReadGuard};
 use task::{Task, TaskInfo};

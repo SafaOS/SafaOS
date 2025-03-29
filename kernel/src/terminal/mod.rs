@@ -15,7 +15,7 @@ use crate::{
         bstr::BStr,
     },
 };
-use safa_utils::{make_path, Name};
+use safa_utils::{make_path, types::Name};
 
 pub mod framebuffer;
 

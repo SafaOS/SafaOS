@@ -1,5 +1,5 @@
+use crate::utils::types::Name;
 use core::fmt::Write;
-use safa_utils::Name;
 
 use crate::{
     threading::{self, expose::SpawnFlags},

@@ -1,11 +1,11 @@
 use core::str::FromStr;
 
+use crate::utils::types::Name;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
-use safa_utils::Name;
 use spin::{Mutex, RwLock};
 
 use crate::devices::Device;

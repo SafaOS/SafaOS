@@ -1,7 +1,7 @@
 use core::{arch::asm, sync::atomic::Ordering};
 
+use crate::utils::{path::CowPath, types::Name};
 use bitflags::bitflags;
-use safa_utils::{path::CowPath, Name};
 
 use crate::{
     arch::threading::CPUStatus,

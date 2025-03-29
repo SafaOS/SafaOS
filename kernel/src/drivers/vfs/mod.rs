@@ -1,6 +1,6 @@
 pub mod expose;
 
-use core::{borrow::Borrow, fmt::Debug, ops::Deref};
+use core::fmt::Debug;
 
 use crate::{
     debug,
@@ -18,39 +18,16 @@ pub mod procfs;
 pub mod ramfs;
 
 use crate::utils::path::Path;
+use crate::utils::types::Name;
 use alloc::{
     boxed::Box,
     collections::btree_map::{BTreeMap, Entry},
-    string::{String, ToString},
     sync::Arc,
 };
 use expose::{DirEntry, FileAttr};
 use lazy_static::lazy_static;
-use safa_utils::Name;
+use safa_utils::types::{DriveName, FileName};
 use spin::{Mutex, RwLock};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FileName(Name);
-
-impl From<Name> for FileName {
-    #[inline(always)]
-    fn from(value: Name) -> Self {
-        Self(value)
-    }
-}
-
-impl Borrow<str> for FileName {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Deref for FileName {
-    type Target = Name;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 lazy_static! {
     pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
@@ -424,7 +401,7 @@ impl Debug for dyn InodeOps {
 }
 #[allow(clippy::upper_case_acronyms)]
 pub struct VFS {
-    drives: BTreeMap<String, Arc<dyn FileSystem>>,
+    drives: BTreeMap<DriveName, Arc<dyn FileSystem>>,
 }
 
 impl VFS {
@@ -448,13 +425,20 @@ impl VFS {
 
         // ramfs
         let ramfs = RwLock::new(ramfs::RamFS::new());
-        this.mount("ram", ramfs).unwrap();
+        this.mount(DriveName::new_const("ram"), ramfs).unwrap();
         // devices
-        this.mount("dev", RwLock::new(ramfs::RamFS::new())).unwrap();
+        this.mount(
+            DriveName::new_const("dev"),
+            RwLock::new(ramfs::RamFS::new()),
+        )
+        .unwrap();
         devices::init(&this);
         // processes
-        this.mount("proc", Mutex::new(procfs::ProcFS::create()))
-            .unwrap();
+        this.mount(
+            DriveName::new_const("proc"),
+            Mutex::new(procfs::ProcFS::create()),
+        )
+        .unwrap();
         // ramdisk
         let mut ramdisk = limine::get_ramdisk();
         let mut ramfs = RwLock::new(ramfs::RamFS::new());
@@ -463,7 +447,8 @@ impl VFS {
         this.unpack_tar(&mut ramfs, &mut ramdisk)
             .expect("failed unpacking ramdisk archive");
         debug!(VFS, "Mounting ramdisk ...");
-        this.mount("sys", ramfs).expect("failed mounting");
+        this.mount(DriveName::new_const("sys"), ramfs)
+            .expect("failed mounting");
 
         let elapsed = time!() - the_now;
         let used_memory = frame_allocator::mapped_frames() - moment_memory_usage;
@@ -481,8 +466,8 @@ impl VFS {
     /// mounts a file system as a drive
     /// returns Err(()) if not enough memory or there is an already mounted driver with that
     /// name
-    fn mount<F: FileSystem + 'static>(&mut self, name: &str, value: F) -> Result<(), ()> {
-        if let Entry::Vacant(entry) = self.drives.entry(name.to_string()) {
+    fn mount<F: FileSystem + 'static>(&mut self, name: DriveName, value: F) -> Result<(), ()> {
+        if let Entry::Vacant(entry) = self.drives.entry(name) {
             entry.insert(Arc::new(value));
             Ok(())
         } else {

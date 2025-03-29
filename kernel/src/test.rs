@@ -3,7 +3,7 @@ use macros::test_module;
 
 #[test_module]
 pub mod testing_module {
-    use crate::utils::Name;
+    use crate::utils::types::Name;
     use alloc::vec::Vec;
 
     use crate::memory::frame_allocator;

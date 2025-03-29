@@ -51,7 +51,7 @@ pub fn main() -> ! {
     #[cfg(feature = "test")]
     {
         use crate::threading::expose::{function_spawn, SpawnFlags};
-        use crate::utils::Name;
+        use crate::utils::types::Name;
 
         function_spawn(
             Name::try_from("TestRunner").unwrap(),

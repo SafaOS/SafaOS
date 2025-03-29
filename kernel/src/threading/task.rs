@@ -4,7 +4,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize},
 };
 
-use safa_utils::Name;
+use crate::utils::types::Name;
 use serde::Serialize;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
