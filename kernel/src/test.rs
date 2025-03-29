@@ -3,7 +3,7 @@ use macros::test_module;
 
 #[test_module]
 pub mod testing_module {
-    use crate::alloc::string::ToString;
+    use crate::utils::Name;
     use alloc::vec::Vec;
 
     use crate::memory::frame_allocator;
@@ -113,7 +113,7 @@ pub mod testing_module {
     fn spawn() {
         unsafe { core::arch::asm!("cli") }
         let pid = pspawn(
-            "TEST_CASE".to_string(),
+            Name::try_from("TEST_CASE").unwrap(),
             make_path!("sys", "/bin/true"),
             &[],
             SpawnFlags::CLONE_RESOURCES,
@@ -128,7 +128,7 @@ pub mod testing_module {
     fn userspace() {
         unsafe { core::arch::asm!("cli") }
         let pid = pspawn(
-            "TEST_BOT".to_string(),
+            Name::try_from("Tester").unwrap(),
             make_path!("sys", "bin/safa-tests"),
             &[],
             SpawnFlags::empty(),

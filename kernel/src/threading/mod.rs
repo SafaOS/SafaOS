@@ -7,7 +7,8 @@ pub type Pid = usize;
 use core::arch::asm;
 use lazy_static::lazy_static;
 
-use alloc::{rc::Rc, string::String, vec::Vec};
+use alloc::{rc::Rc, vec::Vec};
+use safa_utils::Name;
 use slab::Slab;
 use spin::{RwLock, RwLockReadGuard};
 use task::{Task, TaskInfo};
@@ -44,7 +45,7 @@ impl Scheduler {
         let context = CPUStatus::create(&mut page_table, &[], function as usize, false).unwrap();
 
         let task = Task::new(
-            String::from(name),
+            Name::try_from(name).expect("initial process name too long"),
             0,
             0,
             unsafe { Path::new_unchecked("ram:/") }.into_owned(),

@@ -1,4 +1,3 @@
-use alloc::string::String;
 use bitflags::bitflags;
 use core::fmt::Write;
 use framebuffer::FrameBufferTTY;
@@ -16,7 +15,7 @@ use crate::{
         bstr::BStr,
     },
 };
-use safa_utils::make_path;
+use safa_utils::{make_path, Name};
 
 pub mod framebuffer;
 
@@ -162,7 +161,7 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                 self.clear();
                 self.interface.set_cursor(1, 1);
                 pspawn(
-                    String::from("Shell"),
+                    Name::try_from("Shell").unwrap(),
                     // Maybe we can make a const function or a macro for this
                     make_path!("sys", "bin/safa"),
                     &["-i"],

@@ -6,12 +6,13 @@ use core::{
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use hashbrown::HashMap;
 use init::InitStateItem;
+use safa_utils::Name;
 use spin::Mutex;
 use tasks::TaskInfoFile;
 
 use crate::{
     threading::{self, Pid},
-    utils::{alloc::PageString, HeaplessString},
+    utils::alloc::PageString,
 };
 
 use super::{DirIterInodeItem, FSError, FSResult, FileName, Inode, InodeOps};
@@ -174,7 +175,7 @@ impl super::InodeOps for Mutex<ProcInode> {
             ProcInodeData::Dir(dir) => {
                 let mut inodeids = Vec::with_capacity(dir.len());
                 for (name, inodeid) in dir {
-                    inodeids.push((HeaplessString::from_str(name).unwrap(), *inodeid));
+                    inodeids.push((Name::from_str(name).unwrap().into(), *inodeid));
                 }
 
                 Ok(inodeids.into_boxed_slice())
@@ -183,9 +184,10 @@ impl super::InodeOps for Mutex<ProcInode> {
         }
     }
 
-    fn insert(&self, name: FileName, node: usize) -> FSResult<()> {
+    fn insert(&self, name: Name, node: usize) -> FSResult<()> {
         match &mut self.lock().data {
             ProcInodeData::Dir(dir) => {
+                let name = name.into();
                 if dir.contains_key(&name) {
                     return FSResult::Err(FSError::AlreadyExists);
                 }
@@ -245,7 +247,7 @@ impl ProcFS {
 
         for item in init::get_init_state() {
             let (name, inodeid) = fs.append_init_state(item);
-            let name = FileName::from_str(name).unwrap();
+            let name = Name::from_str(name).unwrap();
 
             root_inode.insert(name, inodeid).unwrap();
         }
@@ -266,14 +268,14 @@ impl ProcFS {
         (name, inodeid)
     }
 
-    fn append_dir(&mut self, name: FileName, items: &[(&str, usize)]) -> usize {
+    fn append_dir(&mut self, name: Name, items: &[(&str, usize)]) -> usize {
         let inodeid = self.next_inodeid;
         self.next_inodeid += 1;
 
         let data = HashMap::from_iter(
             items
                 .iter()
-                .map(|(name, inodeid)| (FileName::from_str(name).unwrap(), *inodeid)),
+                .map(|(name, inodeid)| (Name::from_str(name).unwrap().into(), *inodeid)),
         );
 
         self.inodes.insert(
@@ -290,7 +292,7 @@ impl ProcFS {
         let info_file = TaskInfoFile::new(pid);
         let (info_file_name, info_file_inode) = self.append_file(info_file);
 
-        let mut pid_str = FileName::new();
+        let mut pid_str = Name::new();
         pid_str.write_fmt(format_args!("{}", pid)).unwrap();
 
         let inodeid = self.append_dir(pid_str, &[(info_file_name, info_file_inode)]);
@@ -340,9 +342,10 @@ impl ProcFS {
             self.remove_inode(inodeid);
             match &mut self.inodes.get(&0).unwrap().lock().data {
                 ProcInodeData::Dir(dir) => {
-                    let mut pid_str = FileName::new();
+                    let mut pid_str = Name::new();
                     pid_str.write_fmt(format_args!("{}", pid)).unwrap();
 
+                    let pid_str: FileName = pid_str.into();
                     dir.remove(&pid_str);
                 }
                 ProcInodeData::File(_) => unreachable!(),

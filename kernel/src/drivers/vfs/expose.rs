@@ -2,7 +2,10 @@ use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
 use crate::{
     threading::resources::{self, Resource},
-    utils::io::{IoError, Readable},
+    utils::{
+        self,
+        io::{IoError, Readable},
+    },
 };
 
 use super::{
@@ -175,7 +178,7 @@ pub struct DirEntry {
 }
 
 impl DirEntry {
-    pub const MAX_NAME_LEN: usize = 128;
+    pub const MAX_NAME_LEN: usize = utils::consts::MAX_NAME_LENGTH;
     pub fn get_from_inode(inode: Inode, name: &str) -> Self {
         let attrs = FileAttr::from_inode(&inode);
 

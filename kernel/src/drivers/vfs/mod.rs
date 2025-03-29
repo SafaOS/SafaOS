@@ -1,6 +1,6 @@
 pub mod expose;
 
-use core::fmt::Debug;
+use core::{borrow::Borrow, fmt::Debug, ops::Deref};
 
 use crate::{
     debug,
@@ -12,7 +12,6 @@ use crate::{
         errors::{ErrorStatus, IntoErr},
         path::{CowPath, PathParts},
         ustar::{self, TarArchiveIter},
-        HeaplessString,
     },
 };
 pub mod procfs;
@@ -27,9 +26,31 @@ use alloc::{
 };
 use expose::{DirEntry, FileAttr};
 use lazy_static::lazy_static;
+use safa_utils::Name;
 use spin::{Mutex, RwLock};
 
-pub type FileName = HeaplessString<{ DirEntry::MAX_NAME_LEN }>;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FileName(Name);
+
+impl From<Name> for FileName {
+    #[inline(always)]
+    fn from(value: Name) -> Self {
+        Self(value)
+    }
+}
+
+impl Borrow<str> for FileName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Deref for FileName {
+    type Target = Name;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 lazy_static! {
     pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
@@ -225,7 +246,7 @@ pub trait InodeOps: Send + Sync {
 
     /// attempts to insert a node to self
     /// returns an FSError::NotADirectory if not a directory
-    fn insert(&self, name: FileName, node: usize) -> FSResult<()> {
+    fn insert(&self, name: Name, node: usize) -> FSResult<()> {
         _ = name;
         _ = node;
         Err(FSError::OperationNotSupported)
@@ -275,7 +296,7 @@ pub trait InodeOps: Send + Sync {
 pub type Inode = Arc<dyn InodeOps>;
 /// inode type with a known type
 pub type InodeOf<T> = Arc<T>;
-pub type DirIterInodeItem = (HeaplessString<{ DirEntry::MAX_NAME_LEN }>, usize);
+pub type DirIterInodeItem = (FileName, usize);
 
 #[derive(Debug, Clone)]
 pub struct DirIterDescriptor {

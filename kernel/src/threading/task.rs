@@ -4,7 +4,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize},
 };
 
-use alloc::string::String;
+use safa_utils::Name;
 use serde::Serialize;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -209,7 +209,7 @@ pub struct Task {
     /// Task may change it's parent pid
     pub ppid: AtomicUsize,
     state: RwLock<TaskState>,
-    name: String,
+    name: Name,
     /// context must only be changed by the scheduler, so it is not protected by a lock
     context: UnsafeCell<CPUStatus>,
     is_alive: AtomicBool,
@@ -220,7 +220,7 @@ impl Task {
     /// # Panics
     /// if `cwd` or `name` have a length greater than 128 or 64 bytes respectively
     pub fn new(
-        name: String,
+        name: Name,
         pid: Pid,
         ppid: Pid,
         cwd: PathBuf,
@@ -228,7 +228,6 @@ impl Task {
         context: CPUStatus,
         data_break: VirtAddr,
     ) -> Self {
-        assert!(name.len() < 64);
         let data_break = align_up(data_break, PAGE_SIZE);
 
         Self {
@@ -250,7 +249,7 @@ impl Task {
 
     /// Creates a new task from an elf
     pub fn from_elf<T: Readable>(
-        name: String,
+        name: Name,
         pid: Pid,
         ppid: Pid,
         cwd: PathBuf,
@@ -266,7 +265,7 @@ impl Task {
             name, pid, ppid, cwd, page_table, context, data_break,
         ))
     }
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &Name {
         &self.name
     }
 
@@ -316,26 +315,6 @@ impl Task {
 
     pub(super) fn is_alive(&self) -> bool {
         self.is_alive.load(core::sync::atomic::Ordering::Relaxed)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Name([u8; 64]);
-
-impl From<[u8; 64]> for Name {
-    fn from(name: [u8; 64]) -> Self {
-        Self(name)
-    }
-}
-
-impl serde::Serialize for Name {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        unsafe {
-            serializer.serialize_str(core::str::from_utf8_unchecked(&self.0).trim_matches('\0'))
-        }
     }
 }
 
@@ -390,14 +369,12 @@ impl From<&Task> for TaskInfo {
 
         let is_alive = task.is_alive();
         let ppid = task.ppid.load(core::sync::atomic::Ordering::Relaxed);
-
-        let mut name = [0u8; 64];
-        name[..task.name().len()].copy_from_slice(task.name().as_bytes());
+        let name = task.name().clone();
 
         Self {
             ppid,
             pid: task.pid,
-            name: name.into(),
+            name,
             last_resource_id,
             exit_code,
             at,

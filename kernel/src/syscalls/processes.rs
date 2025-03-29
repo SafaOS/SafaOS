@@ -1,4 +1,5 @@
-use alloc::{format, string::ToString};
+use core::fmt::Write;
+use safa_utils::Name;
 
 use crate::{
     threading::{self, expose::SpawnFlags},
@@ -20,11 +21,14 @@ pub fn syspspawn(
     flags: SpawnFlags,
     dest_pid: Option<&mut usize>,
 ) -> Result<(), ErrorStatus> {
-    let name = name.map(|s| s.to_string());
-    // we are using _else because it is expensive to allocate all of this
-    let name = name
-        .or_else(|| argv.first().map(|s| s.to_string()))
-        .unwrap_or_else(|| format!("{path}"));
+    let name = match name {
+        Some(raw) => Name::try_from(raw).map_err(|()| ErrorStatus::StrTooLong)?,
+        None => {
+            let mut name = Name::new();
+            _ = name.write_fmt(format_args!("{path}"));
+            name
+        }
+    };
 
     let results = threading::expose::pspawn(name, path, argv, flags)?;
     if let Some(dest_pid) = dest_pid {

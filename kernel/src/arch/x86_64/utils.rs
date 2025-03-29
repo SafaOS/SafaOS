@@ -3,34 +3,32 @@ use core::{arch::x86_64::__cpuid, cell::SyncUnsafeCell};
 use serde::Serialize;
 use spin::Lazy;
 
-use crate::utils::HeaplessString;
-
 #[derive(Serialize, Debug)]
 pub struct CpuInfo {
-    vendor_id: HeaplessString<12>,
-    model: HeaplessString<48>,
+    vendor_id: heapless::String<12>,
+    model: heapless::String<48>,
 
     physical_address_space: u8,
     virtual_address_space: u8,
     core_count: u8,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    easter_egg: Option<HeaplessString<16>>,
+    easter_egg: Option<heapless::String<16>>,
 }
 
 impl CpuInfo {
-    fn fetch_vendor_id() -> HeaplessString<12> {
+    fn fetch_vendor_id() -> heapless::String<12> {
         unsafe {
             let raw = __cpuid(0);
             let (ebx, ecx, edx) = (raw.ebx, raw.ecx, raw.edx);
 
             let vendor_id: [u8; 12] = core::mem::transmute([ebx, edx, ecx]);
             let vendor_id = heapless::Vec::from_slice(&vendor_id).unwrap_unchecked();
-            heapless::String::from_utf8_unchecked(vendor_id).into()
+            heapless::String::from_utf8_unchecked(vendor_id)
         }
     }
 
-    fn fetch_model() -> HeaplessString<48> {
+    fn fetch_model() -> heapless::String<48> {
         unsafe {
             let mut model: [u8; 48] = [0u8; 48];
 
@@ -45,7 +43,7 @@ impl CpuInfo {
             }
 
             let model = heapless::Vec::from_slice(&model).unwrap_unchecked();
-            heapless::String::from_utf8_unchecked(model).into()
+            heapless::String::from_utf8_unchecked(model)
         }
     }
 
@@ -56,7 +54,7 @@ impl CpuInfo {
         }
     }
 
-    fn fetch_easter_egg() -> Option<HeaplessString<16>> {
+    fn fetch_easter_egg() -> Option<heapless::String<16>> {
         unsafe {
             let raw = __cpuid(0x8FFFFFFFu32);
             let (eax, ebx, ecx, edx) = (raw.eax, raw.ebx, raw.ecx, raw.edx);
@@ -68,9 +66,7 @@ impl CpuInfo {
             }
 
             let easter_egg = heapless::Vec::from_slice(&easter_egg).ok()?;
-            heapless::String::from_utf8(easter_egg)
-                .ok()
-                .map(HeaplessString::from)
+            heapless::String::from_utf8(easter_egg).ok()
         }
     }
 

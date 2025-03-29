@@ -1,8 +1,7 @@
 use core::{arch::asm, sync::atomic::Ordering};
 
-use alloc::string::{String, ToString};
 use bitflags::bitflags;
-use safa_utils::path::CowPath;
+use safa_utils::{path::CowPath, Name};
 
 use crate::{
     arch::threading::CPUStatus,
@@ -89,7 +88,7 @@ bitflags! {
 
 #[allow(unused)]
 pub fn function_spawn(
-    name: &str,
+    name: Name,
     function: fn() -> !,
     argv: &[&str],
     flags: SpawnFlags,
@@ -103,7 +102,7 @@ pub fn function_spawn(
     let mut page_table = PhysPageTable::create()?;
     let context =
         unsafe { CPUStatus::create(&mut page_table, argv, function as usize, false).unwrap() };
-    let task = Task::new(name.to_string(), 0, 0, cwd, page_table, context, 0);
+    let task = Task::new(name, 0, 0, cwd, page_table, context, 0);
 
     if flags.contains(SpawnFlags::CLONE_RESOURCES) {
         let mut state = task.state_mut().unwrap();
@@ -121,7 +120,7 @@ pub fn function_spawn(
 }
 
 pub fn spawn<T: Readable>(
-    name: String,
+    name: Name,
     reader: &T,
     argv: &[&str],
     flags: SpawnFlags,
@@ -155,12 +154,7 @@ pub fn spawn<T: Readable>(
 }
 
 /// spawns an elf process from a path
-pub fn pspawn(
-    name: String,
-    path: Path,
-    argv: &[&str],
-    flags: SpawnFlags,
-) -> Result<usize, FSError> {
+pub fn pspawn(name: Name, path: Path, argv: &[&str], flags: SpawnFlags) -> Result<usize, FSError> {
     let file = File::open(path)?;
 
     if file.kind() != InodeType::File {
