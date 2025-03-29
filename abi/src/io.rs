@@ -22,9 +22,5 @@ pub struct FileAttr {
 pub struct DirEntry {
     pub attrs: FileAttr,
     pub name_length: usize,
-    pub name: [u8; Self::MAX_NAME_LEN],
-}
-
-impl DirEntry {
-    pub const MAX_NAME_LEN: usize = 128;
+    pub name: [u8; super::consts::MAX_NAME_LENGTH],
 }
