@@ -142,17 +142,17 @@ fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
 
         core::ptr::write_volatile(addr, timer.encode_u32());
         core::ptr::write_volatile(divide, 0x3);
-        pit::prepare_sleep(20);
+        pit::prepare_sleep(100);
         asm!("sti");
         core::ptr::write_volatile(init, u32::MAX);
 
         let diff_tick = pit::calibrate_sleep(apic_id, || (), |()| u32::MAX - *current_counter);
         asm!("cli");
 
-        core::ptr::write_volatile(APIC_TIMER_TICKS_PER_MS.get(), diff_tick as u64 / 20);
+        core::ptr::write_volatile(APIC_TIMER_TICKS_PER_MS.get(), diff_tick as u64 / 100);
         serial!(
-            "calibrated with {} ticks in 20ms\n",
-            core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) * 20
+            "calibrated with {} ticks in 100ms\n",
+            core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) * 100
         );
     }
 
@@ -169,7 +169,7 @@ fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
 pub fn calibrate_tsc(apic_id: u8) {
     serial!("calbrating tsc\n");
     unsafe {
-        pit::prepare_sleep(20);
+        pit::prepare_sleep(100);
 
         asm!("sti");
         let diff_tick = pit::calibrate_sleep(
@@ -179,10 +179,10 @@ pub fn calibrate_tsc(apic_id: u8) {
         );
         asm!("cli");
 
-        core::ptr::write_volatile(TICKS_PER_MS.get(), diff_tick / 20);
+        core::ptr::write_volatile(TICKS_PER_MS.get(), diff_tick / 100);
         serial!(
-            "calbrated with {} ticks in 20ms\n",
-            core::ptr::read(TICKS_PER_MS.get()) * 20
+            "calbrated with {} ticks in 100ms\n",
+            core::ptr::read(TICKS_PER_MS.get()) * 100
         );
     }
 }

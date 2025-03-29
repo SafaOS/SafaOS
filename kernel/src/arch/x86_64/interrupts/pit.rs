@@ -26,7 +26,7 @@ pub extern "x86-interrupt" fn pit_handler() {
 /// prepares the PIT to sleep for `ms` milliseconds
 /// make sure that timer is disabled until [`sleep`] is called
 pub fn prepare_sleep(ms: u32) {
-    set_freq(1000);
+    set_freq(1193);
     PIT_COUNTER.store(ms as i16, Ordering::Relaxed);
 }
 
