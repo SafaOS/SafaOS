@@ -72,7 +72,7 @@ the script will return a non-zero exit code if any testing fails
 ## Current Features
 there is a bunch of userspace programs written in rust in the `binutils/` directory they are compiled and then copied to the ramdisk as `sys:/bin/`, you can check them out alongside the `tests` for almost everything the kernel is currently capable of.
 
-> aside from the rust stdandard library another method to interact with the kernel is through the [safa-api](github.com/SafaOS/safa-api) which provides low-level wrapper functions around the syscalls, and also some high-level wrappers (such as a userspace allocator which is a very high-level wrapper around the sbrk syscall, ofc the raw sbrk syscall is still exposed), the problem is it is currently not documented.
+> aside from the rust stdandard library another method to interact with the kernel is through the [safa-api](https://github.com/SafaOS/safa-api) which provides low-level wrapper functions around the syscalls, and also some high-level wrappers (such as a userspace allocator which is a very high-level wrapper around the sbrk syscall, ofc the raw sbrk syscall is still exposed), the problem is it is currently not documented.
 
 ## Credits
 currently uses the [limine](https://limine-bootloader.org/) bootloader.
