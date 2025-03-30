@@ -6,9 +6,8 @@ use core::ops::{Deref, DerefMut, RangeBounds};
 use core::ptr::NonNull;
 use core::str;
 
-use crate::memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc};
+use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
 use alloc::boxed::Box;
-use alloc::str::pattern::{Pattern, ReverseSearcher};
 use alloc::vec::{Drain, Vec};
 
 use super::bstr::BStr;
@@ -158,14 +157,6 @@ impl PageString {
 
     pub fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.inner) }
-    }
-
-    pub fn ends_with<P>(&self, other: P) -> bool
-    where
-        P: Pattern,
-        for<'a> P::Searcher<'a>: ReverseSearcher<'a>,
-    {
-        self.as_str().ends_with(other)
     }
 
     pub fn is_empty(&self) -> bool {

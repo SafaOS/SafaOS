@@ -67,7 +67,7 @@ pub struct TTY<T: TTYInterface> {
     /// stores the stdout buffer for write operations peformed on the tty device, allows to write to the tty at once instead of a peice by piece
     stdout_buffer: PageBString,
     /// stores the stdin buffer for read operations peformed on the tty device
-    pub stdin_buffer: PageString,
+    stdin_buffer: PageString,
     pub settings: TTYSettings,
     interface: T,
 }
@@ -144,6 +144,16 @@ impl<T: TTYInterface> TTY<T> {
 
     pub fn write_bstr(&mut self, s: &BStr) {
         self.stdout_buffer.push_bstr(s);
+    }
+
+    #[inline]
+    pub fn stdin(&self) -> &str {
+        &self.stdin_buffer
+    }
+
+    #[inline(always)]
+    pub fn stdin_pop_front(&mut self, amount: usize) {
+        self.stdin_buffer.drain(..amount);
     }
 }
 
