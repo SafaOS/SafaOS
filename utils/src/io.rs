@@ -1,3 +1,5 @@
+use core::fmt;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoError {
     InvaildOffset,
@@ -30,5 +32,32 @@ impl Readable for &[u8] {
 
         buf[..amount].copy_from_slice(&self[offset..offset + amount]);
         Ok(amount)
+    }
+}
+
+pub struct Cursor<'a> {
+    buf: &'a mut [u8],
+    offset: usize,
+}
+
+impl<'a> Cursor<'a> {
+    pub const fn new(buf: &'a mut [u8]) -> Self {
+        Self { buf, offset: 0 }
+    }
+}
+
+impl<'a> fmt::Write for Cursor<'a> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let bytes = s.as_bytes();
+
+        let remaining = &mut self.buf[self.offset..];
+        if remaining.len() < bytes.len() {
+            return Err(core::fmt::Error);
+        }
+
+        remaining[..bytes.len()].copy_from_slice(bytes);
+        self.offset += bytes.len();
+
+        Ok(())
     }
 }
