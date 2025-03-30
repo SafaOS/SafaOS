@@ -7,6 +7,7 @@ use crate::{
     devices::{self, Device},
     limine,
     memory::{frame_allocator, paging::PAGE_SIZE},
+    threading::this_state,
     time,
     utils::{
         errors::{ErrorStatus, IntoErr},
@@ -368,25 +369,6 @@ pub trait FileSystem: Send + Sync {
         Ok(current_inode)
     }
 
-    /// goes trough path to get the inode it refers to
-    /// will err if there is no such a file or directory or path is straight up invaild
-    /// assumes that the last depth in path is the filename and returns it alongside the parent dir
-    fn resolve_pathparts_uncreated<'a>(
-        &self,
-        path: PathParts<'a>,
-        root_node: Inode,
-    ) -> FSResult<(Inode, &'a str)> {
-        let (name, path) = path.spilt_into_name();
-
-        let name = name.ok_or(FSError::InvaildPath)?;
-        let resloved = self.resolve_pathparts(path, root_node)?;
-        if resloved.kind() != InodeType::Directory {
-            return Err(FSError::NotADirectory);
-        }
-
-        Ok((resloved, name))
-    }
-
     /// creates an empty file named `name` relative to Inode   
     fn create(&self, node: Inode, name: &str) -> FSResult<()> {
         _ = node;
@@ -543,8 +525,9 @@ impl VFS {
             self.resolve_abs_path(path)
         } else {
             let relative_parts = path.parts().unwrap_or_default();
-            let cwd = crate::threading::expose::getcwd();
-            self.resolve_relative_path(cwd.as_path(), relative_parts)
+            let state = this_state();
+            let cwd = state.cwd();
+            self.resolve_relative_path(cwd, relative_parts)
         }
     }
 
@@ -566,10 +549,8 @@ impl VFS {
     }
 
     /// checks if a path is a vaild dir returns Err if path has an error
-    /// assumes that the path is absolute
     pub fn verify_path_dir(&self, path: Path) -> FSResult<()> {
-        assert!(path.is_absolute());
-        let (_, res) = self.resolve_abs_path(path)?;
+        let (_, res) = self.resolve_path(path)?;
 
         if !res.is_dir() {
             return Err(FSError::NotADirectory);

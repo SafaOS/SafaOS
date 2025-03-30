@@ -5,8 +5,9 @@ use core::{
 };
 
 use crate::utils::types::Name;
+use alloc::{boxed::Box, vec::Vec};
 use serde::Serialize;
-use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     arch::threading::CPUStatus,
@@ -23,7 +24,10 @@ use crate::{
     VirtAddr,
 };
 
-use super::{resources::ResourceManager, Pid};
+use super::{
+    resources::{Resource, ResourceManager},
+    Pid,
+};
 
 pub enum TaskState {
     Alive {
@@ -34,7 +38,7 @@ pub enum TaskState {
         data_start: VirtAddr,
         data_break: VirtAddr,
 
-        cwd: PathBuf,
+        cwd: Box<PathBuf>,
     },
     Zombie {
         exit_code: usize,
@@ -44,7 +48,7 @@ pub enum TaskState {
         data_break: VirtAddr,
 
         last_resource_id: usize,
-        cwd: PathBuf,
+        cwd: Box<PathBuf>,
     },
 }
 
@@ -67,6 +71,11 @@ impl TaskState {
         match self {
             TaskState::Alive { cwd, .. } | TaskState::Zombie { cwd, .. } => cwd.as_path(),
         }
+    }
+
+    /// Clones the resources of `self`, panicks if self isn't alive
+    pub fn clone_resources(&mut self) -> Vec<Mutex<Resource>> {
+        self.resource_manager_mut().unwrap().clone_resources()
     }
 
     pub fn cwd_mut(&mut self) -> &mut PathBuf {
@@ -223,7 +232,7 @@ impl Task {
         name: Name,
         pid: Pid,
         ppid: Pid,
-        cwd: PathBuf,
+        cwd: Box<PathBuf>,
         root_page_table: PhysPageTable,
         context: CPUStatus,
         data_break: VirtAddr,
@@ -252,10 +261,12 @@ impl Task {
         name: Name,
         pid: Pid,
         ppid: Pid,
-        cwd: PathBuf,
+        cwd: Path,
         elf: Elf<T>,
         args: &[&str],
     ) -> Result<Self, ElfError> {
+        let cwd = Box::new(cwd.into_owned().unwrap());
+
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;

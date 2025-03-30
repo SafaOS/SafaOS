@@ -9,10 +9,10 @@ use lazy_static::lazy_static;
 use safa_utils::make_path;
 
 use crate::utils::types::Name;
-use alloc::{rc::Rc, vec::Vec};
+use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use slab::Slab;
-use spin::{RwLock, RwLockReadGuard};
-use task::{Task, TaskInfo};
+use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use task::{Task, TaskInfo, TaskState};
 
 use crate::{
     arch::threading::{restore_cpu_status, CPUStatus},
@@ -44,7 +44,7 @@ impl Scheduler {
         asm!("cli");
         let mut page_table = PhysPageTable::from_current();
         let context = CPUStatus::create(&mut page_table, &[], function as usize, false).unwrap();
-        let cwd = make_path!("ram", "").into_owned().unwrap();
+        let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
         let task = Task::new(
             Name::try_from(name).expect("initial process name too long"),
@@ -174,6 +174,19 @@ fn current() -> Rc<Task> {
     SCHEDULER.read().current().clone()
 }
 
+fn this_ptr() -> *const Task {
+    let read = SCHEDULER.read();
+    let curr = read.current();
+    Rc::downgrade(curr).as_ptr()
+}
+
+/// Returns a static reference to the current task
+/// # Safety
+/// Safe because the current Task is always alive as long as there is code executing
+pub fn this() -> &'static Task {
+    unsafe { &*this_ptr() }
+}
+
 /// acquires lock on scheduler and finds a task where executing `condition` on returns true
 fn find<C>(condition: C) -> Option<Rc<Task>>
 where
@@ -204,4 +217,32 @@ fn remove(condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
 
 pub fn schd() -> RwLockReadGuard<'static, Scheduler> {
     SCHEDULER.read()
+}
+
+/// Gets a readlock on the current task's states
+/// # Safety
+/// Safe because the task always is
+#[inline(always)]
+#[must_use]
+pub fn this_state() -> RwLockReadGuard<'static, TaskState> {
+    loop {
+        match this().state() {
+            Some(s) => return s,
+            None => expose::thread_yeild(),
+        }
+    }
+}
+
+/// Gets a writelock on the current task's states
+/// # Safety
+/// Safe because the task always is
+#[inline(always)]
+#[must_use]
+pub fn this_state_mut() -> RwLockWriteGuard<'static, TaskState> {
+    loop {
+        match this().state_mut() {
+            Some(s) => return s,
+            None => expose::thread_yeild(),
+        }
+    }
 }

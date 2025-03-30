@@ -1,26 +1,28 @@
 use core::{arch::asm, sync::atomic::Ordering};
 
-use crate::utils::types::Name;
+use crate::{
+    arch::threading::CPUStatus,
+    memory::paging::{MapToError, PhysPageTable},
+    utils::types::Name,
+};
+use alloc::boxed::Box;
 use bitflags::bitflags;
 use safa_utils::make_path;
 
 use crate::{
-    arch::threading::CPUStatus,
     drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
     khalt,
-    memory::paging::{MapToError, PhysPageTable},
     utils::{
         elf::{Elf, ElfError},
         errors::ErrorStatus,
         io::Readable,
-        path::{Path, PathBuf},
+        path::Path,
     },
 };
 
 use super::{
-    resources,
     task::{Task, TaskInfo, TaskState},
-    Pid,
+    this_state, this_state_mut, Pid,
 };
 
 #[no_mangle]
@@ -87,6 +89,7 @@ bitflags! {
     }
 }
 
+// used by tests...
 #[allow(unused)]
 pub fn function_spawn(
     name: Name,
@@ -94,11 +97,13 @@ pub fn function_spawn(
     argv: &[&str],
     flags: SpawnFlags,
 ) -> Result<usize, MapToError> {
+    let mut this = this_state_mut();
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        getcwd()
+        this.cwd()
     } else {
-        make_path!("ram", "").into_owned().unwrap()
+        make_path!("ram", "")
     };
+    let cwd = Box::new(cwd.into_owned().unwrap());
 
     let mut page_table = PhysPageTable::create()?;
     let context =
@@ -112,7 +117,7 @@ pub fn function_spawn(
             unreachable!()
         };
 
-        let clone = resources::clone_resources();
+        let clone = this.clone_resources();
         resources.overwrite_resources(clone);
     }
 
@@ -126,10 +131,11 @@ pub fn spawn<T: Readable>(
     argv: &[&str],
     flags: SpawnFlags,
 ) -> Result<usize, ElfError> {
+    let this = this_state();
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        getcwd()
+        this.cwd()
     } else {
-        make_path!("ram", "").into_owned().unwrap()
+        make_path!("ram", "")
     };
 
     let elf = Elf::new(reader)?;
@@ -146,7 +152,9 @@ pub fn spawn<T: Readable>(
             unreachable!()
         };
 
-        let clone = resources::clone_resources();
+        drop(this);
+        let mut this = this_state_mut();
+        let clone = this.clone_resources();
         resources.overwrite_resources(clone);
     }
 
@@ -169,26 +177,18 @@ pub fn pspawn(name: Name, path: Path, argv: &[&str], flags: SpawnFlags) -> Resul
 /// will only Err if new_dir doesn't exists or is not a directory
 #[no_mangle]
 pub fn chdir(new_dir: Path) -> FSResult<()> {
-    let cwd = getcwd();
-    let new_dir = new_dir.to_absolute_with(cwd.as_path())?;
+    VFS_STRUCT.read().verify_path_dir(new_dir)?;
 
-    VFS_STRUCT.read().verify_path_dir(new_dir.as_path())?;
-    let current = super::current();
-
-    let mut state = current.state_mut().unwrap();
+    let mut state = this_state_mut();
     let cwd = state.cwd_mut();
-    *cwd = new_dir;
-    Ok(())
-}
 
-// TODO: this depends on the existence of the current process,
-// I can make it faster by returning Path<'a> where 'a is the lifetime of the process, instead of a PathBuf
-#[no_mangle]
-pub fn getcwd() -> PathBuf {
-    let current = super::current();
-    let state = current.state().unwrap();
-    let cwd = state.cwd();
-    cwd.into_owned().unwrap()
+    if new_dir.is_absolute() {
+        *cwd = new_dir.into_owned()?;
+    } else {
+        cwd.append(new_dir)?;
+    }
+
+    Ok(())
 }
 
 fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: usize) -> bool {

@@ -21,18 +21,18 @@ pub fn syschdir(path: Path) -> Result<(), ErrorStatus> {
 /// `dest_len` if it is not null
 /// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
 pub fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let cwd = threading::expose::getcwd();
-    // TODO: implement ToString for PathBuf and Path?
-    let cwd = format!("{cwd}");
-    let got = cwd.into_bytes();
-    if got.len() > path.len() {
+    let state = threading::this_state();
+    let cwd = state.cwd();
+    let len = cwd.len();
+
+    if len > path.len() {
         return Err(ErrorStatus::Generic);
     }
 
-    path[..got.len()].copy_from_slice(&got);
+    path[..len].copy_from_slice(format!("{cwd}").as_bytes());
 
     if let Some(dest_len) = dest_len {
-        *dest_len = got.len();
+        *dest_len = len;
     }
 
     Ok(())

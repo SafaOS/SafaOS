@@ -1,5 +1,4 @@
 extern crate alloc;
-
 use core::fmt::{Display, Write};
 
 use safa_abi::consts;
@@ -77,29 +76,6 @@ impl<'a> PathParts<'a> {
         self.inner.split('/').filter(|x| !x.is_empty())
     }
 
-    fn join(&self, other: Self) -> Result<OwnedPathParts, ()> {
-        let join = |parent: &str, child: &str| -> Result<RawPath, ()> {
-            match (parent.is_empty(), child.is_empty()) {
-                (true, true) => return Ok(RawPath::new()),
-                (true, false) => return RawPath::try_from(child),
-                (false, true) => return RawPath::try_from(parent),
-                (false, false) => (),
-            }
-
-            let mut raw_path = RawPath::new();
-            let parent = parent.trim_end_matches('/');
-            let child = child.trim_start_matches('/');
-
-            raw_path
-                .write_fmt(format_args!("{parent}/{child}"))
-                .map_err(|_| ())?;
-            Ok(raw_path)
-        };
-
-        let joined = join(self.inner, other.inner)?;
-        Ok(OwnedPathParts { inner: joined })
-    }
-
     fn to_owned(&self) -> Result<OwnedPathParts, ()> {
         Ok(OwnedPathParts {
             inner: RawPath::try_from(self.inner)?,
@@ -154,7 +130,7 @@ impl<'a> PathParts<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OwnedPathParts {
     inner: RawPath,
 }
@@ -164,6 +140,22 @@ impl OwnedPathParts {
         PathParts {
             inner: self.inner.as_str(),
         }
+    }
+
+    fn append(&mut self, other: PathParts) -> Result<(), ()> {
+        match (self.inner.is_empty(), other.inner.is_empty()) {
+            (true, true) => return Ok(()),
+            (true, false) => return Ok(*self = other.to_owned()?),
+            (false, true) => return Ok(()),
+            (false, false) => (),
+        }
+
+        if !self.inner.ends_with('/') {
+            self.inner.write_char('/').map_err(|_| ())?;
+        }
+
+        self.inner.write_str(other.inner).map_err(|_| ())?;
+        Ok(())
     }
 }
 
@@ -179,6 +171,28 @@ impl PathBuf {
             drive: self.drive.as_deref().map(|v| &**v),
             path: self.path.as_ref().map(|x| x.as_path_parts()),
         }
+    }
+    pub fn append(&mut self, other: Path) -> Result<(), PathError> {
+        match (&self.drive, other.drive) {
+            (None, None) | (Some(_), None) => (),
+            (None, Some(drive)) => {
+                let drive = DriveName::try_from(drive).map_err(|()| PathError::DriveNameTooLong)?;
+                self.drive = Some(drive);
+            }
+            (Some(expected), Some(got)) => {
+                if expected.as_str() != got {
+                    return Err(PathError::FailedToJoinPaths);
+                }
+            }
+        };
+
+        if let Some(other) = other.path {
+            self.path
+                .get_or_insert_default()
+                .append(other)
+                .map_err(|_| PathError::PathPartsTooLong)?;
+        }
+        Ok(())
     }
 }
 
@@ -291,44 +305,9 @@ impl<'a> Path<'a> {
         self.drive
     }
 
-    pub fn join(&self, other: Self) -> Result<PathBuf, PathError> {
-        let drive = match (self.drive, other.drive) {
-            (None, None) => None,
-            (Some(drive), None) | (None, Some(drive)) => Some(drive),
-            _ => return Err(PathError::FailedToJoinPaths),
-        };
-
-        let path = match (self.path, other.path) {
-            (None, None) => None,
-            (Some(path), None) | (None, Some(path)) => Some(path.to_owned()),
-            (Some(path), Some(other_path)) => Some(path.join(other_path)),
-        }
-        .transpose()
-        .map_err(|()| PathError::PathPartsTooLong)?;
-
-        Ok(PathBuf {
-            drive: drive
-                .map(DriveName::try_from)
-                .transpose()
-                .map_err(|()| PathError::DriveNameTooLong)?,
-            path,
-        })
-    }
-
     #[inline(always)]
     pub fn is_absolute(&self) -> bool {
         self.drive.is_some()
-    }
-
-    /// converts the path to an absolute path if it is relative, the resulted path is going to be absolute to the results of `abs_other`
-    pub fn to_absolute_with(self, abs_other: Path<'a>) -> Result<PathBuf, PathError> {
-        if self.is_absolute() {
-            self.into_owned()
-        } else {
-            assert!(abs_other.is_absolute());
-
-            abs_other.join(self)
-        }
     }
 
     #[inline]
@@ -338,5 +317,13 @@ impl<'a> Path<'a> {
         (name, unsafe {
             Path::from_raw_parts(self.drive, Some(parts))
         })
+    }
+
+    /// Returns the length of `self` as a formatted str
+    pub fn len(&self) -> usize {
+        let drive = self.drive.map(|s| s.len()).unwrap_or_default();
+        let parts = self.path.map(|s| s.inner.len()).unwrap_or_default();
+
+        drive + 2 /* :/ */ + parts
     }
 }
