@@ -1,7 +1,8 @@
 use core::{arch::asm, sync::atomic::Ordering};
 
-use crate::utils::{path::CowPath, types::Name};
+use crate::utils::types::Name;
 use bitflags::bitflags;
+use safa_utils::make_path;
 
 use crate::{
     arch::threading::CPUStatus,
@@ -96,7 +97,7 @@ pub fn function_spawn(
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
         getcwd()
     } else {
-        unsafe { Path::new_unchecked("ram:/").into_owned() }
+        make_path!("ram", "").into_owned().unwrap()
     };
 
     let mut page_table = PhysPageTable::create()?;
@@ -128,7 +129,7 @@ pub fn spawn<T: Readable>(
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
         getcwd()
     } else {
-        unsafe { Path::new_unchecked("ram:/").into_owned() }
+        make_path!("ram", "").into_owned().unwrap()
     };
 
     let elf = Elf::new(reader)?;
@@ -168,8 +169,8 @@ pub fn pspawn(name: Name, path: Path, argv: &[&str], flags: SpawnFlags) -> Resul
 /// will only Err if new_dir doesn't exists or is not a directory
 #[no_mangle]
 pub fn chdir(new_dir: Path) -> FSResult<()> {
-    let new_dir = new_dir.to_absolute_with(|| CowPath::Owned(getcwd()));
-    let new_dir = new_dir.into_owned();
+    let cwd = getcwd();
+    let new_dir = new_dir.to_absolute_with(cwd.as_path())?;
 
     VFS_STRUCT.read().verify_path_dir(new_dir.as_path())?;
     let current = super::current();
@@ -180,13 +181,14 @@ pub fn chdir(new_dir: Path) -> FSResult<()> {
     Ok(())
 }
 
-// TODO: this depends on the existence of the current process we can remove unnecessary allocations
+// TODO: this depends on the existence of the current process,
+// I can make it faster by returning Path<'a> where 'a is the lifetime of the process, instead of a PathBuf
 #[no_mangle]
 pub fn getcwd() -> PathBuf {
     let current = super::current();
     let state = current.state().unwrap();
     let cwd = state.cwd();
-    cwd.into_owned()
+    cwd.into_owned().unwrap()
 }
 
 fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: usize) -> bool {

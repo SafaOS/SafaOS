@@ -145,7 +145,7 @@ impl Deref for FileRef {
 
 #[no_mangle]
 pub fn create(path: Path) -> FSResult<()> {
-    VFS_STRUCT.read().create_path(path)
+    VFS_STRUCT.read().createfile(path)
 }
 
 #[no_mangle]

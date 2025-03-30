@@ -1,14 +1,14 @@
 extern crate alloc;
 
-use core::fmt::Display;
+use core::fmt::{Display, Write};
 
-use alloc::{
-    borrow::ToOwned,
-    format,
-    string::{String, ToString},
-};
+use safa_abi::consts;
+
+use crate::types::DriveName;
 
 use super::errors::{ErrorStatus, IntoErr};
+
+type RawPath = heapless::String<{ consts::MAX_PATH_LENGTH }>;
 
 /// A macro to create a path
 /// assumes that the given path is valid and therefore unchecked and unsafe
@@ -44,12 +44,16 @@ macro_rules! make_path {
 pub enum PathError {
     InvaildPath,
     FailedToJoinPaths,
+    PathPartsTooLong,
+    DriveNameTooLong,
 }
 
 impl IntoErr for PathError {
     fn into_err(self) -> ErrorStatus {
         match self {
             Self::InvaildPath | Self::FailedToJoinPaths => ErrorStatus::InvaildPath,
+            Self::DriveNameTooLong => ErrorStatus::NoSuchAFileOrDirectory,
+            Self::PathPartsTooLong => ErrorStatus::StrTooLong,
         }
     }
 }
@@ -73,29 +77,33 @@ impl<'a> PathParts<'a> {
         self.inner.split('/').filter(|x| !x.is_empty())
     }
 
-    fn join(&self, other: Self) -> OwnedPathParts {
-        let join = |parent: &str, child: &str| -> String {
+    fn join(&self, other: Self) -> Result<OwnedPathParts, ()> {
+        let join = |parent: &str, child: &str| -> Result<RawPath, ()> {
             match (parent.is_empty(), child.is_empty()) {
-                (true, true) => return String::new(),
-                (true, false) => return child.to_owned(),
-                (false, true) => return parent.to_owned(),
+                (true, true) => return Ok(RawPath::new()),
+                (true, false) => return RawPath::try_from(child),
+                (false, true) => return RawPath::try_from(parent),
                 (false, false) => (),
             }
 
+            let mut raw_path = RawPath::new();
             let parent = parent.trim_end_matches('/');
             let child = child.trim_start_matches('/');
 
-            format!("{parent}/{child}")
+            raw_path
+                .write_fmt(format_args!("{parent}/{child}"))
+                .map_err(|_| ())?;
+            Ok(raw_path)
         };
 
-        let joined = join(self.inner, other.inner);
-        OwnedPathParts { inner: joined }
+        let joined = join(self.inner, other.inner)?;
+        Ok(OwnedPathParts { inner: joined })
     }
 
-    fn to_owned(&self) -> OwnedPathParts {
-        OwnedPathParts {
-            inner: self.inner.to_owned(),
-        }
+    fn to_owned(&self) -> Result<OwnedPathParts, ()> {
+        Ok(OwnedPathParts {
+            inner: RawPath::try_from(self.inner)?,
+        })
     }
 
     #[inline(always)]
@@ -148,7 +156,7 @@ impl<'a> PathParts<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedPathParts {
-    inner: String,
+    inner: RawPath,
 }
 
 impl OwnedPathParts {
@@ -161,14 +169,14 @@ impl OwnedPathParts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PathBuf {
-    drive: Option<String>,
+    drive: Option<DriveName>,
     path: Option<OwnedPathParts>,
 }
 
 impl PathBuf {
     pub fn as_path(&self) -> Path<'_> {
         Path {
-            drive: self.drive.as_deref(),
+            drive: self.drive.as_deref().map(|v| &**v),
             path: self.path.as_ref().map(|x| x.as_path_parts()),
         }
     }
@@ -177,29 +185,6 @@ impl PathBuf {
 impl Display for PathBuf {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         Display::fmt(&self.as_path(), f)
-    }
-}
-
-/// I failed to find a way to make this work with `Cow<'a, Path<'a>>` so I made this enum
-#[derive(Debug, Clone, PartialEq)]
-pub enum CowPath<'a> {
-    Owned(PathBuf),
-    Borrowed(Path<'a>),
-}
-
-impl<'a> CowPath<'a> {
-    pub fn as_path(&'a self) -> Path<'a> {
-        match self {
-            Self::Owned(path) => path.as_path(),
-            Self::Borrowed(path) => *path,
-        }
-    }
-
-    pub fn into_owned(self) -> PathBuf {
-        match self {
-            Self::Owned(path) => path,
-            Self::Borrowed(path) => path.into_owned(),
-        }
     }
 }
 
@@ -231,11 +216,19 @@ impl<'a> Path<'a> {
         Self { drive, path }
     }
     #[inline(always)]
-    pub fn into_owned(self) -> PathBuf {
-        PathBuf {
-            drive: self.drive.map(|s| s.to_owned()),
-            path: self.path.map(|x| x.to_owned()),
-        }
+    pub fn into_owned(self) -> Result<PathBuf, PathError> {
+        let drive = self
+            .drive
+            .map(DriveName::try_from)
+            .transpose()
+            .map_err(|()| PathError::DriveNameTooLong)?;
+
+        let path = self
+            .path
+            .map(|p| PathParts::to_owned(&p))
+            .transpose()
+            .map_err(|()| PathError::PathPartsTooLong)?;
+        Ok(PathBuf { drive, path })
     }
 
     pub const fn empty() -> Self {
@@ -309,10 +302,15 @@ impl<'a> Path<'a> {
             (None, None) => None,
             (Some(path), None) | (None, Some(path)) => Some(path.to_owned()),
             (Some(path), Some(other_path)) => Some(path.join(other_path)),
-        };
+        }
+        .transpose()
+        .map_err(|()| PathError::PathPartsTooLong)?;
 
         Ok(PathBuf {
-            drive: drive.map(|s| s.to_string()),
+            drive: drive
+                .map(DriveName::try_from)
+                .transpose()
+                .map_err(|()| PathError::DriveNameTooLong)?,
             path,
         })
     }
@@ -323,17 +321,22 @@ impl<'a> Path<'a> {
     }
 
     /// converts the path to an absolute path if it is relative, the resulted path is going to be absolute to the results of `abs_other`
-    pub fn to_absolute_with(self, abs_other: impl FnOnce() -> CowPath<'a>) -> CowPath<'a> {
+    pub fn to_absolute_with(self, abs_other: Path<'a>) -> Result<PathBuf, PathError> {
         if self.is_absolute() {
-            CowPath::Borrowed(self)
+            self.into_owned()
         } else {
-            let abs_other = abs_other();
-            let abs_other = abs_other.as_path();
-
             assert!(abs_other.is_absolute());
 
-            let joined = unsafe { abs_other.join(self).unwrap_unchecked() };
-            CowPath::Owned(joined)
+            abs_other.join(self)
         }
+    }
+
+    #[inline]
+    /// Spilts the path into the inner most child and the rest of the path
+    pub fn spilt_into_name(self) -> (Option<&'a str>, Self) {
+        let (name, parts) = self.parts().unwrap_or_default().spilt_into_name();
+        (name, unsafe {
+            Path::from_raw_parts(self.drive, Some(parts))
+        })
     }
 }

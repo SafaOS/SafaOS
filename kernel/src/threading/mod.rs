@@ -6,6 +6,7 @@ pub type Pid = usize;
 
 use core::arch::asm;
 use lazy_static::lazy_static;
+use safa_utils::make_path;
 
 use crate::utils::types::Name;
 use alloc::{rc::Rc, vec::Vec};
@@ -17,7 +18,7 @@ use crate::{
     arch::threading::{restore_cpu_status, CPUStatus},
     debug,
     memory::paging::PhysPageTable,
-    utils::{alloc::LinkedList, path::Path},
+    utils::alloc::LinkedList,
 };
 
 pub struct Scheduler {
@@ -43,12 +44,13 @@ impl Scheduler {
         asm!("cli");
         let mut page_table = PhysPageTable::from_current();
         let context = CPUStatus::create(&mut page_table, &[], function as usize, false).unwrap();
+        let cwd = make_path!("ram", "").into_owned().unwrap();
 
         let task = Task::new(
             Name::try_from(name).expect("initial process name too long"),
             0,
             0,
-            unsafe { Path::new_unchecked("ram:/") }.into_owned(),
+            cwd,
             page_table,
             context,
             0,

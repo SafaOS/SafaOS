@@ -10,7 +10,6 @@ use spin::{Mutex, RwLock};
 
 use crate::devices::Device;
 use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
-use crate::utils::path::PathParts;
 
 use super::{DirIterInodeItem, FileName, InodeOf};
 use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType};
@@ -282,19 +281,15 @@ impl FileSystem for RwLock<RamFS> {
             .map(|x| x as Inode)
     }
 
-    fn create(&self, path: PathParts) -> FSResult<()> {
-        let (parent, name) = self.reslove_path_uncreated(path)?;
-        let name = Name::from_str(name).map_err(|()| FSError::InvaildName)?;
-
+    fn create(&self, parent: Inode, name: &str) -> FSResult<()> {
+        let name = Name::try_from(name).map_err(|()| FSError::InvaildName)?;
         let mut write = self.write();
         let new_node = write.make_file();
-
         parent.insert(name, new_node)?;
         Ok(())
     }
 
-    fn createdir(&self, path: PathParts) -> FSResult<()> {
-        let (parent, name) = self.reslove_path_uncreated(path)?;
+    fn createdir(&self, parent: Inode, name: &str) -> FSResult<()> {
         let name = Name::from_str(name).map_err(|()| FSError::InvaildName)?;
 
         let mut write = self.write();
@@ -310,8 +305,7 @@ impl FileSystem for RwLock<RamFS> {
         Ok(())
     }
 
-    fn mount_device(&self, path: PathParts, device: &'static dyn Device) -> FSResult<()> {
-        let (parent, name) = self.reslove_path_uncreated(path)?;
+    fn mount_device(&self, parent: Inode, name: &str, device: &'static dyn Device) -> FSResult<()> {
         let name = Name::from_str(name).map_err(|()| FSError::InvaildName)?;
 
         let mut write = self.write();
