@@ -183,9 +183,9 @@ pub fn chdir(new_dir: Path) -> FSResult<()> {
     let cwd = state.cwd_mut();
 
     if new_dir.is_absolute() {
-        *cwd = new_dir.into_owned()?;
+        *cwd = new_dir.into_owned_simple()?;
     } else {
-        cwd.append(new_dir)?;
+        cwd.append_simplified(new_dir)?;
     }
 
     Ok(())

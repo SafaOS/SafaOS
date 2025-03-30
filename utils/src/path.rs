@@ -76,10 +76,17 @@ impl<'a> PathParts<'a> {
         self.inner.split('/').filter(|x| !x.is_empty())
     }
 
-    fn to_owned(&self) -> Result<OwnedPathParts, ()> {
+    fn into_owned(&self) -> Result<OwnedPathParts, ()> {
         Ok(OwnedPathParts {
             inner: RawPath::try_from(self.inner)?,
         })
+    }
+
+    /// Returns an owned simplified version of `self`
+    fn simplify(&self) -> Result<OwnedPathParts, ()> {
+        let mut new = OwnedPathParts::default();
+        new.append_simplified(*self)?;
+        Ok(new)
     }
 
     #[inline(always)]
@@ -145,17 +152,72 @@ impl OwnedPathParts {
     fn append(&mut self, other: PathParts) -> Result<(), ()> {
         match (self.inner.is_empty(), other.inner.is_empty()) {
             (true, true) => return Ok(()),
-            (true, false) => return Ok(*self = other.to_owned()?),
+            (true, false) => return Ok(*self = other.into_owned()?),
             (false, true) => return Ok(()),
             (false, false) => (),
         }
 
-        if !self.inner.ends_with('/') {
-            self.inner.write_char('/').map_err(|_| ())?;
+        self.append_str(other.inner)?;
+        Ok(())
+    }
+
+    /// Appends a simplified version of `other` to self
+    fn append_simplified(&mut self, other: PathParts) -> Result<(), ()> {
+        match (self.inner.is_empty(), other.inner.is_empty()) {
+            (true, true) | (false, true) => return Ok(()),
+            (false, false) | (true, false) => (),
         }
 
-        self.inner.write_str(other.inner).map_err(|_| ())?;
+        for part in other.iter() {
+            if part == "." {
+                continue;
+            }
+
+            if part == ".." {
+                self.remove_last_part();
+            } else {
+                self.append_str(part).unwrap();
+            }
+        }
+
         Ok(())
+    }
+
+    fn append_str(&mut self, other: &str) -> Result<(), ()> {
+        let other = other.trim_start_matches('/');
+        if other.is_empty() || other == "/" {
+            return Ok(());
+        }
+
+        if !self.inner.ends_with('/') && self.inner != "/" && !self.inner.is_empty() {
+            self.inner.write_char('/').map_err(|_| ())?;
+        }
+        self.inner.write_str(other).map_err(|_| ())?;
+        Ok(())
+    }
+
+    fn remove_last_part(&mut self) {
+        let inner = self.inner.trim_end_matches('/');
+        if inner.is_empty() || inner == "/" {
+            return;
+        }
+
+        let last_item_position = inner
+            .char_indices()
+            .rev()
+            .find_map(|(i, c)| {
+                // since we are trimming the path first we can assume there is at least one char after `/`
+                if c == '/' {
+                    Some(i + 1)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        for _ in last_item_position..self.inner.len() {
+            self.inner.pop();
+        }
     }
 }
 
@@ -190,6 +252,30 @@ impl PathBuf {
             self.path
                 .get_or_insert_default()
                 .append(other)
+                .map_err(|_| PathError::PathPartsTooLong)?;
+        }
+        Ok(())
+    }
+
+    /// Appends a simplified version of `other` to self
+    pub fn append_simplified(&mut self, other: Path) -> Result<(), PathError> {
+        match (&self.drive, other.drive) {
+            (None, None) | (Some(_), None) => (),
+            (None, Some(drive)) => {
+                let drive = DriveName::try_from(drive).map_err(|()| PathError::DriveNameTooLong)?;
+                self.drive = Some(drive);
+            }
+            (Some(expected), Some(got)) => {
+                if expected.as_str() != got {
+                    return Err(PathError::FailedToJoinPaths);
+                }
+            }
+        };
+
+        if let Some(other) = other.path {
+            self.path
+                .get_or_insert_default()
+                .append_simplified(other)
                 .map_err(|_| PathError::PathPartsTooLong)?;
         }
         Ok(())
@@ -239,7 +325,24 @@ impl<'a> Path<'a> {
 
         let path = self
             .path
-            .map(|p| PathParts::to_owned(&p))
+            .map(|p| PathParts::into_owned(&p))
+            .transpose()
+            .map_err(|()| PathError::PathPartsTooLong)?;
+        Ok(PathBuf { drive, path })
+    }
+
+    // Returns an Owned simplified version of `self`
+    #[inline(always)]
+    pub fn into_owned_simple(self) -> Result<PathBuf, PathError> {
+        let drive = self
+            .drive
+            .map(DriveName::try_from)
+            .transpose()
+            .map_err(|()| PathError::DriveNameTooLong)?;
+
+        let path = self
+            .path
+            .map(|p| PathParts::simplify(&p))
             .transpose()
             .map_err(|()| PathError::PathPartsTooLong)?;
         Ok(PathBuf { drive, path })
