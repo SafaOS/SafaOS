@@ -144,24 +144,6 @@ impl FrameBufferTTY<'_> {
         }
     }
 
-    fn remove_char(&mut self) {
-        if self.cursor_x == DEFAULT_CURSOR_X && self.cursor_y > DEFAULT_CURSOR_Y {
-            self.cursor_x = (self.framebuffer.width() / RASTER_WIDTH) - 1;
-            self.cursor_y -= 1;
-        } else if self.cursor_x > DEFAULT_CURSOR_X {
-            self.cursor_x -= 1;
-        }
-
-        let (x, y) = self.get_pixel_at();
-        let mut buffer = self.framebuffer.buffer();
-
-        for row in 0..RASTER_HEIGHT.val() {
-            for col in 0..RASTER_WIDTH {
-                buffer.set_pixel(x + col, y + row, DEFAULT_BG_COLOR);
-            }
-        }
-    }
-
     fn sync_pixels(&mut self) {
         self.framebuffer.buffer().sync_pixels();
     }
@@ -300,11 +282,6 @@ impl TTYInterface for FrameBufferTTY<'_> {
     fn newline(&mut self) {
         self.cursor_x = DEFAULT_CURSOR_X;
         self.cursor_y += 1;
-    }
-
-    fn backspace(&mut self) {
-        self.remove_char();
-        self.sync_pixels();
     }
 
     fn set_cursor(&mut self, x: usize, y: usize) {

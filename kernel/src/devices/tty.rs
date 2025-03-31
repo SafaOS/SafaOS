@@ -31,7 +31,8 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
             if let Some(mut tty) = lock {
                 let stdin = tty.stdin();
 
-                if (stdin.ends_with('\n') && tty.settings.contains(TTYSettings::CANONICAL_MODE))
+                if (stdin.last() == Some(&b'\n')
+                    && tty.settings.contains(TTYSettings::CANONICAL_MODE))
                     || (!stdin.is_empty() && !tty.settings.contains(TTYSettings::CANONICAL_MODE))
                 {
                     let count = stdin.len().min(buffer.len());
