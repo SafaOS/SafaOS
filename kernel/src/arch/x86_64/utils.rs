@@ -31,18 +31,28 @@ impl CpuInfo {
     fn fetch_model() -> heapless::String<48> {
         unsafe {
             let mut model: [u8; 48] = [0u8; 48];
+            let mut len = 0;
 
-            for i in 0..3 {
+            'outer: for i in 0..3 {
                 let model_raw = __cpuid(0x80000002 + i);
                 let (eax, ebx, ecx, edx): (u32, u32, u32, u32) =
                     (model_raw.eax, model_raw.ebx, model_raw.ecx, model_raw.edx);
 
                 let i = (i * 16) as usize;
-                model[i..i + 16]
-                    .copy_from_slice(&core::mem::transmute::<_, [u8; 16]>([eax, ebx, ecx, edx]));
+                let raw_slice = &core::mem::transmute::<_, [u8; 16]>([eax, ebx, ecx, edx]);
+                model[i..i + 16].copy_from_slice(raw_slice);
+
+                for (i, b) in raw_slice.iter().enumerate() {
+                    if *b == 0 {
+                        len += i;
+                        break 'outer;
+                    }
+                }
+
+                len += 16;
             }
 
-            let model = heapless::Vec::from_slice(&model).unwrap_unchecked();
+            let model = heapless::Vec::from_slice(&model[..len]).unwrap_unchecked();
             heapless::String::from_utf8_unchecked(model)
         }
     }
