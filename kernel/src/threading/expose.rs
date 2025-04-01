@@ -7,7 +7,7 @@ use crate::{
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
-use safa_utils::make_path;
+use safa_utils::{abi::raw, make_path};
 
 use crate::{
     drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
@@ -82,10 +82,15 @@ pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
-    #[repr(C)]
     pub struct SpawnFlags: u8 {
         const CLONE_RESOURCES = 1 << 0;
         const CLONE_CWD = 1 << 1;
+    }
+}
+
+impl From<raw::processes::SpawnFlags> for SpawnFlags {
+    fn from(value: raw::processes::SpawnFlags) -> Self {
+        unsafe { Self::from_bits_retain(core::mem::transmute(value)) }
     }
 }
 

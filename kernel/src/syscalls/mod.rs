@@ -1,4 +1,5 @@
-use safa_utils::abi;
+use safa_utils::abi::raw::{RawSlice, RawSliceMut};
+use safa_utils::abi::{self, raw};
 use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
@@ -161,63 +162,52 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 /// converts slice of raw pointers to a slice of strs which is used by pspawn as
                 /// process arguments
                 fn into_args_slice<'a>(
-                    args_raw: *mut (*const u8, usize),
-                    len: usize,
+                    args_raw: &RawSliceMut<RawSlice<u8>>,
                 ) -> Result<&'a [&'a str], ErrorStatus> {
-                    if len == 0 {
+                    if args_raw.len() == 0 {
                         return Ok(&[]);
                     }
 
-                    let raw_slice: &mut [(*const u8, usize)] = SyscallFFI::make((args_raw, len))?;
+                    let raw_slice: &mut [RawSlice<u8>] =
+                        SyscallFFI::make((args_raw.as_mut_ptr(), args_raw.len()))?;
                     // unsafely creates a muttable reference to `raw_slice`
                     let double_slice: &mut [&str] =
                         unsafe { &mut *(raw_slice as *const _ as *mut [&str]) };
 
                     // maps every parent_slice[i] to &str
                     for (i, item) in raw_slice.iter().enumerate() {
-                        double_slice[i] = <&str>::make(*item)?;
+                        double_slice[i] = <&str>::make((item.as_ptr(), item.len()))?;
                     }
 
                     Ok(double_slice)
                 }
 
-                /// the temporary config struct for the spawn syscall, passed to the syscall
-                /// because if it was passed as a bunch of arguments it would be too big to fit
-                /// inside the registers
-                #[repr(C)]
-                struct SpawnConfig {
-                    /// config version for compatibility
-                    /// added in kernel version 0.2.1 and therfore breaking compatibility with any program compiled for version below 0.2.1
-                    version: u8,
-                    name: (*const u8, usize),
-                    argv: (*mut (*const u8, usize), usize),
-                    flags: SpawnFlags,
-                    metadata: *const abi::raw::processes::TaskMetadata,
-                }
+                fn as_rust(
+                    this: &raw::processes::SpawnConfig,
+                ) -> Result<(Option<&str>, &[&str], SpawnFlags, Option<TaskMetadata>), ErrorStatus>
+                {
+                    let name = Option::<&str>::make((this.name.as_ptr(), this.name.len()))?;
+                    let argv = into_args_slice(&this.argv)?;
+                    let metadata: Option<&abi::raw::processes::TaskMetadata> = if this.version >= 1
+                    {
+                        Option::make(this.metadata)?
+                    } else {
+                        None
+                    };
 
-                impl SpawnConfig {
-                    fn as_rust(
-                        &self,
-                    ) -> Result<
-                        (Option<&str>, &[&str], SpawnFlags, Option<TaskMetadata>),
-                        ErrorStatus,
-                    > {
-                        let name = Option::<&str>::make((self.name.0, self.name.1))?;
-                        let argv = into_args_slice(self.argv.0, self.argv.1)?;
-                        let metadata: Option<&abi::raw::processes::TaskMetadata> =
-                            if self.version >= 1 {
-                                Option::make(self.metadata)?
-                            } else {
-                                None
-                            };
-
-                        Ok((name, argv, self.flags, metadata.copied().map(Into::into)))
-                    }
+                    Ok((
+                        name,
+                        argv,
+                        this.flags.into(),
+                        metadata.copied().map(Into::into),
+                    ))
                 }
 
                 let path = <Path>::make((a as *const u8, b))?;
-                let config = <&SpawnConfig>::make(c as *const SpawnConfig)?;
-                let (name, argv, flags, metadata) = config.as_rust()?;
+
+                let config = SyscallFFI::make(c as *const raw::processes::SpawnConfig)?;
+                let (name, argv, flags, metadata) = as_rust(config)?;
+
                 let dest_pid = Option::make(d as *mut usize)?;
 
                 processes::syspspawn(name, path, argv, flags, metadata, dest_pid)
