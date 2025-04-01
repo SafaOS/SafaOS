@@ -290,8 +290,31 @@ impl TTYInterface for FrameBufferTTY<'_> {
     }
 
     fn offset_cursor(&mut self, x: isize, y: isize) {
-        self.cursor_x = (self.cursor_x as isize + x) as usize;
-        self.cursor_y = (self.cursor_y as isize + y) as usize;
+        let max_x = (self.framebuffer.width() / (RASTER_WIDTH)) - (DEFAULT_CURSOR_X * 2);
+        let max_y = (self.framebuffer.height() / (RASTER_HEIGHT.val())) - (DEFAULT_CURSOR_Y * 2);
+
+        let mut y = self.cursor_y.checked_add_signed(y).map(|y| y.min(max_y));
+        let x = self.cursor_x.checked_add_signed(x).map(|x| x.min(max_x));
+
+        match x {
+            Some(x) if x >= DEFAULT_CURSOR_X => {
+                self.cursor_x = x;
+            }
+            _ => {
+                y = y.map(|y| y.saturating_sub(1));
+                self.cursor_x = max_x;
+            }
+        }
+
+        match y {
+            Some(y) if y >= DEFAULT_CURSOR_Y => {
+                self.cursor_y = y;
+            }
+            _ => {
+                self.cursor_x = DEFAULT_CURSOR_X;
+                self.cursor_y = DEFAULT_CURSOR_Y;
+            }
+        }
     }
 
     fn scroll_down(&mut self) {
