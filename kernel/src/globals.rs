@@ -16,4 +16,4 @@ lazy_static! {
 }
 
 pub const KERNEL_CODE_NAME: &str = "Snowball";
-pub const KERNEL_CODE_VERSION: &str = "0.1.0";
+pub const KERNEL_CODE_VERSION: &str = "0.2.0";
