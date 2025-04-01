@@ -119,13 +119,6 @@ impl super::InodeOps for Mutex<ProcInode> {
         }
     }
 
-    fn contains(&self, name: &str) -> bool {
-        match &self.lock().data {
-            ProcInodeData::Dir(dir) => dir.contains_key(name),
-            ProcInodeData::File(_) => false,
-        }
-    }
-
     fn size(&self) -> FSResult<usize> {
         match &mut self.lock().data {
             ProcInodeData::Dir(dir) => Ok(dir.len()),

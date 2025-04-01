@@ -76,15 +76,6 @@ impl InodeOps for RamInode {
         }
     }
 
-    fn contains(&self, name: &str) -> bool {
-        match self.data {
-            RamInodeData::Children(ref tree) => tree.lock().contains_key(name),
-            RamInodeData::HardLink(ref inode) => inode.contains(name),
-            RamInodeData::Device(ref device) => device.contains(name),
-            _ => false,
-        }
-    }
-
     fn truncate(&self, size: usize) -> FSResult<()> {
         match self.data {
             RamInodeData::Data(ref data) => {

@@ -206,11 +206,6 @@ pub trait InodeOps: Send + Sync {
         _ = name;
         FSResult::Err(FSError::OperationNotSupported)
     }
-    /// checks if node contains `name` returns false if it doesn't or if it is not a directory
-    fn contains(&self, name: &str) -> bool {
-        _ = name;
-        false
-    }
     /// returns the size of node
     /// different nodes may use this differently but in case it is a normal file it will always give the
     /// file size in bytes
@@ -356,10 +351,6 @@ pub trait FileSystem: Send + Sync {
 
             if !current_inode.is_dir() {
                 return Err(FSError::NotADirectory);
-            }
-
-            if !current_inode.contains(depth) {
-                return Err(FSError::NoSuchAFileOrDirectory);
             }
 
             let inodeid = current_inode.get(depth)?;
