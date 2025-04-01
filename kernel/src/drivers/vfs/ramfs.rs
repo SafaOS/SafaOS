@@ -1,5 +1,6 @@
 use core::str::FromStr;
 
+use crate::utils::types::Name;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -9,8 +10,6 @@ use spin::{Mutex, RwLock};
 
 use crate::devices::Device;
 use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
-use crate::utils::path::PathParts;
-use crate::utils::HeaplessString;
 
 use super::{DirIterInodeItem, FileName, InodeOf};
 use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType};
@@ -74,15 +73,6 @@ impl InodeOps for RamInode {
             RamInodeData::HardLink(ref inode) => inode.get(name),
             RamInodeData::Device(ref device) => device.get(name),
             _ => Err(FSError::NotADirectory),
-        }
-    }
-
-    fn contains(&self, name: &str) -> bool {
-        match self.data {
-            RamInodeData::Children(ref tree) => tree.lock().contains_key(name),
-            RamInodeData::HardLink(ref inode) => inode.contains(name),
-            RamInodeData::Device(ref device) => device.contains(name),
-            _ => false,
         }
     }
 
@@ -161,10 +151,11 @@ impl InodeOps for RamInode {
         }
     }
 
-    fn insert(&self, name: FileName, node: usize) -> FSResult<()> {
+    fn insert(&self, name: Name, node: usize) -> FSResult<()> {
         match self.data {
             RamInodeData::Children(ref tree) => {
                 let mut tree = tree.lock();
+                let name = name.into();
 
                 if tree.contains_key(&name) {
                     return Err(FSError::AlreadyExists);
@@ -197,7 +188,7 @@ impl InodeOps for RamInode {
                 let data = data.lock();
                 Ok(data
                     .iter()
-                    .map(|(name, inodeid)| (HeaplessString::from_str(name).unwrap(), *inodeid))
+                    .map(|(name, inodeid)| (name.clone(), *inodeid))
                     .collect())
             }
             RamInodeData::HardLink(ref inode) => inode.open_diriter(),
@@ -281,20 +272,16 @@ impl FileSystem for RwLock<RamFS> {
             .map(|x| x as Inode)
     }
 
-    fn create(&self, path: PathParts) -> FSResult<()> {
-        let (parent, name) = self.reslove_path_uncreated(path)?;
-        let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
-
+    fn create(&self, parent: Inode, name: &str) -> FSResult<()> {
+        let name = Name::try_from(name).map_err(|()| FSError::InvaildName)?;
         let mut write = self.write();
         let new_node = write.make_file();
-
         parent.insert(name, new_node)?;
         Ok(())
     }
 
-    fn createdir(&self, path: PathParts) -> FSResult<()> {
-        let (parent, name) = self.reslove_path_uncreated(path)?;
-        let name = HeaplessString::from_str(name).map_err(|()| FSError::InvaildName)?;
+    fn createdir(&self, parent: Inode, name: &str) -> FSResult<()> {
+        let name = Name::from_str(name).map_err(|()| FSError::InvaildName)?;
 
         let mut write = self.write();
         let new_node = write.make_directory();
@@ -304,14 +291,13 @@ impl FileSystem for RwLock<RamFS> {
         // making the previous dir inode a hardlink
         let parent_hardlink_inodeid = write.make_hardlink(parent.inodeid());
         // inserting the previous dir
-        let hardlink_name = unsafe { FileName::from_str("..").unwrap_unchecked() };
+        let hardlink_name = unsafe { Name::from_str("..").unwrap_unchecked() };
         new_node.insert(hardlink_name, parent_hardlink_inodeid)?;
         Ok(())
     }
 
-    fn mount_device(&self, path: PathParts, device: &'static dyn Device) -> FSResult<()> {
-        let (parent, name) = self.reslove_path_uncreated(path)?;
-        let name = FileName::from_str(name).map_err(|()| FSError::InvaildName)?;
+    fn mount_device(&self, parent: Inode, name: &str, device: &'static dyn Device) -> FSResult<()> {
+        let name = Name::from_str(name).map_err(|()| FSError::InvaildName)?;
 
         let mut write = self.write();
         let new_node = write.make_device(device);

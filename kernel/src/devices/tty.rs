@@ -29,16 +29,17 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
             let lock = self.try_write();
 
             if let Some(mut tty) = lock {
-                if (tty.stdin_buffer.ends_with('\n')
-                    && tty.settings.contains(TTYSettings::CANONICAL_MODE))
-                    || (!tty.stdin_buffer.is_empty()
-                        && !tty.settings.contains(TTYSettings::CANONICAL_MODE))
-                {
-                    tty.disable_input();
-                    let count = tty.stdin_buffer.len().min(buffer.len());
-                    buffer[..count].copy_from_slice(&tty.stdin_buffer.as_bytes()[..count]);
-                    tty.stdin_buffer.drain(..count);
+                let stdin = tty.stdin();
 
+                if (stdin.last() == Some(&b'\n')
+                    && tty.settings.contains(TTYSettings::CANONICAL_MODE))
+                    || (!stdin.is_empty() && !tty.settings.contains(TTYSettings::CANONICAL_MODE))
+                {
+                    let count = stdin.len().min(buffer.len());
+                    buffer[..count].copy_from_slice(&stdin.as_bytes()[..count]);
+
+                    tty.stdin_pop_front(count);
+                    tty.disable_input();
                     return Ok(count);
                 }
 

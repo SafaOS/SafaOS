@@ -5,7 +5,7 @@ use bitflags::bitflags;
 
 use crate::{
     arch::{
-        utils::{APIC_TIMER_TICKS_PER_20MS, TICKS_PER_20MS},
+        utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
         x86_64::acpi::{self, MADT},
     },
     limine::HDDM,
@@ -21,7 +21,7 @@ pub struct LVTEntry {
 }
 
 impl LVTEntry {
-    pub fn new(entry: u8, flags: LVTEntryFlags) -> Self {
+    pub const fn new(entry: u8, flags: LVTEntryFlags) -> Self {
         Self { entry, flags }
     }
 
@@ -84,8 +84,8 @@ pub fn get_local_apic_reg(local_apic_addr: VirtAddr, local_apic_reg: u16) -> Vir
 // when we write the offset of the reg we want to access to ioregsel, iowin should have that reg
 // no it is not the addr of that reg it is the reg itself each reg is 32bits long
 pub unsafe fn write_ioapic_val_to_reg(ioapic_addr: VirtAddr, reg: u8, val: u32) {
-    *(ioapic_addr as *mut u32) = reg as u32;
-    *((ioapic_addr + 0x10) as *mut u32) = val;
+    core::ptr::write_volatile(ioapic_addr as *mut u32, reg as u32);
+    core::ptr::write_volatile((ioapic_addr + 0x10) as *mut u32, val);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -126,8 +126,7 @@ fn enable_apic_keyboard(apic_id: u8) {
 
 fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
     fn apic_timer_ms_to_ticks(ms: u64) -> u32 {
-        let ticks_per_ms =
-            APIC_TIMER_TICKS_PER_20MS.load(core::sync::atomic::Ordering::Relaxed) / 20;
+        let ticks_per_ms = unsafe { core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) };
         (ms * ticks_per_ms) as u32
     }
 
@@ -143,15 +142,18 @@ fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
 
         core::ptr::write_volatile(addr, timer.encode_u32());
         core::ptr::write_volatile(divide, 0x3);
-        pit::prepare_sleep(20);
+        pit::prepare_sleep(100);
         asm!("sti");
         core::ptr::write_volatile(init, u32::MAX);
 
         let diff_tick = pit::calibrate_sleep(apic_id, || (), |()| u32::MAX - *current_counter);
         asm!("cli");
 
-        APIC_TIMER_TICKS_PER_20MS.store(diff_tick as u64, core::sync::atomic::Ordering::Relaxed);
-        serial!("calibrated with {} ticks in 20ms\n", diff_tick);
+        core::ptr::write_volatile(APIC_TIMER_TICKS_PER_MS.get(), diff_tick as u64 / 100);
+        serial!(
+            "calibrated with {} ticks in 100ms\n",
+            core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) * 100
+        );
     }
 
     // enable the timer
@@ -167,7 +169,7 @@ fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
 pub fn calibrate_tsc(apic_id: u8) {
     serial!("calbrating tsc\n");
     unsafe {
-        pit::prepare_sleep(20);
+        pit::prepare_sleep(100);
 
         asm!("sti");
         let diff_tick = pit::calibrate_sleep(
@@ -177,8 +179,11 @@ pub fn calibrate_tsc(apic_id: u8) {
         );
         asm!("cli");
 
-        TICKS_PER_20MS.store(diff_tick, core::sync::atomic::Ordering::Relaxed);
-        serial!("calbrated with {} ticks in 20ms\n", diff_tick);
+        core::ptr::write_volatile(TICKS_PER_MS.get(), diff_tick / 100);
+        serial!(
+            "calbrated with {} ticks in 100ms\n",
+            core::ptr::read(TICKS_PER_MS.get()) * 100
+        );
     }
 }
 

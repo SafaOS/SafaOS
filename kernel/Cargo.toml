@@ -1,7 +1,7 @@
 [workspace]
 [package]
 name = "kernel"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -13,7 +13,7 @@ spin = "0.9.8"
 bitflags = "2.6.0"
 macros = { path = "../macros" }
 int-enum = "1.1"
-heapless = "0.8.0"
+heapless = { version = "0.8.0", features = ["serde"] }
 limine = "0.3.0"
 hashbrown = "0.15.2"
 
@@ -32,3 +32,5 @@ test = []
 panic = "abort"
 [profile.release]
 panic = "abort"
+debug = 1
+overflow-checks = true

@@ -1,4 +1,4 @@
-pub const STACK_SIZE: usize = PAGE_SIZE * 6;
+pub const STACK_SIZE: usize = PAGE_SIZE * 8;
 pub const STACK_START: usize = 0x00007A3000000000;
 pub const STACK_END: usize = STACK_START + STACK_SIZE;
 

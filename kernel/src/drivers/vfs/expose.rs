@@ -2,7 +2,10 @@ use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
 use crate::{
     threading::resources::{self, Resource},
-    utils::io::{IoError, Readable},
+    utils::{
+        self,
+        io::{IoError, Readable},
+    },
 };
 
 use super::{
@@ -142,7 +145,7 @@ impl Deref for FileRef {
 
 #[no_mangle]
 pub fn create(path: Path) -> FSResult<()> {
-    VFS_STRUCT.read().create_path(path)
+    VFS_STRUCT.read().createfile(path)
 }
 
 #[no_mangle]
@@ -175,7 +178,7 @@ pub struct DirEntry {
 }
 
 impl DirEntry {
-    pub const MAX_NAME_LEN: usize = 128;
+    pub const MAX_NAME_LEN: usize = utils::consts::MAX_NAME_LENGTH;
     pub fn get_from_inode(inode: Inode, name: &str) -> Self {
         let attrs = FileAttr::from_inode(&inode);
 

@@ -146,11 +146,3 @@ pub fn remove_resource(ri: usize) -> Option<()> {
 
     current.resource_manager_mut().unwrap().remove_resource(ri)
 }
-
-/// clones the resources of the current process
-pub fn clone_resources() -> Vec<ResourceItem> {
-    let current_task = super::current();
-    let mut current = current_task.state_mut().unwrap();
-
-    current.resource_manager_mut().unwrap().clone_resources()
-}

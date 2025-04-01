@@ -2,24 +2,19 @@ extern crate alloc;
 
 use core::fmt::Write;
 use core::marker::PhantomData;
-use core::ops::{Deref, DerefMut, RangeBounds};
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::str;
 
-use crate::memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc};
+use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
 use alloc::boxed::Box;
-use alloc::str::pattern::{Pattern, ReverseSearcher};
-use alloc::vec::{Drain, Vec};
+use alloc::vec::Vec;
 
 use super::bstr::BStr;
 
 pub struct PageVec<T>(Vec<T, PageAlloc>);
 
 impl<T> PageVec<T> {
-    pub fn new() -> Self {
-        Self(Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR))
-    }
-
     pub fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity_in(capacity, &*GLOBAL_PAGE_ALLOCATOR))
     }
@@ -93,6 +88,11 @@ impl PageBString {
     }
 
     #[inline]
+    pub fn push_bytes(&mut self, s: &[u8]) {
+        self.inner.extend_from_slice(s);
+    }
+
+    #[inline]
     pub fn as_bstr(&self) -> &BStr {
         BStr::new(self.as_bytes())
     }
@@ -120,12 +120,6 @@ pub struct PageString {
 }
 
 impl PageString {
-    pub fn new() -> Self {
-        Self {
-            inner: PageVec::new(),
-        }
-    }
-
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: PageVec::with_capacity(capacity),
@@ -143,37 +137,8 @@ impl PageString {
         self.push_str(fake_str);
     }
 
-    pub fn pop(&mut self) -> Option<char> {
-        let char = self.as_str().chars().next_back()?;
-
-        let len = self.len();
-        self.inner.truncate(len - char.len_utf8());
-
-        Some(char)
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
     pub fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.inner) }
-    }
-
-    pub fn ends_with<P>(&self, other: P) -> bool
-    where
-        P: Pattern,
-        for<'a> P::Searcher<'a>: ReverseSearcher<'a>,
-    {
-        self.as_str().ends_with(other)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Drain<'_, u8, PageAlloc> {
-        self.inner.drain(range)
     }
 }
 

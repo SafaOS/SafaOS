@@ -1,26 +1,28 @@
 use core::{arch::asm, sync::atomic::Ordering};
 
-use alloc::string::{String, ToString};
-use bitflags::bitflags;
-use safa_utils::path::CowPath;
-
 use crate::{
     arch::threading::CPUStatus,
+    memory::paging::{MapToError, PhysPageTable},
+    utils::types::Name,
+};
+use alloc::boxed::Box;
+use bitflags::bitflags;
+use safa_utils::make_path;
+
+use crate::{
     drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
     khalt,
-    memory::paging::{MapToError, PhysPageTable},
     utils::{
         elf::{Elf, ElfError},
         errors::ErrorStatus,
         io::Readable,
-        path::{Path, PathBuf},
+        path::Path,
     },
 };
 
 use super::{
-    resources,
     task::{Task, TaskInfo, TaskState},
-    Pid,
+    this_state, this_state_mut, Pid,
 };
 
 #[no_mangle]
@@ -87,23 +89,26 @@ bitflags! {
     }
 }
 
+// used by tests...
 #[allow(unused)]
 pub fn function_spawn(
-    name: &str,
+    name: Name,
     function: fn() -> !,
     argv: &[&str],
     flags: SpawnFlags,
 ) -> Result<usize, MapToError> {
+    let mut this = this_state_mut();
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        getcwd()
+        this.cwd()
     } else {
-        unsafe { Path::new_unchecked("ram:/").into_owned() }
+        make_path!("ram", "")
     };
+    let cwd = Box::new(cwd.into_owned().unwrap());
 
     let mut page_table = PhysPageTable::create()?;
     let context =
         unsafe { CPUStatus::create(&mut page_table, argv, function as usize, false).unwrap() };
-    let task = Task::new(name.to_string(), 0, 0, cwd, page_table, context, 0);
+    let task = Task::new(name, 0, 0, cwd, page_table, context, 0);
 
     if flags.contains(SpawnFlags::CLONE_RESOURCES) {
         let mut state = task.state_mut().unwrap();
@@ -112,7 +117,7 @@ pub fn function_spawn(
             unreachable!()
         };
 
-        let clone = resources::clone_resources();
+        let clone = this.clone_resources();
         resources.overwrite_resources(clone);
     }
 
@@ -121,15 +126,16 @@ pub fn function_spawn(
 }
 
 pub fn spawn<T: Readable>(
-    name: String,
+    name: Name,
     reader: &T,
     argv: &[&str],
     flags: SpawnFlags,
 ) -> Result<usize, ElfError> {
+    let this = this_state();
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        getcwd()
+        this.cwd()
     } else {
-        unsafe { Path::new_unchecked("ram:/").into_owned() }
+        make_path!("ram", "")
     };
 
     let elf = Elf::new(reader)?;
@@ -146,7 +152,9 @@ pub fn spawn<T: Readable>(
             unreachable!()
         };
 
-        let clone = resources::clone_resources();
+        drop(this);
+        let mut this = this_state_mut();
+        let clone = this.clone_resources();
         resources.overwrite_resources(clone);
     }
 
@@ -155,12 +163,7 @@ pub fn spawn<T: Readable>(
 }
 
 /// spawns an elf process from a path
-pub fn pspawn(
-    name: String,
-    path: Path,
-    argv: &[&str],
-    flags: SpawnFlags,
-) -> Result<usize, FSError> {
+pub fn pspawn(name: Name, path: Path, argv: &[&str], flags: SpawnFlags) -> Result<usize, FSError> {
     let file = File::open(path)?;
 
     if file.kind() != InodeType::File {
@@ -174,25 +177,18 @@ pub fn pspawn(
 /// will only Err if new_dir doesn't exists or is not a directory
 #[no_mangle]
 pub fn chdir(new_dir: Path) -> FSResult<()> {
-    let new_dir = new_dir.to_absolute_with(|| CowPath::Owned(getcwd()));
-    let new_dir = new_dir.into_owned();
+    VFS_STRUCT.read().verify_path_dir(new_dir)?;
 
-    VFS_STRUCT.read().verify_path_dir(new_dir.as_path())?;
-    let current = super::current();
-
-    let mut state = current.state_mut().unwrap();
+    let mut state = this_state_mut();
     let cwd = state.cwd_mut();
-    *cwd = new_dir;
-    Ok(())
-}
 
-// TODO: this depends on the existence of the current process we can remove unnecessary allocations
-#[no_mangle]
-pub fn getcwd() -> PathBuf {
-    let current = super::current();
-    let state = current.state().unwrap();
-    let cwd = state.cwd();
-    cwd.into_owned()
+    if new_dir.is_absolute() {
+        *cwd = new_dir.into_owned_simple()?;
+    } else {
+        cwd.append_simplified(new_dir)?;
+    }
+
+    Ok(())
 }
 
 fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: usize) -> bool {

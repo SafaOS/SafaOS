@@ -1,6 +1,6 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use lazy_static::lazy_static;
-use spin::RwLock;
+use spin::{mutex::Mutex, MutexGuard};
 
 use crate::{
     debug, limine,
@@ -15,28 +15,30 @@ pub enum PixelFormat {
     /// TODO: use
     Bgr,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct FrameBufferInfo {
     /// number of pixels between start of a line and another
     pub stride: usize,
+    pub height: usize,
     pub bytes_per_pixel: usize,
     pub _pixel_format: PixelFormat,
 }
 
-pub struct FrameBuffer {
-    pub info: FrameBufferInfo,
+pub struct FrameBuffer<'a> {
+    info: FrameBufferInfo,
     buffer_display_index: usize,
-    buffer: Vec<u8, PageAlloc>,
-    video_buffer: &'static mut [u8],
+    buffer: Box<[u32], PageAlloc>,
+    video_buffer: &'a mut [u32],
 }
 
-impl FrameBuffer {
-    pub fn new() -> Self {
-        let (video_buffer, info) = limine::get_framebuffer();
+impl<'a> FrameBuffer<'a> {
+    pub fn new(video_buffer: &'a mut [u32], info: FrameBufferInfo) -> Self {
         let mut buffer = Vec::with_capacity_in(video_buffer.len() * 4, &*GLOBAL_PAGE_ALLOCATOR);
         unsafe {
-            buffer.set_len(video_buffer.len() * 4);
+            buffer.set_len(buffer.capacity());
         }
+
+        let buffer = buffer.into_boxed_slice();
         debug!(FrameBuffer, "created ({}KiB)", buffer.len() / 1024);
 
         Self {
@@ -47,13 +49,10 @@ impl FrameBuffer {
         }
     }
 
+    #[inline(always)]
     pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {
         let index = x + y * self.info.stride;
-        let bytes = color.bytes();
-
-        self.buffer
-            [index * self.info.bytes_per_pixel..index * self.info.bytes_per_pixel + bytes.len()]
-            .copy_from_slice(&bytes);
+        self.buffer[self.buffer_display_index + index] = color.into_u32();
     }
 
     /// draws all pixels in the buffer to the actual video_buffer
@@ -67,26 +66,24 @@ impl FrameBuffer {
     #[inline]
     /// shifts the buffer by `pixels` pixels
     /// can be used to achive scrolling
+    /// ensures that there are self.width() * self.height() pixels to draw
     pub fn shift_buffer(&mut self, pixels: isize) {
         match pixels.cmp(&0) {
             core::cmp::Ordering::Less => {
-                let amount = (-pixels as usize) * self.info.bytes_per_pixel;
-                if amount > self.buffer_display_index {
-                    self.buffer_display_index = 0;
-                    return;
-                }
-
-                self.buffer_display_index -= amount;
+                let amount = -pixels as usize;
+                self.buffer_display_index = self.buffer_display_index.saturating_sub(amount);
             }
             core::cmp::Ordering::Greater => {
-                let amount = pixels as usize * self.info.bytes_per_pixel;
-                if amount + self.buffer_display_index >= self.buffer.len() - self.video_buffer.len()
-                {
-                    self.buffer_display_index = self.buffer.len() - self.video_buffer.len();
-                    return;
-                }
+                let amount = pixels as usize;
+                let max_index = self.buffer.len() - self.video_buffer.len();
+                let new_index = self.buffer_display_index + amount;
 
-                self.buffer_display_index += amount;
+                if new_index <= max_index {
+                    self.buffer_display_index = new_index;
+                } else {
+                    self.buffer_display_index = max_index;
+                    self.buffer.copy_within(amount.., 0);
+                }
             }
             core::cmp::Ordering::Equal => {}
         }
@@ -95,41 +92,50 @@ impl FrameBuffer {
     }
 
     #[inline(always)]
-    pub fn width(&self) -> usize {
-        self.info.stride
-    }
-    #[inline(always)]
-    pub fn height(&self) -> usize {
-        self.video_buffer.len() / self.info.bytes_per_pixel / self.width()
-    }
-
-    #[inline(always)]
-    /// returns the current draw cursor position in pixels
-    pub fn get_cursor(&self) -> usize {
-        self.buffer_display_index / self.info.bytes_per_pixel
-    }
-
-    #[inline(always)]
     /// sets the cursor to `pixel` in pixels
     pub fn set_cursor(&mut self, pixel: usize) {
-        self.buffer_display_index = pixel * self.info.bytes_per_pixel;
-    }
-
-    fn buffer_u32(&mut self) -> &mut [u32] {
-        let ptr = self.buffer.as_mut_ptr() as *mut u32;
-        let len = self.buffer.len() / 4;
-        unsafe { core::slice::from_raw_parts_mut(ptr, len) }
+        self.buffer_display_index = pixel;
     }
 
     /// FIXME: assumes that [`self.info.bytes_per_pixel`] == 4
     pub fn fill(&mut self, color: RGB) {
-        assert_eq!(self.info.bytes_per_pixel, 4);
         let color: u32 = color.into();
-        let buffer = self.buffer_u32();
-        buffer.fill(color);
+        self.buffer.fill(color);
+    }
+}
+pub struct FrameBufferDriver {
+    info: FrameBufferInfo,
+    inner: Mutex<FrameBuffer<'static>>,
+}
+
+impl FrameBufferDriver {
+    pub fn create() -> Self {
+        let (video_buffer, info) = limine::get_framebuffer();
+        assert_eq!(info.bytes_per_pixel, 4);
+        let framebuffer = FrameBuffer::new(video_buffer, info);
+
+        Self {
+            info,
+            inner: Mutex::new(framebuffer),
+        }
+    }
+
+    #[inline(always)]
+    pub fn width(&self) -> usize {
+        self.info.stride
+    }
+
+    #[inline(always)]
+    pub fn height(&self) -> usize {
+        self.info.height
+    }
+
+    #[inline]
+    pub fn buffer(&self) -> MutexGuard<FrameBuffer<'static>> {
+        self.inner.lock()
     }
 }
 
 lazy_static! {
-    pub static ref FRAMEBUFFER_DRIVER: RwLock<FrameBuffer> = RwLock::new(FrameBuffer::new());
+    pub static ref FRAMEBUFFER_DRIVER: FrameBufferDriver = FrameBufferDriver::create();
 }

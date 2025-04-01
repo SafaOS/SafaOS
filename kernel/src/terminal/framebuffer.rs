@@ -3,21 +3,20 @@ const FONT_WEIGHT: FontWeight = FontWeight::Regular;
 const RASTER_WIDTH: usize = get_raster_width(FONT_WEIGHT, RASTER_HEIGHT);
 const CURSOR_CHAR: char = '_';
 
-use crate::utils::{
-    ansi::{self, AnsiSequence},
-    bstr::BStr,
-    either::Either,
+use crate::{
+    drivers::framebuffer::FrameBufferDriver,
+    utils::{
+        ansi::{self, AnsiSequence},
+        bstr::BStr,
+        either::Either,
+    },
 };
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
 };
-use spin::RwLock;
 
 use super::TTYInterface;
-use crate::{
-    drivers::framebuffer::{FrameBuffer, FRAMEBUFFER_DRIVER},
-    utils::display::RGB,
-};
+use crate::{drivers::framebuffer::FRAMEBUFFER_DRIVER, utils::display::RGB};
 
 const DEFAULT_FG_COLOR: RGB = RGB::WHITE;
 const DEFAULT_BG_COLOR: RGB = RGB::BLACK;
@@ -25,7 +24,7 @@ pub const DEFAULT_CURSOR_X: usize = 1;
 pub const DEFAULT_CURSOR_Y: usize = 1;
 
 pub struct FrameBufferTTY<'a> {
-    framebuffer: &'a RwLock<FrameBuffer>,
+    framebuffer: &'a FrameBufferDriver,
     /// x position in characters
     cursor_x: usize,
     /// y position in characters
@@ -38,7 +37,7 @@ pub struct FrameBufferTTY<'a> {
 impl FrameBufferTTY<'_> {
     pub fn new() -> Self {
         let framebuffer = &FRAMEBUFFER_DRIVER;
-        framebuffer.write().fill(DEFAULT_BG_COLOR);
+        framebuffer.buffer().fill(DEFAULT_BG_COLOR);
 
         Self {
             framebuffer,
@@ -70,20 +69,16 @@ impl FrameBufferTTY<'_> {
 
     #[inline(always)]
     fn check_draw_raster(&mut self, raster: &RasterizedChar) {
-        let framebuffer = self.framebuffer.read();
-        let stride = framebuffer.info.stride;
-        let cursor = framebuffer.get_cursor();
-        let height = framebuffer.height();
-        drop(framebuffer);
+        let stride = self.framebuffer.width();
+        let height = self.framebuffer.height();
 
-        if self.get_x() + raster.width() > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2) {
+        if self.get_x() + raster.width() * 2 > stride {
             self.newline();
         }
 
-        if self.get_y() + raster.height()
-            >= (cursor / stride + height) - ((DEFAULT_CURSOR_Y * RASTER_HEIGHT.val()) * 2)
-        {
+        if self.get_y() + raster.height() * 2 >= height {
             self.scroll_down();
+            self.cursor_y -= 1;
         }
     }
 
@@ -96,22 +91,24 @@ impl FrameBufferTTY<'_> {
         x: usize,
         y: usize,
     ) {
-        let mut framebuffer = self.framebuffer.write();
-        let stride = framebuffer.info.stride;
+        let stride = self.framebuffer.width();
 
-        let (x, y) = if x * RASTER_WIDTH + raster.width()
-            > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2)
-        {
-            (0, (y + 1) * RASTER_HEIGHT.val())
+        let (x, y) = if (x * RASTER_WIDTH) + raster.width() * 2 > stride {
+            (
+                DEFAULT_CURSOR_X * RASTER_WIDTH,
+                (y + 1) * RASTER_HEIGHT.val(),
+            )
         } else {
             (x * RASTER_WIDTH, y * RASTER_HEIGHT.val())
         };
+
+        let mut buffer = self.framebuffer.buffer();
 
         for (row, rows) in raster.raster().iter().enumerate() {
             for (col, byte) in rows.iter().enumerate() {
                 let color = fg_color.with_alpha(*byte, bg_color);
                 if color != bg_color {
-                    framebuffer.set_pixel(x + col, y + row, color);
+                    buffer.set_pixel(x + col, y + row, color);
                 }
             }
         }
@@ -120,13 +117,12 @@ impl FrameBufferTTY<'_> {
         self.check_draw_raster(&raster);
 
         let (x, y) = self.get_pixel_at();
-        let mut framebuffer = self.framebuffer.write();
+        let mut buffer = self.framebuffer.buffer();
 
         for (row, rows) in raster.raster().iter().enumerate() {
             for (col, byte) in rows.iter().enumerate() {
                 let color = fg_color.with_alpha(*byte, bg_color);
-
-                framebuffer.set_pixel(x + col, y + row, color);
+                buffer.set_pixel(x + col, y + row, color);
             }
         }
 
@@ -135,44 +131,21 @@ impl FrameBufferTTY<'_> {
 
     fn remove_char_opaque(&mut self, c: char, bg_color: RGB, x: usize, y: usize) {
         let raster = self.raster(c);
-        let mut framebuffer = self.framebuffer.write();
-        let stride = framebuffer.info.stride;
-        let (x, y) = if x * RASTER_WIDTH + raster.width()
-            > stride - ((DEFAULT_CURSOR_X * RASTER_WIDTH) * 2)
-        {
-            (0, (y + 1) * RASTER_HEIGHT.val())
-        } else {
-            (x * RASTER_WIDTH, y * RASTER_HEIGHT.val())
-        };
+        let (x, y) = (x * RASTER_WIDTH, y * RASTER_HEIGHT.val());
+
+        let mut buffer = self.framebuffer.buffer();
+
         for (row, rows) in raster.raster().iter().enumerate() {
             for (col, byte) in rows.iter().enumerate() {
                 if *byte != 0 {
-                    framebuffer.set_pixel(x + col, y + row, bg_color);
+                    buffer.set_pixel(x + col, y + row, bg_color);
                 }
             }
         }
     }
 
-    fn remove_char(&mut self) {
-        if self.cursor_x == DEFAULT_CURSOR_X && self.cursor_y > DEFAULT_CURSOR_Y {
-            self.cursor_x = (self.framebuffer.read().width() / RASTER_WIDTH) - 1;
-            self.cursor_y -= 1;
-        } else if self.cursor_x > DEFAULT_CURSOR_X {
-            self.cursor_x -= 1;
-        }
-
-        let mut framebuffer = self.framebuffer.write();
-        let (x, y) = self.get_pixel_at();
-
-        for row in 0..RASTER_HEIGHT.val() {
-            for col in 0..RASTER_WIDTH {
-                framebuffer.set_pixel(x + col, y + row, DEFAULT_BG_COLOR);
-            }
-        }
-    }
-
     fn sync_pixels(&mut self) {
-        self.framebuffer.write().sync_pixels();
+        self.framebuffer.buffer().sync_pixels();
     }
 
     fn putc_unsynced(&mut self, c: char) {
@@ -311,43 +284,59 @@ impl TTYInterface for FrameBufferTTY<'_> {
         self.cursor_y += 1;
     }
 
-    fn backspace(&mut self) {
-        self.remove_char();
-        self.sync_pixels();
-    }
-
     fn set_cursor(&mut self, x: usize, y: usize) {
         self.cursor_x = x;
         self.cursor_y = y;
     }
 
     fn offset_cursor(&mut self, x: isize, y: isize) {
-        self.cursor_x = (self.cursor_x as isize + x) as usize;
-        self.cursor_y = (self.cursor_y as isize + y) as usize;
+        let max_x = (self.framebuffer.width() / (RASTER_WIDTH)) - (DEFAULT_CURSOR_X * 2);
+        let max_y = (self.framebuffer.height() / (RASTER_HEIGHT.val())) - (DEFAULT_CURSOR_Y * 2);
+
+        let mut y = self.cursor_y.checked_add_signed(y).map(|y| y.min(max_y));
+        let x = self.cursor_x.checked_add_signed(x).map(|x| x.min(max_x));
+
+        match x {
+            Some(x) if x >= DEFAULT_CURSOR_X => {
+                self.cursor_x = x;
+            }
+            _ => {
+                y = y.map(|y| y.saturating_sub(1));
+                self.cursor_x = max_x;
+            }
+        }
+
+        match y {
+            Some(y) if y >= DEFAULT_CURSOR_Y => {
+                self.cursor_y = y;
+            }
+            _ => {
+                self.cursor_x = DEFAULT_CURSOR_X;
+                self.cursor_y = DEFAULT_CURSOR_Y;
+            }
+        }
     }
 
     fn scroll_down(&mut self) {
-        let mut framebuffer = self.framebuffer.write();
-        let stride = framebuffer.info.stride * RASTER_HEIGHT.val();
+        let stride = self.framebuffer.width() * RASTER_HEIGHT.val();
+        let mut framebuffer = self.framebuffer.buffer();
+
         framebuffer.shift_buffer(stride as isize);
     }
 
     fn scroll_up(&mut self) {
-        let mut framebuffer = self.framebuffer.write();
-        let stride = framebuffer.info.stride * RASTER_HEIGHT.val();
+        let stride = self.framebuffer.width() * RASTER_HEIGHT.val();
+        let mut framebuffer = self.framebuffer.buffer();
         framebuffer.shift_buffer(-(stride as isize));
     }
 
     fn clear(&mut self) {
-        let stride = self.framebuffer.read().info.stride;
-        self.framebuffer.write().fill(self.bg_color);
+        let mut buffer = self.framebuffer.buffer();
+        buffer.fill(self.bg_color);
+        buffer.set_cursor(0);
+        drop(buffer);
 
-        let old_cursor = self.framebuffer.read().get_cursor();
-        self.framebuffer.write().set_cursor(0);
-
-        let diff = old_cursor / stride / RASTER_HEIGHT.val();
-        self.cursor_y -= diff;
-
+        self.cursor_y = 0;
         self.sync_pixels();
     }
 
