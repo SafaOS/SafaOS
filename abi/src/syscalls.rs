@@ -27,6 +27,7 @@ pub enum SyscallTable {
 
     SysPSpawn = 19,
     SysWait = 11,
+    SysMetaTake = 25,
 
     SysShutdown = 20,
     SysReboot = 21,
