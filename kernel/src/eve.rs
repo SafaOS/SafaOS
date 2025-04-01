@@ -2,7 +2,11 @@
 //! it is responsible for managing a few things related to it's children
 
 use crate::{
-    debug, drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yeild,
+    debug,
+    drivers::vfs,
+    memory::paging::PhysPageTable,
+    serial,
+    threading::{self, expose::thread_yeild, task::TaskMetadata},
 };
 use alloc::vec::Vec;
 use safa_utils::make_path;
@@ -42,11 +46,16 @@ pub fn main() -> ! {
     // TODO: make a macro or a const function to do this automatically
     let stdin = vfs::expose::File::open(make_path!("dev", "tty")).unwrap();
     let stdout = vfs::expose::File::open(make_path!("dev", "tty")).unwrap();
+    let stderr = vfs::expose::File::open(make_path!("dev", "tty")).unwrap();
     serial!(
-        "Hello, world!, running tests... stdin: {:?}, stdout: {:?}\n",
+        "Hello, world!, running tests... stdin: {:?}, stdout: {:?}, stderr: {:?}\n",
         stdin,
-        stdout
+        stdout,
+        stderr
     );
+
+    let metadata = TaskMetadata::new(stdout.fd(), stdin.fd(), stderr.fd());
+    unsafe { threading::current().set_metadata(metadata) };
 
     #[cfg(feature = "test")]
     {

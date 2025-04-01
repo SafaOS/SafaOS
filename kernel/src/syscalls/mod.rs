@@ -1,6 +1,9 @@
+use safa_utils::abi;
 use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
+use crate::threading;
+use crate::threading::task::TaskMetadata;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
@@ -183,26 +186,51 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 /// inside the registers
                 #[repr(C)]
                 struct SpawnConfig {
+                    /// config version for compatibility
+                    /// added in kernel version 0.2.1 and therfore breaking compatibility with any program compiled for version below 0.2.1
+                    version: u8,
                     name: (*const u8, usize),
                     argv: (*mut (*const u8, usize), usize),
                     flags: SpawnFlags,
+                    metadata: *const abi::raw::processes::TaskMetadata,
                 }
 
                 impl SpawnConfig {
-                    fn as_rust(&self) -> Result<(Option<&str>, &[&str], SpawnFlags), ErrorStatus> {
+                    fn as_rust(
+                        &self,
+                    ) -> Result<
+                        (Option<&str>, &[&str], SpawnFlags, Option<TaskMetadata>),
+                        ErrorStatus,
+                    > {
                         let name = Option::<&str>::make((self.name.0, self.name.1))?;
                         let argv = into_args_slice(self.argv.0, self.argv.1)?;
+                        let metadata: Option<&abi::raw::processes::TaskMetadata> =
+                            if self.version >= 1 {
+                                Option::make(self.metadata)?
+                            } else {
+                                None
+                            };
 
-                        Ok((name, argv, self.flags))
+                        Ok((name, argv, self.flags, metadata.copied().map(Into::into)))
                     }
                 }
 
                 let path = <Path>::make((a as *const u8, b))?;
                 let config = <&SpawnConfig>::make(c as *const SpawnConfig)?;
-                let (name, argv, flags) = config.as_rust()?;
+                let (name, argv, flags, metadata) = config.as_rust()?;
                 let dest_pid = Option::make(d as *mut usize)?;
 
-                processes::syspspawn(name, path, argv, flags, dest_pid)
+                processes::syspspawn(name, path, argv, flags, metadata, dest_pid)
+            }
+            SyscallTable::SysMetaTake => {
+                let dest_metadata = <&mut abi::raw::processes::TaskMetadata>::make(
+                    a as *mut abi::raw::processes::TaskMetadata,
+                )?;
+
+                *dest_metadata = threading::expose::metadata_take()
+                    .ok_or(ErrorStatus::Generic)?
+                    .into();
+                Ok(())
             }
             SyscallTable::SysCtl => {
                 let fd = FileRef::make(a)?;

@@ -12,7 +12,7 @@ use crate::utils::types::Name;
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use slab::Slab;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use task::{Task, TaskInfo, TaskState};
+use task::{Task, TaskInfo, TaskMetadata, TaskState};
 
 use crate::{
     arch::threading::{restore_cpu_status, CPUStatus},
@@ -54,6 +54,7 @@ impl Scheduler {
             page_table,
             context,
             0,
+            TaskMetadata::default(),
         );
         self::add(task);
 
@@ -170,7 +171,7 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
-fn current() -> Rc<Task> {
+pub fn current() -> Rc<Task> {
     SCHEDULER.read().current().clone()
 }
 

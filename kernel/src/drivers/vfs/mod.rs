@@ -125,11 +125,13 @@ pub enum FSError {
     InvaildCtlCmd,
     InvaildCtlArg,
     NotEnoughArguments,
+    Other,
 }
 
 impl IntoErr for FSError {
     fn into_err(self) -> ErrorStatus {
         match self {
+            Self::Other => ErrorStatus::Generic,
             Self::OperationNotSupported => ErrorStatus::OperationNotSupported,
             Self::NotAFile => ErrorStatus::NotAFile,
             Self::NotADirectory => ErrorStatus::NotADirectory,
@@ -198,7 +200,7 @@ impl<'a> CtlArgs<'a> {
 }
 
 // InodeType implementition
-pub use safa_utils::abi::io::InodeType;
+pub use safa_utils::abi::raw::io::InodeType;
 
 pub trait InodeOps: Send + Sync {
     /// gets an Inode from self

@@ -116,7 +116,8 @@ pub mod testing_module {
             Name::try_from("TEST_CASE").unwrap(),
             make_path!("sys", "/bin/true"),
             &[],
-            SpawnFlags::CLONE_RESOURCES,
+            SpawnFlags::empty(),
+            None,
         )
         .unwrap();
         let ret = wait(pid);
@@ -132,6 +133,7 @@ pub mod testing_module {
             make_path!("sys", "bin/safa-tests"),
             &[],
             SpawnFlags::empty(),
+            None,
         )
         .unwrap();
         let ret = wait(pid);

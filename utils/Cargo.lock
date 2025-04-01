@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "safa-abi"
-version = "0.1.2"
+version = "0.2.0"
 
 [[package]]
 name = "safa-utils"

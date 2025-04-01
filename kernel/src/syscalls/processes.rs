@@ -1,4 +1,4 @@
-use crate::utils::types::Name;
+use crate::{threading::task::TaskMetadata, utils::types::Name};
 use core::fmt::Write;
 
 use crate::{
@@ -19,6 +19,7 @@ pub fn syspspawn(
     path: Path,
     argv: &[&str],
     flags: SpawnFlags,
+    metadata: Option<TaskMetadata>,
     dest_pid: Option<&mut usize>,
 ) -> Result<(), ErrorStatus> {
     let name = match name {
@@ -30,7 +31,7 @@ pub fn syspspawn(
         }
     };
 
-    let results = threading::expose::pspawn(name, path, argv, flags)?;
+    let results = threading::expose::pspawn(name, path, argv, flags, metadata)?;
     if let Some(dest_pid) = dest_pid {
         *dest_pid = results;
     }

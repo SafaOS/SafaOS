@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::{
-    task::{Task, TaskInfo, TaskState},
+    task::{Task, TaskInfo, TaskMetadata, TaskState},
     this_state, this_state_mut, Pid,
 };
 
@@ -108,7 +108,16 @@ pub fn function_spawn(
     let mut page_table = PhysPageTable::create()?;
     let context =
         unsafe { CPUStatus::create(&mut page_table, argv, function as usize, false).unwrap() };
-    let task = Task::new(name, 0, 0, cwd, page_table, context, 0);
+    let task = Task::new(
+        name,
+        0,
+        0,
+        cwd,
+        page_table,
+        context,
+        0,
+        TaskMetadata::default(),
+    );
 
     if flags.contains(SpawnFlags::CLONE_RESOURCES) {
         let mut state = task.state_mut().unwrap();
@@ -130,6 +139,7 @@ pub fn spawn<T: Readable>(
     reader: &T,
     argv: &[&str],
     flags: SpawnFlags,
+    metadata: TaskMetadata,
 ) -> Result<usize, ElfError> {
     let this = this_state();
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
@@ -143,7 +153,7 @@ pub fn spawn<T: Readable>(
     let current = super::current();
     let current_pid = current.pid;
 
-    let task = Task::from_elf(name, 0, current_pid, cwd, elf, argv)?;
+    let task = Task::from_elf(name, 0, current_pid, cwd, elf, argv, metadata)?;
 
     if flags.contains(SpawnFlags::CLONE_RESOURCES) {
         let mut state = task.state_mut().unwrap();
@@ -163,14 +173,28 @@ pub fn spawn<T: Readable>(
 }
 
 /// spawns an elf process from a path
-pub fn pspawn(name: Name, path: Path, argv: &[&str], flags: SpawnFlags) -> Result<usize, FSError> {
+pub fn pspawn(
+    name: Name,
+    path: Path,
+    argv: &[&str],
+    flags: SpawnFlags,
+    mut metadata: Option<TaskMetadata>,
+) -> Result<usize, FSError> {
     let file = File::open(path)?;
 
     if file.kind() != InodeType::File {
         return Err(FSError::NotAFile);
     }
 
-    spawn(name, &file, argv, flags).map_err(|_| FSError::NotExecuteable)
+    if metadata.is_some() && !flags.contains(SpawnFlags::CLONE_RESOURCES) {
+        return Err(FSError::Other);
+    }
+
+    if metadata.is_none() && flags.contains(SpawnFlags::CLONE_RESOURCES) {
+        metadata = Some(super::current().metadata_clone());
+    }
+    spawn(name, &file, argv, flags, metadata.unwrap_or_default())
+        .map_err(|_| FSError::NotExecuteable)
 }
 
 /// also ensures the cwd ends with /
@@ -255,4 +279,10 @@ pub fn sbrk(amount: isize) -> Result<*mut u8, ErrorStatus> {
     let current = super::current();
     let mut state = current.state_mut().unwrap();
     state.extend_data_by(amount).ok_or(ErrorStatus::OutOfMemory)
+}
+
+#[inline(always)]
+/// Takes ownership of the current task metadata or returns None if it was already taken
+pub fn metadata_take() -> Option<TaskMetadata> {
+    super::current().metadata()
 }

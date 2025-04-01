@@ -1,11 +1,12 @@
 use core::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
-    sync::atomic::{AtomicBool, AtomicUsize},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use crate::utils::types::Name;
 use alloc::{boxed::Box, vec::Vec};
+use safa_utils::abi;
 use serde::Serialize;
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -212,6 +213,43 @@ impl TaskState {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct TaskMetadata {
+    stdout: Option<usize>,
+    stdin: Option<usize>,
+    stderr: Option<usize>,
+}
+
+impl TaskMetadata {
+    pub fn new(stdout: usize, stdin: usize, stderr: usize) -> Self {
+        Self {
+            stdout: Some(stdout),
+            stdin: Some(stdin),
+            stderr: Some(stderr),
+        }
+    }
+}
+
+impl From<TaskMetadata> for abi::raw::processes::TaskMetadata {
+    fn from(metadata: TaskMetadata) -> Self {
+        Self {
+            stdout: metadata.stdout.into(),
+            stdin: metadata.stdin.into(),
+            stderr: metadata.stderr.into(),
+        }
+    }
+}
+
+impl From<abi::raw::processes::TaskMetadata> for TaskMetadata {
+    fn from(metadata: abi::raw::processes::TaskMetadata) -> Self {
+        Self {
+            stdout: metadata.stdout.into(),
+            stdin: metadata.stdin.into(),
+            stderr: metadata.stderr.into(),
+        }
+    }
+}
+
 pub struct Task {
     /// constant
     pub pid: Pid,
@@ -221,6 +259,9 @@ pub struct Task {
     name: Name,
     /// context must only be changed by the scheduler, so it is not protected by a lock
     context: UnsafeCell<CPUStatus>,
+    /// metadata are available once then never again, the `SysMetaTake` syscall will take ownership of it
+    metadata: UnsafeCell<TaskMetadata>,
+    metadata_available: AtomicBool,
     is_alive: AtomicBool,
 }
 
@@ -236,6 +277,7 @@ impl Task {
         root_page_table: PhysPageTable,
         context: CPUStatus,
         data_break: VirtAddr,
+        metadata: TaskMetadata,
     ) -> Self {
         let data_break = align_up(data_break, PAGE_SIZE);
 
@@ -245,6 +287,8 @@ impl Task {
             ppid: AtomicUsize::new(ppid),
             is_alive: AtomicBool::new(true),
             context: UnsafeCell::new(context),
+            metadata: UnsafeCell::new(metadata),
+            metadata_available: AtomicBool::new(true),
             state: RwLock::new(TaskState::Alive {
                 root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
@@ -264,6 +308,7 @@ impl Task {
         cwd: Path,
         elf: Elf<T>,
         args: &[&str],
+        metadata: TaskMetadata,
     ) -> Result<Self, ElfError> {
         let cwd = Box::new(cwd.into_owned().unwrap());
 
@@ -273,9 +318,31 @@ impl Task {
 
         let context = unsafe { CPUStatus::create(&mut page_table, args, entry_point, true)? };
         Ok(Self::new(
-            name, pid, ppid, cwd, page_table, context, data_break,
+            name, pid, ppid, cwd, page_table, context, data_break, metadata,
         ))
     }
+
+    #[inline(always)]
+    pub fn metadata_clone(&self) -> TaskMetadata {
+        unsafe { (*self.metadata.get()).clone() }
+    }
+
+    pub unsafe fn set_metadata(&self, metadata: TaskMetadata) {
+        *self.metadata.get() = metadata;
+    }
+
+    pub fn metadata(&self) -> Option<TaskMetadata> {
+        if self
+            .metadata_available
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            Some(self.metadata_clone())
+        } else {
+            None
+        }
+    }
+
     pub fn name(&self) -> &Name {
         &self.name
     }

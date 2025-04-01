@@ -19,6 +19,10 @@ use super::{
 pub struct File(usize);
 
 impl File {
+    pub const fn fd(&self) -> usize {
+        self.0
+    }
+
     fn with_fd<T, R>(&self, then: T) -> R
     where
         T: FnOnce(&mut FileDescriptor) -> R,

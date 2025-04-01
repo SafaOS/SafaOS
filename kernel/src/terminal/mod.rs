@@ -374,6 +374,7 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                     make_path!("sys", "bin/safa"),
                     &["-i"],
                     SpawnFlags::CLONE_RESOURCES,
+                    None,
                 )
                 .unwrap();
             }

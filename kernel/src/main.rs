@@ -63,8 +63,7 @@ macro_rules! time {
 }
 
 use core::arch::asm;
-#[no_mangle]
-#[inline]
+#[unsafe(no_mangle)]
 pub fn khalt() -> ! {
     loop {
         #[cfg(target_arch = "x86_64")]
