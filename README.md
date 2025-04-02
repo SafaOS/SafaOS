@@ -19,7 +19,6 @@ you need:
 - xorriso
 - make
 - cargo
-- zig
 
 simply run
 ```
