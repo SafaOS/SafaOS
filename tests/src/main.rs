@@ -3,7 +3,7 @@ use std::{
     cell::UnsafeCell,
     fmt::{Arguments, Debug},
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     mem::MaybeUninit,
     panic::PanicHookInfo,
     path::PathBuf,
@@ -122,30 +122,25 @@ impl Debug for Output {
 }
 
 fn execute_binary(path: &'static str, args: &[&str]) -> Output {
-    let mut options = OpenOptions::new();
-    options.create(true).read(true);
+    let stdout_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .truncate(true)
+        .open(TEST_LOG_PATH)
+        .expect(&format!(
+            "failed to open stdout file located at {}",
+            TEST_LOG_PATH
+        ));
 
-    let stdout_file = options.open(TEST_LOG_PATH).expect(&format!(
-        "failed to open stdout file located at {}",
-        TEST_LOG_PATH
-    ));
-
-    let status = Command::new(path)
+    let output = Command::new(path)
         .args(args)
         .stdout(Stdio::from(stdout_file))
-        .status()
+        .output()
         .expect("failed to execute a binary");
 
-    let mut stdout = String::new();
-    let mut stdout_file = options.open(TEST_LOG_PATH).expect(&format!(
-        "failed to open stdout file located at {}",
-        TEST_LOG_PATH
-    ));
-    stdout_file
-        .read_to_string(&mut stdout)
-        .expect("failed to read stdout_file");
-    stdout_file.set_len(0).expect("failed to truncate test.log");
+    let (status, stdout) = (output.status, output.stdout);
 
+    let stdout = String::from_utf8_lossy(&stdout).into_owned();
     let result = OSError::from_exit_status(status);
 
     Output {
