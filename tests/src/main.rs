@@ -7,7 +7,7 @@ use std::{
     mem::MaybeUninit,
     panic::PanicHookInfo,
     path::PathBuf,
-    process::{Command, ExitStatus},
+    process::{Command, ExitStatus, Stdio},
     sync::LazyLock,
 };
 
@@ -122,23 +122,25 @@ impl Debug for Output {
 }
 
 fn execute_binary(path: &'static str, args: &[&str]) -> Output {
-    // FD 1 and therefore stdout for executed binary
-    // unsafe I know I should add piping
-    let mut stdout_file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .open(TEST_LOG_PATH)
-        .expect(&format!(
-            "failed to open stdout file located at {}",
-            TEST_LOG_PATH
-        ));
+    let mut options = OpenOptions::new();
+    options.create(true).read(true);
+
+    let stdout_file = options.open(TEST_LOG_PATH).expect(&format!(
+        "failed to open stdout file located at {}",
+        TEST_LOG_PATH
+    ));
 
     let status = Command::new(path)
         .args(args)
+        .stdout(Stdio::from(stdout_file))
         .status()
         .expect("failed to execute a binary");
 
     let mut stdout = String::new();
+    let mut stdout_file = options.open(TEST_LOG_PATH).expect(&format!(
+        "failed to open stdout file located at {}",
+        TEST_LOG_PATH
+    ));
     stdout_file
         .read_to_string(&mut stdout)
         .expect("failed to read stdout_file");
