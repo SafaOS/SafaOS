@@ -1,38 +1,25 @@
 use std::{
     borrow::Cow,
     cell::UnsafeCell,
-    fmt::{Arguments, Debug},
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fmt::Debug,
+    fs::{self, OpenOptions},
     mem::MaybeUninit,
     panic::PanicHookInfo,
     path::PathBuf,
     process::{Command, ExitStatus, Stdio},
-    sync::LazyLock,
 };
 
 const TEST_LOG_PATH: &str = "ram:/test.log";
 
-#[macro_export]
-macro_rules! print {
-   ($($arg:tt)*) => ($crate::serial_write(format_args!($($arg)*)));
-}
-
-#[macro_export]
-macro_rules! println {
-    () => (print!("\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
-}
-
 macro_rules! log {
     ($($arg:tt)*) => {
-        $crate::println!("\x1b[36m[TEST]\x1b[0m: {}", format_args!($($arg)*));
+        println!("\x1b[36m[TEST]\x1b[0m: {}", format_args!($($arg)*));
     };
 }
 
 macro_rules! log_fail {
     ($($arg:tt)*) => {
-        $crate::println!("\x1b[31m[FAILED]: {}\x1b[0m", format_args!($($arg)*));
+        println!("\x1b[31m[FAILED]: {}\x1b[0m", format_args!($($arg)*));
     };
 }
 
@@ -40,32 +27,6 @@ use safa_api::errors::ErrorStatus;
 
 fn panic_hook(info: &PanicHookInfo) {
     log_fail!("{info}");
-}
-
-struct SerialFd(UnsafeCell<File>);
-impl SerialFd {
-    const fn get(&self) -> *mut File {
-        self.0.get()
-    }
-
-    fn open() -> Self {
-        Self(UnsafeCell::new(
-            File::open("dev:/ss").expect("failed to open serial file"),
-        ))
-    }
-}
-
-unsafe impl Sync for SerialFd {}
-unsafe impl Send for SerialFd {}
-
-static SERIAL: LazyLock<SerialFd> = LazyLock::new(|| SerialFd::open());
-
-fn serial() -> &'static mut File {
-    unsafe { &mut *SERIAL.get() }
-}
-
-fn serial_write(args: Arguments<'_>) {
-    serial().write_fmt(args).expect("failed to write to serial");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,21 +86,23 @@ fn execute_binary(path: &'static str, args: &[&str]) -> Output {
     let stdout_file = OpenOptions::new()
         .create(true)
         .read(true)
+        .write(true)
         .truncate(true)
         .open(TEST_LOG_PATH)
         .expect(&format!(
             "failed to open stdout file located at {}",
             TEST_LOG_PATH
         ));
+    let stderr_file = stdout_file.try_clone().unwrap();
 
     let output = Command::new(path)
         .args(args)
         .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
         .output()
         .expect("failed to execute a binary");
 
     let (status, stdout) = (output.status, output.stdout);
-
     let stdout = String::from_utf8_lossy(&stdout).into_owned();
     let result = OSError::from_exit_status(status);
 
