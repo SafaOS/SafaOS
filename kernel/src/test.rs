@@ -128,12 +128,16 @@ pub mod testing_module {
 
     fn userspace() {
         unsafe { core::arch::asm!("cli") }
+        use crate::drivers::vfs::expose::File;
+        use crate::threading::task::TaskMetadata;
+
+        let stdio = File::open(make_path!("dev", "/ss")).unwrap();
         let pid = pspawn(
             Name::try_from("Tester").unwrap(),
             make_path!("sys", "bin/safa-tests"),
             &[],
-            SpawnFlags::empty(),
-            None,
+            SpawnFlags::CLONE_RESOURCES,
+            Some(TaskMetadata::new(stdio.fd(), stdio.fd(), stdio.fd())),
         )
         .unwrap();
         let ret = wait(pid);

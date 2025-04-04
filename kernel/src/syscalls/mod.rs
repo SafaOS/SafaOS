@@ -156,6 +156,13 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 }
                 Ok(())
             }
+            SyscallTable::SysDup => {
+                let fd = FileRef::make(a)?;
+                let dest_fd = <&mut FileRef>::make(b as *mut FileRef)?;
+                let fd = fd.dup();
+                *dest_fd = fd;
+                Ok(())
+            }
             // processes
             SyscallTable::SysPSpawn => {
                 #[inline(always)]

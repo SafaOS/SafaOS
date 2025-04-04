@@ -113,6 +113,13 @@ impl ResourceManager {
 
         Some(self.resources[ri].lock())
     }
+
+    fn get_mut(&mut self, ri: usize) -> Option<&mut Resource> {
+        if ri >= self.resources.len() {
+            return None;
+        }
+        Some(self.resources[ri].get_mut())
+    }
 }
 // TODO: fgure out a better way to do this, where it's easier to tell that we are holding a lock on
 // the current process state.
@@ -137,6 +144,15 @@ pub fn add_resource(resource: Resource) -> usize {
         .resource_manager_mut()
         .unwrap()
         .add_resource(resource)
+}
+
+pub fn duplicate_resource(ri: usize) -> usize {
+    let mut state = super::this_state_mut();
+    let manager = state.resource_manager_mut().unwrap();
+
+    let resource = manager.get_mut(ri).unwrap();
+    let clone = resource.clone();
+    manager.add_resource(clone)
 }
 
 /// removes a resource from the current process with `ri`

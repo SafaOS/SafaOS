@@ -96,6 +96,10 @@ impl File {
     pub fn attrs(&self) -> FileAttr {
         self.with_fd(|fd| fd.attrs())
     }
+
+    pub fn dup(&self) -> Self {
+        Self(resources::duplicate_resource(self.0))
+    }
 }
 
 impl Drop for File {
@@ -119,6 +123,11 @@ impl Readable for File {
 pub struct FileRef(ManuallyDrop<File>);
 
 impl FileRef {
+    pub fn dup(&self) -> Self {
+        let file = self.0.dup();
+        Self(ManuallyDrop::new(file))
+    }
+
     pub fn open(path: Path) -> FSResult<Self> {
         let file = File::open(path)?;
         Ok(Self(ManuallyDrop::new(file)))
