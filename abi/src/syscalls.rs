@@ -16,6 +16,8 @@ pub enum SyscallTable {
     SysSync = 16,
     SysTruncate = 17,
     SysCtl = 12,
+
+    SysDup = 26,
     // TODO: remove in favor of FAttrs
     SysFSize = 22,
     SysFAttrs = 24,
@@ -35,7 +37,7 @@ pub enum SyscallTable {
 
 impl SyscallTable {
     // update when a new Syscall Num is added
-    const MAX: u16 = Self::SysMetaTake as u16;
+    const MAX: u16 = Self::SysDup as u16;
 }
 
 impl TryFrom<u16> for SyscallTable {
