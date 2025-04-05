@@ -5,6 +5,7 @@ use core::ptr::NonNull;
 
 #[repr(C)]
 #[derive(Debug)]
+/// A C complitable slice of type `T`
 pub struct RawSlice<T> {
     ptr: *const T,
     len: usize,
@@ -77,6 +78,7 @@ impl<T> RawSliceMut<RawSlice<T>> {
 
 #[repr(C)]
 #[derive(Debug)]
+/// A C complitable mutable slice of type `T`
 pub struct RawSliceMut<T> {
     ptr: *mut T,
     len: usize,

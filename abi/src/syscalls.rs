@@ -1,3 +1,4 @@
+/// defines Syscall numbers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum SyscallTable {

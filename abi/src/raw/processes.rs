@@ -22,10 +22,12 @@ impl TaskMetadata {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
+/// Flags for the [crate::syscalls::SyscallTable::SysPSpawn] syscall
 pub struct SpawnFlags(u8);
 impl SpawnFlags {
     pub const CLONE_RESOURCES: Self = Self(1 << 0);
     pub const CLONE_CWD: Self = Self(1 << 1);
+    pub const EMPTY: Self = Self(0);
 }
 
 impl BitOr for SpawnFlags {
