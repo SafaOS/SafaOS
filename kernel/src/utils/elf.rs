@@ -1,8 +1,11 @@
+use core::fmt::Display;
+
 use alloc::vec;
 use alloc::{slice, string::String, vec::Vec};
 use bitflags::bitflags;
 use macros::display_consts;
 use spin::once::Once;
+use thiserror::Error;
 
 use crate::{
     memory::{
@@ -82,7 +85,7 @@ pub struct ElfHeader {
     pub sections_names_section_offset: u16,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Error)]
 pub enum ElfError {
     UnsupportedClass,
     UnsupportedEndianness,
@@ -91,6 +94,12 @@ pub enum ElfError {
     NotAnElf,
     NotAnExecutable,
     MapToError,
+}
+
+impl Display for ElfError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl IntoErr for ElfError {

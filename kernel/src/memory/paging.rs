@@ -9,6 +9,7 @@ use core::{
     fmt::{Debug, LowerHex},
     ops::{Deref, DerefMut, Index, IndexMut},
 };
+use thiserror::Error;
 
 use crate::memory::frame_allocator::Frame;
 
@@ -199,8 +200,9 @@ pub unsafe fn current_root_table() -> FramePtr<PageTable> {
     ptr
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Error)]
 pub enum MapToError {
+    #[error("frame allocator: out of memory")]
     FrameAllocationFailed,
 }
 

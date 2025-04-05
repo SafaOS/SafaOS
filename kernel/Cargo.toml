@@ -24,6 +24,7 @@ serde_json = { version = "1.0", git = "https://github.com/ObserverUnit/srede-jso
 
 compile-time = "0.2"
 slab = { version = "0.4", default-features = false }
+thiserror = { version = "2.0.12", default-features = false }
 [dev-dependencies]
 [features]
 test = []

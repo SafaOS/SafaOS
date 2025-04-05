@@ -7,7 +7,8 @@ use crate::{
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
-use safa_utils::{abi::raw, make_path};
+use safa_utils::{abi::raw, make_path, path::PathBuf};
+use thiserror::Error;
 
 use crate::{
     drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
@@ -94,6 +95,83 @@ impl From<raw::processes::SpawnFlags> for SpawnFlags {
     }
 }
 
+#[derive(Debug, Clone, Error)]
+
+pub enum SpawnError {
+    #[error("out of memory")]
+    MapToError(#[from] MapToError),
+    #[error("failed to map elf to memory {0}")]
+    ElfError(#[from] ElfError),
+    #[error("error while creating process {0}")]
+    FSError(#[from] FSError),
+}
+
+#[inline(always)]
+fn spawn_inner(
+    name: Name,
+    flags: SpawnFlags,
+    metadata: TaskMetadata,
+    create_task: impl FnOnce(Name, usize, Box<PathBuf>) -> Result<Task, SpawnError>,
+) -> Result<usize, SpawnError> {
+    let this = this_state();
+    let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
+        this.cwd()
+    } else {
+        make_path!("ram", "")
+    };
+
+    let current = super::current();
+    let current_pid = current.pid;
+
+    let cwd = Box::new(cwd.into_owned().unwrap());
+    let task = create_task(name, current_pid, cwd)?;
+
+    let provide_resources = || {
+        let mut state = task.state_mut().unwrap();
+        let TaskState::Alive {
+            resources: task_resources,
+            ..
+        } = &mut *state
+        else {
+            unreachable!()
+        };
+
+        drop(this);
+        let mut this = this_state_mut();
+
+        let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
+            this.clone_resources()
+        } else {
+            // clone only necassary resources
+            let mut resources = heapless::Vec::<usize, 3>::new();
+            if let Some(stdin) = metadata.stdin {
+                _ = resources.push(stdin);
+            }
+
+            if let Some(stdout) = metadata.stdout {
+                _ = resources.push(stdout);
+            }
+
+            if let Some(stderr) = metadata.stderr {
+                _ = resources.push(stderr);
+            }
+
+            if resources.is_empty() {
+                return Ok(());
+            }
+            this.clone_specific_resources(&resources)?
+        };
+
+        task_resources.overwrite_resources(clone);
+        Ok(())
+    };
+
+    provide_resources().map_err(|()| FSError::InvaildResource)?;
+
+    let pid = super::add(task);
+    Ok(pid)
+}
+
 // used by tests...
 #[allow(unused)]
 pub fn function_spawn(
@@ -101,42 +179,29 @@ pub fn function_spawn(
     function: fn() -> !,
     argv: &[&str],
     flags: SpawnFlags,
-) -> Result<usize, MapToError> {
-    let mut this = this_state_mut();
-    let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        this.cwd()
-    } else {
-        make_path!("ram", "")
-    };
-    let cwd = Box::new(cwd.into_owned().unwrap());
-
-    let mut page_table = PhysPageTable::create()?;
-    let context =
-        unsafe { CPUStatus::create(&mut page_table, argv, function as usize, false).unwrap() };
-    let task = Task::new(
+) -> Result<usize, SpawnError> {
+    spawn_inner(
         name,
-        0,
-        0,
-        cwd,
-        page_table,
-        context,
-        0,
+        flags,
         TaskMetadata::default(),
-    );
+        |name: Name, pid, cwd| {
+            let mut page_table = PhysPageTable::create()?;
+            let context =
+                unsafe { CPUStatus::create(&mut page_table, argv, function as usize, false) }?;
 
-    if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        let mut state = task.state_mut().unwrap();
-
-        let TaskState::Alive { resources, .. } = &mut *state else {
-            unreachable!()
-        };
-
-        let clone = this.clone_resources();
-        resources.overwrite_resources(clone);
-    }
-
-    let pid = super::add(task);
-    Ok(pid)
+            let task = Task::new(
+                name,
+                pid,
+                0,
+                cwd,
+                page_table,
+                context,
+                0,
+                TaskMetadata::default(),
+            );
+            Ok(task)
+        },
+    )
 }
 
 pub fn spawn<T: Readable>(
@@ -145,36 +210,12 @@ pub fn spawn<T: Readable>(
     argv: &[&str],
     flags: SpawnFlags,
     metadata: TaskMetadata,
-) -> Result<usize, ElfError> {
-    let this = this_state();
-    let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        this.cwd()
-    } else {
-        make_path!("ram", "")
-    };
-
-    let elf = Elf::new(reader)?;
-
-    let current = super::current();
-    let current_pid = current.pid;
-
-    let task = Task::from_elf(name, 0, current_pid, cwd, elf, argv, metadata)?;
-
-    if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        let mut state = task.state_mut().unwrap();
-
-        let TaskState::Alive { resources, .. } = &mut *state else {
-            unreachable!()
-        };
-
-        drop(this);
-        let mut this = this_state_mut();
-        let clone = this.clone_resources();
-        resources.overwrite_resources(clone);
-    }
-
-    let pid = super::add(task);
-    Ok(pid)
+) -> Result<usize, SpawnError> {
+    spawn_inner(name, flags, metadata, |name: Name, ppid, cwd| {
+        let elf = Elf::new(reader)?;
+        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, metadata)?;
+        Ok(task)
+    })
 }
 
 /// spawns an elf process from a path
@@ -183,7 +224,7 @@ pub fn pspawn(
     path: Path,
     argv: &[&str],
     flags: SpawnFlags,
-    mut metadata: Option<TaskMetadata>,
+    metadata: Option<TaskMetadata>,
 ) -> Result<usize, FSError> {
     let file = File::open(path)?;
 
@@ -191,15 +232,8 @@ pub fn pspawn(
         return Err(FSError::NotAFile);
     }
 
-    if metadata.is_some() && !flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        return Err(FSError::Other);
-    }
-
-    if metadata.is_none() && flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        metadata = Some(super::current().metadata_clone());
-    }
-    spawn(name, &file, argv, flags, metadata.unwrap_or_default())
-        .map_err(|_| FSError::NotExecuteable)
+    let metadata = metadata.unwrap_or_else(|| super::current().metadata_clone());
+    spawn(name, &file, argv, flags, metadata).map_err(|_| FSError::NotExecuteable)
 }
 
 /// also ensures the cwd ends with /

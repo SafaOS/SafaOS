@@ -79,6 +79,29 @@ impl TaskState {
         self.resource_manager_mut().unwrap().clone_resources()
     }
 
+    /// Clones only the resources in `resources` of `self`, panicks if self isn't alive
+    pub fn clone_specific_resources(
+        &mut self,
+        resources: &[usize],
+    ) -> Result<Vec<Mutex<Resource>>, ()> {
+        if resources.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let manager = self.resource_manager_mut().unwrap();
+        let biggest = resources.iter().max().copied().unwrap_or(0);
+        // ensures the results has the same ids as the resources
+        let mut results = Vec::with_capacity(biggest + 1);
+        results.resize_with(biggest + 1, || Mutex::new(Resource::Null));
+
+        for resource in resources {
+            let result = manager.clone_resource(*resource).ok_or(())?;
+            results[*resource] = result;
+        }
+
+        Ok(results)
+    }
+
     pub fn cwd_mut(&mut self) -> &mut PathBuf {
         match self {
             TaskState::Alive { cwd, .. } | TaskState::Zombie { cwd, .. } => cwd,
@@ -215,9 +238,9 @@ impl TaskState {
 
 #[derive(Clone, Copy, Default)]
 pub struct TaskMetadata {
-    stdout: Option<usize>,
-    stdin: Option<usize>,
-    stderr: Option<usize>,
+    pub stdout: Option<usize>,
+    pub stdin: Option<usize>,
+    pub stderr: Option<usize>,
 }
 
 impl TaskMetadata {
@@ -305,13 +328,11 @@ impl Task {
         name: Name,
         pid: Pid,
         ppid: Pid,
-        cwd: Path,
+        cwd: Box<PathBuf>,
         elf: Elf<T>,
         args: &[&str],
         metadata: TaskMetadata,
     ) -> Result<Self, ElfError> {
-        let cwd = Box::new(cwd.into_owned().unwrap());
-
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;

@@ -1,6 +1,6 @@
 pub mod expose;
 
-use core::fmt::Debug;
+use core::fmt::{Debug, Display};
 
 use crate::{
     debug,
@@ -107,9 +107,10 @@ impl Drop for FileDescriptor {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 #[repr(u8)]
 pub enum FSError {
+    InvaildResource,
     OperationNotSupported,
     NotAFile,
     NotADirectory,
@@ -125,13 +126,17 @@ pub enum FSError {
     InvaildCtlCmd,
     InvaildCtlArg,
     NotEnoughArguments,
-    Other,
+}
+
+impl Display for FSError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl IntoErr for FSError {
     fn into_err(self) -> ErrorStatus {
         match self {
-            Self::Other => ErrorStatus::Generic,
             Self::OperationNotSupported => ErrorStatus::OperationNotSupported,
             Self::NotAFile => ErrorStatus::NotAFile,
             Self::NotADirectory => ErrorStatus::NotADirectory,
@@ -144,6 +149,7 @@ impl IntoErr for FSError {
             Self::InvaildCtlCmd | Self::InvaildCtlArg => ErrorStatus::Generic,
             Self::InvaildName | Self::PathTooLong => ErrorStatus::StrTooLong,
             Self::NotEnoughArguments => ErrorStatus::NotEnoughArguments,
+            Self::InvaildResource => ErrorStatus::InvaildResource,
         }
     }
 }
@@ -201,6 +207,7 @@ impl<'a> CtlArgs<'a> {
 
 // InodeType implementition
 pub use safa_utils::abi::raw::io::InodeType;
+use thiserror::Error;
 
 pub trait InodeOps: Send + Sync {
     /// gets an Inode from self

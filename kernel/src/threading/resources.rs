@@ -104,6 +104,15 @@ impl ResourceManager {
             .map(|r| Mutex::new(r.get_mut().clone()))
             .collect()
     }
+
+    pub fn clone_resource(&mut self, ri: usize) -> Option<ResourceItem> {
+        if ri >= self.resources.len() {
+            return None;
+        }
+
+        Some(Mutex::new(self.resources[ri].get_mut().clone()))
+    }
+
     /// gets a reference to the resource with index `ri`
     /// returns `None` if `ri` is invaild
     fn get(&self, ri: usize) -> Option<MutexGuard<Resource>> {

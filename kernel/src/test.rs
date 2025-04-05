@@ -136,7 +136,7 @@ pub mod testing_module {
             Name::try_from("Tester").unwrap(),
             make_path!("sys", "bin/safa-tests"),
             &[],
-            SpawnFlags::CLONE_RESOURCES,
+            SpawnFlags::empty(),
             Some(TaskMetadata::new(stdio.fd(), stdio.fd(), stdio.fd())),
         )
         .unwrap();
