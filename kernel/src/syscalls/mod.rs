@@ -3,7 +3,6 @@ use safa_utils::abi::{self, raw};
 use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
-use crate::threading;
 use crate::threading::task::TaskMetadata;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
@@ -17,6 +16,7 @@ use crate::{
     utils::{errors::ErrorStatus, path::Path},
     VirtAddr,
 };
+use crate::{threading, time};
 
 impl SyscallFFI for FileRef {
     type Args = usize;
@@ -243,6 +243,10 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             // power
             SyscallTable::SysShutdown => Ok(power::shutdown()),
             SyscallTable::SysReboot => Ok(power::reboot()),
+            SyscallTable::SysUptime => Ok({
+                let dest_uptime = <&mut u64>::make(a as *mut u64)?;
+                *dest_uptime = time!();
+            }),
             #[allow(unreachable_patterns)]
             syscall => {
                 debug!(

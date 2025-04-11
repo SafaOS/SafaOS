@@ -34,6 +34,8 @@ pub enum SyscallTable {
 
     SysShutdown = 20,
     SysReboot = 21,
+    /// returns the Uptime of the system in milliseconds
+    SysUptime = 27,
 }
 
 impl SyscallTable {

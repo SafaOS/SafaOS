@@ -369,7 +369,7 @@ pub trait FileSystem: Send + Sync {
         Ok(current_inode)
     }
 
-    /// creates an empty file named `name` relative to Inode   
+    /// creates an empty file named `name` relative to Inode
     fn create(&self, node: Inode, name: &str) -> FSResult<()> {
         _ = node;
         _ = name;
@@ -426,7 +426,9 @@ impl VFS {
 
         let moment_memory_usage = frame_allocator::mapped_frames();
         let the_now = time!();
-
+        // temporary directory
+        let tempfs = RwLock::new(ramfs::RamFS::new());
+        this.mount(DriveName::new_const("tmp"), tempfs).unwrap();
         // ramfs
         let ramfs = RwLock::new(ramfs::RamFS::new());
         this.mount(DriveName::new_const("ram"), ramfs).unwrap();
