@@ -373,6 +373,7 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                     // Maybe we can make a const function or a macro for this
                     make_path!("sys", "bin/safa"),
                     &["-i"],
+                    &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
                     SpawnFlags::CLONE_RESOURCES,
                     None,
                 )

@@ -7,6 +7,7 @@ pub const RING0_STACK_END: usize = RING0_STACK_START + STACK_SIZE;
 
 pub const ENVIROMENT_START: usize = 0x00007E0000000000;
 pub const ARGV_START: usize = ENVIROMENT_START + 0xA000000000;
+pub const ENVIROMENT_VARIABLES_START: usize = ENVIROMENT_START + 0xE000000000;
 
 use core::{arch::global_asm, ptr::NonNull};
 
@@ -228,6 +229,7 @@ impl CPUStatus {
     pub unsafe fn create(
         page_table: &mut PhysPageTable,
         argv: &[&str],
+        env: &[&[u8]],
         entry_point: usize,
         userspace: bool,
     ) -> Result<Self, MapToError> {
@@ -245,19 +247,16 @@ impl CPUStatus {
             EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
         )?;
 
-        // // FIXME: dynamically size the argv area based on the length of the args
-        // // allocate the argv area
-        // page_table.alloc_map(
-        //     ARGV_START,
-        //     ARGV_END,
-        //     EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
-        // )?;
-
         let argc = argv.len();
+        let envc = env.len();
+
         let argv_ptr = map_argv(page_table, argv)?;
         let argv_ptr = argv_ptr
             .map(|p| p.as_ptr())
             .unwrap_or(core::ptr::null_mut());
+
+        let env_ptr = map_byte_slices(page_table, env, ENVIROMENT_VARIABLES_START)?;
+        let env_ptr = env_ptr.map(|p| p.as_ptr()).unwrap_or(core::ptr::null_mut());
 
         let (cs, ss, rflags) = if userspace {
             (
@@ -278,6 +277,8 @@ impl CPUStatus {
             rip: entry_point as u64,
             rdi: argc as u64,
             rsi: argv_ptr as u64,
+            rdx: envc as u64,
+            rcx: env_ptr as u64,
             cr3: page_table.phys_addr() as u64,
             rsp: STACK_END as u64,
             cs,

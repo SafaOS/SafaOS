@@ -66,6 +66,7 @@ pub fn main() -> ! {
             Name::try_from("TestRunner").unwrap(),
             crate::test::main,
             &[],
+            &[],
             SpawnFlags::CLONE_RESOURCES,
         )
         .unwrap();

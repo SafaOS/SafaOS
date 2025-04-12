@@ -47,22 +47,26 @@ pub struct SpawnConfig {
     pub argv: RawSliceMut<RawSlice<u8>>,
     pub flags: SpawnFlags,
     pub metadata: *const TaskMetadata,
+    pub env: RawSliceMut<RawSlice<u8>>,
 }
 
 impl SpawnConfig {
     pub fn new(
         name: &str,
         argv: *mut [&[u8]],
+        env: *mut [&[u8]],
         flags: SpawnFlags,
         metadata: Option<&TaskMetadata>,
     ) -> Self {
         let name = unsafe { RawSlice::from_slice(name.as_bytes()) };
         let argv = unsafe { RawSliceMut::from_slices(argv) };
+        let env = unsafe { RawSliceMut::from_slices(env) };
 
         Self {
             version: 1,
             name,
             argv,
+            env,
             flags,
             metadata: metadata
                 .map(|x| x as *const TaskMetadata)

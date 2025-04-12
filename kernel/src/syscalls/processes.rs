@@ -18,6 +18,7 @@ pub fn syspspawn(
     name: Option<&str>,
     path: Path,
     argv: &[&str],
+    env: &[&[u8]],
     flags: SpawnFlags,
     metadata: Option<TaskMetadata>,
     dest_pid: Option<&mut usize>,
@@ -31,7 +32,7 @@ pub fn syspspawn(
         }
     };
 
-    let results = threading::expose::pspawn(name, path, argv, flags, metadata)?;
+    let results = threading::expose::pspawn(name, path, argv, env, flags, metadata)?;
     if let Some(dest_pid) = dest_pid {
         *dest_pid = results;
     }

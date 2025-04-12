@@ -166,6 +166,28 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             // processes
             SyscallTable::SysPSpawn => {
                 #[inline(always)]
+                fn into_bytes_slice<'a>(
+                    args_raw: &RawSliceMut<RawSlice<u8>>,
+                ) -> Result<&'a [&'a [u8]], ErrorStatus> {
+                    if args_raw.len() == 0 {
+                        return Ok(&[]);
+                    }
+
+                    let raw_slice: &mut [RawSlice<u8>] =
+                        SyscallFFI::make((args_raw.as_mut_ptr(), args_raw.len()))?;
+                    // unsafely creates a muttable reference to `raw_slice`
+                    let double_slice: &mut [&[u8]] =
+                        unsafe { &mut *(raw_slice as *const _ as *mut [&[u8]]) };
+
+                    // maps every parent_slice[i] to &str
+                    for (i, item) in raw_slice.iter().enumerate() {
+                        double_slice[i] = <&[u8]>::make((item.as_ptr(), item.len()))?;
+                    }
+
+                    Ok(double_slice)
+                }
+
+                #[inline(always)]
                 /// converts slice of raw pointers to a slice of strs which is used by pspawn as
                 /// process arguments
                 fn into_args_slice<'a>(
@@ -191,10 +213,20 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
 
                 fn as_rust(
                     this: &raw::processes::SpawnConfig,
-                ) -> Result<(Option<&str>, &[&str], SpawnFlags, Option<TaskMetadata>), ErrorStatus>
-                {
+                ) -> Result<
+                    (
+                        Option<&str>,
+                        &[&str],
+                        &[&[u8]],
+                        SpawnFlags,
+                        Option<TaskMetadata>,
+                    ),
+                    ErrorStatus,
+                > {
                     let name = Option::<&str>::make((this.name.as_ptr(), this.name.len()))?;
                     let argv = into_args_slice(&this.argv)?;
+                    let env = into_bytes_slice(&this.env)?;
+
                     let metadata: Option<&abi::raw::processes::TaskMetadata> = if this.version >= 1
                     {
                         Option::make(this.metadata)?
@@ -205,6 +237,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                     Ok((
                         name,
                         argv,
+                        env,
                         this.flags.into(),
                         metadata.copied().map(Into::into),
                     ))
@@ -213,11 +246,11 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 let path = <Path>::make((a as *const u8, b))?;
 
                 let config = SyscallFFI::make(c as *const raw::processes::SpawnConfig)?;
-                let (name, argv, flags, metadata) = as_rust(config)?;
+                let (name, argv, env, flags, metadata) = as_rust(config)?;
 
                 let dest_pid = Option::make(d as *mut usize)?;
 
-                processes::syspspawn(name, path, argv, flags, metadata, dest_pid)
+                processes::syspspawn(name, path, argv, env, flags, metadata, dest_pid)
             }
             SyscallTable::SysMetaTake => {
                 let dest_metadata = <&mut abi::raw::processes::TaskMetadata>::make(

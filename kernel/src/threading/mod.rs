@@ -43,7 +43,8 @@ impl Scheduler {
         debug!(Scheduler, "initing ...");
         asm!("cli");
         let mut page_table = PhysPageTable::from_current();
-        let context = CPUStatus::create(&mut page_table, &[], function as usize, false).unwrap();
+        let context =
+            CPUStatus::create(&mut page_table, &[], &[], function as usize, false).unwrap();
         let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
         let task = Task::new(

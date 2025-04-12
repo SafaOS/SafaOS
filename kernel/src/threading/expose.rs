@@ -178,6 +178,7 @@ pub fn function_spawn(
     name: Name,
     function: fn() -> !,
     argv: &[&str],
+    env: &[&[u8]],
     flags: SpawnFlags,
 ) -> Result<usize, SpawnError> {
     spawn_inner(
@@ -187,7 +188,7 @@ pub fn function_spawn(
         |name: Name, pid, cwd| {
             let mut page_table = PhysPageTable::create()?;
             let context =
-                unsafe { CPUStatus::create(&mut page_table, argv, function as usize, false) }?;
+                unsafe { CPUStatus::create(&mut page_table, argv, env, function as usize, false) }?;
 
             let task = Task::new(
                 name,
@@ -208,12 +209,13 @@ pub fn spawn<T: Readable>(
     name: Name,
     reader: &T,
     argv: &[&str],
+    env: &[&[u8]],
     flags: SpawnFlags,
     metadata: TaskMetadata,
 ) -> Result<usize, SpawnError> {
     spawn_inner(name, flags, metadata, |name: Name, ppid, cwd| {
         let elf = Elf::new(reader)?;
-        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, metadata)?;
+        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, metadata)?;
         Ok(task)
     })
 }
@@ -223,6 +225,7 @@ pub fn pspawn(
     name: Name,
     path: Path,
     argv: &[&str],
+    env: &[&[u8]],
     flags: SpawnFlags,
     metadata: Option<TaskMetadata>,
 ) -> Result<usize, FSError> {
@@ -233,7 +236,7 @@ pub fn pspawn(
     }
 
     let metadata = metadata.unwrap_or_else(|| super::current().metadata_clone());
-    spawn(name, &file, argv, flags, metadata).map_err(|_| FSError::NotExecuteable)
+    spawn(name, &file, argv, env, flags, metadata).map_err(|_| FSError::NotExecuteable)
 }
 
 /// also ensures the cwd ends with /

@@ -331,13 +331,14 @@ impl Task {
         cwd: Box<PathBuf>,
         elf: Elf<T>,
         args: &[&str],
+        env: &[&[u8]],
         metadata: TaskMetadata,
     ) -> Result<Self, ElfError> {
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;
 
-        let context = unsafe { CPUStatus::create(&mut page_table, args, entry_point, true)? };
+        let context = unsafe { CPUStatus::create(&mut page_table, args, env, entry_point, true)? };
         Ok(Self::new(
             name, pid, ppid, cwd, page_table, context, data_break, metadata,
         ))

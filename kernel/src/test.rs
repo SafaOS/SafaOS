@@ -116,6 +116,7 @@ pub mod testing_module {
             Name::try_from("TEST_CASE").unwrap(),
             make_path!("sys", "/bin/true"),
             &[],
+            &[],
             SpawnFlags::empty(),
             None,
         )
@@ -135,6 +136,7 @@ pub mod testing_module {
         let pid = pspawn(
             Name::try_from("Tester").unwrap(),
             make_path!("sys", "bin/safa-tests"),
+            &[],
             &[],
             SpawnFlags::empty(),
             Some(TaskMetadata::new(stdio.fd(), stdio.fd(), stdio.fd())),
