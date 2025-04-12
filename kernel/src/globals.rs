@@ -15,5 +15,5 @@ lazy_static! {
     pub static ref RSDP_ADDR: usize = limine::rsdp_addr();
 }
 
-pub const KERNEL_CODE_NAME: &str = "Snowball";
-pub const KERNEL_CODE_VERSION: &str = "0.2.0";
+pub const KERNEL_CODE_NAME: &str = env!("CARGO_PKG_NAME");
+pub const KERNEL_CODE_VERSION: &str = env!("CARGO_PKG_VERSION");
