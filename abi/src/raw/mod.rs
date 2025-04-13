@@ -4,7 +4,7 @@ pub mod processes;
 use core::ptr::NonNull;
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 /// A C complitable slice of type `T`
 pub struct RawSlice<T> {
     ptr: *const T,
@@ -77,7 +77,7 @@ impl<T> RawSliceMut<RawSlice<T>> {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 /// A C complitable mutable slice of type `T`
 pub struct RawSliceMut<T> {
     ptr: *mut T,
@@ -85,7 +85,7 @@ pub struct RawSliceMut<T> {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct NonNullSlice<T> {
     ptr: NonNull<T>,
     len: usize,
