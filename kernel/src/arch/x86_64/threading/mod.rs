@@ -108,14 +108,14 @@ use safa_utils::abi::raw::RawSlice;
 fn map_byte_slices(
     page_table: &mut PhysPageTable,
     slices: &[&[u8]],
-    mut start_addr: usize,
+    map_start_addr: usize,
 ) -> Result<Option<NonNull<RawSlice<u8>>>, MapToError> {
     if slices.is_empty() {
         return Ok(None);
     }
 
     let mut allocated_bytes_remaining = 0;
-    let mut current_page = start_addr;
+    let mut current_page = map_start_addr;
 
     let mut map_next = |page_table: &mut PhysPageTable, allocated_bytes_remaining: &mut usize| {
         let results = page_table.map_to(
@@ -152,7 +152,7 @@ fn map_byte_slices(
 
     const USIZE_BYTES: usize = size_of::<usize>();
     map_if_not_enough!(8);
-
+    let mut start_addr = map_start_addr;
     // argc
     copy_to_userspace(page_table, start_addr, &slices.len().to_ne_bytes());
 
@@ -170,7 +170,7 @@ fn map_byte_slices(
 
     let mut start_addr = start_addr.next_multiple_of(USIZE_BYTES);
     let slices_addr = start_addr;
-    let mut current_slice_ptr = ARGV_START + USIZE_BYTES /* after argc */;
+    let mut current_slice_ptr = map_start_addr + USIZE_BYTES /* after argc */;
 
     for slice in slices {
         map_if_not_enough!(size_of::<RawSlice<u8>>());
