@@ -5,7 +5,7 @@ use core::ptr::NonNull;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// A C complitable slice of type `T`
+/// A C compatible slice of type `T`
 pub struct RawSlice<T> {
     ptr: *const T,
     len: usize,
@@ -33,6 +33,21 @@ impl<T> RawSlice<T> {
     pub fn as_ptr(&self) -> *const T {
         self.ptr
     }
+
+    /// Converts a [`RawSlice<T>`] into a slice of type `T`
+    ///
+    /// returns `None` if the slice ptr is null or the length is zero
+    /// # Safety
+    ///
+    /// panics if the slice ptr is not aligned to the alignment of `T`
+    #[inline(always)]
+    pub unsafe fn into_slice<'a>(self) -> Option<&'a [T]> {
+        if self.ptr.is_null() || self.len == 0 {
+            None
+        } else {
+            Some(core::slice::from_raw_parts(self.ptr, self.len))
+        }
+    }
 }
 
 impl<T> RawSliceMut<T> {
@@ -54,6 +69,21 @@ impl<T> RawSliceMut<T> {
     #[inline(always)]
     pub fn as_mut_ptr(&self) -> *mut T {
         self.ptr
+    }
+
+    /// Converts a [`RawSliceMut<T>`] into a slice of type `T`
+    ///
+    /// returns `None` if the slice ptr is null or the length is zero
+    /// # Safety
+    ///
+    /// panics if the slice ptr is not aligned to the alignment of `T`
+    #[inline(always)]
+    pub unsafe fn into_slice_mut<'a>(self) -> Option<&'a mut [T]> {
+        if self.ptr.is_null() || self.len == 0 {
+            None
+        } else {
+            Some(core::slice::from_raw_parts_mut(self.ptr, self.len))
+        }
     }
 }
 
@@ -94,6 +124,26 @@ pub struct NonNullSlice<T> {
 impl<T> NonNullSlice<T> {
     pub const unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize) -> Self {
         Self { ptr, len }
+    }
+
+    pub const fn as_non_null(&self) -> NonNull<T> {
+        self.ptr
+    }
+
+    pub const fn as_ptr(&self) -> *mut T {
+        self.ptr.as_ptr()
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Converts a [`NonNullSlice<T>`] into a slice of type `T`
+    /// # Safety
+    /// panics if the slice ptr is not aligned to the alignment of `T`
+    #[inline(always)]
+    pub unsafe fn into_slice_mut<'a>(self) -> &'a mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 }
 
