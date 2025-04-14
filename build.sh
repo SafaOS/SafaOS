@@ -19,7 +19,7 @@ function build_ramdisk {
     RAMDISK_INCLUDE=(*)
     cd ..
 
-    
+
     # Add all the files in the ramdisk-include directory to the ramdisk root
     for i in "${RAMDISK_INCLUDE[@]}"
     do
@@ -29,7 +29,7 @@ function build_ramdisk {
     RAMDISK=("${RAMDISK[@]}" "${RAMDISK_BUILTIN[@]}")
 
     set -- "${RAMDISK[@]}"
-    
+
     # temporary ramdisk root
     mkdir -pv $ISO_BUILD_DIR/boot/ramdisk
 
@@ -78,10 +78,10 @@ function cargo_build_safaos {
     CWD=$(pwd)
     AT=$1
     ARGS="${@:2}"
-    
+
     cd "$AT"
 
-    cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
+    cargo $RUSTC_TOOLCHAIN build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
 }
 
 function build_programs {
