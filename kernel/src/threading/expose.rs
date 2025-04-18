@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::{
-    task::{Task, TaskInfo, TaskMetadata, TaskState},
+    task::{Task, TaskInfo, TaskMetadata},
     this_state, this_state_mut, Pid,
 };
 
@@ -128,12 +128,8 @@ fn spawn_inner(
 
     let provide_resources = || {
         let mut state = task.state_mut().unwrap();
-        let TaskState::Alive {
-            resources: task_resources,
-            ..
-        } = &mut *state
-        else {
-            unreachable!()
+        let Some(task_resources) = state.resource_manager_mut() else {
+            unreachable!();
         };
 
         drop(this);
