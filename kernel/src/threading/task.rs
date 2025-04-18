@@ -154,7 +154,7 @@ impl AliveTask {
             }
         }
 
-        if is_negative {
+        if is_negative && amount >= usable_bytes {
             self.data_break -= amount;
         } else {
             self.data_break += amount;
