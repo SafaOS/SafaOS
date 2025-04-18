@@ -150,9 +150,7 @@ pub struct PageTable {
 
 impl PageTable {
     pub fn zeroize(&mut self) {
-        for entry in &mut self.entries {
-            entry.0 = 0;
-        }
+        self.entries.fill(const { unsafe { core::mem::zeroed() } });
     }
 
     /// copies the higher half entries of the current pml4 to this page table
@@ -163,8 +161,6 @@ impl PageTable {
         }
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    /// unsafe because self becomes almost invaild after use, the entries are not invalidated
-    /// meaning you can still use virtual addresses from the page table but using them will cause UB
     pub unsafe fn free(&mut self, level: u8) {
         for entry in &mut self.entries[0..HIGHER_HALF_ENTRY] {
             if entry.0 != 0 {
