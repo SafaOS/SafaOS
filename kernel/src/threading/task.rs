@@ -140,7 +140,7 @@ impl AliveTask {
         let is_negative = amount.is_negative();
         let amount = amount.unsigned_abs();
 
-        if usable_bytes < amount && !is_negative {
+        if (usable_bytes < amount) || (is_negative) {
             let pages = crate::memory::align_up(amount - usable_bytes, PAGE_SIZE) / PAGE_SIZE;
 
             let func = if is_negative {

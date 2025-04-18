@@ -74,6 +74,7 @@ pub fn main() -> ! {
 
     loop {
         one_shot();
+        core::hint::spin_loop();
     }
 }
 
