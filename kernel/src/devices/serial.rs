@@ -3,7 +3,7 @@ use core::fmt::Write;
 use crate::{
     arch::serial::Serial,
     drivers::vfs::{FSError, FSResult},
-    threading::expose::thread_yeild,
+    threading::expose::thread_yield,
     utils::Locked,
 };
 
@@ -26,7 +26,7 @@ impl CharDevice for Locked<Serial> {
                     writer.write_str(str).unwrap();
                     return Ok(buffer.len());
                 }
-                None => thread_yeild(),
+                None => thread_yield(),
             }
         }
     }

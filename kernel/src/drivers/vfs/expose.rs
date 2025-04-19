@@ -112,7 +112,7 @@ impl Drop for File {
 impl Readable for File {
     fn read(&self, offset: isize, buf: &mut [u8]) -> Result<usize, IoError> {
         self.read(offset, buf).map_err(|e| match e {
-            FSError::InvaildOffset => IoError::InvaildOffset,
+            FSError::InvalidOffset => IoError::InvalidOffset,
             _ => IoError::Generic,
         })
     }

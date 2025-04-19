@@ -6,7 +6,7 @@ use spin::RwLock;
 use crate::{
     drivers::vfs::{CtlArgs, FSError, FSResult},
     terminal::{TTYInterface, TTYSettings, TTY},
-    threading::expose::thread_yeild,
+    threading::expose::thread_yield,
     utils::bstr::BStr,
 };
 
@@ -46,7 +46,7 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
                 tty.enable_input();
             }
 
-            thread_yeild();
+            thread_yield();
         }
     }
 
@@ -60,13 +60,13 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
                     tty.write_bstr(str);
                     return Ok(buffer.len());
                 }
-                None => thread_yeild(),
+                None => thread_yield(),
             }
         }
     }
 
     fn ctl(&self, cmd: u16, mut args: CtlArgs) -> FSResult<()> {
-        let cmd = TTYCtlCmd::try_from(cmd).map_err(|_| FSError::InvaildCtlCmd)?;
+        let cmd = TTYCtlCmd::try_from(cmd).map_err(|_| FSError::InvalidCtlCmd)?;
         match cmd {
             TTYCtlCmd::GetFlags => {
                 let flags = args.get_ref_to::<TTYSettings>()?;
@@ -75,7 +75,7 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
             }
             TTYCtlCmd::SetFlags => {
                 let flags: TTYSettings =
-                    TTYSettings::from_bits(args.get_ty()?).ok_or(FSError::InvaildCtlArg)?;
+                    TTYSettings::from_bits(args.get_ty()?).ok_or(FSError::InvalidCtlArg)?;
                 self.write().settings = flags;
                 Ok(())
             }
@@ -88,7 +88,7 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
                     writer.sync();
                     return Ok(());
                 }
-                None => thread_yeild(),
+                None => thread_yield(),
             }
         }
     }
