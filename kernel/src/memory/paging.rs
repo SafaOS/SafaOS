@@ -162,7 +162,15 @@ impl PageTable {
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
     pub unsafe fn free(&mut self, level: u8) {
-        for entry in &mut self.entries[0..HIGHER_HALF_ENTRY] {
+        // if the table is the pml4 we need not to free the higher half
+        // because it is shared with other tables
+        let last_entry = if level >= 4 {
+            HIGHER_HALF_ENTRY
+        } else {
+            ENTRY_COUNT
+        };
+
+        for entry in &mut self.entries[0..last_entry] {
             if entry.0 != 0 {
                 entry.free(level - 1);
             }
