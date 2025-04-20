@@ -23,6 +23,7 @@ function build_ramdisk {
     # Add all the files in the ramdisk-include directory to the ramdisk root
     for i in "${RAMDISK_INCLUDE[@]}"
     do
+	echo "$i: ramdisk-include/$i"
         RAMDISK+=("ramdisk-include/$i" "$i")
     done
 
@@ -35,8 +36,9 @@ function build_ramdisk {
 
     while [ ! -z  "$1" ] ; do
         O_PATH="$ISO_BUILD_DIR/boot/ramdisk/$2"
-        mkdir -pv $(dirname $O_PATH)
-        cp -rv "$1" "$O_PATH"
+        DIR=$(dirname $O_PATH)
+        mkdir -pv $DIR
+        cp -Trv "$1" $O_PATH
         shift 2
     done
 
