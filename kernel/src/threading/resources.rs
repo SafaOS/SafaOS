@@ -5,7 +5,7 @@ use spin::{Mutex, MutexGuard};
 
 use crate::drivers::vfs::{DirIterDescriptor, FileDescriptor};
 
-use super::expose::thread_yeild;
+use super::expose::thread_yield;
 
 #[derive(Clone)]
 pub enum Resource {
@@ -80,7 +80,7 @@ impl ResourceManager {
                 break;
             }
 
-            thread_yeild();
+            thread_yield();
         }
 
         if ri < self.next_ri {
@@ -114,7 +114,7 @@ impl ResourceManager {
     }
 
     /// gets a reference to the resource with index `ri`
-    /// returns `None` if `ri` is invaild
+    /// returns `None` if `ri` is invalid
     fn get(&self, ri: usize) -> Option<MutexGuard<Resource>> {
         if ri >= self.resources.len() {
             return None;

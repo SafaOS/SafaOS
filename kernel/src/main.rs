@@ -25,6 +25,7 @@ mod threading;
 mod utils;
 
 extern crate alloc;
+use alloc::string::String;
 use arch::x86_64::serial;
 
 use drivers::keyboard::keys::Key;
@@ -140,7 +141,11 @@ fn print_stack_trace() {
 
             let name = {
                 let sym = KERNEL_ELF.sym_from_value_range(return_address);
-                sym.map(|sym| KERNEL_ELF.string_table_index(sym.name_index).unwrap())
+                sym.map(|sym| {
+                    KERNEL_ELF
+                        .string_table_index(sym.name_index)
+                        .unwrap_or(String::from("??"))
+                })
             };
             let name = name.as_deref().unwrap_or("???");
 

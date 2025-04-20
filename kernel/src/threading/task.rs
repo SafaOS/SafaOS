@@ -1,12 +1,12 @@
 use core::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize},
 };
 
 use crate::utils::types::Name;
 use alloc::{boxed::Box, vec::Vec};
-use safa_utils::abi;
+use safa_utils::abi::raw::processes::AbiStructures;
 use serde::Serialize;
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -165,7 +165,7 @@ impl AliveTask {
 
     /// Makes `self` a zombie
     /// # Safety
-    ///  unsafe because `self` becomes invaild after this call
+    ///  unsafe because `self` becomes invalid after this call
     unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask {
         let root_page_table = ManuallyDrop::take(&mut self.root_page_table);
         eve::add_cleanup(root_page_table);
@@ -247,103 +247,8 @@ impl TaskState {
         self.alive_mut().unwrap().cwd_mut()
     }
 
-    // fn page_extend_data(&mut self) -> Option<VirtAddr> {
-    // match self {
-    //     TaskState::Alive {
-    //         data_start,
-    //         data_pages,
-    //         root_page_table,
-    //         ..
-    //     } => {
-    //         use crate::memory::paging::EntryFlags;
-
-    //         let page_end = *data_start + PAGE_SIZE * *data_pages;
-    //         let new_page = Page::containing_address(page_end);
-
-    //         let frame = frame_allocator::allocate_frame()?;
-
-    //         root_page_table
-    //             .map_to(
-    //                 new_page,
-    //                 frame,
-    //                 EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
-    //             )
-    //             .ok()?;
-
-    //         let addr = frame.virt_addr();
-    //         let ptr = addr as *mut u8;
-    //         let slice = unsafe { core::slice::from_raw_parts_mut(ptr, PAGE_SIZE) };
-
-    //         slice.fill(0xAA);
-    //         *data_pages += 1;
-    //         Some(addr)
-    //     }
-    //     TaskState::Zombie { .. } => None,
-    // }
-    // }
-
-    // fn page_unextend_data(&mut self) -> Option<VirtAddr> {
-    // match self {
-    //     TaskState::Alive {
-    //         data_start,
-    //         data_pages,
-    //         root_page_table,
-    //         ..
-    //     } => {
-    //         if *data_pages == 0 {
-    //             return Some(*data_start);
-    //         }
-
-    //         let page_end = *data_start + PAGE_SIZE * *data_pages;
-
-    //         let page = Page::containing_address(page_end - PAGE_SIZE);
-    //         root_page_table.unmap(page);
-
-    //         *data_pages -= 1;
-    //         Some(page_end - PAGE_SIZE)
-    //     }
-    //     TaskState::Zombie { .. } => None,
-    // }
-    // }
-
     pub fn extend_data_by(&mut self, amount: isize) -> Option<*mut u8> {
         self.alive_mut().unwrap().extend_data_by(amount)
-        // match self {
-        //     TaskState::Alive {
-        //         data_break,
-        //         data_start,
-        //         data_pages,
-        //         ..
-        //     } => {
-        //         let actual_data_break = *data_start + PAGE_SIZE * *data_pages;
-        //         let usable_bytes = actual_data_break - *data_break;
-        //         let is_negative = amount.is_negative();
-        //         let amount = amount.unsigned_abs();
-
-        //         if usable_bytes < amount && !is_negative {
-        //             let pages = crate::memory::align_up(amount, PAGE_SIZE) / PAGE_SIZE;
-
-        //             let func = if is_negative {
-        //                 Self::page_unextend_data
-        //             } else {
-        //                 Self::page_extend_data
-        //             };
-
-        //             for _ in 0..pages {
-        //                 func(self)?;
-        //             }
-        //         }
-
-        //         if is_negative {
-        //             *data_break -= amount;
-        //         } else {
-        //             *data_break += amount;
-        //         }
-
-        //         Some(*data_break as *mut u8)
-        //     }
-        //     TaskState::Zombie { .. } => None,
-        // }
     }
 
     pub fn die(&mut self, exit_code: usize, killed_by: Pid) {
@@ -352,74 +257,12 @@ impl TaskState {
         };
 
         *self = TaskState::Zombie(unsafe { alive.die_mut(exit_code, killed_by) });
-        // match self {
-        //     TaskState::Alive {
-        //         cwd,
-        //         data_start,
-        //         data_break,
-        //         resources,
-        //         root_page_table,
-        //         ..
-        //     } => {
-        //         let last_resource_id = resources.next_ri();
-
-        //         let root_page_table = unsafe { ManuallyDrop::take(root_page_table) };
-        //         eve::add_cleanup(root_page_table);
-
-        //         *self = TaskState::Zombie {
-        //             exit_code,
-        //             killed_by,
-        //             data_start: *data_start,
-        //             data_break: *data_break,
-        //             last_resource_id,
-        //             cwd: core::mem::take(cwd),
-        //         };
-        //     }
-        //     TaskState::Zombie { .. } => {}
-        // }
     }
     /// gets the exit code of the task
     /// returns `None` if the task is alive
     /// returns `Some(exit_code)` if the task is zombie
     pub fn exit_code(&self) -> Option<usize> {
         self.zombie().map(|zombie| zombie.exit_code)
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-pub struct TaskMetadata {
-    pub stdout: Option<usize>,
-    pub stdin: Option<usize>,
-    pub stderr: Option<usize>,
-}
-
-impl TaskMetadata {
-    pub fn new(stdout: usize, stdin: usize, stderr: usize) -> Self {
-        Self {
-            stdout: Some(stdout),
-            stdin: Some(stdin),
-            stderr: Some(stderr),
-        }
-    }
-}
-
-impl From<TaskMetadata> for abi::raw::processes::TaskMetadata {
-    fn from(metadata: TaskMetadata) -> Self {
-        Self {
-            stdout: metadata.stdout.into(),
-            stdin: metadata.stdin.into(),
-            stderr: metadata.stderr.into(),
-        }
-    }
-}
-
-impl From<abi::raw::processes::TaskMetadata> for TaskMetadata {
-    fn from(metadata: abi::raw::processes::TaskMetadata) -> Self {
-        Self {
-            stdout: metadata.stdout.into(),
-            stdin: metadata.stdin.into(),
-            stderr: metadata.stderr.into(),
-        }
     }
 }
 
@@ -432,9 +275,6 @@ pub struct Task {
     name: Name,
     /// context must only be changed by the scheduler, so it is not protected by a lock
     context: UnsafeCell<CPUStatus>,
-    /// metadata are available once then never again, the `SysMetaTake` syscall will take ownership of it
-    metadata: UnsafeCell<TaskMetadata>,
-    metadata_available: AtomicBool,
     is_alive: AtomicBool,
 }
 
@@ -450,7 +290,6 @@ impl Task {
         root_page_table: PhysPageTable,
         context: CPUStatus,
         data_break: VirtAddr,
-        metadata: TaskMetadata,
     ) -> Self {
         let data_break = align_up(data_break, PAGE_SIZE);
 
@@ -460,8 +299,6 @@ impl Task {
             ppid: AtomicUsize::new(ppid),
             is_alive: AtomicBool::new(true),
             context: UnsafeCell::new(context),
-            metadata: UnsafeCell::new(metadata),
-            metadata_available: AtomicBool::new(true),
             state: RwLock::new(TaskState::Alive(AliveTask {
                 root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
@@ -482,37 +319,18 @@ impl Task {
         elf: Elf<T>,
         args: &[&str],
         env: &[&[u8]],
-        metadata: TaskMetadata,
+        structures: AbiStructures,
     ) -> Result<Self, ElfError> {
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;
 
-        let context = unsafe { CPUStatus::create(&mut page_table, args, env, entry_point, true)? };
+        let context = unsafe {
+            CPUStatus::create(&mut page_table, args, env, structures, entry_point, true)?
+        };
         Ok(Self::new(
-            name, pid, ppid, cwd, page_table, context, data_break, metadata,
+            name, pid, ppid, cwd, page_table, context, data_break,
         ))
-    }
-
-    #[inline(always)]
-    pub fn metadata_clone(&self) -> TaskMetadata {
-        unsafe { (*self.metadata.get()).clone() }
-    }
-
-    pub unsafe fn set_metadata(&self, metadata: TaskMetadata) {
-        *self.metadata.get() = metadata;
-    }
-
-    pub fn metadata(&self) -> Option<TaskMetadata> {
-        if self
-            .metadata_available
-            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            Some(self.metadata_clone())
-        } else {
-            None
-        }
     }
 
     pub fn name(&self) -> &Name {

@@ -7,7 +7,11 @@ use crate::{
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
-use safa_utils::{abi::raw, make_path, path::PathBuf};
+use safa_utils::{
+    abi::raw::{self, processes::AbiStructures},
+    make_path,
+    path::PathBuf,
+};
 use thiserror::Error;
 
 use crate::{
@@ -22,7 +26,7 @@ use crate::{
 };
 
 use super::{
-    task::{Task, TaskInfo, TaskMetadata},
+    task::{Task, TaskInfo},
     this_state, this_state_mut, Pid,
 };
 
@@ -41,7 +45,7 @@ pub fn thread_exit(code: usize) -> ! {
 }
 
 #[no_mangle]
-pub fn thread_yeild() {
+pub fn thread_yield() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
         asm!("int 0x20")
@@ -54,7 +58,7 @@ pub fn thread_yeild() {
 pub fn wait(pid: usize) -> usize {
     // loops through the processes until it finds the process with `pid` as a zombie
     loop {
-        // cycles through the processes one by one untils it finds the process with `pid`
+        // cycles through the processes one by one until it finds the process with `pid`
         // returns the exit code of the process if it's a zombie and cleans it up
         // if it's not a zombie it will be caught by the next above loop
         let found = super::find(|process| process.pid == pid);
@@ -67,7 +71,7 @@ pub fn wait(pid: usize) -> usize {
                 exit_code
             }
             Some(None) => {
-                thread_yeild();
+                thread_yield();
                 continue;
             }
             None => 0,
@@ -110,7 +114,7 @@ pub enum SpawnError {
 fn spawn_inner(
     name: Name,
     flags: SpawnFlags,
-    metadata: TaskMetadata,
+    structures: AbiStructures,
     create_task: impl FnOnce(Name, usize, Box<PathBuf>) -> Result<Task, SpawnError>,
 ) -> Result<usize, SpawnError> {
     let this = this_state();
@@ -138,17 +142,17 @@ fn spawn_inner(
         let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
             this.clone_resources()
         } else {
-            // clone only necassary resources
+            // clone only necessary resources
             let mut resources = heapless::Vec::<usize, 3>::new();
-            if let Some(stdin) = metadata.stdin {
+            if let Some(stdin) = structures.stdio.stdin.into() {
                 _ = resources.push(stdin);
             }
 
-            if let Some(stdout) = metadata.stdout {
+            if let Some(stdout) = structures.stdio.stdout.into() {
                 _ = resources.push(stdout);
             }
 
-            if let Some(stderr) = metadata.stderr {
+            if let Some(stderr) = structures.stdio.stderr.into() {
                 _ = resources.push(stderr);
             }
 
@@ -162,7 +166,7 @@ fn spawn_inner(
         Ok(())
     };
 
-    provide_resources().map_err(|()| FSError::InvaildResource)?;
+    provide_resources().map_err(|()| FSError::InvalidResource)?;
 
     let pid = super::add(task);
     Ok(pid)
@@ -176,29 +180,24 @@ pub fn function_spawn(
     argv: &[&str],
     env: &[&[u8]],
     flags: SpawnFlags,
+    structures: AbiStructures,
 ) -> Result<usize, SpawnError> {
-    spawn_inner(
-        name,
-        flags,
-        TaskMetadata::default(),
-        |name: Name, pid, cwd| {
-            let mut page_table = PhysPageTable::create()?;
-            let context =
-                unsafe { CPUStatus::create(&mut page_table, argv, env, function as usize, false) }?;
+    spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
+        let mut page_table = PhysPageTable::create()?;
+        let context = unsafe {
+            CPUStatus::create(
+                &mut page_table,
+                argv,
+                env,
+                structures,
+                function as usize,
+                false,
+            )
+        }?;
 
-            let task = Task::new(
-                name,
-                pid,
-                0,
-                cwd,
-                page_table,
-                context,
-                0,
-                TaskMetadata::default(),
-            );
-            Ok(task)
-        },
-    )
+        let task = Task::new(name, 0, ppid, cwd, page_table, context, 0);
+        Ok(task)
+    })
 }
 
 pub fn spawn<T: Readable>(
@@ -207,11 +206,11 @@ pub fn spawn<T: Readable>(
     argv: &[&str],
     env: &[&[u8]],
     flags: SpawnFlags,
-    metadata: TaskMetadata,
+    structures: AbiStructures,
 ) -> Result<usize, SpawnError> {
-    spawn_inner(name, flags, metadata, |name: Name, ppid, cwd| {
+    spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let elf = Elf::new(reader)?;
-        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, metadata)?;
+        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, structures)?;
         Ok(task)
     })
 }
@@ -223,7 +222,7 @@ pub fn pspawn(
     argv: &[&str],
     env: &[&[u8]],
     flags: SpawnFlags,
-    metadata: Option<TaskMetadata>,
+    structures: AbiStructures,
 ) -> Result<usize, FSError> {
     let file = File::open(path)?;
 
@@ -231,8 +230,7 @@ pub fn pspawn(
         return Err(FSError::NotAFile);
     }
 
-    let metadata = metadata.unwrap_or_else(|| super::current().metadata_clone());
-    spawn(name, &file, argv, env, flags, metadata).map_err(|_| FSError::NotExecuteable)
+    spawn(name, &file, argv, env, flags, structures).map_err(|_| FSError::NotExecutable)
 }
 
 /// also ensures the cwd ends with /
@@ -317,10 +315,4 @@ pub fn sbrk(amount: isize) -> Result<*mut u8, ErrorStatus> {
     let current = super::current();
     let mut state = current.state_mut().unwrap();
     state.extend_data_by(amount).ok_or(ErrorStatus::OutOfMemory)
-}
-
-#[inline(always)]
-/// Takes ownership of the current task metadata or returns None if it was already taken
-pub fn metadata_take() -> Option<TaskMetadata> {
-    super::current().metadata()
 }

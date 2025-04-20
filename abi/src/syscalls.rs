@@ -1,4 +1,5 @@
 /// defines Syscall numbers
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum SyscallTable {

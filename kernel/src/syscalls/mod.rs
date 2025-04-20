@@ -1,9 +1,10 @@
+use safa_utils::abi::raw::processes::TaskStdio;
 use safa_utils::abi::raw::{RawSlice, RawSliceMut};
 use safa_utils::abi::{self, raw};
 use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
-use crate::threading::task::TaskMetadata;
+use crate::time;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
@@ -16,33 +17,32 @@ use crate::{
     utils::{errors::ErrorStatus, path::Path},
     VirtAddr,
 };
-use crate::{threading, time};
 
 impl SyscallFFI for FileRef {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        FileRef::get(args).ok_or(ErrorStatus::InvaildResource)
+        FileRef::get(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 
 impl SyscallFFI for File {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        File::from_fd(args).ok_or(ErrorStatus::InvaildResource)
+        File::from_fd(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 
 impl SyscallFFI for DirIterRef {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIterRef::get(args).ok_or(ErrorStatus::InvaildResource)
+        DirIterRef::get(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 
 impl SyscallFFI for DirIter {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIter::from_ri(args).ok_or(ErrorStatus::InvaildResource)
+        DirIter::from_ri(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 mod io;
@@ -64,7 +64,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
         d: usize,
         e: usize,
     ) -> Result<(), ErrorStatus> {
-        let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvaildSyscall)?;
+        let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvalidSyscall)?;
         match syscall {
             // utils
             SyscallTable::SysExit => utils::sysexit(a),
@@ -219,7 +219,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                         &[&str],
                         &[&[u8]],
                         SpawnFlags,
-                        Option<TaskMetadata>,
+                        Option<TaskStdio>,
                     ),
                     ErrorStatus,
                 > {
@@ -227,9 +227,8 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                     let argv = into_args_slice(&this.argv)?;
                     let env = into_bytes_slice(&this.env)?;
 
-                    let metadata: Option<&abi::raw::processes::TaskMetadata> = if this.version >= 1
-                    {
-                        Option::make(this.metadata)?
+                    let stdio: Option<&abi::raw::processes::TaskStdio> = if this.version >= 1 {
+                        Option::make(this.stdio)?
                     } else {
                         None
                     };
@@ -239,7 +238,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                         argv,
                         env,
                         this.flags.into(),
-                        metadata.copied().map(Into::into),
+                        stdio.copied().map(Into::into),
                     ))
                 }
 
@@ -251,16 +250,6 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 let dest_pid = Option::make(d as *mut usize)?;
 
                 processes::syspspawn(name, path, argv, env, flags, metadata, dest_pid)
-            }
-            SyscallTable::SysMetaTake => {
-                let dest_metadata = <&mut abi::raw::processes::TaskMetadata>::make(
-                    a as *mut abi::raw::processes::TaskMetadata,
-                )?;
-
-                *dest_metadata = threading::expose::metadata_take()
-                    .ok_or(ErrorStatus::Generic)?
-                    .into();
-                Ok(())
             }
             SyscallTable::SysCtl => {
                 let fd = FileRef::make(a)?;
@@ -292,7 +281,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                     c,
                     d
                 );
-                Err(ErrorStatus::InvaildSyscall)
+                Err(ErrorStatus::InvalidSyscall)
             }
         }
     }

@@ -277,10 +277,11 @@ static MEMORY_INFO_CAPTURE: MemoryInfoCapture = MemoryInfoCapture::new();
 fn main() {
     // makes sure panic uses the custom println
     std::panic::set_hook(Box::new(panic_hook));
-    // DON'T REMOVE! MAKES SURE SERIAL IS FD 0
     log!("Running {} tests", TEST_LIST.len());
+
     for test in TEST_LIST {
         test.execute();
     }
+
     log!("Done running all tests");
 }

@@ -2,15 +2,14 @@
 //! it is responsible for managing a few things related to it's children
 
 use crate::{
-    debug,
-    drivers::vfs,
-    memory::paging::PhysPageTable,
-    serial,
-    threading::{self, expose::thread_yeild, task::TaskMetadata},
+    debug, drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield,
 };
 use alloc::vec::Vec;
-use safa_utils::make_path;
-use spin::Mutex;
+use safa_utils::{
+    abi::raw::processes::{AbiStructures, TaskStdio},
+    make_path,
+};
+use spin::{Lazy, Mutex};
 
 pub struct Eve {
     clean_up_list: Vec<PhysPageTable>,
@@ -34,28 +33,28 @@ fn one_shot() -> Option<PhysPageTable> {
     loop {
         match EVE.try_lock() {
             Some(mut eve) => return eve.clean_up_list.pop(),
-            None => thread_yeild(),
+            None => thread_yield(),
         }
     }
 }
+
+pub static KERNEL_STDIO: Lazy<TaskStdio> = Lazy::new(|| {
+    let stdin = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
+    let stdout = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
+    let stderr = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
+    TaskStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
+});
+
+pub static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructures {
+    stdio: *KERNEL_STDIO,
+});
 
 /// the main loop of Eve
 /// it will run until doomsday
 pub fn main() -> ! {
     debug!(Eve, "Eve has been awaken ...");
     // TODO: make a macro or a const function to do this automatically
-    let stdin = vfs::expose::File::open(make_path!("dev", "tty")).unwrap();
-    let stdout = vfs::expose::File::open(make_path!("dev", "tty")).unwrap();
-    let stderr = vfs::expose::File::open(make_path!("dev", "tty")).unwrap();
-    serial!(
-        "Hello, world!, running tests... stdin: {:?}, stdout: {:?}, stderr: {:?}\n",
-        stdin,
-        stdout,
-        stderr
-    );
-
-    let metadata = TaskMetadata::new(stdout.fd(), stdin.fd(), stderr.fd());
-    unsafe { threading::current().set_metadata(metadata) };
+    serial!("Hello, world!, running tests...\n",);
 
     #[cfg(feature = "test")]
     {
@@ -68,6 +67,7 @@ pub fn main() -> ! {
             &[],
             &[],
             SpawnFlags::CLONE_RESOURCES,
+            *KERNEL_ABI_STRUCTURES,
         )
         .unwrap();
     }
@@ -87,7 +87,7 @@ pub fn add_cleanup(page_table: PhysPageTable) {
                 return;
             }
             None => {
-                thread_yeild();
+                thread_yield();
             }
         }
     }

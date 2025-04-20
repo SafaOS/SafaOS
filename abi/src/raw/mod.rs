@@ -90,7 +90,7 @@ impl<T> RawSliceMut<T> {
 impl<T> RawSliceMut<RawSlice<T>> {
     /// Converts a slice of slices of [`T`] into [`RawSliceMut<RawSlice<T>>`]
     /// # Safety
-    /// `slices` becomes invaild after use
+    /// `slices` becomes invalid after use
     /// as it is going to be reused as a memory location for creating `Self`
     /// making this unexpensive but dangerous
     /// O(N) expect if the Layout of RawSlice is equal to the Layout of rust slices, and it has been optimized it is O(1)
@@ -153,6 +153,12 @@ impl<T> NonNullSlice<T> {
 pub enum Optional<T> {
     None,
     Some(T),
+}
+
+impl<T> Default for Optional<T> {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 impl<T> From<Option<T>> for Optional<T> {

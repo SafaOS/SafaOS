@@ -2,15 +2,24 @@ use core::ops::BitOr;
 
 use super::{Optional, RawSlice, RawSliceMut};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-pub struct TaskMetadata {
+/// ABI structures are structures that are passed to tasks by the parent task
+/// for now only stdio file descriptors are passed
+/// you get a pointer to them in the `r8` register at _start (the 5th argument)
+pub struct AbiStructures {
+    pub stdio: TaskStdio,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct TaskStdio {
     pub stdout: Optional<usize>,
     pub stdin: Optional<usize>,
     pub stderr: Optional<usize>,
 }
 
-impl TaskMetadata {
+impl TaskStdio {
     pub fn new(stdout: Option<usize>, stdin: Option<usize>, stderr: Option<usize>) -> Self {
         Self {
             stdout: stdout.into(),
@@ -41,12 +50,12 @@ impl BitOr for SpawnFlags {
 #[repr(C)]
 pub struct SpawnConfig {
     /// config version for compatibility
-    /// added in kernel version 0.2.1 and therfore breaking compatibility with any program compiled for version below 0.2.1
+    /// added in kernel version 0.2.1 and therefore breaking compatibility with any program compiled for version below 0.2.1
     pub version: u8,
     pub name: RawSlice<u8>,
     pub argv: RawSliceMut<RawSlice<u8>>,
     pub flags: SpawnFlags,
-    pub metadata: *const TaskMetadata,
+    pub stdio: *const TaskStdio,
     pub env: RawSliceMut<RawSlice<u8>>,
 }
 
@@ -56,7 +65,7 @@ impl SpawnConfig {
         argv: *mut [&[u8]],
         env: *mut [&[u8]],
         flags: SpawnFlags,
-        metadata: Option<&TaskMetadata>,
+        stdio: &TaskStdio,
     ) -> Self {
         let name = unsafe { RawSlice::from_slice(name.as_bytes()) };
         let argv = unsafe { RawSliceMut::from_slices(argv) };
@@ -68,9 +77,7 @@ impl SpawnConfig {
             argv,
             env,
             flags,
-            metadata: metadata
-                .map(|x| x as *const TaskMetadata)
-                .unwrap_or(core::ptr::null()),
+            stdio: stdio as *const TaskStdio,
         }
     }
 }

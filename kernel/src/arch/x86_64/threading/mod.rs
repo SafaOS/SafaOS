@@ -5,9 +5,11 @@ pub const STACK_END: usize = STACK_START + STACK_SIZE;
 pub const RING0_STACK_START: usize = 0x00007A0000000000;
 pub const RING0_STACK_END: usize = RING0_STACK_START + STACK_SIZE;
 
-pub const ENVIROMENT_START: usize = 0x00007E0000000000;
-pub const ARGV_START: usize = ENVIROMENT_START + 0xA000000000;
-pub const ENVIROMENT_VARIABLES_START: usize = ENVIROMENT_START + 0xE000000000;
+pub const ENVIRONMENT_START: usize = 0x00007E0000000000;
+pub const ARGV_START: usize = ENVIRONMENT_START + 0xA000000000;
+pub const ENVIRONMENT_VARIABLES_START: usize = ENVIRONMENT_START + 0xE000000000;
+
+pub const ABI_STRUCTURES_START: usize = ENVIRONMENT_START + 0x1000000000;
 
 use core::{arch::global_asm, ptr::NonNull};
 
@@ -18,6 +20,7 @@ use crate::{
         copy_to_userspace, frame_allocator,
         paging::{EntryFlags, MapToError, Page, PhysPageTable, PAGE_SIZE},
     },
+    serial,
     threading::swtch,
     VirtAddr,
 };
@@ -103,7 +106,7 @@ pub struct CPUStatus {
     xmm0: [u8; 16],
 }
 
-use safa_utils::abi::raw::RawSlice;
+use safa_utils::abi::raw::{processes::AbiStructures, RawSlice};
 
 fn map_byte_slices(
     page_table: &mut PhysPageTable,
@@ -221,7 +224,7 @@ impl CPUStatus {
         self.rsp as VirtAddr
     }
 
-    /// Initializes a new userspace `CPUStatus` instance, intializes the stack, argv, etc...
+    /// Initializes a new userspace `CPUStatus` instance, initializes the stack, argv, etc...
     /// argument `userspace` determines if the process is in ring0 or not
     /// # Safety
     /// The caller must ensure `page_table` is not freed, as long as [`Self`] is alive otherwise it will cause UB
@@ -230,6 +233,7 @@ impl CPUStatus {
         page_table: &mut PhysPageTable,
         argv: &[&str],
         env: &[&[u8]],
+        structures: AbiStructures,
         entry_point: usize,
         userspace: bool,
     ) -> Result<Self, MapToError> {
@@ -255,9 +259,25 @@ impl CPUStatus {
             .map(|p| p.as_ptr())
             .unwrap_or(core::ptr::null_mut());
 
-        let env_ptr = map_byte_slices(page_table, env, ENVIROMENT_VARIABLES_START)?;
+        let env_ptr = map_byte_slices(page_table, env, ENVIRONMENT_VARIABLES_START)?;
         let env_ptr = env_ptr.map(|p| p.as_ptr()).unwrap_or(core::ptr::null_mut());
 
+        // ABI structures are structures that are passed to tasks by the kernel
+        // currently only stdio is passed
+        let structures_bytes: &[u8] =
+            &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) };
+
+        page_table.alloc_map(
+            ABI_STRUCTURES_START,
+            ABI_STRUCTURES_START + PAGE_SIZE,
+            EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+        )?;
+        copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
+
+        let abi_structures_ptr = ABI_STRUCTURES_START as *const AbiStructures;
+
+        serial!("abi is {:#?}\n", structures);
+        serial!("abi ptr is {:#x}\n", abi_structures_ptr as usize);
         let (cs, ss, rflags) = if userspace {
             (
                 USER_CODE_SEG as u64,
@@ -279,6 +299,7 @@ impl CPUStatus {
             rsi: argv_ptr as u64,
             rdx: envc as u64,
             rcx: env_ptr as u64,
+            r8: abi_structures_ptr as u64,
             cr3: page_table.phys_addr() as u64,
             rsp: STACK_END as u64,
             cs,

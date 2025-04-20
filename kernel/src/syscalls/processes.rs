@@ -1,4 +1,6 @@
-use crate::{threading::task::TaskMetadata, utils::types::Name};
+use safa_utils::abi::raw::processes::{AbiStructures, TaskStdio};
+
+use crate::utils::types::Name;
 use core::fmt::Write;
 
 use crate::{
@@ -20,7 +22,7 @@ pub fn syspspawn(
     argv: &[&str],
     env: &[&[u8]],
     flags: SpawnFlags,
-    metadata: Option<TaskMetadata>,
+    stdio: Option<TaskStdio>,
     dest_pid: Option<&mut usize>,
 ) -> Result<(), ErrorStatus> {
     let name = match name {
@@ -32,7 +34,16 @@ pub fn syspspawn(
         }
     };
 
-    let results = threading::expose::pspawn(name, path, argv, env, flags, metadata)?;
+    let results = threading::expose::pspawn(
+        name,
+        path,
+        argv,
+        env,
+        flags,
+        AbiStructures {
+            stdio: stdio.unwrap_or_default(),
+        },
+    )?;
     if let Some(dest_pid) = dest_pid {
         *dest_pid = results;
     }
