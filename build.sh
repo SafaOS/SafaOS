@@ -112,7 +112,7 @@ cp -v limine/BOOTX64.EFI limine/BOOTIA32.EFI $ISO_BUILD_DIR/EFI/BOOT
 
 build_ramdisk
 
-echo "Putting the iso toghether from the iso root directory: $ISO_BUILD_DIR"
+echo "Putting the iso together from the iso root directory: $ISO_BUILD_DIR"
 xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
             --efi-boot boot/limine/limine-uefi-cd.bin \
