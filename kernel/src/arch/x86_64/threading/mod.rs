@@ -20,7 +20,6 @@ use crate::{
         copy_to_userspace, frame_allocator,
         paging::{EntryFlags, MapToError, Page, PhysPageTable, PAGE_SIZE},
     },
-    serial,
     threading::swtch,
     VirtAddr,
 };
@@ -276,8 +275,6 @@ impl CPUStatus {
 
         let abi_structures_ptr = ABI_STRUCTURES_START as *const AbiStructures;
 
-        serial!("abi is {:#?}\n", structures);
-        serial!("abi ptr is {:#x}\n", abi_structures_ptr as usize);
         let (cs, ss, rflags) = if userspace {
             (
                 USER_CODE_SEG as u64,
