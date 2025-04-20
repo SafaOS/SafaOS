@@ -93,7 +93,7 @@ impl InodeOps for RamInode {
             RamInodeData::Data(ref data) => {
                 let data = data.lock();
                 if offset >= data.len() as isize {
-                    return Err(FSError::InvaildOffset);
+                    return Err(FSError::InvalidOffset);
                 }
 
                 if offset >= 0 {
@@ -106,7 +106,7 @@ impl InodeOps for RamInode {
                     let rev_offset = (-offset) as usize;
                     let len = data.len();
                     if rev_offset > len + 1 {
-                        return Err(FSError::InvaildOffset);
+                        return Err(FSError::InvalidOffset);
                     }
 
                     drop(data);
@@ -138,7 +138,7 @@ impl InodeOps for RamInode {
                     let len = data.len();
 
                     if rev_offset > len + 1 {
-                        return Err(FSError::InvaildOffset);
+                        return Err(FSError::InvalidOffset);
                     }
 
                     drop(data);
@@ -273,7 +273,7 @@ impl FileSystem for RwLock<RamFS> {
     }
 
     fn create(&self, parent: Inode, name: &str) -> FSResult<()> {
-        let name = Name::try_from(name).map_err(|()| FSError::InvaildName)?;
+        let name = Name::try_from(name).map_err(|()| FSError::InvalidName)?;
         let mut write = self.write();
         let new_node = write.make_file();
         parent.insert(name, new_node)?;
@@ -281,7 +281,7 @@ impl FileSystem for RwLock<RamFS> {
     }
 
     fn createdir(&self, parent: Inode, name: &str) -> FSResult<()> {
-        let name = Name::from_str(name).map_err(|()| FSError::InvaildName)?;
+        let name = Name::from_str(name).map_err(|()| FSError::InvalidName)?;
 
         let mut write = self.write();
         let new_node = write.make_directory();
@@ -297,7 +297,7 @@ impl FileSystem for RwLock<RamFS> {
     }
 
     fn mount_device(&self, parent: Inode, name: &str, device: &'static dyn Device) -> FSResult<()> {
-        let name = Name::from_str(name).map_err(|()| FSError::InvaildName)?;
+        let name = Name::from_str(name).map_err(|()| FSError::InvalidName)?;
 
         let mut write = self.write();
         let new_node = write.make_device(device);

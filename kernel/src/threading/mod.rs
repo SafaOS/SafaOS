@@ -6,7 +6,7 @@ pub type Pid = usize;
 
 use core::arch::asm;
 use lazy_static::lazy_static;
-use safa_utils::make_path;
+use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
 use crate::utils::types::Name;
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
@@ -43,7 +43,15 @@ impl Scheduler {
         debug!(Scheduler, "initing ...");
         asm!("cli");
         let mut page_table = PhysPageTable::from_current();
-        let context = CPUStatus::create(&mut page_table, &[], function as usize, false).unwrap();
+        let context = CPUStatus::create(
+            &mut page_table,
+            &[],
+            &[],
+            AbiStructures::default(),
+            function as usize,
+            false,
+        )
+        .unwrap();
         let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
         let task = Task::new(
@@ -139,7 +147,7 @@ impl Scheduler {
     }
 
     #[inline(always)]
-    /// wether or not has been properly initialized using `init`
+    /// whether or not has been properly initialized using `init`
     pub fn inited(&self) -> bool {
         self.tasks.len() > 0
     }
@@ -156,7 +164,7 @@ impl Scheduler {
 }
 
 #[inline(always)]
-/// peforms a context switch using the scheduler, switching to the next task context
+/// performs a context switch using the scheduler, switching to the next task context
 /// to be used
 pub fn swtch(context: CPUStatus) -> CPUStatus {
     if let Some(mut scheduler) = SCHEDULER.try_write().filter(|s| s.inited()) {
@@ -170,7 +178,7 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
-fn current() -> Rc<Task> {
+pub fn current() -> Rc<Task> {
     SCHEDULER.read().current().clone()
 }
 
@@ -228,7 +236,7 @@ pub fn this_state() -> RwLockReadGuard<'static, TaskState> {
     loop {
         match this().state() {
             Some(s) => return s,
-            None => expose::thread_yeild(),
+            None => expose::thread_yield(),
         }
     }
 }
@@ -242,7 +250,7 @@ pub fn this_state_mut() -> RwLockWriteGuard<'static, TaskState> {
     loop {
         match this().state_mut() {
             Some(s) => return s,
-            None => expose::thread_yeild(),
+            None => expose::thread_yield(),
         }
     }
 }

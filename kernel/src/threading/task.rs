@@ -6,6 +6,7 @@ use core::{
 
 use crate::utils::types::Name;
 use alloc::{boxed::Box, vec::Vec};
+use safa_utils::abi::raw::processes::AbiStructures;
 use serde::Serialize;
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -29,186 +30,239 @@ use super::{
     Pid,
 };
 
+pub struct AliveTask {
+    root_page_table: ManuallyDrop<PhysPageTable>,
+    resources: ResourceManager,
+
+    data_pages: usize,
+    data_start: VirtAddr,
+    data_break: VirtAddr,
+
+    cwd: Box<PathBuf>,
+}
+
+pub struct ZombieTask {
+    exit_code: usize,
+    killed_by: Pid,
+
+    data_start: VirtAddr,
+    data_break: VirtAddr,
+
+    last_resource_id: usize,
+    cwd: Box<PathBuf>,
+}
+
+impl AliveTask {
+    pub fn resource_manager(&self) -> &ResourceManager {
+        &self.resources
+    }
+
+    pub fn resource_manager_mut(&mut self) -> &mut ResourceManager {
+        &mut self.resources
+    }
+    pub fn cwd(&self) -> Path {
+        self.cwd.as_path()
+    }
+
+    /// Clones the resources of `self`, panicks if self isn't alive
+    pub fn clone_resources(&mut self) -> Vec<Mutex<Resource>> {
+        self.resources.clone_resources()
+    }
+
+    /// Clones only the resources in `resources` of `self`, panicks if self isn't alive
+    pub fn clone_specific_resources(
+        &mut self,
+        resources: &[usize],
+    ) -> Result<Vec<Mutex<Resource>>, ()> {
+        if resources.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let biggest = resources.iter().max().copied().unwrap_or(0);
+        // ensures the results has the same ids as the resources
+        let mut results = Vec::with_capacity(biggest + 1);
+        results.resize_with(biggest + 1, || Mutex::new(Resource::Null));
+
+        for resource in resources {
+            let result = self.resources.clone_resource(*resource).ok_or(())?;
+            results[*resource] = result;
+        }
+
+        Ok(results)
+    }
+
+    pub fn cwd_mut(&mut self) -> &mut PathBuf {
+        &mut self.cwd
+    }
+
+    fn page_extend_data(&mut self) -> Option<VirtAddr> {
+        use crate::memory::paging::EntryFlags;
+
+        let page_end = self.data_start + PAGE_SIZE * self.data_pages;
+        let new_page = Page::containing_address(page_end);
+
+        let frame = frame_allocator::allocate_frame()?;
+
+        self.root_page_table
+            .map_to(
+                new_page,
+                frame,
+                EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+            )
+            .ok()?;
+
+        let addr = frame.virt_addr();
+        let ptr = addr as *mut u8;
+        let slice = unsafe { core::slice::from_raw_parts_mut(ptr, PAGE_SIZE) };
+
+        slice.fill(0xBB);
+        self.data_pages += 1;
+        Some(addr)
+    }
+
+    fn page_unextend_data(&mut self) -> Option<VirtAddr> {
+        if self.data_pages == 0 {
+            return Some(self.data_start);
+        }
+
+        let page_end = self.data_start + PAGE_SIZE * self.data_pages;
+
+        let page = Page::containing_address(page_end - PAGE_SIZE);
+        self.root_page_table.unmap(page);
+
+        self.data_pages -= 1;
+        Some(page_end - PAGE_SIZE)
+    }
+
+    pub fn extend_data_by(&mut self, amount: isize) -> Option<*mut u8> {
+        let actual_data_break = self.data_start + PAGE_SIZE * self.data_pages;
+        let usable_bytes = actual_data_break - self.data_break;
+        let is_negative = amount.is_negative();
+        let amount = amount.unsigned_abs();
+
+        if (usable_bytes < amount) || (is_negative) {
+            let pages = crate::memory::align_up(amount - usable_bytes, PAGE_SIZE) / PAGE_SIZE;
+
+            let func = if is_negative {
+                Self::page_unextend_data
+            } else {
+                Self::page_extend_data
+            };
+
+            for _ in 0..pages {
+                func(self)?;
+            }
+        }
+
+        if is_negative && amount >= usable_bytes {
+            self.data_break -= amount;
+        } else {
+            self.data_break += amount;
+        }
+
+        Some(self.data_break as *mut u8)
+    }
+
+    /// Makes `self` a zombie
+    /// # Safety
+    ///  unsafe because `self` becomes invalid after this call
+    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask {
+        let root_page_table = ManuallyDrop::take(&mut self.root_page_table);
+        eve::add_cleanup(root_page_table);
+        ZombieTask {
+            exit_code,
+            killed_by,
+            data_start: self.data_start,
+            data_break: self.data_break,
+            last_resource_id: self.resources.next_ri(),
+            cwd: core::mem::take(&mut self.cwd),
+        }
+    }
+}
+
+impl ZombieTask {
+    pub fn cwd(&self) -> Path {
+        self.cwd.as_path()
+    }
+}
+
 pub enum TaskState {
-    Alive {
-        root_page_table: ManuallyDrop<PhysPageTable>,
-        resources: ResourceManager,
-
-        data_pages: usize,
-        data_start: VirtAddr,
-        data_break: VirtAddr,
-
-        cwd: Box<PathBuf>,
-    },
-    Zombie {
-        exit_code: usize,
-        killed_by: Pid,
-
-        data_start: VirtAddr,
-        data_break: VirtAddr,
-
-        last_resource_id: usize,
-        cwd: Box<PathBuf>,
-    },
+    Alive(AliveTask),
+    Zombie(ZombieTask),
 }
 
 impl TaskState {
-    pub fn resource_manager(&self) -> Option<&ResourceManager> {
+    fn zombie(&self) -> Option<&ZombieTask> {
         match self {
-            TaskState::Alive { resources, .. } => Some(resources),
+            TaskState::Zombie(zombie) => Some(zombie),
+            TaskState::Alive { .. } => None,
+        }
+    }
+
+    fn alive(&self) -> Option<&AliveTask> {
+        match self {
+            TaskState::Alive(alive) => Some(alive),
             TaskState::Zombie { .. } => None,
         }
     }
 
-    pub fn resource_manager_mut(&mut self) -> Option<&mut ResourceManager> {
+    fn alive_mut(&mut self) -> Option<&mut AliveTask> {
         match self {
-            TaskState::Alive { resources, .. } => Some(resources),
+            TaskState::Alive(alive) => Some(alive),
             TaskState::Zombie { .. } => None,
         }
+    }
+
+    pub fn resource_manager(&self) -> Option<&ResourceManager> {
+        self.alive().map(|alive| alive.resource_manager())
+    }
+
+    pub fn resource_manager_mut(&mut self) -> Option<&mut ResourceManager> {
+        self.alive_mut().map(|alive| alive.resource_manager_mut())
     }
 
     pub fn cwd(&self) -> Path {
         match self {
-            TaskState::Alive { cwd, .. } | TaskState::Zombie { cwd, .. } => cwd.as_path(),
+            TaskState::Alive(alive) => alive.cwd(),
+            TaskState::Zombie(zombie) => zombie.cwd(),
         }
     }
 
     /// Clones the resources of `self`, panicks if self isn't alive
     pub fn clone_resources(&mut self) -> Vec<Mutex<Resource>> {
-        self.resource_manager_mut().unwrap().clone_resources()
+        self.alive_mut().unwrap().clone_resources()
+    }
+
+    /// Clones only the resources in `resources` of `self`, panicks if self isn't alive
+    pub fn clone_specific_resources(
+        &mut self,
+        resources: &[usize],
+    ) -> Result<Vec<Mutex<Resource>>, ()> {
+        self.alive_mut()
+            .unwrap()
+            .clone_specific_resources(resources)
     }
 
     pub fn cwd_mut(&mut self) -> &mut PathBuf {
-        match self {
-            TaskState::Alive { cwd, .. } | TaskState::Zombie { cwd, .. } => cwd,
-        }
-    }
-
-    fn page_extend_data(&mut self) -> Option<VirtAddr> {
-        match self {
-            TaskState::Alive {
-                data_start,
-                data_pages,
-                root_page_table,
-                ..
-            } => {
-                use crate::memory::paging::EntryFlags;
-
-                let page_end = *data_start + PAGE_SIZE * *data_pages;
-                let new_page = Page::containing_address(page_end);
-
-                let frame = frame_allocator::allocate_frame()?;
-
-                root_page_table
-                    .map_to(
-                        new_page,
-                        frame,
-                        EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
-                    )
-                    .ok()?;
-
-                let addr = frame.virt_addr();
-                let ptr = addr as *mut u8;
-                let slice = unsafe { core::slice::from_raw_parts_mut(ptr, PAGE_SIZE) };
-
-                slice.fill(0xAA);
-                *data_pages += 1;
-                Some(addr)
-            }
-            TaskState::Zombie { .. } => None,
-        }
-    }
-
-    fn page_unextend_data(&mut self) -> Option<VirtAddr> {
-        match self {
-            TaskState::Alive {
-                data_start,
-                data_pages,
-                root_page_table,
-                ..
-            } => {
-                if *data_pages == 0 {
-                    return Some(*data_start);
-                }
-
-                let page_end = *data_start + PAGE_SIZE * *data_pages;
-
-                let page = Page::containing_address(page_end - PAGE_SIZE);
-                root_page_table.unmap(page);
-
-                *data_pages -= 1;
-                Some(page_end - PAGE_SIZE)
-            }
-            TaskState::Zombie { .. } => None,
-        }
+        self.alive_mut().unwrap().cwd_mut()
     }
 
     pub fn extend_data_by(&mut self, amount: isize) -> Option<*mut u8> {
-        let is_negative = amount.is_negative();
-        let amount = amount.unsigned_abs();
-
-        let pages = crate::memory::align_up(amount, PAGE_SIZE) / PAGE_SIZE;
-
-        let func = if is_negative {
-            Self::page_unextend_data
-        } else {
-            Self::page_extend_data
-        };
-
-        for _ in 0..pages {
-            func(self)?;
-        }
-
-        match self {
-            TaskState::Alive { data_break, .. } => {
-                if is_negative {
-                    *data_break -= amount;
-                } else {
-                    *data_break += amount;
-                }
-
-                Some(*data_break as *mut u8)
-            }
-            TaskState::Zombie { .. } => None,
-        }
+        self.alive_mut().unwrap().extend_data_by(amount)
     }
 
     pub fn die(&mut self, exit_code: usize, killed_by: Pid) {
-        match self {
-            TaskState::Alive {
-                cwd,
-                data_start,
-                data_break,
-                resources,
-                root_page_table,
-                ..
-            } => {
-                let last_resource_id = resources.next_ri();
+        let Some(alive) = self.alive_mut() else {
+            return;
+        };
 
-                let root_page_table = unsafe { ManuallyDrop::take(root_page_table) };
-                eve::add_cleanup(root_page_table);
-
-                *self = TaskState::Zombie {
-                    exit_code,
-                    killed_by,
-                    data_start: *data_start,
-                    data_break: *data_break,
-                    last_resource_id,
-                    cwd: core::mem::take(cwd),
-                };
-            }
-            TaskState::Zombie { .. } => {}
-        }
+        *self = TaskState::Zombie(unsafe { alive.die_mut(exit_code, killed_by) });
     }
     /// gets the exit code of the task
     /// returns `None` if the task is alive
     /// returns `Some(exit_code)` if the task is zombie
-    /// can be used to check if the task is alive
     pub fn exit_code(&self) -> Option<usize> {
-        match &self {
-            TaskState::Alive { .. } => None,
-            TaskState::Zombie { exit_code, .. } => Some(*exit_code),
-        }
+        self.zombie().map(|zombie| zombie.exit_code)
     }
 }
 
@@ -245,14 +299,14 @@ impl Task {
             ppid: AtomicUsize::new(ppid),
             is_alive: AtomicBool::new(true),
             context: UnsafeCell::new(context),
-            state: RwLock::new(TaskState::Alive {
+            state: RwLock::new(TaskState::Alive(AliveTask {
                 root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
                 data_pages: 0,
                 data_start: data_break,
                 data_break,
                 cwd,
-            }),
+            })),
         }
     }
 
@@ -261,21 +315,24 @@ impl Task {
         name: Name,
         pid: Pid,
         ppid: Pid,
-        cwd: Path,
+        cwd: Box<PathBuf>,
         elf: Elf<T>,
         args: &[&str],
+        env: &[&[u8]],
+        structures: AbiStructures,
     ) -> Result<Self, ElfError> {
-        let cwd = Box::new(cwd.into_owned().unwrap());
-
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;
 
-        let context = unsafe { CPUStatus::create(&mut page_table, args, entry_point, true)? };
+        let context = unsafe {
+            CPUStatus::create(&mut page_table, args, env, structures, entry_point, true)?
+        };
         Ok(Self::new(
             name, pid, ppid, cwd, page_table, context, data_break,
         ))
     }
+
     pub fn name(&self) -> &Name {
         &self.name
     }
@@ -356,20 +413,20 @@ impl From<&Task> for TaskInfo {
         let state = task.state().unwrap();
 
         let (exit_code, data_start, data_break, killed_by, last_resource_id) = match &*state {
-            TaskState::Alive {
+            TaskState::Alive(AliveTask {
                 data_start,
                 data_break,
                 resources,
                 ..
-            } => (0, *data_start, *data_break, 0, resources.next_ri()),
-            TaskState::Zombie {
+            }) => (0, *data_start, *data_break, 0, resources.next_ri()),
+            TaskState::Zombie(ZombieTask {
                 data_start,
                 data_break,
                 exit_code,
                 killed_by,
                 last_resource_id,
                 ..
-            } => (
+            }) => (
                 *exit_code,
                 *data_start,
                 *data_break,

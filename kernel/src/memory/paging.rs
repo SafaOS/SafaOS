@@ -9,6 +9,7 @@ use core::{
     fmt::{Debug, LowerHex},
     ops::{Deref, DerefMut, Index, IndexMut},
 };
+use thiserror::Error;
 
 use crate::memory::frame_allocator::Frame;
 
@@ -149,9 +150,7 @@ pub struct PageTable {
 
 impl PageTable {
     pub fn zeroize(&mut self) {
-        for entry in &mut self.entries {
-            entry.0 = 0;
-        }
+        self.entries.fill(const { unsafe { core::mem::zeroed() } });
     }
 
     /// copies the higher half entries of the current pml4 to this page table
@@ -162,10 +161,16 @@ impl PageTable {
         }
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    /// unsafe because self becomes almost invaild after use, the entries are not invalidated
-    /// meaning you can still use virtual addresses from the page table but using them will cause UB
     pub unsafe fn free(&mut self, level: u8) {
-        for entry in &mut self.entries[0..HIGHER_HALF_ENTRY] {
+        // if the table is the pml4 we need not to free the higher half
+        // because it is shared with other tables
+        let last_entry = if level >= 4 {
+            HIGHER_HALF_ENTRY
+        } else {
+            ENTRY_COUNT
+        };
+
+        for entry in &mut self.entries[0..last_entry] {
             if entry.0 != 0 {
                 entry.free(level - 1);
             }
@@ -199,8 +204,9 @@ pub unsafe fn current_root_table() -> FramePtr<PageTable> {
     ptr
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Error)]
 pub enum MapToError {
+    #[error("frame allocator: out of memory")]
     FrameAllocationFailed,
 }
 

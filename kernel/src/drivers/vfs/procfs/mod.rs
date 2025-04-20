@@ -141,7 +141,7 @@ impl super::InodeOps for Mutex<ProcInode> {
             ProcInodeData::File(file) => {
                 let file_data = file.get_data();
                 if offset >= file_data.len() as isize {
-                    return Err(FSError::InvaildOffset);
+                    return Err(FSError::InvalidOffset);
                 }
 
                 if offset >= 0 {
@@ -153,7 +153,7 @@ impl super::InodeOps for Mutex<ProcInode> {
                 } else {
                     let rev_offset = (-offset) as usize;
                     if rev_offset > file_data.len() {
-                        return Err(FSError::InvaildOffset);
+                        return Err(FSError::InvalidOffset);
                     }
                     // TODO: this is slower then inlining the code ourselves
                     self.read((file_data.len() - rev_offset) as isize + 1, buffer)

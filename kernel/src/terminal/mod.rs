@@ -9,6 +9,7 @@ use crate::{
         keys::{Key, KeyCode, KeyFlags},
         HandleKey,
     },
+    eve::KERNEL_ABI_STRUCTURES,
     threading::expose::{pspawn, SpawnFlags},
     utils::{alloc::PageBString, bstr::BStr},
 };
@@ -18,7 +19,7 @@ pub mod framebuffer;
 
 /// defines the interface for a tty
 /// a tty is a user-visible device that can be written to, and that user-input can be read from
-/// it is recommened for the tty to support ansii escape sequences, some stuff will be managed by a
+/// it is recommended for the tty to support ansii escape sequences, some stuff will be managed by a
 /// higher-level tty implementation `TTY` only writing to the tty is required
 pub trait TTYInterface: Send + Sync {
     fn write_str(&mut self, s: &BStr);
@@ -46,11 +47,11 @@ pub trait TTYInterface: Send + Sync {
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct TTYSettings: u8 {
-        /// wether or not we are currently reciving input
+        /// whether or not we are currently receiving input
         /// the cursor should work well if enabled correctly using `self.enable_input` and disabled
         /// using `self.disable_input`
         // TODO: maybe the cursor should be the job of the shell?
-        const RECIVE_INPUT = 1 << 0;
+        const RECEIVE_INPUT = 1 << 0;
         const DRAW_GRAPHICS = 1 << 1;
         const CANONICAL_MODE = 1 << 2;
         const ECHO_INPUT = 1 << 3;
@@ -212,9 +213,9 @@ impl Stdin {
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct TTY<T: TTYInterface> {
-    /// stores the stdout buffer for write operations peformed on the tty device, allows to write to the tty at once instead of a peice by piece
+    /// stores the stdout buffer for write operations performed on the tty device, allows to write to the tty at once instead of a piece by piece
     stdout_buffer: PageBString,
-    /// stores the stdin buffer for read operations peformed on the tty device
+    /// stores the stdin buffer for read operations performed on the tty device
     stdin: Stdin,
     pub settings: TTYSettings,
     interface: T,
@@ -283,20 +284,20 @@ impl<T: TTYInterface> TTY<T> {
     }
 
     pub fn enable_input(&mut self) {
-        if !self.settings.contains(TTYSettings::RECIVE_INPUT) {
-            self.settings |= TTYSettings::RECIVE_INPUT;
+        if !self.settings.contains(TTYSettings::RECEIVE_INPUT) {
+            self.settings |= TTYSettings::RECEIVE_INPUT;
             self.show_cursor();
         }
     }
 
     pub fn disable_input(&mut self) {
-        if self.settings.contains(TTYSettings::RECIVE_INPUT) {
-            self.settings &= !TTYSettings::RECIVE_INPUT;
+        if self.settings.contains(TTYSettings::RECEIVE_INPUT) {
+            self.settings &= !TTYSettings::RECEIVE_INPUT;
             self.hide_cursor();
         }
     }
 
-    pub fn peform_backspace(&mut self) {
+    pub fn perform_backspace(&mut self) {
         if !self.stdin().is_empty() {
             // backspace
             self.stdin.pop_at_cursor(Some(&mut self.stdout_buffer));
@@ -337,7 +338,7 @@ impl<T: TTYInterface> TTY<T> {
 
     #[inline(always)]
     const fn is_interactive(&self) -> bool {
-        self.settings.contains(TTYSettings::RECIVE_INPUT)
+        self.settings.contains(TTYSettings::RECEIVE_INPUT)
             && self.settings.contains(TTYSettings::CANONICAL_MODE)
     }
 }
@@ -373,13 +374,15 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                     // Maybe we can make a const function or a macro for this
                     make_path!("sys", "bin/safa"),
                     &["-i"],
-                    SpawnFlags::CLONE_RESOURCES,
+                    &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
+                    SpawnFlags::empty(),
+                    *KERNEL_ABI_STRUCTURES,
                 )
                 .unwrap();
             }
             KeyCode::Backspace if self.is_interactive() => {
                 self.hide_cursor();
-                self.peform_backspace();
+                self.perform_backspace();
                 self.show_cursor();
             }
 
@@ -393,7 +396,7 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                     write_key!();
                 }
             }
-            _ if self.settings.contains(TTYSettings::RECIVE_INPUT) => {
+            _ if self.settings.contains(TTYSettings::RECEIVE_INPUT) => {
                 let mapped = key.map_key();
                 if mapped.is_empty() {
                     return;

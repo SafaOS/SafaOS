@@ -65,6 +65,7 @@ impl PageAllocator {
     /// returns a pointer to the start of the allocated memory, or None if allocation fails.
     /// sets the allocated pages as used in the bitmap
     pub fn find_pages(&mut self, page_count: usize) -> Option<(*mut u8, usize)> {
+        assert!(page_count != 0);
         let bitmap = self.bitmap.as_mut_slice();
 
         if page_count < usize::BITS as usize {
@@ -88,9 +89,10 @@ impl PageAllocator {
 
                 let mut bit = 0;
                 while byte_ref & mask != 0 && bit <= usize::BITS - page_count as u32 {
-                    let leading_ones = byte_ref.trailing_ones();
-                    byte_ref >>= leading_ones;
-                    bit += leading_ones;
+                    let trailing_zeros = byte_ref.trailing_zeros();
+                    let shift = trailing_zeros + (byte_ref >> trailing_zeros).trailing_ones();
+                    byte_ref >>= shift;
+                    bit += shift;
                 }
 
                 if bit <= usize::BITS - page_count as u32 {
@@ -220,7 +222,7 @@ impl PageAllocator {
 
         // if we have more than 1 usizes then allocated page_count is a multiple of usize::BITS
         // else it is less then usize::BITS so we need to find the actual index
-        let mask = if usizes > 1 {
+        let mask = if usizes > 1 || page_count == usize::BITS as usize {
             if self.next_large_allocation_index > start_index {
                 self.next_large_allocation_index = start_index;
             }

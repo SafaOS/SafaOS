@@ -1,6 +1,6 @@
 [package]
 name = "safa-abi"
-version = "0.1.2"
+version = "0.2.6"
 edition = "2021"
 description = "an ABI over some of the SafaOS's structures kernel"
 repository = "https://github.com/SafaOS/SafaOS"
@@ -21,3 +21,8 @@ rustc-dep-of-std = ["core", "alloc", "compiler_builtins/rustc-dep-of-std"]
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = ['cfg(target_os, values("safaos"))']
+
+[package.metadata.docs.rs]
+
+default-target = "x86_64-unknown-none"
+targets = []

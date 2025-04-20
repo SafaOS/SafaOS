@@ -1,6 +1,6 @@
 pub mod expose;
 
-use core::fmt::Debug;
+use core::fmt::{Debug, Display};
 
 use crate::{
     debug,
@@ -107,24 +107,31 @@ impl Drop for FileDescriptor {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 #[repr(u8)]
 pub enum FSError {
+    InvalidResource,
     OperationNotSupported,
     NotAFile,
     NotADirectory,
     NoSuchAFileOrDirectory,
-    InvaildDrive,
-    InvaildPath,
+    InvalidDrive,
+    InvalidPath,
     PathTooLong,
     AlreadyExists,
-    NotExecuteable,
-    InvaildOffset,
-    InvaildName,
+    NotExecutable,
+    InvalidOffset,
+    InvalidName,
     /// Ctl
-    InvaildCtlCmd,
-    InvaildCtlArg,
+    InvalidCtlCmd,
+    InvalidCtlArg,
     NotEnoughArguments,
+}
+
+impl Display for FSError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl IntoErr for FSError {
@@ -134,14 +141,15 @@ impl IntoErr for FSError {
             Self::NotAFile => ErrorStatus::NotAFile,
             Self::NotADirectory => ErrorStatus::NotADirectory,
             Self::NoSuchAFileOrDirectory => ErrorStatus::NoSuchAFileOrDirectory,
-            Self::InvaildPath => ErrorStatus::InvaildPath,
-            Self::InvaildDrive => ErrorStatus::NoSuchAFileOrDirectory,
+            Self::InvalidPath => ErrorStatus::InvalidPath,
+            Self::InvalidDrive => ErrorStatus::NoSuchAFileOrDirectory,
             Self::AlreadyExists => ErrorStatus::AlreadyExists,
-            Self::NotExecuteable => ErrorStatus::NotExecutable,
-            Self::InvaildOffset => ErrorStatus::InvaildOffset,
-            Self::InvaildCtlCmd | Self::InvaildCtlArg => ErrorStatus::Generic,
-            Self::InvaildName | Self::PathTooLong => ErrorStatus::StrTooLong,
+            Self::NotExecutable => ErrorStatus::NotExecutable,
+            Self::InvalidOffset => ErrorStatus::InvalidOffset,
+            Self::InvalidCtlCmd | Self::InvalidCtlArg => ErrorStatus::Generic,
+            Self::InvalidName | Self::PathTooLong => ErrorStatus::StrTooLong,
             Self::NotEnoughArguments => ErrorStatus::NotEnoughArguments,
+            Self::InvalidResource => ErrorStatus::InvalidResource,
         }
     }
 }
@@ -149,9 +157,9 @@ impl IntoErr for FSError {
 impl From<PathError> for FSError {
     fn from(value: PathError) -> Self {
         match value {
-            PathError::DriveNameTooLong => Self::InvaildDrive,
+            PathError::DriveNameTooLong => Self::InvalidDrive,
             PathError::PathPartsTooLong => Self::PathTooLong,
-            PathError::FailedToJoinPaths | PathError::InvaildPath => Self::InvaildPath,
+            PathError::FailedToJoinPaths | PathError::InvalidPath => Self::InvalidPath,
         }
     }
 }
@@ -182,7 +190,7 @@ impl<'a> CtlArgs<'a> {
         let it = self.get_ty::<usize>()? as *mut T;
 
         if it.is_null() || !it.is_aligned() {
-            return Err(FSError::InvaildCtlArg);
+            return Err(FSError::InvalidCtlArg);
         }
         Ok(unsafe { &mut *it })
     }
@@ -193,12 +201,13 @@ impl<'a> CtlArgs<'a> {
             .get(self.index)
             .ok_or(FSError::NotEnoughArguments)?;
         self.index += 1;
-        T::try_from(*it).ok_or(FSError::InvaildCtlArg)
+        T::try_from(*it).ok_or(FSError::InvalidCtlArg)
     }
 }
 
 // InodeType implementition
-pub use safa_utils::abi::io::InodeType;
+pub use safa_utils::abi::raw::io::InodeType;
+use thiserror::Error;
 
 pub trait InodeOps: Send + Sync {
     /// gets an Inode from self
@@ -337,7 +346,7 @@ pub trait FileSystem: Send + Sync {
     }
 
     /// goes trough path to get the inode it refers to
-    /// will err if there is no such a file or directory or path is straight up invaild
+    /// will err if there is no such a file or directory or path is straight up invalid
     fn resolve_pathparts(&self, path: PathParts, root_node: Inode) -> FSResult<Inode> {
         let mut current_inode = root_node;
         if path.is_empty() {
@@ -360,7 +369,7 @@ pub trait FileSystem: Send + Sync {
         Ok(current_inode)
     }
 
-    /// creates an empty file named `name` relative to Inode   
+    /// creates an empty file named `name` relative to Inode
     fn create(&self, node: Inode, name: &str) -> FSResult<()> {
         _ = node;
         _ = name;
@@ -417,7 +426,9 @@ impl VFS {
 
         let moment_memory_usage = frame_allocator::mapped_frames();
         let the_now = time!();
-
+        // temporary directory
+        let tempfs = RwLock::new(ramfs::RamFS::new());
+        this.mount(DriveName::new_const("tmp"), tempfs).unwrap();
         // ramfs
         let ramfs = RwLock::new(ramfs::RamFS::new());
         this.mount(DriveName::new_const("ram"), ramfs).unwrap();
@@ -476,7 +487,7 @@ impl VFS {
     #[inline]
     fn get_from_path(&self, path: Path) -> FSResult<&Arc<dyn FileSystem>> {
         let drive = path.drive().expect("path is not absolute");
-        let drive = self.drives.get(drive).ok_or(FSError::InvaildDrive)?;
+        let drive = self.drives.get(drive).ok_or(FSError::InvalidDrive)?;
         Ok(drive)
     }
 
@@ -507,7 +518,7 @@ impl VFS {
         Ok((drive, resolved))
     }
 
-    /// resloves path into a Drive and an Inode
+    /// resolves path into a Drive and an Inode
     /// path may be relative to cwd or absolute
     #[must_use]
     #[inline]
@@ -530,16 +541,16 @@ impl VFS {
     ) -> FSResult<(&'a Arc<dyn FileSystem>, Inode, &'b str)> {
         let (name, path) = path.spilt_into_name();
 
-        let name = name.ok_or(FSError::InvaildPath)?;
-        let (drive, resloved) = self.resolve_path(path)?;
-        if resloved.kind() != InodeType::Directory {
+        let name = name.ok_or(FSError::InvalidPath)?;
+        let (drive, resolved) = self.resolve_path(path)?;
+        if resolved.kind() != InodeType::Directory {
             return Err(FSError::NotADirectory);
         }
 
-        Ok((drive, resloved, name))
+        Ok((drive, resolved, name))
     }
 
-    /// checks if a path is a vaild dir returns Err if path has an error
+    /// checks if a path is a valid dir returns Err if path has an error
     pub fn verify_path_dir(&self, path: Path) -> FSResult<()> {
         let (_, res) = self.resolve_path(path)?;
 

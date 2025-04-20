@@ -8,7 +8,7 @@ pub trait SyscallFFI: Sized {
 }
 
 /// converts `*const T` into `None` if the pointer is null if it is not aligned it will return an
-/// [`ErrorStatus::InvaildPtr`]
+/// [`ErrorStatus::InvalidPtr`]
 impl<T> SyscallFFI for Option<&T> {
     type Args = *const T;
 
@@ -16,7 +16,7 @@ impl<T> SyscallFFI for Option<&T> {
         if args.is_null() {
             Ok(None)
         } else if !args.is_aligned() {
-            return Err(ErrorStatus::InvaildPtr);
+            return Err(ErrorStatus::InvalidPtr);
         } else {
             Ok(unsafe { Some(&*args) })
         }
@@ -24,7 +24,7 @@ impl<T> SyscallFFI for Option<&T> {
 }
 
 /// converts `*mut T` into `None` if the pointer is null if it is not aligned it will return an
-/// [`ErrorStatus::InvaildPtr`]
+/// [`ErrorStatus::InvalidPtr`]
 impl<T> SyscallFFI for Option<&mut T> {
     type Args = *mut T;
 
@@ -32,7 +32,7 @@ impl<T> SyscallFFI for Option<&mut T> {
         if args.is_null() {
             Ok(None)
         } else if !args.is_aligned() {
-            return Err(ErrorStatus::InvaildPtr);
+            return Err(ErrorStatus::InvalidPtr);
         } else {
             Ok(unsafe { Some(&mut *args) })
         }
@@ -59,7 +59,7 @@ impl SyscallFFI for Option<&str> {
         let opt = <Option<&[u8]>>::make((ptr, len))?;
 
         if let Some(slice) = opt {
-            let str = core::str::from_utf8(slice).map_err(|_| ErrorStatus::InvaildStr)?;
+            let str = core::str::from_utf8(slice).map_err(|_| ErrorStatus::InvalidStr)?;
             Ok(Some(str))
         } else {
             Ok(None)
@@ -73,7 +73,7 @@ impl<T> SyscallFFI for &T {
 
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         if args.is_null() || !args.is_aligned() {
-            Err(ErrorStatus::InvaildPtr)
+            Err(ErrorStatus::InvalidPtr)
         } else {
             Ok(unsafe { &*args })
         }
@@ -86,7 +86,7 @@ impl<T> SyscallFFI for &mut T {
 
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         if args.is_null() || !args.is_aligned() {
-            Err(ErrorStatus::InvaildPtr)
+            Err(ErrorStatus::InvalidPtr)
         } else {
             Ok(unsafe { &mut *args })
         }
@@ -101,7 +101,7 @@ impl<T> SyscallFFI for &[T] {
         if ptr.is_null() {
             Ok(&[])
         } else if !ptr.is_aligned() {
-            return Err(ErrorStatus::InvaildPtr);
+            return Err(ErrorStatus::InvalidPtr);
         } else {
             Ok(unsafe { core::slice::from_raw_parts(ptr, len) })
         }
@@ -115,7 +115,7 @@ impl<T> SyscallFFI for &mut [T] {
         if ptr.is_null() {
             Ok(&mut [])
         } else if !ptr.is_aligned() {
-            return Err(ErrorStatus::InvaildPtr);
+            return Err(ErrorStatus::InvalidPtr);
         } else {
             Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
         }
@@ -126,7 +126,7 @@ impl SyscallFFI for &str {
     type Args = (*const u8, usize);
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         let slice: &[u8] = SyscallFFI::make(args)?;
-        core::str::from_utf8(slice).map_err(|_| ErrorStatus::InvaildPtr)
+        core::str::from_utf8(slice).map_err(|_| ErrorStatus::InvalidPtr)
     }
 }
 

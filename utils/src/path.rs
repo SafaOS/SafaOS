@@ -41,7 +41,7 @@ macro_rules! make_path {
 }
 #[derive(Debug, Clone, Copy)]
 pub enum PathError {
-    InvaildPath,
+    InvalidPath,
     FailedToJoinPaths,
     PathPartsTooLong,
     DriveNameTooLong,
@@ -50,7 +50,7 @@ pub enum PathError {
 impl IntoErr for PathError {
     fn into_err(self) -> ErrorStatus {
         match self {
-            Self::InvaildPath | Self::FailedToJoinPaths => ErrorStatus::InvaildPath,
+            Self::InvalidPath | Self::FailedToJoinPaths => ErrorStatus::InvalidPath,
             Self::DriveNameTooLong => ErrorStatus::NoSuchAFileOrDirectory,
             Self::PathPartsTooLong => ErrorStatus::StrTooLong,
         }
@@ -95,12 +95,12 @@ impl<'a> PathParts<'a> {
             return Self::default();
         }
 
-        let trimed = inner.trim();
-        let trimed = trimed.trim_matches('/');
+        let trimmed = inner.trim();
+        let trimmed = trimmed.trim_matches('/');
 
-        assert!(!trimed.contains(':'));
+        assert!(!trimmed.contains(':'));
 
-        Self { inner: trimed }
+        Self { inner: trimmed }
     }
 
     #[inline(always)]
@@ -372,10 +372,10 @@ impl<'a> Path<'a> {
 
         let first_part = parts.next();
         let second_part = parts.next();
-        let thrid_part = parts.next();
+        let third_part = parts.next();
 
-        if thrid_part.is_some() {
-            return Err(PathError::InvaildPath);
+        if third_part.is_some() {
+            return Err(PathError::InvalidPath);
         }
         let (drive, path) = match (first_part, second_part) {
             // paths like `sys:whatever` are ugly `sys:/whatever` is the correct way
@@ -383,7 +383,7 @@ impl<'a> Path<'a> {
             // relative paths must not start with a `/` i forgot why
             (Some(path), None) if !path.starts_with('/') => (None, Some(path)),
             (None, Some(_)) | (None, None) => unreachable!(),
-            _ => return Err(PathError::InvaildPath),
+            _ => return Err(PathError::InvalidPath),
         };
 
         let parts = if let Some(path) = path {

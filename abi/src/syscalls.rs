@@ -1,3 +1,5 @@
+/// defines Syscall numbers
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum SyscallTable {
@@ -16,6 +18,8 @@ pub enum SyscallTable {
     SysSync = 16,
     SysTruncate = 17,
     SysCtl = 12,
+
+    SysDup = 26,
     // TODO: remove in favor of FAttrs
     SysFSize = 22,
     SysFAttrs = 24,
@@ -27,14 +31,17 @@ pub enum SyscallTable {
 
     SysPSpawn = 19,
     SysWait = 11,
+    SysMetaTake = 25,
 
     SysShutdown = 20,
     SysReboot = 21,
+    /// returns the Uptime of the system in milliseconds
+    SysUptime = 27,
 }
 
 impl SyscallTable {
     // update when a new Syscall Num is added
-    const MAX: u16 = Self::SysReboot as u16;
+    const MAX: u16 = Self::SysDup as u16;
 }
 
 impl TryFrom<u16> for SyscallTable {

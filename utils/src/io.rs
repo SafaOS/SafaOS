@@ -2,8 +2,8 @@ use core::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoError {
-    InvaildOffset,
-    InvaildSize,
+    InvalidOffset,
+    InvalidSize,
     Generic,
 }
 
@@ -12,7 +12,7 @@ pub trait Readable {
     fn read_exact(&self, offset: isize, buf: &mut [u8]) -> Result<(), IoError> {
         let amount = self.read(offset, buf)?;
         if amount != buf.len() {
-            return Err(IoError::InvaildSize);
+            return Err(IoError::InvalidSize);
         }
         Ok(())
     }
@@ -22,7 +22,7 @@ impl Readable for &[u8] {
     fn read(&self, offset: isize, buf: &mut [u8]) -> Result<usize, IoError> {
         let offset = offset as usize;
         if offset >= self.len() {
-            return Err(IoError::InvaildOffset);
+            return Err(IoError::InvalidOffset);
         }
 
         let amount = buf.len().min(self.len() - offset);

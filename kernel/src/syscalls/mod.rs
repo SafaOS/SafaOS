@@ -1,6 +1,10 @@
+use safa_utils::abi::raw::processes::TaskStdio;
+use safa_utils::abi::raw::{RawSlice, RawSliceMut};
+use safa_utils::abi::{self, raw};
 use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
+use crate::time;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
@@ -17,28 +21,28 @@ use crate::{
 impl SyscallFFI for FileRef {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        FileRef::get(args).ok_or(ErrorStatus::InvaildResource)
+        FileRef::get(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 
 impl SyscallFFI for File {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        File::from_fd(args).ok_or(ErrorStatus::InvaildResource)
+        File::from_fd(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 
 impl SyscallFFI for DirIterRef {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIterRef::get(args).ok_or(ErrorStatus::InvaildResource)
+        DirIterRef::get(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 
 impl SyscallFFI for DirIter {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIter::from_ri(args).ok_or(ErrorStatus::InvaildResource)
+        DirIter::from_ri(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 mod io;
@@ -60,7 +64,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
         d: usize,
         e: usize,
     ) -> Result<(), ErrorStatus> {
-        let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvaildSyscall)?;
+        let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvalidSyscall)?;
         match syscall {
             // utils
             SyscallTable::SysExit => utils::sysexit(a),
@@ -152,57 +156,100 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 }
                 Ok(())
             }
+            SyscallTable::SysDup => {
+                let fd = FileRef::make(a)?;
+                let dest_fd = <&mut FileRef>::make(b as *mut FileRef)?;
+                let fd = fd.dup();
+                *dest_fd = fd;
+                Ok(())
+            }
             // processes
             SyscallTable::SysPSpawn => {
+                #[inline(always)]
+                fn into_bytes_slice<'a>(
+                    args_raw: &RawSliceMut<RawSlice<u8>>,
+                ) -> Result<&'a [&'a [u8]], ErrorStatus> {
+                    if args_raw.len() == 0 {
+                        return Ok(&[]);
+                    }
+
+                    let raw_slice: &mut [RawSlice<u8>] =
+                        SyscallFFI::make((args_raw.as_mut_ptr(), args_raw.len()))?;
+                    // unsafely creates a muttable reference to `raw_slice`
+                    let double_slice: &mut [&[u8]] =
+                        unsafe { &mut *(raw_slice as *const _ as *mut [&[u8]]) };
+
+                    // maps every parent_slice[i] to &str
+                    for (i, item) in raw_slice.iter().enumerate() {
+                        double_slice[i] = <&[u8]>::make((item.as_ptr(), item.len()))?;
+                    }
+
+                    Ok(double_slice)
+                }
+
                 #[inline(always)]
                 /// converts slice of raw pointers to a slice of strs which is used by pspawn as
                 /// process arguments
                 fn into_args_slice<'a>(
-                    args_raw: *mut (*const u8, usize),
-                    len: usize,
+                    args_raw: &RawSliceMut<RawSlice<u8>>,
                 ) -> Result<&'a [&'a str], ErrorStatus> {
-                    if len == 0 {
+                    if args_raw.len() == 0 {
                         return Ok(&[]);
                     }
 
-                    let raw_slice: &mut [(*const u8, usize)] = SyscallFFI::make((args_raw, len))?;
+                    let raw_slice: &mut [RawSlice<u8>] =
+                        SyscallFFI::make((args_raw.as_mut_ptr(), args_raw.len()))?;
                     // unsafely creates a muttable reference to `raw_slice`
                     let double_slice: &mut [&str] =
                         unsafe { &mut *(raw_slice as *const _ as *mut [&str]) };
 
                     // maps every parent_slice[i] to &str
                     for (i, item) in raw_slice.iter().enumerate() {
-                        double_slice[i] = <&str>::make(*item)?;
+                        double_slice[i] = <&str>::make((item.as_ptr(), item.len()))?;
                     }
 
                     Ok(double_slice)
                 }
 
-                /// the temporary config struct for the spawn syscall, passed to the syscall
-                /// because if it was passed as a bunch of arguments it would be too big to fit
-                /// inside the registers
-                #[repr(C)]
-                struct SpawnConfig {
-                    name: (*const u8, usize),
-                    argv: (*mut (*const u8, usize), usize),
-                    flags: SpawnFlags,
-                }
+                fn as_rust(
+                    this: &raw::processes::SpawnConfig,
+                ) -> Result<
+                    (
+                        Option<&str>,
+                        &[&str],
+                        &[&[u8]],
+                        SpawnFlags,
+                        Option<TaskStdio>,
+                    ),
+                    ErrorStatus,
+                > {
+                    let name = Option::<&str>::make((this.name.as_ptr(), this.name.len()))?;
+                    let argv = into_args_slice(&this.argv)?;
+                    let env = into_bytes_slice(&this.env)?;
 
-                impl SpawnConfig {
-                    fn as_rust(&self) -> Result<(Option<&str>, &[&str], SpawnFlags), ErrorStatus> {
-                        let name = Option::<&str>::make((self.name.0, self.name.1))?;
-                        let argv = into_args_slice(self.argv.0, self.argv.1)?;
+                    let stdio: Option<&abi::raw::processes::TaskStdio> = if this.version >= 1 {
+                        Option::make(this.stdio)?
+                    } else {
+                        None
+                    };
 
-                        Ok((name, argv, self.flags))
-                    }
+                    Ok((
+                        name,
+                        argv,
+                        env,
+                        this.flags.into(),
+                        stdio.copied().map(Into::into),
+                    ))
                 }
 
                 let path = <Path>::make((a as *const u8, b))?;
-                let config = <&SpawnConfig>::make(c as *const SpawnConfig)?;
-                let (name, argv, flags) = config.as_rust()?;
+
+                let config = SyscallFFI::make(c as *const raw::processes::SpawnConfig)?;
+                let (name, argv, env, flags, metadata) = as_rust(config)?;
+
                 let dest_pid = Option::make(d as *mut usize)?;
 
-                processes::syspspawn(name, path, argv, flags, dest_pid)
+                processes::syspspawn(name, path, argv, env, flags, metadata, dest_pid)
             }
             SyscallTable::SysCtl => {
                 let fd = FileRef::make(a)?;
@@ -218,6 +265,10 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             // power
             SyscallTable::SysShutdown => Ok(power::shutdown()),
             SyscallTable::SysReboot => Ok(power::reboot()),
+            SyscallTable::SysUptime => Ok({
+                let dest_uptime = <&mut u64>::make(a as *mut u64)?;
+                *dest_uptime = time!();
+            }),
             #[allow(unreachable_patterns)]
             syscall => {
                 debug!(
@@ -230,7 +281,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                     c,
                     d
                 );
-                Err(ErrorStatus::InvaildSyscall)
+                Err(ErrorStatus::InvalidSyscall)
             }
         }
     }

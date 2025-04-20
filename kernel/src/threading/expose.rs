@@ -7,7 +7,12 @@ use crate::{
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
-use safa_utils::make_path;
+use safa_utils::{
+    abi::raw::{self, processes::AbiStructures},
+    make_path,
+    path::PathBuf,
+};
+use thiserror::Error;
 
 use crate::{
     drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
@@ -21,7 +26,7 @@ use crate::{
 };
 
 use super::{
-    task::{Task, TaskInfo, TaskState},
+    task::{Task, TaskInfo},
     this_state, this_state_mut, Pid,
 };
 
@@ -40,7 +45,7 @@ pub fn thread_exit(code: usize) -> ! {
 }
 
 #[no_mangle]
-pub fn thread_yeild() {
+pub fn thread_yield() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
         asm!("int 0x20")
@@ -53,7 +58,7 @@ pub fn thread_yeild() {
 pub fn wait(pid: usize) -> usize {
     // loops through the processes until it finds the process with `pid` as a zombie
     loop {
-        // cycles through the processes one by one untils it finds the process with `pid`
+        // cycles through the processes one by one until it finds the process with `pid`
         // returns the exit code of the process if it's a zombie and cleans it up
         // if it's not a zombie it will be caught by the next above loop
         let found = super::find(|process| process.pid == pid);
@@ -66,7 +71,7 @@ pub fn wait(pid: usize) -> usize {
                 exit_code
             }
             Some(None) => {
-                thread_yeild();
+                thread_yield();
                 continue;
             }
             None => 0,
@@ -82,11 +87,89 @@ pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
-    #[repr(C)]
     pub struct SpawnFlags: u8 {
         const CLONE_RESOURCES = 1 << 0;
         const CLONE_CWD = 1 << 1;
     }
+}
+
+impl From<raw::processes::SpawnFlags> for SpawnFlags {
+    fn from(value: raw::processes::SpawnFlags) -> Self {
+        unsafe { Self::from_bits_retain(core::mem::transmute(value)) }
+    }
+}
+
+#[derive(Debug, Clone, Error)]
+
+pub enum SpawnError {
+    #[error("out of memory")]
+    MapToError(#[from] MapToError),
+    #[error("failed to map elf to memory {0}")]
+    ElfError(#[from] ElfError),
+    #[error("error while creating process {0}")]
+    FSError(#[from] FSError),
+}
+
+#[inline(always)]
+fn spawn_inner(
+    name: Name,
+    flags: SpawnFlags,
+    structures: AbiStructures,
+    create_task: impl FnOnce(Name, usize, Box<PathBuf>) -> Result<Task, SpawnError>,
+) -> Result<usize, SpawnError> {
+    let this = this_state();
+    let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
+        this.cwd()
+    } else {
+        make_path!("ram", "")
+    };
+
+    let current = super::current();
+    let current_pid = current.pid;
+
+    let cwd = Box::new(cwd.into_owned().unwrap());
+    let task = create_task(name, current_pid, cwd)?;
+
+    let provide_resources = || {
+        let mut state = task.state_mut().unwrap();
+        let Some(task_resources) = state.resource_manager_mut() else {
+            unreachable!();
+        };
+
+        drop(this);
+        let mut this = this_state_mut();
+
+        let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
+            this.clone_resources()
+        } else {
+            // clone only necessary resources
+            let mut resources = heapless::Vec::<usize, 3>::new();
+            if let Some(stdin) = structures.stdio.stdin.into() {
+                _ = resources.push(stdin);
+            }
+
+            if let Some(stdout) = structures.stdio.stdout.into() {
+                _ = resources.push(stdout);
+            }
+
+            if let Some(stderr) = structures.stdio.stderr.into() {
+                _ = resources.push(stderr);
+            }
+
+            if resources.is_empty() {
+                return Ok(());
+            }
+            this.clone_specific_resources(&resources)?
+        };
+
+        task_resources.overwrite_resources(clone);
+        Ok(())
+    };
+
+    provide_resources().map_err(|()| FSError::InvalidResource)?;
+
+    let pid = super::add(task);
+    Ok(pid)
 }
 
 // used by tests...
@@ -95,82 +178,59 @@ pub fn function_spawn(
     name: Name,
     function: fn() -> !,
     argv: &[&str],
+    env: &[&[u8]],
     flags: SpawnFlags,
-) -> Result<usize, MapToError> {
-    let mut this = this_state_mut();
-    let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        this.cwd()
-    } else {
-        make_path!("ram", "")
-    };
-    let cwd = Box::new(cwd.into_owned().unwrap());
+    structures: AbiStructures,
+) -> Result<usize, SpawnError> {
+    spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
+        let mut page_table = PhysPageTable::create()?;
+        let context = unsafe {
+            CPUStatus::create(
+                &mut page_table,
+                argv,
+                env,
+                structures,
+                function as usize,
+                false,
+            )
+        }?;
 
-    let mut page_table = PhysPageTable::create()?;
-    let context =
-        unsafe { CPUStatus::create(&mut page_table, argv, function as usize, false).unwrap() };
-    let task = Task::new(name, 0, 0, cwd, page_table, context, 0);
-
-    if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        let mut state = task.state_mut().unwrap();
-
-        let TaskState::Alive { resources, .. } = &mut *state else {
-            unreachable!()
-        };
-
-        let clone = this.clone_resources();
-        resources.overwrite_resources(clone);
-    }
-
-    let pid = super::add(task);
-    Ok(pid)
+        let task = Task::new(name, 0, ppid, cwd, page_table, context, 0);
+        Ok(task)
+    })
 }
 
 pub fn spawn<T: Readable>(
     name: Name,
     reader: &T,
     argv: &[&str],
+    env: &[&[u8]],
     flags: SpawnFlags,
-) -> Result<usize, ElfError> {
-    let this = this_state();
-    let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        this.cwd()
-    } else {
-        make_path!("ram", "")
-    };
-
-    let elf = Elf::new(reader)?;
-
-    let current = super::current();
-    let current_pid = current.pid;
-
-    let task = Task::from_elf(name, 0, current_pid, cwd, elf, argv)?;
-
-    if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-        let mut state = task.state_mut().unwrap();
-
-        let TaskState::Alive { resources, .. } = &mut *state else {
-            unreachable!()
-        };
-
-        drop(this);
-        let mut this = this_state_mut();
-        let clone = this.clone_resources();
-        resources.overwrite_resources(clone);
-    }
-
-    let pid = super::add(task);
-    Ok(pid)
+    structures: AbiStructures,
+) -> Result<usize, SpawnError> {
+    spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
+        let elf = Elf::new(reader)?;
+        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, structures)?;
+        Ok(task)
+    })
 }
 
 /// spawns an elf process from a path
-pub fn pspawn(name: Name, path: Path, argv: &[&str], flags: SpawnFlags) -> Result<usize, FSError> {
+pub fn pspawn(
+    name: Name,
+    path: Path,
+    argv: &[&str],
+    env: &[&[u8]],
+    flags: SpawnFlags,
+    structures: AbiStructures,
+) -> Result<usize, FSError> {
     let file = File::open(path)?;
 
     if file.kind() != InodeType::File {
         return Err(FSError::NotAFile);
     }
 
-    spawn(name, &file, argv, flags).map_err(|_| FSError::NotExecuteable)
+    spawn(name, &file, argv, env, flags, structures).map_err(|_| FSError::NotExecutable)
 }
 
 /// also ensures the cwd ends with /

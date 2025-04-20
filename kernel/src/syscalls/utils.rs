@@ -12,7 +12,7 @@ pub fn sysexit(code: usize) -> ! {
 }
 
 pub fn sysyield() {
-    threading::expose::thread_yeild()
+    threading::expose::thread_yield()
 }
 
 pub fn syschdir(path: Path) -> Result<(), ErrorStatus> {

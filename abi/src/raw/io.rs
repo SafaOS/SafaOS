@@ -1,3 +1,5 @@
+use crate::consts;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum InodeType {
@@ -22,5 +24,5 @@ pub struct FileAttr {
 pub struct DirEntry {
     pub attrs: FileAttr,
     pub name_length: usize,
-    pub name: [u8; super::consts::MAX_NAME_LENGTH],
+    pub name: [u8; consts::MAX_NAME_LENGTH],
 }

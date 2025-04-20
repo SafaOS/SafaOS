@@ -4,7 +4,7 @@
 compile_error!("abi should only be used for SafaOS or freestanding targets");
 
 pub mod errors;
-pub mod io;
+pub mod raw;
 pub mod syscalls;
 
 pub mod consts {

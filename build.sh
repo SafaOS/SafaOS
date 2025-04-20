@@ -19,24 +19,26 @@ function build_ramdisk {
     RAMDISK_INCLUDE=(*)
     cd ..
 
-    
+
     # Add all the files in the ramdisk-include directory to the ramdisk root
     for i in "${RAMDISK_INCLUDE[@]}"
     do
+	echo "$i: ramdisk-include/$i"
         RAMDISK+=("ramdisk-include/$i" "$i")
     done
 
     RAMDISK=("${RAMDISK[@]}" "${RAMDISK_BUILTIN[@]}")
 
     set -- "${RAMDISK[@]}"
-    
+
     # temporary ramdisk root
     mkdir -pv $ISO_BUILD_DIR/boot/ramdisk
 
     while [ ! -z  "$1" ] ; do
         O_PATH="$ISO_BUILD_DIR/boot/ramdisk/$2"
-        mkdir -pv $(dirname $O_PATH)
-        cp -rv "$1" "$O_PATH"
+        DIR=$(dirname $O_PATH)
+        mkdir -pv $DIR
+        cp -Trv "$1" $O_PATH
         shift 2
     done
 
@@ -78,10 +80,10 @@ function cargo_build_safaos {
     CWD=$(pwd)
     AT=$1
     ARGS="${@:2}"
-    
+
     cd "$AT"
 
-    cargo "$RUSTC_TOOLCHAIN" build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
+    cargo $RUSTC_TOOLCHAIN build $ARGS --target x86_64-unknown-safaos --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
 }
 
 function build_programs {
@@ -110,7 +112,7 @@ cp -v limine/BOOTX64.EFI limine/BOOTIA32.EFI $ISO_BUILD_DIR/EFI/BOOT
 
 build_ramdisk
 
-echo "Putting the iso toghether from the iso root directory: $ISO_BUILD_DIR"
+echo "Putting the iso together from the iso root directory: $ISO_BUILD_DIR"
 xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
             --efi-boot boot/limine/limine-uefi-cd.bin \

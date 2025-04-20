@@ -3,6 +3,7 @@ use macros::test_module;
 
 #[test_module]
 pub mod testing_module {
+    use crate::utils::abi::raw::processes::{AbiStructures, TaskStdio};
     use crate::utils::types::Name;
     use alloc::vec::Vec;
 
@@ -116,7 +117,9 @@ pub mod testing_module {
             Name::try_from("TEST_CASE").unwrap(),
             make_path!("sys", "/bin/true"),
             &[],
-            SpawnFlags::CLONE_RESOURCES,
+            &[],
+            SpawnFlags::empty(),
+            AbiStructures::default(),
         )
         .unwrap();
         let ret = wait(pid);
@@ -127,11 +130,18 @@ pub mod testing_module {
 
     fn userspace() {
         unsafe { core::arch::asm!("cli") }
+        use crate::drivers::vfs::expose::File;
+
+        let stdio = File::open(make_path!("dev", "/ss")).unwrap();
+        let stdio = TaskStdio::new(Some(stdio.fd()), Some(stdio.fd()), Some(stdio.fd()));
+
         let pid = pspawn(
             Name::try_from("Tester").unwrap(),
             make_path!("sys", "bin/safa-tests"),
             &[],
+            &[],
             SpawnFlags::empty(),
+            AbiStructures { stdio },
         )
         .unwrap();
         let ret = wait(pid);
@@ -143,7 +153,7 @@ pub mod testing_module {
 
 pub fn main() -> ! {
     testing_module::test_main();
-    // printing this to the serial makes `test.sh` know that the kernel tests were succesful
+    // printing this to the serial makes `test.sh` know that the kernel tests were successful
     serial!("finished initing ...\n");
     println!("finished running tests...");
     println!("\x1B[38;2;0;255;0mBoot success! press ctrl + shift + C to start the shell\x1B[0m");

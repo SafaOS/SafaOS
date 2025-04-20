@@ -12,7 +12,7 @@
 An open-source non-Unix-like OS, written from scratch in Rust for fun.
 
 ## Building
-you need: 
+you need:
 
 - bash
 - git
@@ -51,14 +51,14 @@ you can also use the `run.sh` script to debug:
 and then connect to port 1234 with a gdb client i recommend using `rust-lldb`.
 
 ### Additional Information
-avalable arguments for the `run.sh` script are:
+available arguments for the `run.sh` script are:
 
 - `no-kvm`: disables kvm
 - `no-gui`: disables gui
 - `debugger`: listens on port 1234 for a debugger
 
 ## Testing
-there is an automated testing script called `test.sh` which is used to test SafaOS automatcally
+there is an automated testing script called `test.sh` which is used to test SafaOS automatically
 you'll need:
 
 - qemu-system-x86_64
@@ -69,9 +69,11 @@ you'll need:
 the script will return a non-zero exit code if any testing fails
 
 ## Current Features
-there is a bunch of userspace programs written in rust in the `binutils/` directory they are compiled and then copied to the ramdisk as `sys:/bin/`, you can check them out alongside the `tests` for almost everything the kernel is currently capable of.
+Check `FEATURES.md`.
 
-> aside from the rust stdandard library another method to interact with the kernel is through the [safa-api](https://github.com/SafaOS/safa-api) which provides low-level wrapper functions around the syscalls, and also some high-level wrappers (such as a userspace allocator which is a very high-level wrapper around the sbrk syscall, ofc the raw sbrk syscall is still exposed), the problem is it is currently not documented.
+There is also a bunch of userspace programs written in rust in the `binutils/` directory they are compiled and then copied to the ramdisk as `sys:/bin/`, you can check them out alongside the `tests` for almost everything the kernel is currently capable of.
+
+> Aside from the rust stdandard library another method to interact with the kernel is through the [safa-api](https://github.com/SafaOS/safa-api) which provides low-level wrapper functions around the syscalls, and also some high-level wrappers (such as a userspace allocator which is a very high-level wrapper around the sbrk syscall, ofc the raw sbrk syscall is still exposed).
 
 ## Credits
 currently uses the [limine](https://limine-bootloader.org/) bootloader.

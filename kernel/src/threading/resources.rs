@@ -5,7 +5,7 @@ use spin::{Mutex, MutexGuard};
 
 use crate::drivers::vfs::{DirIterDescriptor, FileDescriptor};
 
-use super::expose::thread_yeild;
+use super::expose::thread_yield;
 
 #[derive(Clone)]
 pub enum Resource {
@@ -80,7 +80,7 @@ impl ResourceManager {
                 break;
             }
 
-            thread_yeild();
+            thread_yield();
         }
 
         if ri < self.next_ri {
@@ -104,14 +104,30 @@ impl ResourceManager {
             .map(|r| Mutex::new(r.get_mut().clone()))
             .collect()
     }
+
+    pub fn clone_resource(&mut self, ri: usize) -> Option<ResourceItem> {
+        if ri >= self.resources.len() {
+            return None;
+        }
+
+        Some(Mutex::new(self.resources[ri].get_mut().clone()))
+    }
+
     /// gets a reference to the resource with index `ri`
-    /// returns `None` if `ri` is invaild
+    /// returns `None` if `ri` is invalid
     fn get(&self, ri: usize) -> Option<MutexGuard<Resource>> {
         if ri >= self.resources.len() {
             return None;
         }
 
         Some(self.resources[ri].lock())
+    }
+
+    fn get_mut(&mut self, ri: usize) -> Option<&mut Resource> {
+        if ri >= self.resources.len() {
+            return None;
+        }
+        Some(self.resources[ri].get_mut())
     }
 }
 // TODO: fgure out a better way to do this, where it's easier to tell that we are holding a lock on
@@ -137,6 +153,15 @@ pub fn add_resource(resource: Resource) -> usize {
         .resource_manager_mut()
         .unwrap()
         .add_resource(resource)
+}
+
+pub fn duplicate_resource(ri: usize) -> usize {
+    let mut state = super::this_state_mut();
+    let manager = state.resource_manager_mut().unwrap();
+
+    let resource = manager.get_mut(ri).unwrap();
+    let clone = resource.clone();
+    manager.add_resource(clone)
 }
 
 /// removes a resource from the current process with `ri`
