@@ -78,6 +78,14 @@ fn print() -> io::Result<()> {
     }
 
     print_field!("Terminal", "dev:/tty");
+    print_field!(
+        "Shell",
+        "{}",
+        std::env::var("SHELL")
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("none")
+    );
     print_field!("CPU", "{}", cpuinfo.model());
     print_field!(
         "Memory",

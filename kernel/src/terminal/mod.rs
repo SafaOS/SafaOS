@@ -373,7 +373,7 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
                     Name::try_from("Shell").unwrap(),
                     // Maybe we can make a const function or a macro for this
                     make_path!("sys", "bin/safa"),
-                    &["-i"],
+                    &["sys:/bin/safa", "-i"],
                     &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
                     SpawnFlags::empty(),
                     *KERNEL_ABI_STRUCTURES,
