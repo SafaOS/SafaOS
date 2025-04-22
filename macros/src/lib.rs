@@ -26,17 +26,17 @@ pub fn test_module(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let len = func_names.len();
     let test_main: Item = parse_quote! {
         pub fn test_main() {
-            crate::cross_println!("\x1B[36m[TEST]\x1B[0m: Running {} tests", #len);
+            crate::logln!("\x1B[36m[TEST]\x1B[0m: Running {} tests", #len);
             let test_start = crate::time!();
             #(
-                crate::cross_println!("\x1B[36m[TEST]\x1B[0m: Running {} test", stringify!(#func_names));
+                crate::logln!("\x1B[36m[TEST]\x1B[0m: Running {} test", stringify!(#func_names));
                 let time = crate::time!();
                 #func_names();
                 let time = crate::time!() - time;
-                crate::cross_println!("\x1B[32m[OK] ({} ms)\x1B[0m", time);
+                crate::logln!("\x1B[32m[OK] ({} ms)\x1B[0m", time);
             )*
             let test_end = crate::time!();
-            crate::cross_println!("\x1B[36m[TEST]\x1B[0m: Finished {} tests in ({}ms)", #len, test_end - test_start);
+            crate::logln!("\x1B[36m[TEST]\x1B[0m: Finished {} tests in ({}ms)", #len, test_end - test_start);
         }
     };
 

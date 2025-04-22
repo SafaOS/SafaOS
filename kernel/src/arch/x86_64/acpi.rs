@@ -1,8 +1,6 @@
 use core::mem::offset_of;
 
-use crate::{arch::x86_64::inw, limine::HDDM, serial, RSDP_ADDR};
-
-use super::outb;
+use crate::{limine::HDDM, RSDP_ADDR};
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
@@ -327,27 +325,4 @@ pub fn get_sdt() -> &'static dyn PTSD {
     let rsdt_ptr = rsdt_addr as *const RSDT;
 
     unsafe { &*rsdt_ptr }
-}
-
-/// enable the acpi if not already enabled
-pub fn enable_acpi(fadt: &FADT) {
-    if !(fadt.smi_cmd == 0
-        || ((fadt.acpi_enable == fadt.acpi_disable) && fadt.acpi_disable == 0)
-        || inw(fadt.pm1a_cnt_blk as u16) & 1 == 1)
-    {
-        serial!(
-            "enabling the acpi... smi: 0x{:X}, enable: 0x{:X}\n",
-            fadt.smi_cmd as u16,
-            fadt.acpi_enable
-        );
-        outb(fadt.smi_cmd as u16, fadt.acpi_enable);
-
-        while (inw(fadt.smi_cmd as u16) & 1) == 0 {
-            serial!("stuff\n")
-        }
-
-        if (inw(fadt.pm1a_evt_blk as u16) & 1) == 0 {
-            panic!("failed to enable acpi");
-        }
-    }
 }

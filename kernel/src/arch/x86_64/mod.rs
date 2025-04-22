@@ -9,9 +9,10 @@ pub mod utils;
 
 use core::arch::asm;
 
-use acpi::{get_sdt, FADT};
 use interrupts::{apic, init_idt};
 use serial::init_serial;
+
+use crate::info;
 
 use self::gdt::init_gdt;
 
@@ -33,14 +34,6 @@ pub fn outw(port: u16, value: u16) {
     unsafe {
         asm!("out dx, ax", in("dx") port, in("ax") value, options(nomem, nostack, preserves_flags));
     }
-}
-
-pub fn inw(port: u16) -> u16 {
-    let value;
-    unsafe {
-        asm!("in ax, dx", out("ax") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    }
-    value
 }
 
 #[inline]
@@ -95,7 +88,8 @@ pub fn init_phase1() {
 /// complexer init
 #[inline]
 pub fn init_phase2() {
-    acpi::enable_acpi(FADT::get(get_sdt()));
+    info!("Enabling apic interrupts...");
     apic::enable_apic_interrupts();
+    info!("Enabling sse...");
     enable_sse();
 }

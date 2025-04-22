@@ -8,6 +8,7 @@ use crate::{
         utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
         x86_64::acpi::{self, MADT},
     },
+    info,
     limine::HDDM,
     serial, PhysAddr, VirtAddr,
 };
@@ -119,12 +120,14 @@ pub unsafe fn write_ioapic_irq(n: u8, table: IOREDTBL) {
 fn enable_apic_keyboard(apic_id: u8) {
     unsafe {
         let keyboard = IOREDTBL::new(LVTEntry::new(0x21, LVTEntryFlags::empty()), apic_id);
-
         write_ioapic_irq(1, keyboard);
+
+        info!("Enabled APIC Keyboard.");
     }
 }
 
 fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
+    info!("Enabling apic timer...");
     fn apic_timer_ms_to_ticks(ms: u64) -> u32 {
         let ticks_per_ms = unsafe { core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) };
         (ms * ticks_per_ms) as u32
@@ -150,8 +153,8 @@ fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
         asm!("cli");
 
         core::ptr::write_volatile(APIC_TIMER_TICKS_PER_MS.get(), diff_tick as u64 / 100);
-        serial!(
-            "calibrated with {} ticks in 100ms\n",
+        info!(
+            "APIC Timer calibrated with {} ticks in 100ms",
             core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) * 100
         );
     }
@@ -180,8 +183,8 @@ pub fn calibrate_tsc(apic_id: u8) {
         asm!("cli");
 
         core::ptr::write_volatile(TICKS_PER_MS.get(), diff_tick / 100);
-        serial!(
-            "calbrated with {} ticks in 100ms\n",
+        info!(
+            "Calibrated TSC with {} ticks in 100ms",
             core::ptr::read(TICKS_PER_MS.get()) * 100
         );
     }
@@ -199,6 +202,7 @@ pub fn enable_apic_interrupts() {
         IOAPIC_ADDR.store(ioapic_addr as usize, core::sync::atomic::Ordering::Relaxed);
 
         let apic_id = *(get_local_apic_reg(local_apic_addr, 0x20) as *const u8);
+        info!("Enabled APIC, apic_id is {apic_id}, IO APIC is at {ioapic_addr:#x}, local APIC is at {local_apic_addr:#x}");
         calibrate_tsc(apic_id);
         enable_apic_timer(local_apic_addr, apic_id);
         enable_apic_keyboard(apic_id);

@@ -76,7 +76,9 @@ pub fn khalt() -> ! {
 
 #[allow(unused_imports)]
 use core::panic::PanicInfo;
+use core::sync::atomic::AtomicBool;
 pub const QUITE_PANIC: bool = true;
+pub static BOOTING: AtomicBool = AtomicBool::new(false);
 
 /// prints to both the serial and the terminal doesn't print to the terminal if it panicked or if
 /// it is not ready...
@@ -92,6 +94,26 @@ macro_rules! cross_println {
     };
 }
 
+#[macro_export]
+macro_rules! logln {
+    ($($arg:tt)*) => {
+        $crate::serial!("{}\n", format_args!($($arg)*));
+        $crate::println!("{}", format_args!($($arg)*));
+    };
+}
+
+/// logs line to the TTY only when the kernel is initializing
+/// logs to the serial in all cases
+#[macro_export]
+macro_rules! logln_boot {
+    ($($arg:tt)*) => {
+        $crate::serial!("{}\n", format_args!($($arg)*));
+        if $crate::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
+            $crate::println!("{}", format_args!($($arg)*));
+        }
+    };
+}
+
 /// runtime debug info that is only available though test feature
 /// takes a $mod and an Arguments, mod must be a type
 #[macro_export]
@@ -99,7 +121,14 @@ macro_rules! debug {
     ($mod: path, $($arg:tt)*) => {
         // makes sure $mod is a valid type
         let _ = core::marker::PhantomData::<$mod>;
-        $crate::serial!("\x1B[38;2;0;155;200m[DEBUG]\x1B[38;2;255;155;0m {}: \x1B[0m{}\n", stringify!($mod), format_args!($($arg)*));
+        $crate::logln_boot!("\x1B[38;2;0;155;200m[DEBUG]\x1B[38;2;255;155;0m {}: \x1B[0m{}", stringify!($mod), format_args!($($arg)*));
+    };
+}
+
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => {
+        $crate::logln!("\x1B[34m[INFO]\x1B[0m: {}", format_args!($($arg)*));
     };
 }
 
@@ -160,13 +189,14 @@ fn print_stack_trace() {
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
     memory::sorcery::init_page_table();
-    println!("Terminal initialized successfully");
-
+    info!("Terminal initialized");
+    BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
     arch::init_phase2();
 
     unsafe {
         debug!(Scheduler, "Eve starting...");
+        BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
         Scheduler::init(eve::main, "Eve");
     }
 
