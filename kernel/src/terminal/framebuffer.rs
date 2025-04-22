@@ -2,6 +2,7 @@ const RASTER_HEIGHT: RasterHeight = RasterHeight::Size20;
 const FONT_WEIGHT: FontWeight = FontWeight::Regular;
 const RASTER_WIDTH: usize = get_raster_width(FONT_WEIGHT, RASTER_HEIGHT);
 const CURSOR_CHAR: char = '_';
+const TAB_WIDTH: usize = 5;
 
 use crate::{
     drivers::framebuffer::FrameBufferDriver,
@@ -153,6 +154,11 @@ impl FrameBufferTTY<'_> {
         match c {
             '\n' => self.newline(),
             '\r' => self.cursor_x = DEFAULT_CURSOR_X,
+            '\t' => {
+                for _ in 0..TAB_WIDTH {
+                    self.putc_unsynced(' ');
+                }
+            }
             _ => self.draw_raster(raster, self.fg_color, self.bg_color),
         }
     }
