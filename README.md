@@ -19,8 +19,15 @@ you need:
 - xorriso
 - make
 - cargo
+- jq
 
-simply run
+first you have to run
+```
+./init.sh
+```
+once every rust `libstd` update.
+
+then to build run
 ```
 ./build.sh
 ```
@@ -34,11 +41,12 @@ you'll need:
 - qemu-system-x86_64
 
 ```
-./run.sh
-```
-or to run without kvm
-```
 ./run.sh no-kvm
+```
+
+or run **with** kvm (faster but kvm might not be available or broken)
+```
+./run.sh
 ```
 otherwise you have the iso `safaos.iso` feel free to do whatever you want with it
 
