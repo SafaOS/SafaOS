@@ -25,7 +25,8 @@ first you have to run
 ```
 ./init.sh
 ```
-once every rust `libstd` update.
+once every rust `libstd` update (or if you are not actively working on the project just once every `git pull` would work).
+
 
 then to build run
 ```
