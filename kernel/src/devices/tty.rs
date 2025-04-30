@@ -1,6 +1,6 @@
 use core::str;
 
-use crate::utils::locks::RwLock;
+use crate::utils::locks::{RwLock, SPIN_AMOUNT};
 use int_enum::IntEnum;
 
 use crate::{
@@ -26,26 +26,26 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
 
     fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
         loop {
-            let lock = self.try_write();
+            let mut tty = self.write();
+            let stdin = tty.stdin();
 
-            if let Some(mut tty) = lock {
-                let stdin = tty.stdin();
+            if (stdin.last() == Some(&b'\n') && tty.settings.contains(TTYSettings::CANONICAL_MODE))
+                || (!stdin.is_empty() && !tty.settings.contains(TTYSettings::CANONICAL_MODE))
+            {
+                let count = stdin.len().min(buffer.len());
+                buffer[..count].copy_from_slice(&stdin.as_bytes()[..count]);
 
-                if (stdin.last() == Some(&b'\n')
-                    && tty.settings.contains(TTYSettings::CANONICAL_MODE))
-                    || (!stdin.is_empty() && !tty.settings.contains(TTYSettings::CANONICAL_MODE))
-                {
-                    let count = stdin.len().min(buffer.len());
-                    buffer[..count].copy_from_slice(&stdin.as_bytes()[..count]);
-
-                    tty.stdin_pop_front(count);
-                    tty.disable_input();
-                    return Ok(count);
-                }
-
-                tty.enable_input();
+                tty.stdin_pop_front(count);
+                tty.disable_input();
+                return Ok(count);
             }
 
+            tty.enable_input();
+            // TODO: add thread sleep
+            drop(tty);
+            for _ in 0..SPIN_AMOUNT {
+                core::hint::spin_loop();
+            }
             thread_yield();
         }
     }

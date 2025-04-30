@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use lock_api::{GuardSend, RawMutex, RawRwLock};
 
 use crate::threading::expose::thread_yield;
-const SPIN_AMOUNT: u32 = 10_000;
+pub const SPIN_AMOUNT: u32 = 10_000;
 
 pub struct LockRawMutex(AtomicBool);
 
