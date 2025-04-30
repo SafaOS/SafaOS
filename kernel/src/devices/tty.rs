@@ -1,7 +1,7 @@
 use core::str;
 
+use crate::utils::locks::RwLock;
 use int_enum::IntEnum;
-use spin::RwLock;
 
 use crate::{
     drivers::vfs::{CtlArgs, FSError, FSResult},

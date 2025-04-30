@@ -9,7 +9,7 @@ noto-sans-mono-bitmap = { version = "0.3.0", features = ["size_20"] }
 
 safa-utils = { path = "../utils" }
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
-spin = "0.9.8"
+spin = {version = "0.9.8", default-features = false, features = ["lazy", "once"]}
 bitflags = "2.6.0"
 macros = { path = "../macros" }
 int-enum = "1.1"
@@ -25,6 +25,7 @@ serde_json = { version = "1.0", git = "https://github.com/ObserverUnit/srede-jso
 compile-time = "0.2"
 slab = { version = "0.4", default-features = false }
 thiserror = { version = "2.0.12", default-features = false }
+lock_api = "0.4.12"
 [dev-dependencies]
 [features]
 test = []

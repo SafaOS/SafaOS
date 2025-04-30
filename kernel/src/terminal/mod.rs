@@ -1,8 +1,8 @@
+use crate::utils::locks::RwLock;
 use bitflags::bitflags;
 use core::fmt::Write;
 use framebuffer::FrameBufferTTY;
 use lazy_static::lazy_static;
-use spin::RwLock;
 
 use crate::{
     drivers::keyboard::{

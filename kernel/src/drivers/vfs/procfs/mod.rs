@@ -3,11 +3,11 @@ use core::{
     str::{self, FromStr},
 };
 
+use crate::utils::locks::Mutex;
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use hashbrown::HashMap;
 use init::InitStateItem;
 use safa_utils::types::Name;
-use spin::Mutex;
 use tasks::TaskInfoFile;
 
 use crate::{

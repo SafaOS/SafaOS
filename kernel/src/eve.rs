@@ -1,6 +1,7 @@
 //! Eve is the kernel's main loop (PID 0)
 //! it is responsible for managing a few things related to it's children
 
+use crate::utils::locks::Mutex;
 use crate::{
     debug, drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield,
 };
@@ -9,7 +10,7 @@ use safa_utils::{
     abi::raw::processes::{AbiStructures, TaskStdio},
     make_path,
 };
-use spin::{Lazy, Mutex};
+use spin::Lazy;
 
 pub struct Eve {
     clean_up_list: Vec<PhysPageTable>,
@@ -80,15 +81,5 @@ pub fn main() -> ! {
 
 /// adds a page table to the list of page tables that need to be cleaned up
 pub fn add_cleanup(page_table: PhysPageTable) {
-    loop {
-        match EVE.try_lock() {
-            Some(mut eve) => {
-                eve.add_cleanup(page_table);
-                return;
-            }
-            None => {
-                thread_yield();
-            }
-        }
-    }
+    EVE.lock().add_cleanup(page_table);
 }

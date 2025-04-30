@@ -4,26 +4,27 @@
 use core::ops::Deref;
 
 pub use safa_utils::*;
+use spin::lazy::Lazy;
 pub mod alloc;
 pub mod elf;
+pub mod locks;
 pub mod ustar;
 
-use spin::{Lazy, Mutex};
-
+/// A wrapper around [`locks::Mutex`] which allows an outsider trait implementation
 pub struct Locked<T: ?Sized> {
-    inner: Mutex<T>,
+    inner: locks::Mutex<T>,
 }
 
 impl<T> Locked<T> {
     pub const fn new(inner: T) -> Self {
         Self {
-            inner: Mutex::new(inner),
+            inner: locks::Mutex::new(inner),
         }
     }
 }
 
 impl<T> Deref for Locked<T> {
-    type Target = Mutex<T>;
+    type Target = locks::Mutex<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -44,7 +45,7 @@ impl<T> LazyLock<T> {
 }
 
 impl<T> Deref for LazyLock<T> {
-    type Target = Mutex<T>;
+    type Target = locks::Mutex<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner

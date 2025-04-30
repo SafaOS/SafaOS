@@ -3,8 +3,8 @@ mod set1;
 
 use heapless::Vec;
 
+use crate::utils::locks::RwLock;
 use keys::{Key, KeyCode, KeyFlags};
-use spin::RwLock;
 
 const MAX_KEYS: usize = 256;
 

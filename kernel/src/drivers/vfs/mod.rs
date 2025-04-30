@@ -18,6 +18,7 @@ use crate::{
 pub mod procfs;
 pub mod ramfs;
 
+use crate::utils::locks::{Mutex, RwLock};
 use crate::utils::path::Path;
 use crate::utils::types::Name;
 use alloc::{
@@ -31,7 +32,6 @@ use safa_utils::{
     path::PathError,
     types::{DriveName, FileName},
 };
-use spin::{Mutex, RwLock};
 
 lazy_static! {
     pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());

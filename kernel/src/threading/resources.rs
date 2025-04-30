@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 
+use crate::utils::locks::{Mutex, MutexGuard};
 use alloc::vec::Vec;
-use spin::{Mutex, MutexGuard};
 
 use crate::drivers::vfs::{DirIterDescriptor, FileDescriptor};
 

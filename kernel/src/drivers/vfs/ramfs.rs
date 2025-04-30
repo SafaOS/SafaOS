@@ -1,12 +1,12 @@
 use core::str::FromStr;
 
+use crate::utils::locks::{Mutex, RwLock};
 use crate::utils::types::Name;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
-use spin::{Mutex, RwLock};
 
 use crate::devices::Device;
 use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};

@@ -4,11 +4,11 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize},
 };
 
+use crate::utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::utils::types::Name;
 use alloc::{boxed::Box, vec::Vec};
 use safa_utils::abi::raw::processes::AbiStructures;
 use serde::Serialize;
-use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     arch::threading::CPUStatus,

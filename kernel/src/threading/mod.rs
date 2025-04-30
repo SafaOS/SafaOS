@@ -8,10 +8,10 @@ use core::arch::asm;
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
+use crate::utils::locks::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::utils::types::Name;
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use slab::Slab;
-use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use task::{Task, TaskInfo, TaskState};
 
 use crate::{

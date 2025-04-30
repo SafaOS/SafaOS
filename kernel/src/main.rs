@@ -139,7 +139,7 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe {
         arch::x86_64::serial::SERIAL.force_unlock();
         if !QUITE_PANIC {
-            FRAMEBUFFER_TERMINAL.force_write_unlock();
+            FRAMEBUFFER_TERMINAL.force_unlock_write();
             FRAMEBUFFER_TERMINAL.write().clear();
         }
     }

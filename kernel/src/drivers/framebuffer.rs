@@ -1,6 +1,6 @@
+use crate::utils::locks::{Mutex, MutexGuard};
 use alloc::{boxed::Box, vec::Vec};
 use lazy_static::lazy_static;
-use spin::{mutex::Mutex, MutexGuard};
 
 use crate::{
     debug, limine,
@@ -65,7 +65,7 @@ impl<'a> FrameBuffer<'a> {
 
     #[inline]
     /// shifts the buffer by `pixels` pixels
-    /// can be used to achive scrolling
+    /// can be used to achieve scrolling
     /// ensures that there are self.width() * self.height() pixels to draw
     pub fn shift_buffer(&mut self, pixels: isize) {
         match pixels.cmp(&0) {
