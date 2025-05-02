@@ -6,9 +6,6 @@ set -eo pipefail
 PID=$!
 
 function cleanup {
-    pkill -P $PID
-    kill $PID
-
     echo "--------- BUILD LOG -------"
     cat last_build.log
     echo "--------- END BUILD LOG -------"
