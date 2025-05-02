@@ -13,13 +13,13 @@ const TEST_LOG_PATH: &str = "ram:/test.log";
 
 macro_rules! log {
     ($($arg:tt)*) => {
-        println!("\x1b[36m[TEST]\x1b[0m: {}", format_args!($($arg)*));
+        println!("[ \x1B[92m test \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
     };
 }
 
 macro_rules! log_fail {
     ($($arg:tt)*) => {
-        println!("\x1b[31m[FAILED]: {}\x1b[0m", format_args!($($arg)*));
+        println!("[ \x1B[31m fail \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
     };
 }
 
@@ -170,7 +170,7 @@ impl Test {
     }
 
     fn execute(&self) {
-        log!("Running test \"{}\"", self.name);
+        log!("running test \x1b[90m{}\x1b[0m...", self.name);
         match self.inner {
             TestInner::Typical {
                 path,
@@ -180,7 +180,7 @@ impl Test {
             TestInner::Special(f) => f(),
         }
 
-        println!("\x1b[32m[OK]\x1b[0m");
+        println!("[ \x1B[32m OK   \x1B[0m  ]")
     }
 }
 
@@ -232,14 +232,14 @@ const TEST_LIST: &[Test] = &[
 
         assert!(
             output.is_success() && expected.is_success(),
-            "Either expected output: {:?} or retrived output {:?} or both results are a failure",
+            "Either expected output: {:?} or retrieved output {:?} or both results are a failure",
             expected.result,
             output.result
         );
 
         if output.stdout() != expected.stdout() {
             log_fail!(
-                "Possible Memory Leak Detected\nexpected (`meminfo -k` output):\n{}\nbut got:\n{}",
+                "possible memory leak detected\nexpected (`meminfo -k` output):\n{}\nbut got:\n{}",
                 expected.stdout().trim_end_matches('\n'),
                 output.stdout().trim_end_matches('\n'),
             );
@@ -277,11 +277,11 @@ static MEMORY_INFO_CAPTURE: MemoryInfoCapture = MemoryInfoCapture::new();
 fn main() {
     // makes sure panic uses the custom println
     std::panic::set_hook(Box::new(panic_hook));
-    log!("Running {} tests", TEST_LIST.len());
+    log!("running {} tests", TEST_LIST.len());
 
     for test in TEST_LIST {
         test.execute();
     }
 
-    log!("Done running all tests");
+    log!("userspace test script done");
 }

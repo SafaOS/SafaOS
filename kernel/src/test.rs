@@ -86,7 +86,7 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     let first_log = crate::time!();
 
     for test in tests_iter {
-        log!("running test \x1B[90m{}\x1B[0m", test.name(),);
+        log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
         let last_log = crate::time!();
         test.run();
         ok!(last_log);
