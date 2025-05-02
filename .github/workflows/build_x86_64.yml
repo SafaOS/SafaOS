@@ -33,7 +33,7 @@ jobs:
         run: ./build.sh --tests
       - uses: actions/upload-artifact@v4
         with:
-          name: x86_64-iso
+          name: x86_64-tests-iso
           path: safaos-tests.iso
           if-no-files-found: error
       - name: ls
