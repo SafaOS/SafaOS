@@ -2,10 +2,10 @@ name: Build and Test X86_64
 
 on:
   push:
-    branches: 
-      - '**'
+    branches:
+      - "**"
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,22 +14,29 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: mlugg/setup-zig@v1
-      with:
-        version: 0.14.0
-    - name: Install deps
-      run: sudo apt update -y && sudo apt install xorriso qemu-system -y
-    - name: Setup
-      run: rustup update && rustup install nightly && rustup +nightly target add x86_64-unknown-none && rustup target add x86_64-unknown-none
-    - name: Build
-      run: ./init.sh && ./build.sh
-    - name: ls
-      run: pwd && ls
-    - name: Run tests
-      run: ./test.sh
-    - uses: actions/upload-artifact@v4
-      with:
-        name: x86_64-iso
-        path: safaos.iso
-        if-no-files-found: error
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
+      - name: Install deps
+        run: sudo apt update -y && sudo apt install xorriso qemu-system -y
+      - name: Setup
+        run: rustup update && rustup install nightly && rustup +nightly target add x86_64-unknown-none && rustup target add x86_64-unknown-none
+      - name: Build
+        run: ./init.sh && ./build.sh
+      - name: Build Tests
+        run: ./init.sh && ./build.sh --tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-iso
+          path: safaos-tests.iso
+          if-no-files-found: error
+      - name: ls
+        run: pwd && ls
+      - name: Run tests
+        run: ./test.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-iso
+          path: safaos.iso
+          if-no-files-found: error
