@@ -11,18 +11,30 @@ set -eo pipefail
 
 KVM=true
 GUI=true
+TESTS=false
 DEBUGGER=false
 
 for arg in "$@"
 do
     case $arg in
-        no-kvm)
+        "--help")
+            echo "Usage: $0 [options]"
+            echo "Options:"
+            echo "  --no-kvm      Runs qemu without kvm"
+            echo "  --no-gui      Runs qemu without gui"
+            echo "  --debugger    Runs qemu with a gdb server"
+            exit 0
+            ;;
+        "--no-kvm")
             KVM=false
             ;;
-        no-gui)
+        "--no-gui")
             GUI=false
             ;;
-        debugger)
+        "--tests")
+            TESTS=true
+            ;;
+        "--debugger")
             DEBUGGER=true
             ;;
         *)
@@ -32,9 +44,14 @@ do
     esac
 done
 
-QEMU_ARGS="-drive format=raw,file=safaos.iso -serial stdio -m 512M -bios common/OVMF-pure-efi.fd"
+QEMU_ARGS=""
 if $KVM; then QEMU_ARGS="$QEMU_ARGS -enable-kvm"; fi
 if $GUI; then QEMU_ARGS="$QEMU_ARGS -display gtk"; else QEMU_ARGS="$QEMU_ARGS -display none"; fi
 if $DEBUGGER; then QEMU_ARGS="$QEMU_ARGS -s -S"; fi
+
+FILE="safaos.iso"
+if $TESTS; then FILE="safaos-tests.iso"; fi
+
+QEMU_ARGS="-drive format=raw,file=$FILE -serial stdio -m 512M -bios common/OVMF-pure-efi.fd $QEMU_ARGS"
 
 qemu-system-x86_64 $QEMU_ARGS
