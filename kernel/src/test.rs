@@ -49,13 +49,15 @@ pub enum TestPiritory {
 }
 
 const fn get_test_piritory<T: ?Sized>() -> TestPiritory {
-    let name = type_name::<T>();
-    if const_str::contains!(name, "test::") {
-        TestPiritory::Lowest
-    } else if const_str::contains!(name, "arch::") {
-        TestPiritory::Highest
-    } else {
-        TestPiritory::Medium
+    const {
+        let name = type_name::<T>();
+        if const_str::contains!(name, "test::") {
+            TestPiritory::Lowest
+        } else if const_str::contains!(name, "arch::") {
+            TestPiritory::Highest
+        } else {
+            TestPiritory::Medium
+        }
     }
 }
 
