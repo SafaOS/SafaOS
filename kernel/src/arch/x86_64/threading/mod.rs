@@ -228,7 +228,6 @@ impl CPUStatus {
     /// argument `userspace` determines if the process is in ring0 or not
     /// # Safety
     /// The caller must ensure `page_table` is not freed, as long as [`Self`] is alive otherwise it will cause UB
-    /// TODO: maybe use lifetimes to make this safe?
     pub unsafe fn create(
         page_table: &mut PhysPageTable,
         argv: &[&str],

@@ -66,7 +66,6 @@ pub struct ElfHeader {
     pub _padding: [u8; 7],
 
     pub kind: ElfType,
-    //  TODO: this>>
     pub insturction_set: ElfInstrSet,
     pub version_2: u32,
 

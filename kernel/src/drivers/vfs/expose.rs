@@ -55,8 +55,6 @@ impl File {
     }
 
     pub fn truncate(&self, len: usize) -> FSResult<()> {
-        // TODO: work more on truncating, for now we are using the node directly
-        // i am not really sure if the VFS layer is even needed anymore because even reads and writes are just directing to the node
         self.with_fd(|fd| fd.truncate(len))
     }
 
