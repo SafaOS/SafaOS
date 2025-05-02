@@ -19,6 +19,7 @@ target
 
 iso_root
 safaos.iso
+safaos-tests.iso
 limine
 test.txt
 .vscode

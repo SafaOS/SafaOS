@@ -7,6 +7,7 @@ set -eo pipefail
 echo "Note that ./init.sh must be run at least once before running this script"
 
 ISO_PATH="safaos.iso"
+TESTS_ISO_PATH="safaos-tests.iso"
 ISO_BUILD_DIR="iso_root"
 
 RUSTC_TOOLCHAIN=$(cd common && ./get-rustc.sh && cd ..)
@@ -63,16 +64,20 @@ function install_toolchain {
     return 0
 }
 
-# TODO: release vs debug mode and such
-function cargo_build {
+function cargo_build_custom {
     CWD=$(pwd)
-    AT=$1
-    ARGS="${@:2}"
+    COMMAND=$1
+    AT=$2
+    ARGS="${@:3}"
 
     cd "$AT"
     install_toolchain
 
-    cargo build $ARGS --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
+    cargo $COMMAND $ARGS --message-format=json-render-diagnostics | jq -rs '.[] | select(.reason == "compiler-artifact") | select(.executable != null) | .executable'
+}
+# TODO: release vs debug mode and such
+function cargo_build {
+    cargo_build_custom build $@
 }
 
 # TODO: release vs debug mode and such
@@ -104,17 +109,27 @@ function build_programs {
 }
 
 build_programs
-KERNEL_ELF=$(cargo_build "kernel" --features=test)
+KERNEL_ELF=$(cargo_build "kernel")
+KERNEL_TESTS_ELF=$(cargo_build_custom test "kernel" --no-run)
 
-cp -v "$KERNEL_ELF" $ISO_BUILD_DIR/boot/kernel
-cp -v limine.conf limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin $ISO_BUILD_DIR/boot/limine
-cp -v limine/BOOTX64.EFI limine/BOOTIA32.EFI $ISO_BUILD_DIR/EFI/BOOT
+# TODO: make it not build both the tests versions and the normal version
+function build_final {
+    BOOT=$1
+    OUTPUT=$2
 
-build_ramdisk
+    cp -v "$BOOT" $ISO_BUILD_DIR/boot/kernel
+    cp -v limine.conf limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin $ISO_BUILD_DIR/boot/limine
+    cp -v limine/BOOTX64.EFI limine/BOOTIA32.EFI $ISO_BUILD_DIR/EFI/BOOT
 
-echo "Putting the iso together from the iso root directory: $ISO_BUILD_DIR"
-xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
+    build_ramdisk
+
+    echo "Putting the iso together from the iso root directory: $ISO_BUILD_DIR"
+    xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
             --efi-boot boot/limine/limine-uefi-cd.bin \
             -efi-boot-part --efi-boot-image --protective-msdos-label \
-            $ISO_BUILD_DIR -o $ISO_PATH
+            $ISO_BUILD_DIR -o $OUTPUT
+}
+
+build_final $KERNEL_ELF $ISO_PATH
+build_final $KERNEL_TESTS_ELF $TESTS_ISO_PATH

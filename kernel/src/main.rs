@@ -1,4 +1,7 @@
 #![no_std]
+#![feature(custom_test_frameworks)]
+#![test_runner(crate::test::test_runner)]
+#![reexport_test_harness_main = "kernel_testmain"]
 #![no_main]
 #![feature(abi_x86_interrupt)]
 #![feature(allocator_api)]
@@ -9,7 +12,7 @@
 #![feature(naked_functions)]
 #![feature(sync_unsafe_cell)]
 
-#[cfg(feature = "test")]
+#[cfg(test)]
 mod test;
 
 mod arch;
@@ -121,18 +124,17 @@ macro_rules! debug {
     ($mod: path, $($arg:tt)*) => {
         // makes sure $mod is a valid type
         let _ = core::marker::PhantomData::<$mod>;
-        $crate::logln_boot!("\x1B[38;2;0;155;200m[DEBUG]\x1B[38;2;255;155;0m {}: \x1B[0m{}", stringify!($mod), format_args!($($arg)*));
+        $crate::logln_boot!("[\x1B[31mDEBUG\x1B[0m]\x1B[38;2;255;155;0m {}\x1B[0m: {}", stringify!($mod), format_args!($($arg)*));
     };
 }
 
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        $crate::logln!("\x1B[34m[INFO]\x1B[0m: {}", format_args!($($arg)*));
+        $crate::logln!("[\x1B[33mINFO\x1B[0m]: {}", format_args!($($arg)*));
     };
 }
 
-#[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     unsafe { asm!("cli") }

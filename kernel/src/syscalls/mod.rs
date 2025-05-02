@@ -263,8 +263,8 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 processes::syswait(a, dest_code)
             }
             // power
-            SyscallTable::SysShutdown => Ok(power::shutdown()),
-            SyscallTable::SysReboot => Ok(power::reboot()),
+            SyscallTable::SysShutdown => power::shutdown(),
+            SyscallTable::SysReboot => power::reboot(),
             SyscallTable::SysUptime => Ok({
                 let dest_uptime = <&mut u64>::make(a as *mut u64)?;
                 *dest_uptime = time!();

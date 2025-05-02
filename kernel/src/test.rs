@@ -1,5 +1,12 @@
-use crate::{println, serial, threading::expose::thread_exit};
+use crate::{arch::power::shutdown, info};
 use macros::test_module;
+
+pub fn test_runner(_tests: &[()]) -> ! {
+    testing_module::test_main();
+    // printing this to the serial makes `test.sh` know that the kernel tests were successful
+    info!("finished running tests PLEASE EXIT...");
+    shutdown()
+}
 
 #[test_module]
 pub mod testing_module {
@@ -149,15 +156,4 @@ pub mod testing_module {
         assert_eq!(ret, 0);
         unsafe { core::arch::asm!("sti") }
     }
-}
-
-pub fn main() -> ! {
-    testing_module::test_main();
-    // printing this to the serial makes `test.sh` know that the kernel tests were successful
-    serial!("finished initing ...\n");
-    println!("finished running tests...");
-    println!("\x1B[38;2;0;255;0mBoot success! press ctrl + shift + C to start the shell\x1B[0m");
-    // interrupts are typically disabled during syscalls
-    unsafe { core::arch::asm!("cli") }
-    thread_exit(0)
 }

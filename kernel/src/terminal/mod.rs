@@ -9,11 +9,8 @@ use crate::{
         keys::{Key, KeyCode, KeyFlags},
         HandleKey,
     },
-    eve::KERNEL_ABI_STRUCTURES,
-    threading::expose::{pspawn, SpawnFlags},
     utils::{alloc::PageBString, bstr::BStr},
 };
-use safa_utils::{make_path, types::Name};
 
 pub mod framebuffer;
 
@@ -369,16 +366,6 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
             KeyCode::KeyC if key.flags.contains(KeyFlags::CTRL | KeyFlags::SHIFT) => {
                 self.clear();
                 self.interface.set_cursor(1, 1);
-                pspawn(
-                    Name::try_from("Shell").unwrap(),
-                    // Maybe we can make a const function or a macro for this
-                    make_path!("sys", "bin/safa"),
-                    &["sys:/bin/safa", "-i"],
-                    &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
-                    SpawnFlags::empty(),
-                    *KERNEL_ABI_STRUCTURES,
-                )
-                .unwrap();
             }
             KeyCode::Backspace if self.is_interactive() => {
                 self.hide_cursor();

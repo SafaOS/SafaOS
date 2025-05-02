@@ -30,8 +30,6 @@ slab = { version = "0.4", default-features = false }
 thiserror = { version = "2.0.12", default-features = false }
 lock_api = "0.4.12"
 [dev-dependencies]
-[features]
-test = []
 
 [profile.dev]
 panic = "abort"

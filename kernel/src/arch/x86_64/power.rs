@@ -10,7 +10,7 @@ use super::{
 const SLP_TYP_S5: u16 = 0x1C00;
 const SLP_EN: u16 = 1 << 13;
 
-pub fn shutdown() {
+pub fn shutdown() -> ! {
     let fadt = FADT::get(acpi::get_sdt());
 
     let pm1a_cnt_blk = fadt.pm1a_cnt_blk as u16;
@@ -25,9 +25,10 @@ pub fn shutdown() {
     // if failed to shutdown shutdown qemu!
     outw(0xB004, 0x2000);
     outw(0x604, 0x2000);
+    unreachable!()
 }
 
-pub fn reboot() {
+pub fn reboot() -> ! {
     unsafe { asm!("cli") };
 
     let fadt = FADT::get(acpi::get_sdt());
@@ -44,5 +45,5 @@ pub fn reboot() {
 
     println!("failed to reboot maybe your device is not supported yet?");
 
-    unsafe { asm!("sti") }
+    unreachable!()
 }

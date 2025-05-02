@@ -2,9 +2,7 @@
 //! it is responsible for managing a few things related to it's children
 
 use crate::utils::locks::Mutex;
-use crate::{
-    debug, drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield,
-};
+use crate::{drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield};
 use alloc::vec::Vec;
 use safa_utils::{
     abi::raw::processes::{AbiStructures, TaskStdio},
@@ -53,21 +51,44 @@ pub static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructur
 /// the main loop of Eve
 /// it will run until doomsday
 pub fn main() -> ! {
-    debug!(Eve, "Eve has been awaken ...");
+    crate::info!("Eve has been awaken ...");
     // TODO: make a macro or a const function to do this automatically
     serial!("Hello, world!, running tests...\n",);
 
-    #[cfg(feature = "test")]
+    #[cfg(test)]
     {
         use crate::threading::expose::{function_spawn, SpawnFlags};
         use crate::utils::types::Name;
 
+        fn run_tests() -> ! {
+            crate::kernel_testmain();
+            unreachable!()
+        }
+
         function_spawn(
             Name::try_from("TestRunner").unwrap(),
-            crate::test::main,
+            run_tests,
             &[],
             &[],
             SpawnFlags::CLONE_RESOURCES,
+            *KERNEL_ABI_STRUCTURES,
+        )
+        .unwrap();
+    }
+
+    #[cfg(not(test))]
+    {
+        use crate::threading::expose::{pspawn, SpawnFlags};
+        use crate::utils::types::Name;
+
+        // start the shell
+        pspawn(
+            Name::try_from("Shell").unwrap(),
+            // Maybe we can make a const function or a macro for this
+            make_path!("sys", "bin/safa"),
+            &["sys:/bin/safa", "-i"],
+            &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
+            SpawnFlags::empty(),
             *KERNEL_ABI_STRUCTURES,
         )
         .unwrap();
