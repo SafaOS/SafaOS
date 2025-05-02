@@ -71,10 +71,6 @@ function build_ramdisk {
 
 rm -vrf $ISO_BUILD_DIR
 
-if ! (test -d "limine") ; then
-    git clone https://github.com/limine-bootloader/limine.git --branch=v8.x-binary --depth=1
-fi
-
 make -C limine
 mkdir -pv $ISO_BUILD_DIR/boot/limine
 mkdir -pv $ISO_BUILD_DIR/EFI/BOOT

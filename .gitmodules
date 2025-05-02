@@ -4,3 +4,7 @@
 [submodule "SafaShell"]
 	path = Shell
 	url = https://github.com/SafaOS/Shell
+[submodule "limine"]
+	path = limine
+	url = https://github.com/limine-bootloader/limine
+	branch = v9.x-binary
