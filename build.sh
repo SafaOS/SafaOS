@@ -6,6 +6,26 @@
 set -eo pipefail
 echo "Note that ./init.sh must be run at least once before running this script"
 
+BUILD_TESTS=false
+for arg in "$@"
+do
+    case $arg in
+        "--help")
+            echo "Usage: $0 [options]"
+            echo "Options:"
+            echo "  --tests       Builds tests iso"
+            exit 0
+            ;;
+        "--tests")
+            BUILD_TESTS=true
+            ;;
+        *)
+            echo "Unknown argument $arg"
+            exit 1
+            ;;
+    esac
+done
+
 ISO_PATH="safaos.iso"
 TESTS_ISO_PATH="safaos-tests.iso"
 ISO_BUILD_DIR="iso_root"
@@ -109,8 +129,6 @@ function build_programs {
 }
 
 build_programs
-KERNEL_ELF=$(cargo_build "kernel")
-KERNEL_TESTS_ELF=$(cargo_build_custom test "kernel" --no-run)
 
 # TODO: make it not build both the tests versions and the normal version
 function build_final {
@@ -131,5 +149,10 @@ function build_final {
             $ISO_BUILD_DIR -o $OUTPUT
 }
 
-build_final $KERNEL_ELF $ISO_PATH
-build_final $KERNEL_TESTS_ELF $TESTS_ISO_PATH
+if $BUILD_TESTS; then
+    KERNEL_TESTS_ELF=$(cargo_build_custom test "kernel" --no-run)
+    build_final $KERNEL_TESTS_ELF $TESTS_ISO_PATH
+else
+    KERNEL_ELF=$(cargo_build "kernel")
+    build_final $KERNEL_ELF $ISO_PATH
+fi

@@ -6,8 +6,6 @@
 # debbugger: runs qemu with a gdb server
 
 set -eo pipefail
-# Builds an ISO first
-./build.sh > last_build.log
 
 KVM=true
 GUI=true
@@ -23,6 +21,7 @@ do
             echo "  --no-kvm      Runs qemu without kvm"
             echo "  --no-gui      Runs qemu without gui"
             echo "  --debugger    Runs qemu with a gdb server"
+            echo "  --tests       Runs tests"
             exit 0
             ;;
         "--no-kvm")
@@ -43,6 +42,11 @@ do
             ;;
     esac
 done
+
+BUILD_ARGS=""
+if $TESTS; then BUILD_ARGS="$BUILD_ARGS --tests"; fi
+
+./build.sh $BUILD_ARGS > last_build.log
 
 QEMU_ARGS=""
 if $KVM; then QEMU_ARGS="$QEMU_ARGS -enable-kvm"; fi
