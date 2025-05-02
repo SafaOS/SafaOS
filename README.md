@@ -42,7 +42,7 @@ you'll need:
 - qemu-system-x86_64
 
 ```
-./run.sh no-kvm
+./run.sh --no-kvm
 ```
 
 or run **with** kvm (faster but kvm might not be available or broken)
@@ -54,17 +54,17 @@ otherwise you have the iso `safaos.iso` feel free to do whatever you want with i
 ### Debugging
 you can also use the `run.sh` script to debug:
 ```
-./run.sh debugger no-kvm
+./run.sh --debugger --no-kvm
 ```
-(doesn't work with kvm for now)
+(doesn't work with kvm)
 and then connect to port 1234 with a gdb client i recommend using `rust-lldb`.
 
 ### Additional Information
 available arguments for the `run.sh` script are:
 
-- `no-kvm`: disables kvm
-- `no-gui`: disables gui
-- `debugger`: listens on port 1234 for a debugger
+- `--no-kvm`: disables kvm
+- `--no-gui`: disables gui
+- `--debugger`: listens on port 1234 for a debugger
 
 ## Testing
 there is an automated testing script called `test.sh` which is used to test SafaOS automatically
