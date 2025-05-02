@@ -1,159 +1,122 @@
-use crate::{arch::power::shutdown, info};
-use macros::test_module;
+use core::any::type_name;
 
-pub fn test_runner(_tests: &[()]) -> ! {
-    testing_module::test_main();
+use crate::{
+    arch::power::shutdown,
+    info,
+    threading::expose::{pspawn, wait, SpawnFlags},
+};
+use safa_utils::{
+    abi::raw::processes::{AbiStructures, TaskStdio},
+    make_path,
+    types::Name,
+};
+
+macro_rules! log {
+    ($($arg:tt)*) => {
+        $crate::logln!("[ \x1B[92m test \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
+    };
+}
+
+macro_rules! ok {
+    ($last_time: expr) => {
+        $crate::logln!(
+            "[ \x1B[92m OK   \x1B[0m  ]\x1b[90m:\x1B[0m delta {}ms",
+            $crate::time!() - $last_time
+        );
+    };
+}
+
+pub trait Testable {
+    fn run(&self);
+    #[inline(always)]
+    fn name(&self) -> &'static str {
+        type_name::<Self>()
+    }
+    #[inline(always)]
+    fn piritory(&self) -> TestPiritory {
+        get_test_piritory::<Self>()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Represents the priority of a test.
+pub enum TestPiritory {
+    // crate::arch tests must be ran before other tests to ensure fail order
+    Highest,
+    Medium,
+    // tests that run last, given to this module tests
+    Lowest,
+}
+
+const fn get_test_piritory<T: ?Sized>() -> TestPiritory {
+    let name = type_name::<T>();
+    if const_str::contains!(name, "test::") {
+        TestPiritory::Lowest
+    } else if const_str::contains!(name, "arch::") {
+        TestPiritory::Highest
+    } else {
+        TestPiritory::Medium
+    }
+}
+
+impl<T: Fn()> Testable for T {
+    fn run(&self) {
+        self();
+    }
+}
+
+pub fn test_runner(tests: &[&dyn Testable]) -> ! {
+    let tests_iter = tests
+        .iter()
+        .filter(|x| x.piritory() == TestPiritory::Highest);
+    let tests_iter = tests_iter.chain(
+        tests
+            .iter()
+            .filter(|x| x.piritory() == TestPiritory::Medium),
+    );
+    let tests_iter = tests_iter.chain(
+        tests
+            .iter()
+            .filter(|x| x.piritory() == TestPiritory::Lowest),
+    );
+
+    log!("running {} tests", tests.len());
+    let first_log = crate::time!();
+
+    for test in tests_iter {
+        log!("running test \x1B[90m{}\x1B[0m", test.name(),);
+        let last_log = crate::time!();
+        test.run();
+        ok!(last_log);
+    }
+    info!("finished running tests in {}ms", crate::time!() - first_log);
+
     // printing this to the serial makes `test.sh` know that the kernel tests were successful
-    info!("finished running tests PLEASE EXIT...");
+    info!("PLEASE EXIT");
     shutdown()
 }
 
-#[test_module]
-pub mod testing_module {
-    use crate::utils::abi::raw::processes::{AbiStructures, TaskStdio};
-    use crate::utils::types::Name;
-    use alloc::vec::Vec;
+// runs the userspace test script
+// always runs last because it is given the lowest priority (`[TestPiritory::Lowest`] because it is in this module)
+#[test_case]
+fn userspace_test_script() {
+    unsafe { core::arch::asm!("cli") }
+    use crate::drivers::vfs::expose::File;
 
-    use crate::memory::frame_allocator;
-    use crate::memory::paging::PAGE_SIZE;
-    use crate::println;
-    use crate::threading::expose::pspawn;
-    use crate::threading::expose::wait;
-    use crate::threading::expose::SpawnFlags;
-    use crate::utils::alloc::PageVec;
-    use core::arch::asm;
-    use core::mem::MaybeUninit;
-    use safa_utils::make_path;
+    let stdio = File::open(make_path!("dev", "/ss")).unwrap();
+    let stdio = TaskStdio::new(Some(stdio.fd()), Some(stdio.fd()), Some(stdio.fd()));
 
-    fn serial() {}
-    fn print() {}
+    let pid = pspawn(
+        Name::try_from("Tester").unwrap(),
+        make_path!("sys", "bin/safa-tests"),
+        &[],
+        &[],
+        SpawnFlags::empty(),
+        AbiStructures { stdio },
+    )
+    .unwrap();
+    let ret = wait(pid);
 
-    #[cfg(target_arch = "x86_64")]
-    fn long_mode() {
-        let rax: u64;
-        unsafe {
-            asm!(
-                "
-                    mov rax, 0xFFFFFFFFFFFFFFFF
-                    mov {}, rax
-                ",
-                out(reg) rax
-            );
-        };
-
-        assert_eq!(rax, 0xFFFFFFFFFFFFFFFF);
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    fn interrupts() {
-        unsafe { asm!("int3") }
-    }
-
-    fn allocator() {
-        let mut test = Vec::new();
-
-        for i in 0..100 {
-            test.push(i);
-        }
-
-        println!("{:#?}\nAllocated Vec with len {}", test, test.len());
-    }
-
-    fn page_allocator_test() {
-        let mut test = PageVec::with_capacity(50);
-
-        let page = [MaybeUninit::<u8>::uninit(); PAGE_SIZE];
-        for _ in 0..50 {
-            test.push(page);
-        }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    // syscall tests
-    fn syscall() {
-        let msg = "Hello from syswrite!\n";
-        let len = msg.len();
-        let msg = msg.as_ptr();
-
-        unsafe {
-            // writing "Hello from syswrite!\n" to the terminal
-            asm!(
-                "mov rax, 3
-                mov rdi, 1
-                mov rsi, 0
-                mov rdx, r9
-                mov rcx, r10
-                mov r8, 0
-                int 0x80", in("r9") msg, in("r10") len
-            );
-            // sync
-            asm!(
-                "
-                mov rax, 0x10
-                mov rdi, 1
-                int 0x80
-            "
-            )
-        }
-    }
-
-    fn frame_allocator() {
-        let mut frames = heapless::Vec::<_, 1024>::new();
-        for _ in 0..frames.capacity() {
-            frames
-                .push(frame_allocator::allocate_frame().unwrap())
-                .unwrap();
-        }
-
-        for i in 1..frames.capacity() {
-            assert_ne!(frames[i - 1].start_address(), frames[i].start_address());
-        }
-
-        let last_frame = frames[frames.len() - 1];
-        for frame in frames.iter() {
-            frame_allocator::deallocate_frame(*frame);
-        }
-        let allocated = frame_allocator::allocate_frame().unwrap();
-        assert_eq!(allocated, last_frame);
-
-        frame_allocator::deallocate_frame(allocated);
-    }
-    fn spawn() {
-        unsafe { core::arch::asm!("cli") }
-        let pid = pspawn(
-            Name::try_from("TEST_CASE").unwrap(),
-            make_path!("sys", "/bin/true"),
-            &[],
-            &[],
-            SpawnFlags::empty(),
-            AbiStructures::default(),
-        )
-        .unwrap();
-        let ret = wait(pid);
-
-        assert_eq!(ret, 1);
-        unsafe { core::arch::asm!("sti") }
-    }
-
-    fn userspace() {
-        unsafe { core::arch::asm!("cli") }
-        use crate::drivers::vfs::expose::File;
-
-        let stdio = File::open(make_path!("dev", "/ss")).unwrap();
-        let stdio = TaskStdio::new(Some(stdio.fd()), Some(stdio.fd()), Some(stdio.fd()));
-
-        let pid = pspawn(
-            Name::try_from("Tester").unwrap(),
-            make_path!("sys", "bin/safa-tests"),
-            &[],
-            &[],
-            SpawnFlags::empty(),
-            AbiStructures { stdio },
-        )
-        .unwrap();
-        let ret = wait(pid);
-
-        assert_eq!(ret, 0);
-        unsafe { core::arch::asm!("sti") }
-    }
+    assert_eq!(ret, 0);
+    unsafe { core::arch::asm!("sti") }
 }

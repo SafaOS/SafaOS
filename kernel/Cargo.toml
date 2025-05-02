@@ -29,6 +29,7 @@ compile-time = "0.2"
 slab = { version = "0.4", default-features = false }
 thiserror = { version = "2.0.12", default-features = false }
 lock_api = "0.4.12"
+const-str = { version = "0.6.2", default-features = false }
 [dev-dependencies]
 
 [profile.dev]

@@ -2,49 +2,7 @@ use core::panic;
 
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, parse_quote, DeriveInput, ImplItem, Item, ItemImpl, ItemMod};
-
-/// takes a mod and puts a function called `test_main` in it which executes all of it is functions
-/// used by kernel for tests (test feature)
-#[proc_macro_attribute]
-pub fn test_module(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut module = parse_macro_input!(item as ItemMod);
-
-    let mut content = module.content.take().unwrap();
-
-    let func_names: Vec<_> = content
-        .1
-        .iter()
-        .filter_map(|x| {
-            if let Item::Fn(func) = x {
-                Some(func.sig.ident.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-    let len = func_names.len();
-    let test_main: Item = parse_quote! {
-        pub fn test_main() {
-            crate::logln!("\x1B[36m[TEST]\x1B[0m: Running {} tests", #len);
-            let test_start = crate::time!();
-            #(
-                crate::logln!("\x1B[36m[TEST]\x1B[0m: Running {} test", stringify!(#func_names));
-                let time = crate::time!();
-                #func_names();
-                let time = crate::time!() - time;
-                crate::logln!("\x1B[32m[OK] ({} ms)\x1B[0m", time);
-            )*
-            let test_end = crate::time!();
-            crate::logln!("\x1B[36m[TEST]\x1B[0m: Finished {} tests in ({}ms)", #len, test_end - test_start);
-        }
-    };
-
-    content.1.push(test_main);
-
-    module.content = Some(content);
-    TokenStream::from(quote! {#module})
-}
+use syn::{parse_macro_input, DeriveInput, ImplItem, ItemImpl};
 
 /// used by the kernel [keyboard driver](file://kernel/src/drivers/keyboard.rs)
 /// impl EncodeKey for key set enum

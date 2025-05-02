@@ -328,6 +328,13 @@ impl<T: TTYInterface> TTY<T> {
         self.stdin.as_str()
     }
 
+    // used by tests
+    #[allow(unused)]
+    #[inline]
+    pub fn stdout(&self) -> &BStr {
+        self.stdout_buffer.as_bstr()
+    }
+
     #[inline(always)]
     pub fn stdin_pop_front(&mut self, amount: usize) {
         self.stdin.pop_front(amount)

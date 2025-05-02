@@ -1,6 +1,6 @@
 //! bump allocator for large kernel allocations
 //! it is still kinda slow for really large allocations it takes about 1 second to allocate 4 mbs
-//! makes use of memmory mapping and `FrameAllocator` (TODO: check if these are possible reasons it
+//! makes use of memory mapping and `FrameAllocator` (TODO: check if these are possible reasons it
 //! is slow)
 
 use core::alloc::{AllocError, Allocator};
@@ -311,3 +311,16 @@ lazy_static! {
 }
 
 pub type PageAlloc = &'static Locked<PageAllocator>;
+
+#[test_case]
+fn page_allocator_test() {
+    use crate::utils::alloc::PageVec;
+    use core::mem::MaybeUninit;
+
+    let mut test = PageVec::with_capacity(50);
+
+    let page = [MaybeUninit::<u8>::uninit(); PAGE_SIZE];
+    for _ in 0..50 {
+        test.push(page);
+    }
+}

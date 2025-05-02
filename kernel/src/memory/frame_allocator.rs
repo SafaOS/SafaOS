@@ -237,3 +237,24 @@ pub fn mapped_frames() -> usize {
 pub fn usable_frames() -> usize {
     REGION_ALLOCATOR.lock().usable_frames()
 }
+
+#[test_case]
+fn frame_allocator_test() {
+    let mut frames = heapless::Vec::<_, 1024>::new();
+    for _ in 0..frames.capacity() {
+        frames.push(allocate_frame().unwrap()).unwrap();
+    }
+
+    for i in 1..frames.capacity() {
+        assert_ne!(frames[i - 1].start_address(), frames[i].start_address());
+    }
+
+    let last_frame = frames[frames.len() - 1];
+    for frame in frames.iter() {
+        deallocate_frame(*frame);
+    }
+    let allocated = allocate_frame().unwrap();
+    assert_eq!(allocated, last_frame);
+
+    deallocate_frame(allocated);
+}

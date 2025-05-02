@@ -6,6 +6,7 @@
 #![feature(abi_x86_interrupt)]
 #![feature(allocator_api)]
 #![feature(pattern)]
+#![feature(const_type_name)]
 #![feature(box_vec_non_null)]
 #![feature(vec_into_raw_parts)]
 #![feature(iter_collect_into)]

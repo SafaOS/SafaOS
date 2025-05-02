@@ -1,6 +1,8 @@
 pub mod expose;
 pub mod resources;
 pub mod task;
+#[cfg(test)]
+mod tests;
 
 pub type Pid = usize;
 

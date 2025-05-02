@@ -1,9 +1,5 @@
 #!/bin/bash
 # A script to build and run SafaOS using qemu
-# arguments:
-# no-kvm: runs qemu without kvm
-# no-gui: runs qemu withou gui
-# debbugger: runs qemu with a gdb server
 
 set -eo pipefail
 

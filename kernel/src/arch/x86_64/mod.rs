@@ -4,6 +4,8 @@ pub mod interrupts;
 pub mod power;
 pub mod serial;
 mod syscalls;
+#[cfg(test)]
+mod tests;
 pub mod threading;
 pub mod utils;
 
@@ -87,7 +89,7 @@ pub fn init_phase1() {
     init_idt();
 }
 
-/// Complexer init ran after terminal initilization.
+/// Complexer init ran after terminal initialization.
 #[inline]
 pub fn init_phase2() {
     info!("enabling apic interrupts...");

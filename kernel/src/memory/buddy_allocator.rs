@@ -36,7 +36,7 @@ impl Block {
     }
     /// divides self into 2 buddies
     /// returns the right buddy
-    /// self is still vaild and it points to the left buddy
+    /// self is still valid and it points to the left buddy
     /// both self and buddy is free after this
     pub fn divide<'b>(&mut self) -> &'b mut Block {
         self.free = true;
@@ -244,8 +244,8 @@ impl BuddyAllocator<'_> {
         Some(results)
     }
 
-    /// coalescence buddies returns wether or not it coalescenced anything
-    /// doesn't peform full coalescence
+    /// coalescence buddies returns whether or not it coalescenced anything
+    /// doesn't perform full coalescence
     fn coalescence_buddies(&mut self) -> bool {
         let mut results = false;
 
@@ -269,7 +269,7 @@ impl BuddyAllocator<'_> {
         }
     }
 
-    /// peforms full coalescence_buddies
+    /// performs full coalescence_buddies
     fn coalescence_buddies_full(&mut self) {
         while self.coalescence_buddies() {}
     }
@@ -317,3 +317,16 @@ unsafe impl GlobalAlloc for LazyLock<BuddyAllocator<'static>> {
 static GLOBAL_ALLOCATOR: LazyLock<BuddyAllocator> = LazyLock::new(|| {
     Locked::new(BuddyAllocator::create().expect("Failed to create buddy allocator"))
 });
+
+#[test_case]
+fn buddy_allocator_test() {
+    use alloc::vec::Vec;
+
+    let mut test = Vec::new();
+
+    for i in 0..100 {
+        test.push(i);
+    }
+
+    crate::println!("{:#?}\nAllocated Vec with len {}", test, test.len());
+}
