@@ -90,8 +90,8 @@ pub fn init_phase1() {
 /// Complexer init ran after terminal initilization.
 #[inline]
 pub fn init_phase2() {
-    info!("Enabling apic interrupts...");
+    info!("enabling apic interrupts...");
     apic::enable_apic_interrupts();
-    info!("Enabling sse...");
+    info!("enabling sse...");
     enable_sse();
 }

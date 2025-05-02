@@ -122,12 +122,12 @@ fn enable_apic_keyboard(apic_id: u8) {
         let keyboard = IOREDTBL::new(LVTEntry::new(0x21, LVTEntryFlags::empty()), apic_id);
         write_ioapic_irq(1, keyboard);
 
-        info!("Enabled APIC Keyboard.");
+        info!("enabled APIC Keyboard.");
     }
 }
 
 fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
-    info!("Enabling apic timer...");
+    info!("enabling apic timer...");
     fn apic_timer_ms_to_ticks(ms: u64) -> u32 {
         let ticks_per_ms = unsafe { core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) };
         (ms * ticks_per_ms) as u32
@@ -184,7 +184,7 @@ pub fn calibrate_tsc(apic_id: u8) {
 
         core::ptr::write_volatile(TICKS_PER_MS.get(), diff_tick / 100);
         info!(
-            "Calibrated TSC with {} ticks in 100ms",
+            "calibrated TSC with {} ticks in 100ms",
             core::ptr::read(TICKS_PER_MS.get()) * 100
         );
     }
@@ -202,7 +202,7 @@ pub fn enable_apic_interrupts() {
         IOAPIC_ADDR.store(ioapic_addr as usize, core::sync::atomic::Ordering::Relaxed);
 
         let apic_id = *(get_local_apic_reg(local_apic_addr, 0x20) as *const u8);
-        info!("Enabled APIC, apic_id is {apic_id}, IO APIC is at {ioapic_addr:#x}, local APIC is at {local_apic_addr:#x}");
+        info!("enabled APIC, apic_id is {apic_id}, IO APIC is at {ioapic_addr:#x}, local APIC is at {local_apic_addr:#x}");
         calibrate_tsc(apic_id);
         enable_apic_timer(local_apic_addr, apic_id);
         enable_apic_keyboard(apic_id);

@@ -51,7 +51,7 @@ pub static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructur
 /// the main loop of Eve
 /// it will run until doomsday
 pub fn main() -> ! {
-    crate::info!("Eve has been awaken ...");
+    crate::info!("eve has been awaken ...");
     // TODO: make a macro or a const function to do this automatically
     serial!("Hello, world!, running tests...\n",);
 

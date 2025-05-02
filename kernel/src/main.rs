@@ -124,14 +124,14 @@ macro_rules! debug {
     ($mod: path, $($arg:tt)*) => {
         // makes sure $mod is a valid type
         let _ = core::marker::PhantomData::<$mod>;
-        $crate::logln_boot!("[\x1B[31mDEBUG\x1B[0m]\x1B[38;2;255;155;0m {}\x1B[0m: {}", stringify!($mod), format_args!($($arg)*));
+        $crate::logln_boot!("\x1B[0m[ \x1B[91m debug \x1B[0m ]\x1B[90m {}:\x1B[0m {}", stringify!($mod), format_args!($($arg)*));
     };
 }
 
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        $crate::logln!("[\x1B[33mINFO\x1B[0m]: {}", format_args!($($arg)*));
+        $crate::logln!("[ \x1B[92m info \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*));
     };
 }
 
@@ -191,7 +191,7 @@ fn print_stack_trace() {
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
     memory::sorcery::init_page_table();
-    info!("Terminal initialized");
+    info!("terminal initialized");
     BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
     arch::init_phase2();
