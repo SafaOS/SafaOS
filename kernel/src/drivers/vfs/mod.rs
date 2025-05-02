@@ -432,13 +432,8 @@ impl VFS {
         // ramfs
         let ramfs = RwLock::new(ramfs::RamFS::new());
         this.mount(DriveName::new_const("ram"), ramfs).unwrap();
-        // devices
-        this.mount(
-            DriveName::new_const("dev"),
-            RwLock::new(ramfs::RamFS::new()),
-        )
-        .unwrap();
-        devices::init(&this);
+
+        devices::init(&mut this);
         // processes
         this.mount(
             DriveName::new_const("proc"),
@@ -472,7 +467,7 @@ impl VFS {
     /// mounts a file system as a drive
     /// returns Err(()) if not enough memory or there is an already mounted driver with that
     /// name
-    fn mount<F: FileSystem + 'static>(&mut self, name: DriveName, value: F) -> Result<(), ()> {
+    pub fn mount<F: FileSystem + 'static>(&mut self, name: DriveName, value: F) -> Result<(), ()> {
         if let Entry::Vacant(entry) = self.drives.entry(name) {
             entry.insert(Arc::new(value));
             Ok(())

@@ -1,10 +1,10 @@
 pub mod keys;
-mod set1;
+pub mod set1;
 
 use heapless::Vec;
 
 use crate::utils::locks::RwLock;
-use keys::{Key, KeyCode, KeyFlags};
+use keys::{Key, KeyCode, KeyFlags, ProcessUnencodedKeyByte};
 
 const MAX_KEYS: usize = 256;
 
@@ -104,6 +104,10 @@ impl Keyboard {
             }
         }
         false
+    }
+
+    pub fn process_byte<T: ProcessUnencodedKeyByte>(&mut self, byte: u8) -> Key {
+        T::process_byte(self, byte)
     }
 }
 

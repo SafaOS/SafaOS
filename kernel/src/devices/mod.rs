@@ -4,21 +4,28 @@ pub mod tty;
 use crate::{
     arch::serial::SERIAL,
     debug,
-    drivers::vfs::{CtlArgs, FSError, FSResult, InodeOps, VFS},
+    drivers::vfs::{self, CtlArgs, FSError, FSResult, InodeOps, VFS},
     terminal::FRAMEBUFFER_TERMINAL,
     time,
 };
 
-use safa_utils::make_path;
+use lock_api::RwLock;
+use safa_utils::{make_path, types::DriveName};
 
 pub fn add_device(vfs: &VFS, device: &'static dyn Device) {
     let path = make_path!("dev", device.name());
     vfs.mount_device(path, device).unwrap();
 }
 
-pub fn init(vfs: &VFS) {
+/// Mounts devices to the `dev:/` file system in the VFS
+pub fn init(vfs: &mut VFS) {
     debug!(VFS, "Initializing devices ...");
     let now = time!();
+    vfs.mount(
+        DriveName::new_const("dev"),
+        RwLock::new(vfs::ramfs::RamFS::new()),
+    )
+    .expect("failed to mount `dev:/`");
     add_device(vfs, &*FRAMEBUFFER_TERMINAL);
     add_device(vfs, &*SERIAL);
     let elapsed = time!() - now;

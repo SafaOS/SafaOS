@@ -4,9 +4,9 @@ use super::{pit, read_msr};
 use bitflags::bitflags;
 
 use crate::{
-    arch::{
+    arch::x86_64::{
+        acpi::{self, MADT},
         utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
-        x86_64::acpi::{self, MADT},
     },
     info,
     limine::HDDM,

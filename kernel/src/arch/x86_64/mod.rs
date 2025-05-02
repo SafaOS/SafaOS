@@ -78,6 +78,7 @@ fn _enable_avx() {
 }
 
 /// simple init less likely to panic
+/// in general memory and serial are required to be usable after this
 /// highly required
 #[inline]
 pub fn init_phase1() {
@@ -85,7 +86,8 @@ pub fn init_phase1() {
     init_gdt();
     init_idt();
 }
-/// complexer init
+
+/// Complexer init ran after terminal initilization.
 #[inline]
 pub fn init_phase2() {
     info!("Enabling apic interrupts...");

@@ -57,6 +57,7 @@ bitflags! {
     }
 }
 
+/// The CPU Status for each thread (registers)
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct CPUStatus {
@@ -83,7 +84,7 @@ pub struct CPUStatus {
     rdx: u64,
     rcx: u64,
     rbx: u64,
-    pub cr3: u64,
+    cr3: u64,
     rax: u64,
 
     // ffi-safe alternative for u128
@@ -417,6 +418,7 @@ context_switch_stub:
 );
 
 extern "C" {
+    ///  Takes a reference to [`CPUStatus`] and sets current cpu status (registers) to it
     pub fn restore_cpu_status(status: &CPUStatus) -> !;
 }
 

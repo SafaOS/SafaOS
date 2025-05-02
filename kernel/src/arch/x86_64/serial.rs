@@ -50,6 +50,7 @@ pub fn write_serial_string(s: &str) {
 
 pub struct Serial;
 lazy_static! {
+    /// Global Serial writer
     pub static ref SERIAL: Locked<Serial> = Locked::new(Serial);
 }
 impl Write for Serial {
