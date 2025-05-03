@@ -5,4 +5,4 @@ edition = "2021"
 
 [dependencies]
 heapless = { version = "0.8.0", features = ["serde"] }
-safa-abi = { path = "../abi" }
+safa-abi = { path = "../safa-abi" }

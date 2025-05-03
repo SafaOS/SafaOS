@@ -108,13 +108,13 @@ function cargo_build_safaos {
 }
 
 function build_programs {
-    SHELL=$(cargo_build_safaos "Shell" --release)
+    SHELL=$(cargo_build_safaos "crates-user/Shell" --release)
     RAMDISK+=("$SHELL" "bin/safa")
 
-    TESTS=$(cargo_build_safaos "tests" --release)
+    TESTS=$(cargo_build_safaos "crates-user/safa-tests" --release)
     RAMDISK+=("$TESTS" "bin/safa-tests")
 
-    BINUTILS=$(cargo_build_safaos "binutils" --release)
+    BINUTILS=$(cargo_build_safaos "crates-user/safa-binutils" --release)
 
     for bin in $BINUTILS;
     do
@@ -146,9 +146,9 @@ function build_final {
 }
 
 if $BUILD_TESTS; then
-    KERNEL_TESTS_ELF=$(cargo_build_custom test "kernel" --no-run)
+    KERNEL_TESTS_ELF=$(cargo_build_custom test "crates/kernel" --no-run)
     build_final $KERNEL_TESTS_ELF $TESTS_ISO_PATH
 else
-    KERNEL_ELF=$(cargo_build "kernel")
+    KERNEL_ELF=$(cargo_build "crates/kernel")
     build_final $KERNEL_ELF $ISO_PATH
 fi

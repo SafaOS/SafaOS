@@ -2,7 +2,7 @@
 	path = common
 	url = https://github.com/SafaOS/common
 [submodule "SafaShell"]
-	path = Shell
+	path = crates-user/Shell
 	url = https://github.com/SafaOS/Shell
 [submodule "limine"]
 	path = limine
