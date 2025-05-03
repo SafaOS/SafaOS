@@ -77,10 +77,25 @@ you'll need:
 ```
 the script will return a non-zero exit code if any testing fails
 
+
+## Project structure
+`crates-user/`: contains userspace programs written in rust, they are compiled and then copied to the ramdisk as `sys:/bin/`.
+
+`crates`: contains the kernel and other kernel-related crates.
+
+`ramdisk-include`: anything put in this directory will be included in the ramdisk at `sys:/` by the build system.
+
+`common`: some scripts, constants and files that are used by the build system (TODO: move some of the stuff here to ci).
+
+`build.sh`: a script that builds safaos isos to `/`.
+
+`run.sh`: a script that builds and runs safaos isos.
+
+`test.sh`: a script that builds and runs safaos test isos and checks if testing is successful.
+
 ## Current Features
 Check `FEATURES.md`.
-
-There is also a bunch of userspace programs written in rust in the `binutils/` directory they are compiled and then copied to the ramdisk as `sys:/bin/`, you can check them out alongside the `tests` for almost everything the kernel is currently capable of.
+you can also check `crates-user/` for examples of programs written in rust.
 
 > Aside from the rust stdandard library another method to interact with the kernel is through the [safa-api](https://github.com/SafaOS/safa-api) which provides low-level wrapper functions around the syscalls, and also some high-level wrappers (such as a userspace allocator which is a very high-level wrapper around the sbrk syscall, ofc the raw sbrk syscall is still exposed).
 
