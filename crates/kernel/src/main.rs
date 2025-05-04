@@ -32,8 +32,8 @@ extern crate alloc;
 use alloc::string::String;
 use arch::x86_64::serial;
 
-use drivers::keyboard::keys::Key;
 use drivers::keyboard::HandleKey;
+use drivers::keyboard::keys::Key;
 use globals::*;
 
 pub use memory::PhysAddr;
@@ -154,9 +154,10 @@ fn panic(info: &PanicInfo) -> ! {
     );
     print_stack_trace();
 
-    // crate::serial!("tty stdout dump:\n{}\n", crate::terminal().stdout_buffer);
-    // crate::serial!("tty stdin dump:\n{}\n", crate::terminal().stdin_buffer);
-    khalt()
+    #[cfg(test)]
+    arch::power::shutdown();
+    #[cfg(not(test))]
+    khalt();
 }
 
 #[allow(unused)]
