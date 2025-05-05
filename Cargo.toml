@@ -1,0 +1,22 @@
+[package]
+name = "safa-helper"
+version = "0.1.0"
+edition = "2024"
+description = "The SafaOS's build system and helper tools"
+
+[lib]
+name = "safa_builder"
+path = "src/builder.rs"
+
+[[test]]
+name = "test"
+path = "src/test.rs"
+harness = false
+
+[dependencies]
+cargo_metadata = "0.19.2"
+clap = { version = "4.5.37", features = ["derive"] }
+lazy_static = "1.5.0"
+tar = "0.4.44"
+
+[dev-dependencies]

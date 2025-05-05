@@ -12,28 +12,27 @@
 An open-source non-Unix-like OS, written from scratch in Rust for fun.
 
 ## Building
+the crate at the root of the project is called `safa-helper` it is basically the build system.
 you need:
 
-- bash
 - git
 - xorriso
 - make
 - cargo
-- jq
 
 first you have to run
 ```
-./init.sh
+cargo run init
 ```
 once every rust `libstd` update (or if you are not actively working on the project just once every `git pull` would work).
 
 
 then to build run
 ```
-./build.sh
+cargo run build
 ```
 
-this should make an iso with the name: `safaos.iso` if successful,
+this should make an iso with the path: `out/safaos.iso` if successful,
 you can also find pre-built artifact isos built using github actions, check the latest successful build for the main branch.
 
 ## Running
@@ -42,41 +41,61 @@ you'll need:
 - qemu-system-x86_64
 
 ```
-./run.sh --no-kvm
+cargo run -- --no-kvm
 ```
 
 or run **with** kvm (faster but kvm might not be available or broken)
 ```
-./run.sh
+cargo run
 ```
-otherwise you have the iso `safaos.iso` feel free to do whatever you want with it
+otherwise you have the iso `out/safaos.iso` feel free to do whatever you want with it
 
 ### Debugging
 you can also use the `run.sh` script to debug:
 ```
-./run.sh --debugger --no-kvm
+cargo run -- --debugger --no-kvm
 ```
 (doesn't work with kvm)
 and then connect to port 1234 with a gdb client i recommend using `rust-lldb`.
 
 ### Additional Information
-available arguments for the `run.sh` script are:
+```
+$ cargo run help
+The SafaOS's build system and helper tools
 
-- `--no-kvm`: disables kvm
-- `--no-gui`: disables gui
-- `--debugger`: listens on port 1234 for a debugger
+Usage: safa-helper [OPTIONS] [COMMAND]
+
+Commands:
+  init   Initializes the submodules and installs the SafaOS's toolchain (rustc target)
+  build  Builds a SafaOS iso
+  run    Builds and Runs a normal SafaOS iso, requires qemu (default)
+  test   Builds and runs a test SafaOS iso, requires qemu
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --no-kvm           runs with kvm disabled
+      --no-gui           runs with gui disabled
+      --debugger         runs with debugger enabled on port 1234
+  -o, --output <OUTPUT>  The final output of the built iso the default is out/safaos.iso for normal isos and out/safaos-tests.iso for test isos
+  -v, --verbose
+  -h, --help             Print help
+  -V, --version          Print version
+```
 
 ## Testing
-there is an automated testing script called `test.sh` which is used to test SafaOS automatically
 you'll need:
 
 - qemu-system-x86_64
 
+to test SafaOS, run:
 ```
-./test.sh
+cargo run test --no-kvm
 ```
-the script will return a non-zero exit code if any testing fails
-
+or to test SafaOS alongside the `safa-helper` (currently there are no tests for the helper) run:
+```
+cargo test
+```
+the problem is this requires kvm to be enabled, running with `--no-kvm` will not work currently.
 
 ## Project structure
 `crates-user/`: contains userspace programs written in rust, they are compiled and then copied to the ramdisk as `sys:/bin/`.

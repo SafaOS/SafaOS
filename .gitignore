@@ -17,8 +17,14 @@ build/
 target
 /.cache
 
+/out
 iso_root
 safaos.iso
 safaos-tests.iso
 test.txt
 .vscode
+
+
+# Added by cargo
+
+/target

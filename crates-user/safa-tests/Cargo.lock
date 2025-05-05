@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "safa-test"
+name = "safa-tests"
 version = "0.1.0"
 dependencies = [
  "safa-api",
