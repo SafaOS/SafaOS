@@ -13,12 +13,15 @@ lazy_static! {
     // this is the specifier given to cargo which tells it what version of rust SafaOS's libstd is built with
     static ref SAFAOS_RUST_VERSION_SPECIFIER: String = {
         use super::ROOT_REPO_PATH;
+        let cwd = std::env::current_dir().expect("failed to get cwd");
+        // TODO: make this script not this hard to execute (chdir and back) and add a wrapper on Command or smth
         let common_path = ROOT_REPO_PATH.join("common");
-        let latest_stable_rustc = common_path.join(".latest_stable_rustc_version.lock");
-        let results = std::fs::read_to_string(latest_stable_rustc)
-            .expect("failed to read latest stable rustc version");
-
-        format!("+{}", results.trim())
+        std::env::set_current_dir(&common_path).expect("failed to chdir");
+        let mut stdout = Command::new("./get-rustc.sh").output().expect("failed to execute get-rustc.sh").stdout;
+        std::env::set_current_dir(&cwd).expect("failed to chdir back");
+        // remove \n
+        stdout.pop();
+        String::from_utf8(stdout).expect("failed to convert stdout to string")
     };
 }
 /// Rustc target
@@ -130,12 +133,19 @@ where
 /// panicls if the build fails
 /// returns the path to the executable and the name of the binary
 pub fn build_safaos(crate_path: &Path, args: &[&'static str]) -> Vec<(PathBuf, String)> {
-    log!("compiling crate at {} (SafaOS)...", crate_path.display());
+    let specifier = &*SAFAOS_RUST_VERSION_SPECIFIER;
+    log!(
+        "compiling crate at {} (SafaOS) with rust `{}`",
+        crate_path.display(),
+        specifier
+    );
     let args = args.iter();
     let args = args.map(|s| *s);
-    let args = [&*SAFAOS_RUST_VERSION_SPECIFIER, "build"]
-        .into_iter()
-        .chain(args);
+
+    let args = [specifier, "build"].into_iter().into_iter().chain(args);
+    // if specifier is empty it'd be a problem
+    let args = args.filter(|x| !x.is_empty());
+
     let results = cargo_build_and_get_exe(crate_path, RustcTarget::SafaOSX86, args);
     log!("successful got {} executables", results.len());
     results
