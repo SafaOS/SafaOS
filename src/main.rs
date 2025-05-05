@@ -27,7 +27,11 @@ fn main() {
                 .expect("failed to wait for get");
             std::env::set_current_dir(ROOT_REPO_PATH.join("common")).expect("failed to set cwd");
             // TODO: re write in rust? move to ci?
-            Command::new("install-toolchain.sh");
+            Command::new("./install-toolchain.sh")
+                .spawn()
+                .expect("failed to spawn install-toolchain.sh")
+                .wait()
+                .expect("failed to wait for install-toolchain.sh");
             std::process::exit(0);
         }
     };
