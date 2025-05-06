@@ -98,19 +98,15 @@ cargo test
 the problem is this requires kvm to be enabled, running with `--no-kvm` will not work currently.
 
 ## Project structure
-`crates-user/`: contains userspace programs written in rust, they are compiled and then copied to the ramdisk as `sys:/bin/`.
+`crates-user/`: contains userspace programs written in rust, they are compiled and then copied to the ramdisk as `sys:/bin/`, any rust binary crate added to this directory would be automatically detected, compiled and bundled to the ramdisk by the `safa-helper`.
 
-`crates`: contains the kernel and other kernel-related crates.
+`crates`: contains the kernel and other kernel-related crates (only the kernel crate is detected by the `safa-helper`).
 
-`ramdisk-include`: anything put in this directory will be included in the ramdisk at `sys:/` by the build system.
+`ramdisk-include`: anything put in this directory will be included in the ramdisk at `sys:/` by the `safa-helper`.
 
 `common`: some scripts, constants and files that are used by the build system (TODO: move some of the stuff here to ci).
 
-`build.sh`: a script that builds safaos isos to `/`.
-
-`run.sh`: a script that builds and runs safaos isos.
-
-`test.sh`: a script that builds and runs safaos test isos and checks if testing is successful.
+`src`: the source of the SafaOS build system and helper utils aka `safa-helper`.
 
 ## Current Features
 Check `FEATURES.md`.
