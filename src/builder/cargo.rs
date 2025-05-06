@@ -166,7 +166,7 @@ pub fn build_tests_freestanding(
     );
     let args = args.iter();
     let args = args.map(|s| *s);
-    let args = ["test"].into_iter().chain(args);
+    let args = ["test", "--no-run"].into_iter().chain(args);
     let results = cargo_build_and_get_exe(crate_path, RustcTarget::NoneX86, args);
     log!("successful got {} executables", results.len());
     results
