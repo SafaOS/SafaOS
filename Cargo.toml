@@ -16,7 +16,6 @@ harness = false
 [dependencies]
 cargo_metadata = "0.19.2"
 clap = { version = "4.5.37", features = ["derive"] }
-lazy_static = "1.5.0"
 tar = "0.4.44"
 
 [dev-dependencies]

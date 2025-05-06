@@ -2,18 +2,19 @@ use std::{
     fs::{self, File},
     path::{Path, PathBuf},
     process::Command,
+    sync::LazyLock,
 };
 
-lazy_static! {
-    pub static ref ROOT_REPO_PATH: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-}
-use lazy_static::lazy_static;
+pub static ROOT_REPO_PATH: LazyLock<PathBuf> = LazyLock::new(|| env!("CARGO_MANIFEST_DIR").into());
 
 #[path = "builder/cargo.rs"]
 mod cargo;
 
 #[path = "builder/make.rs"]
 mod make;
+
+#[path = "builder/rustc.rs"]
+mod rustc;
 
 const KERNEL_PATH: &'static str = "crates/kernel";
 /// A bunch of binary crates which built results are included in the ramdisk in `sys:/bin/`

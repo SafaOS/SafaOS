@@ -4,26 +4,11 @@ use std::{
     process::{Command, Stdio},
 };
 
+use crate::rustc;
+
 use super::log;
 use cargo_metadata::Message;
-use lazy_static::lazy_static;
 
-lazy_static! {
-    // TODO: make this a given argument to build or something
-    // this is the specifier given to cargo which tells it what version of rust SafaOS's libstd is built with
-    static ref SAFAOS_RUST_VERSION_SPECIFIER: String = {
-        use super::ROOT_REPO_PATH;
-        let cwd = std::env::current_dir().expect("failed to get cwd");
-        // TODO: make this script not this hard to execute (chdir and back) and add a wrapper on Command or smth
-        let common_path = ROOT_REPO_PATH.join("common");
-        std::env::set_current_dir(&common_path).expect("failed to chdir");
-        let mut stdout = Command::new("./get-rustc.sh").output().expect("failed to execute get-rustc.sh").stdout;
-        std::env::set_current_dir(&cwd).expect("failed to chdir back");
-        // remove \n
-        stdout.pop();
-        String::from_utf8(stdout).expect("failed to convert stdout to string")
-    };
-}
 /// Rustc target
 pub enum RustcTarget {
     NoneX86,
@@ -133,7 +118,8 @@ where
 /// panicls if the build fails
 /// returns the path to the executable and the name of the binary
 pub fn build_safaos(crate_path: &Path, args: &[&'static str]) -> Vec<(PathBuf, String)> {
-    let specifier = &*SAFAOS_RUST_VERSION_SPECIFIER;
+    let specifier = &*rustc::SAFAOS_RUSTC_SPECIFIER;
+
     log!(
         "compiling crate at {} (SafaOS) with rust `{}`",
         crate_path.display(),
