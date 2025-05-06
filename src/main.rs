@@ -2,7 +2,6 @@ use std::process::Command;
 
 use clap::Parser;
 use cli::{BuildOpts, Cli, SubCommand};
-use safa_builder::ROOT_REPO_PATH;
 
 mod cli;
 
@@ -25,13 +24,8 @@ fn main() {
                 .expect("failed to spawn git")
                 .wait()
                 .expect("failed to wait for get");
-            std::env::set_current_dir(ROOT_REPO_PATH.join("common")).expect("failed to set cwd");
-            // TODO: re write in rust? move to ci?
-            Command::new("./install-toolchain.sh")
-                .spawn()
-                .expect("failed to spawn install-toolchain.sh")
-                .wait()
-                .expect("failed to wait for install-toolchain.sh");
+            safa_builder::rustc::install_safaos_toolchain()
+                .expect("failed to install the SafaOS toolchain");
             std::process::exit(0);
         }
     };

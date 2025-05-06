@@ -14,7 +14,10 @@ mod cargo;
 mod make;
 
 #[path = "builder/rustc.rs"]
-mod rustc;
+pub mod rustc;
+
+#[path = "builder/utils.rs"]
+mod utils;
 
 const KERNEL_PATH: &'static str = "crates/kernel";
 /// A bunch of binary crates which built results are included in the ramdisk in `sys:/bin/`
