@@ -19,6 +19,7 @@ you need:
 - xorriso
 - make
 - cargo
+- libcurl
 
 first you have to run
 ```
