@@ -37,6 +37,11 @@ where
         .output()
         .expect("failed to execute cargo");
 
+    if !output.status.success() {
+        // TODO: add and use errors
+        panic!("cargo: exited with status {}", output.status);
+    }
+
     let reader = std::io::Cursor::new(output.stdout);
     let results = Message::parse_stream(reader);
     let results = results.filter_map(|s| s.ok());
