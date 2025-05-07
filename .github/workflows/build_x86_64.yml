@@ -23,7 +23,7 @@ jobs:
       - name: Setup
         run: rustup update && rustup install nightly && rustup +nightly target add x86_64-unknown-none && rustup target add x86_64-unknown-none
       - name: Build
-        run: cargo run -- init && cargo run -- build
+        run: cargo run init && cargo run build -v
       - uses: actions/upload-artifact@v4
         with:
           name: x86_64-iso
