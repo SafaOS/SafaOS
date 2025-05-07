@@ -161,6 +161,7 @@ impl<'a> Builder<'a> {
                 ramdisk_path.display()
             );
 
+            fs::create_dir_all(ramdisk_path.parent().unwrap())?;
             utils::recursive_copy(real_path, &ramdisk_path)?;
         }
 
