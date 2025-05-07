@@ -401,6 +401,7 @@ name = "safa-helper"
 version = "0.1.0"
 dependencies = [
  "cargo_metadata",
+ "cfg-if",
  "clap",
  "curl",
  "flate2",

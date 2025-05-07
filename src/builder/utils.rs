@@ -1,7 +1,65 @@
 use std::{io, path::Path};
 
 use curl::easy::{List, WriteError};
+/// Defines a target architecture to compile SafaOS to
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ArchTarget {
+    #[value(name = "aarch64")]
+    Arm64,
+    #[value(name = "x86_64")]
+    X86_64,
+}
 
+impl Default for ArchTarget {
+    fn default() -> Self {
+        Self::X86_64
+    }
+}
+
+impl ArchTarget {
+    /// Whether or not the arch has a libstd port
+    /// used for architectures currently in development:w
+    pub const fn has_rustc_target(&self) -> bool {
+        match self {
+            Self::X86_64 => true,
+            Self::Arm64 => false,
+        }
+    }
+    /// Gets the host architecture
+    /// returns None if unsupported
+    pub const fn get_host() -> Option<Self> {
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")]  {
+                Some(Self::X86_64)
+            }  else if #[cfg(target_arch = "aarch64")] {
+                Some(Self::Arm64)
+            }
+            else {
+                None
+            }
+        }
+    }
+
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Arm64 => "aarch64",
+        }
+    }
+}
+
+impl ToString for ArchTarget {
+    fn to_string(&self) -> String {
+        String::from(self.as_str())
+    }
+}
+
+/// The default architecture for build SafaOS
+pub const DEFAULT_ARCH: ArchTarget = if let Some(s) = ArchTarget::get_host() {
+    s
+} else {
+    ArchTarget::X86_64
+};
 /// make a Get request to a URL and returns the results as a String
 pub fn https_get(url: &str, headers: &[&str]) -> std::io::Result<String> {
     let mut response = Vec::new();

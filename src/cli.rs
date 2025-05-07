@@ -1,7 +1,10 @@
 use std::process::{Command, Stdio};
 
 use clap::Parser;
-use safa_builder::{Builder, ROOT_REPO_PATH};
+use safa_builder::{
+    Builder, ROOT_REPO_PATH,
+    utils::{self, ArchTarget},
+};
 
 const QEMU: &str = "qemu-system-x86_64";
 #[derive(Parser, Clone, Copy, Debug)]
@@ -24,6 +27,8 @@ pub struct BuildArgs {
     pub output: Option<String>,
     #[arg(short, long, default_value = "false")]
     pub verbose: bool,
+    #[arg(short, long, default_value_t = utils::DEFAULT_ARCH)]
+    pub arch: ArchTarget,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -31,6 +36,7 @@ pub struct BuildOpts<'a> {
     pub output: &'a str,
     pub verbose: bool,
     pub tests: bool,
+    pub target_arch: ArchTarget,
 }
 
 impl<'a> BuildOpts<'a> {
@@ -43,6 +49,7 @@ impl<'a> BuildOpts<'a> {
             }),
             verbose: value.verbose,
             tests,
+            target_arch: value.arch,
         }
     }
 }
@@ -77,7 +84,7 @@ pub enum SubCommand {
 }
 
 pub fn build(opts: BuildOpts) {
-    Builder::create(opts.output)
+    Builder::create(opts.output, opts.target_arch)
         .set_testing(opts.tests)
         .set_verbose(opts.verbose)
         .build()

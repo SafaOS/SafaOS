@@ -4,34 +4,36 @@ use std::{
     process::{Command, Stdio},
 };
 
-use crate::rustc;
+use crate::{rustc, utils::ArchTarget};
 
 use super::log;
 use cargo_metadata::Message;
 
 /// Rustc target
 pub enum RustcTarget {
-    NoneX86,
-    SafaOSX86,
+    None,
+    SafaOS,
 }
 
 impl RustcTarget {
-    const fn into_cargo_target(self) -> &'static str {
-        match self {
-            Self::SafaOSX86 => "x86_64-unknown-safaos",
-            Self::NoneX86 => "x86_64-unknown-none",
+    const fn into_cargo_target(self, arch: ArchTarget) -> &'static str {
+        match (self, arch) {
+            (Self::SafaOS, ArchTarget::X86_64) => "x86_64-unknown-safaos",
+            (Self::SafaOS, ArchTarget::Arm64) => "aarch64-unknown-safaos",
+            (Self::None, ArchTarget::X86_64) => "x86_64-unknown-none",
+            (Self::None, ArchTarget::Arm64) => "aarch64-unknown-none",
         }
     }
 }
 
-fn cargo_raw<I>(target: RustcTarget, args: I) -> Vec<Message>
+fn cargo_raw<I>(arch: ArchTarget, target: RustcTarget, args: I) -> Vec<Message>
 where
     I: Iterator<Item = &'static str>,
 {
     let output = Command::new("cargo")
         .args(args)
         .arg("--target")
-        .arg(target.into_cargo_target())
+        .arg(target.into_cargo_target(arch))
         .arg("--message-format=json-render-diagnostics")
         .stderr(Stdio::inherit())
         .output()
@@ -55,6 +57,7 @@ where
 /// panicks if the build fails
 fn cargo_build_and_get_exe<I>(
     crate_path: &Path,
+    arch: ArchTarget,
     target: RustcTarget,
     args: I,
 ) -> Vec<(PathBuf, String)>
@@ -68,7 +71,7 @@ where
     let cwd = std::env::current_dir().expect("failed to get current directory");
     // because cargo doesn't have a stable -C flag
     std::env::set_current_dir(crate_path).expect("failed to set current directory");
-    let results = cargo_raw(target, args);
+    let results = cargo_raw(arch, target, args);
 
     let results = results.into_iter();
     let results = results.filter(|message| match message {
@@ -122,7 +125,11 @@ where
 /// Builds a binary crate for SafaOS
 /// panicls if the build fails
 /// returns the path to the executable and the name of the binary
-pub fn build_safaos(crate_path: &Path, args: &[&'static str]) -> Vec<(PathBuf, String)> {
+pub fn build_safaos(
+    crate_path: &Path,
+    arch: ArchTarget,
+    args: &[&'static str],
+) -> Vec<(PathBuf, String)> {
     let specifier = &*rustc::SAFAOS_RUSTC_SPECIFIER;
 
     log!(
@@ -137,7 +144,7 @@ pub fn build_safaos(crate_path: &Path, args: &[&'static str]) -> Vec<(PathBuf, S
     // if specifier is empty it'd be a problem
     let args = args.filter(|x| !x.is_empty());
 
-    let results = cargo_build_and_get_exe(crate_path, RustcTarget::SafaOSX86, args);
+    let results = cargo_build_and_get_exe(crate_path, arch, RustcTarget::SafaOS, args);
     log!("successful got {} executables", results.len());
     results
 }
@@ -145,7 +152,11 @@ pub fn build_safaos(crate_path: &Path, args: &[&'static str]) -> Vec<(PathBuf, S
 /// Builds a binary crate for the freestanding target (currently only x86_64-unknown-none)
 /// panicks if the build fails
 /// returns the path to the executable and the name of the binary
-pub fn build_freestanding(crate_path: &Path, args: &[&'static str]) -> Vec<(PathBuf, String)> {
+pub fn build_freestanding(
+    crate_path: &Path,
+    arch: ArchTarget,
+    args: &[&'static str],
+) -> Vec<(PathBuf, String)> {
     log!(
         "compiling crate at {} (freestanding)...",
         crate_path.display()
@@ -153,7 +164,7 @@ pub fn build_freestanding(crate_path: &Path, args: &[&'static str]) -> Vec<(Path
     let args = args.iter();
     let args = args.map(|s| *s);
     let args = ["build"].into_iter().chain(args);
-    let results = cargo_build_and_get_exe(crate_path, RustcTarget::NoneX86, args);
+    let results = cargo_build_and_get_exe(crate_path, arch, RustcTarget::None, args);
     log!("successful got {} executables", results.len());
     results
 }
@@ -163,6 +174,7 @@ pub fn build_freestanding(crate_path: &Path, args: &[&'static str]) -> Vec<(Path
 /// returns the path to the executable and the name of the binary
 pub fn build_tests_freestanding(
     crate_path: &Path,
+    arch: ArchTarget,
     args: &[&'static str],
 ) -> Vec<(PathBuf, String)> {
     log!(
@@ -172,7 +184,7 @@ pub fn build_tests_freestanding(
     let args = args.iter();
     let args = args.map(|s| *s);
     let args = ["test", "--no-run"].into_iter().chain(args);
-    let results = cargo_build_and_get_exe(crate_path, RustcTarget::NoneX86, args);
+    let results = cargo_build_and_get_exe(crate_path, arch, RustcTarget::None, args);
     log!("successful got {} executables", results.len());
     results
 }
