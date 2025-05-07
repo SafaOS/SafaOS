@@ -1,5 +1,6 @@
 use std::{
     fs::{self, File},
+    io,
     path::{Path, PathBuf},
     process::Command,
     sync::LazyLock,
@@ -137,57 +138,48 @@ impl<'a> Builder<'a> {
     }
 
     /// Builds and packages the ramdisk tar to the iso root
-    fn package_ramdisk(&self, boot_build_path: &Path) {
+    fn package_ramdisk(&self, boot_build_path: &Path) -> io::Result<()> {
         let userspace_binaries = self.build_userspace();
         let userspace_binaries = userspace_binaries.iter();
 
         let ramdisk = self.ramdisk.iter();
         let ramdisk = ramdisk.chain(userspace_binaries);
 
-        fs::create_dir_all(&boot_build_path).expect("failed to create build directory");
+        fs::create_dir_all(&boot_build_path)?;
 
         let ramdisk_tar_path = boot_build_path.join("ramdisk.tar");
-        log!("building the ramdisk...");
 
-        let ramdisk_tar = File::create(ramdisk_tar_path).expect("failed to create ramdisk.tar");
-        // building the ramdisk archive
-        let mut ramdisk_builder = tar::Builder::new(ramdisk_tar);
-
-        let mut ramdisk_directories: Vec<&Path> = Vec::new();
-
+        log!("copying the ramdisk...");
+        let ramdisk_build_path = self.build_root_path.join("ramdisk");
         for (real_path, ramdisk_path) in ramdisk {
+            assert!(real_path.exists());
+            let ramdisk_path = ramdisk_build_path.join(ramdisk_path);
             log_verbose!(
                 self,
-                "building ramdisk: {} => {}",
+                "copying ramdisk: {} => {}",
                 real_path.display(),
                 ramdisk_path.display()
             );
-            assert!(real_path.exists());
 
-            if let Some(parent) = ramdisk_path.parent() {
-                // make sure the parent was already created in the ramdisk otherwise add it
-                if parent != Path::new("") && !ramdisk_directories.contains(&parent) {
-                    // TODO: dirty solution that works for now but might break in the future
-                    let mut header = tar::Header::new_ustar();
-                    header.set_entry_type(tar::EntryType::Directory);
-                    header.set_path(parent).expect("failed to create header");
-                    header.set_size(0);
-                    ramdisk_builder
-                        .append(&header, std::io::empty())
-                        .expect("failed to append header to ramdisk");
+            utils::recursive_copy(real_path, &ramdisk_path)?;
+        }
 
-                    ramdisk_directories.push(parent);
-                }
-            }
+        log!("building the ramdisk...");
+        let ramdisk_tar = File::create(ramdisk_tar_path).expect("failed to create ramdisk.tar");
+        // building the ramdisk archive
+        let mut ramdisk_builder = tar::Builder::new(ramdisk_tar);
+        for entry in ramdisk_build_path.read_dir()? {
+            let entry = entry?;
 
-            if real_path.is_dir() {
-                ramdisk_builder
-                    .append_dir_all(&real_path, &ramdisk_path)
-                    .expect("failed to append dir to tar archive");
+            let name = entry.file_name();
+            let name = Path::new(&name);
+            let path = &entry.path();
+            log_verbose!(self, "building ramdisk: {}", name.display());
+
+            if entry.file_type().is_ok_and(|k| k.is_dir()) {
+                ramdisk_builder.append_dir_all(name, path)?;
             } else {
-                ramdisk_builder
-                    .append_path_with_name(&real_path, &ramdisk_path)
-                    .expect("failed to append to tar archive");
+                ramdisk_builder.append_path_with_name(path, name)?;
             }
         }
 
@@ -195,6 +187,7 @@ impl<'a> Builder<'a> {
             .finish()
             .expect("failed to finish building the ramdisk.tar");
         log!("finished building ramdisk");
+        Ok(())
     }
 
     /// Builds the kernel to the iso root
@@ -317,7 +310,8 @@ impl<'a> Builder<'a> {
         // the kernel
         self.package_kernel(&boot_build_path, freestanding_build_function);
         // the ramdisk
-        self.package_ramdisk(&boot_build_path);
+        self.package_ramdisk(&boot_build_path)
+            .expect("failed to package ramdisk");
         // the bootloader
         self.package_limine(&boot_build_path);
         self.package_final_iso()

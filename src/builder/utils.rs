@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::Path};
 
 use curl::easy::{List, WriteError};
 
@@ -39,5 +39,20 @@ pub fn https_get_write(
         handle.perform()?;
     }
 
+    Ok(())
+}
+
+pub fn recursive_copy(path: &Path, to_path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        std::fs::create_dir_all(&to_path)?;
+        for entry in path.read_dir()? {
+            let entry = entry?;
+            let src = path.join(entry.file_name());
+            let dest = to_path.join(entry.file_name());
+            recursive_copy(&src, &dest)?;
+        }
+    } else {
+        std::fs::copy(&path, &to_path)?;
+    }
     Ok(())
 }

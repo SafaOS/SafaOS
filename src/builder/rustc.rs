@@ -2,7 +2,7 @@ use std::{
     ffi::OsString,
     io::{self, BufReader, Seek, Write},
     os::unix::ffi::OsStringExt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Command,
     sync::LazyLock,
 };
@@ -156,22 +156,7 @@ pub fn install_safaos_toolchain() -> io::Result<()> {
 
     let extracted_path = toolchain_root.join("x86_64-unknown-safaos-toolchain");
     // recursively copy extracted_path to toolchain_root
-    fn recursive_mv(path: &Path, to_path: &Path) -> std::io::Result<()> {
-        if path.is_dir() {
-            std::fs::create_dir_all(&to_path)?;
-            for entry in path.read_dir()? {
-                let entry = entry?;
-                let src = path.join(entry.file_name());
-                let dest = to_path.join(entry.file_name());
-                recursive_mv(&src, &dest)?;
-            }
-        } else {
-            std::fs::copy(&path, &to_path)?;
-        }
-        Ok(())
-    }
-
-    recursive_mv(&extracted_path, toolchain_root)?;
+    utils::recursive_copy(&extracted_path, toolchain_root)?;
     std::fs::remove_dir_all(extracted_path)?;
     Ok(())
 }
