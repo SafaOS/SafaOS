@@ -107,7 +107,7 @@ impl AliveTask {
             .map_to(
                 new_page,
                 frame,
-                EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
             )
             .ok()?;
 

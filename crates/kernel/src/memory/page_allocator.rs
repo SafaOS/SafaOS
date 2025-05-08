@@ -186,7 +186,7 @@ impl PageAllocator {
                 current_root_table().map_to(
                     page,
                     frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
-                    EntryFlags::PRESENT | EntryFlags::WRITABLE,
+                    EntryFlags::WRITE,
                 )?
             }
         }

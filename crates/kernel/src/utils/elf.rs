@@ -468,18 +468,18 @@ impl<'a, T: Readable> Elf<'a, T> {
                 continue;
             }
 
-            let mut entry_flags = EntryFlags::PRESENT | EntryFlags::USER_ACCESSIBLE;
+            let mut entry_flags = EntryFlags::USER_ACCESSIBLE;
 
             if header.flags.contains(ProgramFlags::READ) {
                 entry_flags |= EntryFlags::empty();
             }
 
             if header.flags.contains(ProgramFlags::WRITE) {
-                entry_flags |= EntryFlags::WRITABLE;
+                entry_flags |= EntryFlags::WRITE;
             }
 
             if header.flags.contains(ProgramFlags::EXEC) {
-                entry_flags |= EntryFlags::WRITABLE;
+                entry_flags |= EntryFlags::WRITE;
             }
 
             let start_page = Page::containing_address(header.vaddr);

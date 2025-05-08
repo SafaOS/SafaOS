@@ -10,28 +10,6 @@ pub type PhysAddr = usize;
 
 use paging::{current_root_table, Page, PageTable, PAGE_SIZE};
 
-fn p4_index(addr: VirtAddr) -> usize {
-    (addr >> 39) & 0x1FF
-}
-fn p3_index(addr: VirtAddr) -> usize {
-    (addr >> 30) & 0x1FF
-}
-fn p2_index(addr: VirtAddr) -> usize {
-    (addr >> 21) & 0x1FF
-}
-fn p1_index(addr: VirtAddr) -> usize {
-    (addr >> 12) & 0x1FF
-}
-
-pub fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
-    (
-        p1_index(addr),
-        p2_index(addr),
-        p3_index(addr),
-        p4_index(addr),
-    )
-}
-
 #[inline(always)]
 pub const fn align_up(address: usize, alignment: usize) -> usize {
     (address + alignment - 1) & !(alignment - 1)

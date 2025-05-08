@@ -33,9 +33,10 @@ impl PageTableBinding {
         );
 
         for page in from_iter {
-            let pml4_index = super::translate(page.start_address).3;
+            // TODO: add a set entry function
+            let pml4_index = crate::arch::paging::p4_index(page.start_address);
             let to_page = to_iter.next().unwrap();
-            let to_plm4_index = super::translate(to_page.start_address).3;
+            let to_plm4_index = crate::arch::paging::p4_index(to_page.start_address);
 
             to_page_table[to_plm4_index] = from_page_table[pml4_index].clone();
         }
@@ -63,7 +64,7 @@ impl<const N: usize> PageTableBindings<N> {
     }
 
     /// gets a PageTableBinding named `name`, returns it's start address as a pointer and it's
-    /// size, pointer is vaild only if that binding is applied on the current page table, and it's
+    /// size, pointer is valid only if that binding is applied on the current page table, and it's
     /// pages is mapped
     pub fn get(&self, name: &'static str) -> Option<(*mut u8, usize)> {
         for binding in &self.bindings {
@@ -143,7 +144,7 @@ pub fn set_current_page_table(page_table: &'static mut PageTable) {
 }
 
 pub fn init_page_table() {
-    debug!(PageTable, "intializing root page table ... ");
+    debug!(PageTable, "initializing root page table ... ");
     let previous_table = unsafe { super::current_root_table() };
     let table = create_root_page_table().unwrap();
     set_current_page_table(table);

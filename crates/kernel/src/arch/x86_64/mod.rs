@@ -1,6 +1,7 @@
 mod acpi;
 pub mod gdt;
 pub mod interrupts;
+pub mod paging;
 pub mod power;
 pub mod serial;
 mod syscalls;

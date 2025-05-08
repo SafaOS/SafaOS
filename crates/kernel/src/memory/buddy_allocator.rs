@@ -122,7 +122,7 @@ impl BuddyAllocator<'_> {
                 if current_root_table().get_frame(page).is_none() {
                     let frame = frame_allocator::allocate_frame()?;
                     current_root_table()
-                        .map_to(page, frame, EntryFlags::PRESENT | EntryFlags::WRITABLE)
+                        .map_to(page, frame, EntryFlags::WRITE)
                         .ok()?;
                 }
             }
@@ -148,7 +148,7 @@ impl BuddyAllocator<'_> {
             Page::iter_pages(heap_start_page, heap_end_page)
         };
 
-        let flags = EntryFlags::PRESENT | EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE;
+        let flags = EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE;
         for page in page_range {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;

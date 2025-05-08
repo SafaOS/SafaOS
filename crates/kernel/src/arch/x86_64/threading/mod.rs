@@ -124,7 +124,7 @@ fn map_byte_slices(
         let results = page_table.map_to(
             Page::containing_address(current_page),
             frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
-            EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         );
         *allocated_bytes_remaining += 4096;
         current_page += 4096;
@@ -240,14 +240,14 @@ impl CPUStatus {
         page_table.alloc_map(
             STACK_START,
             STACK_END,
-            EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         // allocate the syscall stack
         page_table.alloc_map(
             RING0_STACK_START,
             RING0_STACK_END,
-            EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         let argc = argv.len();
@@ -269,7 +269,7 @@ impl CPUStatus {
         page_table.alloc_map(
             ABI_STRUCTURES_START,
             ABI_STRUCTURES_START + PAGE_SIZE,
-            EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE | EntryFlags::PRESENT,
+            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
         copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
 
