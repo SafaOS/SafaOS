@@ -1,3 +1,4 @@
+use crate::limine;
 use bitflags::bitflags;
 use core::fmt::Debug;
 use core::ops::IndexMut;
@@ -16,6 +17,8 @@ use crate::{
 const ENTRY_COUNT: usize = 512;
 const HIGHER_HALF_ENTRY: usize = 256;
 
+/// A hack that returns the last level (root) table's index from a VirtAddr
+/// level 4 in x86_64
 pub fn p4_index(addr: VirtAddr) -> usize {
     (addr >> 39) & 0x1FF
 }
@@ -297,4 +300,12 @@ pub unsafe fn current_root_table() -> FramePtr<PageTable> {
     let frame = Frame::containing_address(phys_addr);
     let ptr = frame.into_ptr();
     ptr
+}
+
+/// sets the current Page Table to `page_table`
+pub unsafe fn set_current_page_table(page_table: &'static mut PageTable) {
+    let phys_addr = page_table as *mut _ as usize - limine::get_phy_offset();
+    unsafe {
+        asm!("mov cr3, rax", in("rax") phys_addr);
+    }
 }

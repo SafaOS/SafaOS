@@ -111,7 +111,7 @@ pub static APIC_TIMER_TICKS_PER_MS: SyncUnsafeCell<u64> = SyncUnsafeCell::new(1)
 
 #[inline(always)]
 /// Returns the number of clock cpu cycles per 1ms
-pub fn ticks_per_ms() -> u64 {
+fn ticks_per_ms() -> u64 {
     unsafe { core::ptr::read_volatile(TICKS_PER_MS.get()) }
 }
 

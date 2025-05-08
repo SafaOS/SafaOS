@@ -12,6 +12,7 @@
 #![feature(iter_collect_into)]
 #![feature(naked_functions)]
 #![feature(sync_unsafe_cell)]
+#![feature(never_type)]
 
 #[cfg(test)]
 mod test;
@@ -30,10 +31,10 @@ mod utils;
 
 extern crate alloc;
 use alloc::string::String;
-use arch::x86_64::serial;
+use arch::serial;
 
-use drivers::keyboard::HandleKey;
 use drivers::keyboard::keys::Key;
+use drivers::keyboard::HandleKey;
 use globals::*;
 
 pub use memory::PhysAddr;
@@ -55,7 +56,7 @@ macro_rules! println {
 #[macro_export]
 macro_rules! serial {
     ($($arg:tt)*) => {
-        $crate::arch::x86_64::serial::_serial(format_args!($($arg)*))
+        $crate::arch::serial::_serial(format_args!($($arg)*))
     };
 }
 
@@ -63,18 +64,14 @@ macro_rules! serial {
 #[macro_export]
 macro_rules! time {
     () => {
-        $crate::arch::x86_64::utils::time()
+        $crate::arch::utils::time()
     };
 }
 
-use core::arch::asm;
 #[unsafe(no_mangle)]
 pub fn khalt() -> ! {
     loop {
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            asm!("hlt")
-        }
+        unsafe { arch::hlt() }
     }
 }
 
@@ -138,9 +135,11 @@ macro_rules! info {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    unsafe { asm!("cli") }
     unsafe {
-        arch::x86_64::serial::SERIAL.force_unlock();
+        arch::disable_interrupts();
+    }
+    unsafe {
+        arch::serial::SERIAL.force_unlock();
         if !QUITE_PANIC {
             FRAMEBUFFER_TERMINAL.force_unlock_write();
             FRAMEBUFFER_TERMINAL.write().clear();

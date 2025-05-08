@@ -1,8 +1,9 @@
 use super::paging::PAGE_SIZE;
-use core::{arch::asm, fmt::Display};
+use core::fmt::Display;
 use lazy_static::lazy_static;
 
 use crate::{
+    arch::paging::set_current_page_table,
     debug,
     limine::{self, MEMORY_END},
     memory::frame_allocator::{self},
@@ -135,19 +136,13 @@ pub fn create_root_page_table() -> Result<&'static mut PageTable, MapToError> {
     ROOT_BINDINGS.create_page_table()
 }
 
-/// sets the current Page Table to `page_table`
-pub fn set_current_page_table(page_table: &'static mut PageTable) {
-    let phys_addr = page_table as *mut _ as usize - limine::get_phy_offset();
-    unsafe {
-        asm!("mov cr3, rax", in("rax") phys_addr);
-    }
-}
-
 pub fn init_page_table() {
     debug!(PageTable, "initializing root page table ... ");
     let previous_table = unsafe { super::current_root_table() };
     let table = create_root_page_table().unwrap();
-    set_current_page_table(table);
+    unsafe {
+        set_current_page_table(table);
+    }
     // de-allocating the previous root table
     let frame = previous_table.frame();
     frame_allocator::deallocate_frame(frame)

@@ -11,7 +11,10 @@ pub const ENVIRONMENT_VARIABLES_START: usize = ENVIRONMENT_START + 0xE000000000;
 
 pub const ABI_STRUCTURES_START: usize = ENVIRONMENT_START + 0x1000000000;
 
-use core::{arch::global_asm, ptr::NonNull};
+use core::{
+    arch::{asm, global_asm},
+    ptr::NonNull,
+};
 
 use bitflags::bitflags;
 
@@ -439,4 +442,9 @@ pub extern "C" fn context_switch(mut capture: CPUStatus, frame: super::interrupt
         super::interrupts::apic::send_eoi();
         restore_cpu_status(&capture);
     }
+}
+
+#[inline(always)]
+pub fn invoke_context_switch() {
+    unsafe { asm!("int 0x20") }
 }

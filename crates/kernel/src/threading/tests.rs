@@ -4,7 +4,9 @@ use crate::threading::expose::{pspawn, wait, SpawnFlags};
 
 #[test_case]
 fn spawn_test() {
-    unsafe { core::arch::asm!("cli") }
+    unsafe {
+        crate::arch::disable_interrupts();
+    }
     let pid = pspawn(
         Name::try_from("TEST_CASE").unwrap(),
         make_path!("sys", "/bin/true"),
@@ -17,5 +19,7 @@ fn spawn_test() {
     let ret = wait(pid);
 
     assert_eq!(ret, 1);
-    unsafe { core::arch::asm!("sti") }
+    unsafe {
+        crate::arch::enable_interrupts();
+    }
 }

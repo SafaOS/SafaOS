@@ -98,3 +98,18 @@ pub fn init_phase2() {
     info!("enabling sse...");
     enable_sse();
 }
+
+#[inline(always)]
+pub unsafe fn disable_interrupts() {
+    unsafe { core::arch::asm!("cli") }
+}
+
+#[inline(always)]
+pub unsafe fn enable_interrupts() {
+    unsafe { core::arch::asm!("sti") }
+}
+
+#[inline(always)]
+pub unsafe fn hlt() {
+    unsafe { core::arch::asm!("hlt") }
+}
