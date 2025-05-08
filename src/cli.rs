@@ -88,6 +88,7 @@ pub fn build(opts: BuildOpts) {
         .set_testing(opts.tests)
         .set_verbose(opts.verbose)
         .build()
+        .expect("build failed")
 }
 
 /// Runs qemu with options `opts` and iso at `path`, if `tests` is true, will scan output for tests failure or success
