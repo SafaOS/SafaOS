@@ -249,10 +249,21 @@ impl<'a> Builder<'a> {
             .expect("failed to copy the kernel elf to iso build dir");
     }
 
-    const fn boot_efi_file(&self) -> &'static str {
+    const fn boot_efi_files(&self) -> &'static [&'static str] {
         match self.arch {
-            ArchTarget::X86_64 => "BOOTX64.EFI",
-            ArchTarget::Arm64 => "BOOTAA64.EFI",
+            ArchTarget::X86_64 => &["BOOTX64.EFI", "BOOTIA32.EFI"],
+            ArchTarget::Arm64 => &["BOOTAA64.EFI"],
+        }
+    }
+
+    const fn limine_bios_files(&self) -> &'static [&'static str] {
+        match self.arch {
+            ArchTarget::X86_64 => &[
+                "limine-bios.sys",
+                "limine-bios-cd.bin",
+                "limine-uefi-cd.bin",
+            ],
+            ArchTarget::Arm64 => &["limine-uefi-cd.bin"],
         }
     }
 
@@ -267,12 +278,12 @@ impl<'a> Builder<'a> {
         fs::create_dir_all(&efi_boot_build_path)?;
 
         make::build(&limine_path);
-        for src in [
-            limine_path.join("limine-bios.sys"),
-            limine_path.join("limine-bios-cd.bin"),
-            limine_path.join("limine-uefi-cd.bin"),
-            self.root_repo_path.join("limine.conf"),
-        ] {
+
+        let limine_bios_files = self.limine_bios_files();
+        let limine_bios_files = limine_bios_files.iter().map(|f| limine_path.join(f));
+        let limine_files = limine_bios_files.chain([self.root_repo_path.join("limine.conf")]);
+
+        for src in limine_files {
             log_verbose!(
                 self,
                 "building limine cp: {} => {}",
@@ -282,7 +293,7 @@ impl<'a> Builder<'a> {
             fs::copy(&src, limine_build_path.join(src.file_name().unwrap()))?;
         }
 
-        for src in [self.boot_efi_file()] {
+        for src in self.boot_efi_files() {
             let full_path = limine_path.join(src);
             log_verbose!(
                 self,
@@ -300,15 +311,21 @@ impl<'a> Builder<'a> {
 
     fn package_final_iso(self) {
         log!("packaging iso");
-        let status = Command::new("xorriso")
-            .arg("-as")
-            .arg("mkisofs")
-            .arg("-b")
-            .arg("boot/limine/limine-bios-cd.bin")
-            .arg("-no-emul-boot")
-            .arg("-boot-load-size")
-            .arg("4")
-            .arg("-boot-info-table")
+        let mut cmd = Command::new("xorriso");
+        cmd.arg("-as").arg("mkisofs").arg("-R").arg("-r").arg("-J");
+        // add bios options to limine
+        if self.arch == ArchTarget::X86_64 {
+            cmd.arg("-b")
+                .arg("boot/limine/limine-bios-cd.bin")
+                .arg("-no-emul-boot")
+                .arg("-boot-load-size")
+                .arg("4")
+                .arg("-boot-info-table");
+        }
+
+        cmd.arg("-hfsplus").arg("-apm-block-size").arg("2048");
+
+        let status = cmd
             .arg("--efi-boot")
             .arg("boot/limine/limine-uefi-cd.bin")
             .arg("-efi-boot-part")

@@ -2,7 +2,7 @@ use std::{io, path::Path};
 
 use curl::easy::{List, WriteError};
 /// Defines a target architecture to compile SafaOS to
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
 pub enum ArchTarget {
     #[value(name = "aarch64")]
     Arm64,

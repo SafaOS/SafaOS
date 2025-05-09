@@ -1,4 +1,7 @@
-use std::process::{Command, Stdio};
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 use clap::Parser;
 use safa_builder::{
@@ -6,21 +9,43 @@ use safa_builder::{
     utils::{self, ArchTarget},
 };
 
-const QEMU: &str = "qemu-system-x86_64";
-#[derive(Parser, Clone, Copy, Debug)]
-pub struct RunOpts {
-    #[arg(long, default_value = "false")]
-    /// runs with kvm disabled
-    pub no_kvm: bool,
-    #[arg(long, default_value = "false")]
-    /// runs with gui disabled
-    pub no_gui: bool,
-    #[arg(long, default_value = "false")]
-    /// runs with debugger enabled on port 1234
-    pub debugger: bool,
+const fn get_qemu(arch: ArchTarget) -> &'static str {
+    match arch {
+        ArchTarget::Arm64 => "qemu-system-aarch64",
+        ArchTarget::X86_64 => "qemu-system-x86_64",
+    }
 }
 
-#[derive(Parser, Debug)]
+fn get_ovmf(arch: ArchTarget) -> PathBuf {
+    let path = format!("common/ovmf-code-{}.fd", arch.as_str());
+    ROOT_REPO_PATH.join(path)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RunOpts {
+    /// runs with kvm disabled
+    no_kvm: bool,
+    /// runs with gui disabled
+    no_gui: bool,
+    /// runs with debugger enabled on port 1234
+    debugger: bool,
+    tests: bool,
+    arch: ArchTarget,
+}
+
+impl RunOpts {
+    pub fn from_args(args: RunArgs, tests: bool) -> Self {
+        Self {
+            no_gui: args.no_gui,
+            no_kvm: args.no_kvm,
+            debugger: args.debugger,
+            tests,
+            arch: args.build_args.arch,
+        }
+    }
+}
+
+#[derive(Parser, Debug, Clone)]
 pub struct BuildArgs {
     #[arg(short, long)]
     /// The final output of the built iso the default is out/safaos.iso for normal isos and out/safaos-tests.iso for test isos
@@ -54,10 +79,17 @@ impl<'a> BuildOpts<'a> {
     }
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct RunArgs {
-    #[command(flatten)]
-    pub opts: RunOpts,
+    #[arg(long, default_value = "false")]
+    /// runs with kvm disabled
+    no_kvm: bool,
+    #[arg(long, default_value = "false")]
+    /// runs with gui disabled
+    no_gui: bool,
+    #[arg(long, default_value = "false")]
+    /// runs with debugger enabled on port 1234
+    debugger: bool,
     #[command(flatten)]
     pub build_args: BuildArgs,
 }
@@ -92,16 +124,42 @@ pub fn build(opts: BuildOpts) {
 }
 
 /// Runs qemu with options `opts` and iso at `path`, if `tests` is true, will scan output for tests failure or success
-pub fn run(opts: RunOpts, path: &str, tests: bool) {
-    let mut cmd = Command::new(QEMU);
-    cmd.arg("-drive")
-        .arg(format!("format=raw,file={}", path))
+pub fn run(opts: RunOpts, path: &str) {
+    let qemu = get_qemu(opts.arch);
+    let path_to_ovmf = get_ovmf(opts.arch);
+
+    let mut cmd = Command::new(qemu);
+
+    cmd.arg("-cdrom")
+        .arg(path)
         .arg("-serial")
         .arg("stdio")
         .arg("-m")
-        .arg("512M")
-        .arg("-bios")
-        .arg(ROOT_REPO_PATH.join("common/OVMF-pure-efi.fd"));
+        .arg("2G")
+        .arg("-drive")
+        .arg(format!(
+            "if=pflash,unit=0,format=raw,file={},readonly=on",
+            path_to_ovmf.display()
+        ));
+
+    let arch_args: &[&str] = match opts.arch {
+        // FIXME: unefficent and can be written better
+        ArchTarget::Arm64 => &[
+            "-M",
+            "virt",
+            "-cpu",
+            "cortex-a72",
+            "-device",
+            "qemu-xhci",
+            "-device",
+            "usb-kbd",
+            "-device",
+            "ramfb",
+        ],
+        ArchTarget::X86_64 => &[],
+    };
+
+    cmd.args(arch_args);
 
     if !opts.no_kvm {
         cmd.arg("-enable-kvm");
@@ -115,20 +173,20 @@ pub fn run(opts: RunOpts, path: &str, tests: bool) {
         cmd.arg("-s").arg("-S");
     }
 
-    if tests {
+    if opts.tests {
         cmd.stdout(Stdio::piped());
     }
     println!("--------------   QEMU OUTPUT   --------------");
     println!();
     let output = cmd
         .spawn()
-        .unwrap_or_else(|_| panic!("{} required to run", QEMU))
+        .unwrap_or_else(|_| panic!("{} required to run", qemu))
         .wait_with_output()
         .expect("failed to wait for qemu to exit");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     // if tests is on we read stdout for scanning later so it is piped so we have to echo it...
-    if tests {
+    if opts.tests {
         print!("{}", stdout);
     }
     println!();
@@ -139,7 +197,7 @@ pub fn run(opts: RunOpts, path: &str, tests: bool) {
         std::process::exit(-1);
     }
 
-    if tests {
+    if opts.tests {
         let failure_message = b"kernel panic";
         // read tests output for failure
         if stdout
