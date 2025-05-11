@@ -191,8 +191,9 @@ impl PageTable {
     /// copies the higher half entries of the current pml4 to this page table
     pub fn copy_higher_half(&mut self) {
         unsafe {
-            self.entries[HIGHER_HALF_ENTRY..ENTRY_COUNT]
-                .clone_from_slice(&current_root_table().entries[HIGHER_HALF_ENTRY..ENTRY_COUNT])
+            self.entries[HIGHER_HALF_ENTRY..ENTRY_COUNT].clone_from_slice(
+                &current_higher_root_table().entries[HIGHER_HALF_ENTRY..ENTRY_COUNT],
+            )
         }
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
@@ -213,7 +214,7 @@ impl PageTable {
     }
 
     /// maps a virtual `Page` to physical `Frame`
-    pub fn map_to(
+    pub unsafe fn map_to(
         &mut self,
         page: Page,
         frame: Frame,
@@ -257,7 +258,7 @@ impl PageTable {
     }
 
     /// get a mutable reference to the entry for a given page
-    pub fn get_entry(&self, page: Page) -> Option<&mut Entry> {
+    fn get_entry(&self, page: Page) -> Option<&mut Entry> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
             translate(page.start_address);
         let level_3_table = self[level_4_index].mapped_to()?;
@@ -268,7 +269,7 @@ impl PageTable {
     }
 
     /// unmap page and all of it's entries
-    pub fn unmap(&mut self, page: Page) {
+    pub unsafe fn unmap(&mut self, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {
@@ -291,7 +292,7 @@ impl IndexMut<usize> for PageTable {
 }
 
 /// returns the current pml4 from cr3
-pub unsafe fn current_root_table() -> FramePtr<PageTable> {
+pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
     let phys_addr: PhysAddr;
     unsafe {
         asm!("mov {}, cr3", out(reg) phys_addr);

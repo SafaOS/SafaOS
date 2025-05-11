@@ -124,11 +124,13 @@ fn map_byte_slices(
     let mut current_page = map_start_addr;
 
     let mut map_next = |page_table: &mut PhysPageTable, allocated_bytes_remaining: &mut usize| {
-        let results = page_table.map_to(
-            Page::containing_address(current_page),
-            frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        );
+        let results = unsafe {
+            page_table.map_to(
+                Page::containing_address(current_page),
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )
+        };
         *allocated_bytes_remaining += 4096;
         current_page += 4096;
         results

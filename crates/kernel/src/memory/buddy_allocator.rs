@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     align_up,
-    paging::{current_root_table, EntryFlags, Page},
+    paging::{current_higher_root_table, EntryFlags, Page},
 };
 
 pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
@@ -117,13 +117,12 @@ impl BuddyAllocator<'_> {
         let start = Page::containing_address(self.heap_end);
         let end = Page::containing_address(self.heap_end + size);
 
+        let mut root_table = unsafe { current_higher_root_table() };
         for page in Page::iter_pages(start, end) {
-            unsafe {
-                if current_root_table().get_frame(page).is_none() {
-                    let frame = frame_allocator::allocate_frame()?;
-                    current_root_table()
-                        .map_to(page, frame, EntryFlags::WRITE)
-                        .ok()?;
+            if root_table.get_frame(page).is_none() {
+                let frame = frame_allocator::allocate_frame()?;
+                unsafe {
+                    root_table.map_to(page, frame, EntryFlags::WRITE).ok()?;
                 }
             }
         }
@@ -149,12 +148,13 @@ impl BuddyAllocator<'_> {
         };
 
         let flags = EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE;
+        let mut root_table = unsafe { current_higher_root_table() };
         for page in page_range {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
             unsafe {
-                current_root_table().map_to(page, frame, flags)?;
+                root_table.map_to(page, frame, flags)?;
             };
         }
 

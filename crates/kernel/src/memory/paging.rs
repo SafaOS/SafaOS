@@ -13,7 +13,7 @@ use super::{
     VirtAddr,
 };
 
-pub use crate::arch::paging::{current_root_table, PageTable};
+pub use crate::arch::paging::{current_higher_root_table, PageTable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Page {
@@ -117,7 +117,7 @@ impl PhysPageTable {
     /// creates a new PhysPageTable from the current pml4 table
     /// takes ownership of the current pml4 table meaning it will free it when the PhysPageTable is dropped
     pub unsafe fn from_current() -> Self {
-        let inner = current_root_table();
+        let inner = current_higher_root_table();
         Self { inner }
     }
 
@@ -139,7 +139,9 @@ impl PhysPageTable {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
             let virt_addr = frame.virt_addr();
-            self.map_to(page, frame, flags)?;
+            unsafe {
+                self.map_to(page, frame, flags)?;
+            }
 
             unsafe {
                 core::ptr::write_bytes(virt_addr as *mut u8, 0, PAGE_SIZE);

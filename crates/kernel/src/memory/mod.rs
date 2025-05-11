@@ -8,7 +8,7 @@ pub mod sorcery;
 pub type VirtAddr = usize;
 pub type PhysAddr = usize;
 
-use paging::{current_root_table, Page, PageTable, PAGE_SIZE};
+use paging::{Page, PageTable, PAGE_SIZE};
 
 #[inline(always)]
 pub const fn align_up(address: usize, alignment: usize) -> usize {

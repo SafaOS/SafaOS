@@ -11,6 +11,7 @@ use core::ops::{Index, IndexMut};
 
 /// A hack that returns the last level (root) table's index from a VirtAddr
 /// level 4 in x86_64
+/// FIXME: bad name and broken usage
 pub fn p4_index(addr: VirtAddr) -> usize {
     todo!()
 }
@@ -36,8 +37,9 @@ impl IndexMut<usize> for PageTable {
     }
 }
 
-/// returns the current pml4 from cr3
-pub unsafe fn current_root_table() -> FramePtr<PageTable> {
+/// returns the current higher half root page table
+/// in x86_64 the higher half table is the same as the lower one which is not the case in aarch64
+pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
     todo!()
 }
 

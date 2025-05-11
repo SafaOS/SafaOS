@@ -30,7 +30,6 @@ mod threading;
 mod utils;
 
 extern crate alloc;
-use alloc::string::String;
 use arch::serial;
 
 use drivers::keyboard::keys::Key;
@@ -98,8 +97,8 @@ macro_rules! cross_println {
 #[macro_export]
 macro_rules! logln {
     ($($arg:tt)*) => {
-        $crate::serial!("{}\n", format_args!($($arg)*));
         $crate::println!("{}", format_args!($($arg)*));
+        $crate::serial!("{}\n", format_args!($($arg)*));
     };
 }
 
@@ -108,10 +107,10 @@ macro_rules! logln {
 #[macro_export]
 macro_rules! logln_boot {
     ($($arg:tt)*) => {
-        $crate::serial!("{}\n", format_args!($($arg)*));
         if $crate::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
             $crate::println!("{}", format_args!($($arg)*));
         }
+        $crate::serial!("{}\n", format_args!($($arg)*));
     };
 }
 
@@ -151,7 +150,7 @@ fn panic(info: &PanicInfo) -> ! {
         info.message(),
         info.location().unwrap()
     );
-    print_stack_trace();
+    crate::arch::print_stack_trace();
 
     #[cfg(test)]
     arch::power::shutdown();
@@ -159,39 +158,11 @@ fn panic(info: &PanicInfo) -> ! {
     khalt();
 }
 
-#[allow(unused)]
-fn print_stack_trace() {
-    let mut fp: *const usize;
-
-    unsafe {
-        core::arch::asm!("mov {}, rbp", out(reg) fp);
-
-        cross_println!("\x1B[38;2;0;0;200mStack trace:");
-        while !fp.is_null() && fp.is_aligned() {
-            let return_address_ptr = fp.offset(1);
-            let return_address = *return_address_ptr;
-
-            let name = {
-                let sym = KERNEL_ELF.sym_from_value_range(return_address);
-                sym.map(|sym| {
-                    KERNEL_ELF
-                        .string_table_index(sym.name_index)
-                        .unwrap_or(String::from("??"))
-                })
-            };
-            let name = name.as_deref().unwrap_or("???");
-
-            cross_println!("  {:#x} <{}>", return_address, name);
-            fp = *fp as *const usize;
-        }
-        cross_println!("\x1B[0m");
-    }
-}
-
 #[no_mangle]
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
-    memory::sorcery::init_page_table();
+    // TODO: temporary removed because aarch64 doesn't like it
+    // memory::sorcery::init_page_table();
     info!("terminal initialized");
     BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch

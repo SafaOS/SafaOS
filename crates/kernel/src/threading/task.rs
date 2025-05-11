@@ -103,13 +103,15 @@ impl AliveTask {
 
         let frame = frame_allocator::allocate_frame()?;
 
-        self.root_page_table
-            .map_to(
-                new_page,
-                frame,
-                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-            )
-            .ok()?;
+        unsafe {
+            self.root_page_table
+                .map_to(
+                    new_page,
+                    frame,
+                    EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+                )
+                .ok()?;
+        }
 
         let addr = frame.virt_addr();
         let ptr = addr as *mut u8;
@@ -128,7 +130,9 @@ impl AliveTask {
         let page_end = self.data_start + PAGE_SIZE * self.data_pages;
 
         let page = Page::containing_address(page_end - PAGE_SIZE);
-        self.root_page_table.unmap(page);
+        unsafe {
+            self.root_page_table.unmap(page);
+        }
 
         self.data_pages -= 1;
         Some(page_end - PAGE_SIZE)

@@ -6,7 +6,11 @@ cfg_if! {
     if #[cfg(target_arch = "x86_64")] {
         pub mod x86_64;
         use x86_64 as arch;
-    } else {
+    }  else if #[cfg(target_arch = "aarch64")] {
+        pub mod aarch64;
+        use aarch64 as arch;
+    }
+    else {
         pub mod unsupported;
         use unsupported as arch;
     }
@@ -17,7 +21,9 @@ pub mod threading {
     pub use super::arch::threading::{invoke_context_switch, restore_cpu_status, CPUStatus};
 }
 
-pub use arch::{disable_interrupts, enable_interrupts, hlt, init_phase1, init_phase2};
+pub use arch::{
+    disable_interrupts, enable_interrupts, hlt, init_phase1, init_phase2, print_stack_trace,
+};
 
 pub mod power {
     pub use super::arch::power::{reboot, shutdown};

@@ -13,7 +13,7 @@ use crate::{debug, utils::Locked};
 
 use super::{
     align_up, frame_allocator,
-    paging::{current_root_table, EntryFlags, MapToError, Page, PAGE_SIZE},
+    paging::{current_higher_root_table, EntryFlags, MapToError, Page, PAGE_SIZE},
     sorcery::ROOT_BINDINGS,
 };
 
@@ -181,9 +181,10 @@ impl PageAllocator {
         let start_page = Page::containing_address(ptr as usize);
         let end_page = Page::containing_address(ptr as usize + pages * PAGE_SIZE);
 
+        let mut root_table = unsafe { current_higher_root_table() };
         for page in Page::iter_pages(start_page, end_page) {
             unsafe {
-                current_root_table().map_to(
+                root_table.map_to(
                     page,
                     frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
                     EntryFlags::WRITE,
@@ -210,9 +211,10 @@ impl PageAllocator {
         let start = Page::containing_address(start);
         let end = Page::containing_address(end);
 
+        let mut root_table = unsafe { current_higher_root_table() };
         for page in Page::iter_pages(start, end) {
             unsafe {
-                current_root_table().unmap(page);
+                root_table.unmap(page);
             }
         }
 

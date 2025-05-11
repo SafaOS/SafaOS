@@ -3,7 +3,6 @@ use core::fmt::Display;
 use lazy_static::lazy_static;
 
 use crate::{
-    arch::paging::set_current_page_table,
     debug,
     limine::{self, MEMORY_END},
     memory::frame_allocator::{self},
@@ -89,9 +88,10 @@ impl<const N: usize> PageTableBindings<N> {
             table
         };
 
-        unsafe {
-            self.apply_bindings(&mut super::current_root_table(), table);
-        }
+        // FIXME: this is broken af
+        // unsafe {
+        //     self.apply_bindings(&mut super::current_root_table(), table);
+        // }
         Ok(table)
     }
 }
@@ -138,12 +138,13 @@ pub fn create_root_page_table() -> Result<&'static mut PageTable, MapToError> {
 
 pub fn init_page_table() {
     debug!(PageTable, "initializing root page table ... ");
-    let previous_table = unsafe { super::current_root_table() };
-    let table = create_root_page_table().unwrap();
-    unsafe {
-        set_current_page_table(table);
-    }
-    // de-allocating the previous root table
-    let frame = previous_table.frame();
-    frame_allocator::deallocate_frame(frame)
+    todo!()
+    // let previous_table = unsafe { super::current_root_table() };
+    // let table = create_root_page_table().unwrap();
+    // unsafe {
+    //     set_current_page_table(table);
+    // }
+    // // de-allocating the previous root table
+    // let frame = previous_table.frame();
+    // frame_allocator::deallocate_frame(frame)
 }
