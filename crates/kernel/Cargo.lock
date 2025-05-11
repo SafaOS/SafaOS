@@ -47,6 +47,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "compiler_builtins"
+version = "0.1.158"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "164cdc689e4c6d69417f77a5f48be240c291e84fbef0b1281755dc754b19c809"
+
+[[package]]
 name = "const-str"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -130,6 +136,7 @@ dependencies = [
  "bitflags",
  "cfg-if",
  "compile-time",
+ "compiler_builtins",
  "const-str",
  "hashbrown",
  "heapless",
