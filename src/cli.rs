@@ -177,7 +177,9 @@ pub fn run(opts: RunOpts, path: &str) {
         cmd.arg("-s").arg("-S");
     }
 
-    cmd.args(opts.qemu_args.split(|c: char| c.is_whitespace()));
+    if !opts.qemu_args.is_empty() {
+        cmd.args(opts.qemu_args.split(|c: char| c.is_whitespace()));
+    }
     if opts.tests {
         cmd.stdout(Stdio::piped());
     }
