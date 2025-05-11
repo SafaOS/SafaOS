@@ -14,17 +14,17 @@ fn main() {
         None => (
             false,
             args.run_args.build_args.clone(),
-            Some(RunOpts::from_args(args.run_args, false)),
+            Some(RunOpts::from_args(&args.run_args, false)),
         ),
-        Some(SubCommand::Run(c)) => (
+        Some(SubCommand::Run(ref c)) => (
             false,
             c.build_args.clone(),
-            Some(RunOpts::from_args(c, false)),
+            Some(RunOpts::from_args(&c, false)),
         ),
-        Some(SubCommand::Test(c)) => (
+        Some(SubCommand::Test(ref c)) => (
             true,
             c.build_args.clone(),
-            Some(RunOpts::from_args(c, true)),
+            Some(RunOpts::from_args(&c, true)),
         ),
         Some(SubCommand::Build(b)) => (false, b, None),
         Some(SubCommand::Init) => {

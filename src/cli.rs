@@ -22,7 +22,7 @@ fn get_ovmf(arch: ArchTarget) -> PathBuf {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct RunOpts {
+pub struct RunOpts<'a> {
     /// runs with kvm disabled
     no_kvm: bool,
     /// runs with gui disabled
@@ -31,16 +31,18 @@ pub struct RunOpts {
     debugger: bool,
     tests: bool,
     arch: ArchTarget,
+    qemu_args: &'a str,
 }
 
-impl RunOpts {
-    pub fn from_args(args: RunArgs, tests: bool) -> Self {
+impl<'a> RunOpts<'a> {
+    pub fn from_args(args: &'a RunArgs, tests: bool) -> Self {
         Self {
             no_gui: args.no_gui,
             no_kvm: args.no_kvm,
             debugger: args.debugger,
             tests,
             arch: args.build_args.arch,
+            qemu_args: &args.qemu_args,
         }
     }
 }
@@ -90,6 +92,8 @@ pub struct RunArgs {
     #[arg(long, default_value = "false")]
     /// runs with debugger enabled on port 1234
     debugger: bool,
+    #[arg(long, default_value = "")]
+    qemu_args: String,
     #[command(flatten)]
     pub build_args: BuildArgs,
 }
@@ -173,6 +177,7 @@ pub fn run(opts: RunOpts, path: &str) {
         cmd.arg("-s").arg("-S");
     }
 
+    cmd.args(opts.qemu_args.split(|c: char| c.is_whitespace()));
     if opts.tests {
         cmd.stdout(Stdio::piped());
     }
