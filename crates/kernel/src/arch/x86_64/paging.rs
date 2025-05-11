@@ -1,4 +1,3 @@
-use crate::limine;
 use bitflags::bitflags;
 use core::fmt::Debug;
 use core::ops::IndexMut;
@@ -269,7 +268,7 @@ impl PageTable {
         Some(&mut level_1_table[level_1_index])
     }
 
-    /// unmap page and all of it's entries
+    /// unmaps a page
     pub unsafe fn unmap(&mut self, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());

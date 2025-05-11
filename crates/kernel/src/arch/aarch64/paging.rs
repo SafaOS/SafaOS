@@ -131,6 +131,30 @@ impl Entry {
 
         None
     }
+
+    /// deallocates an entry depending on it's level if it is 1 it should just deallocate the frame
+    /// otherwise treat the frame as a page table and deallocate it
+    /// # Safety
+    /// the caller must ensure that the entry is not used anymore
+    unsafe fn free(&mut self, level: u8) {
+        let frame = self.frame().unwrap();
+
+        if level != 0 {
+            let table = &mut *(frame.virt_addr() as *mut PageTable);
+            table.free(level);
+        }
+        self.deallocate();
+    }
+
+    /// deallocates a page table entry and invalidates it
+    /// # Safety
+    /// the caller must ensure that the entry is not used anymore
+    unsafe fn deallocate(&mut self) {
+        if let Some(frame) = self.frame() {
+            frame_allocator::deallocate_frame(frame);
+            self.set(ArchEntryFlags::empty(), 0);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -189,9 +213,14 @@ impl PageTable {
     pub fn copy_higher_half(&mut self) {
         // not needed in aarch64 because the higher half lives in another register anyways
     }
+
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
     pub unsafe fn free(&mut self, level: u8) {
-        todo!()
+        for entry in &mut self.0 {
+            if entry.flags().contains(ArchEntryFlags::PRESENT) {
+                entry.free(level - 1);
+            }
+        }
     }
 
     /// maps a virtual `Page` to physical `Frame`
@@ -239,21 +268,21 @@ impl PageTable {
     }
 
     /// get a mutable reference to the entry for a given page
-    // fn get_entry(&self, page: Page) -> Option<&mut Entry> {
-    //     let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.start_address);
-    //     let l1 = self[l0_index].mapped_to()?;
-    //     let l2 = l1[l1_index].mapped_to()?;
-    //     let l3 = l2[l2_index].mapped_to()?;
+    fn get_entry(&self, page: Page) -> Option<&mut Entry> {
+        let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.start_address);
+        let l1 = self[l0_index].mapped_to()?;
+        let l2 = l1[l1_index].mapped_to()?;
+        let l3 = l2[l2_index].mapped_to()?;
 
-    //     Some(&mut l3[l3_index])
-    // }
+        Some(&mut l3[l3_index])
+    }
 
-    /// unmap page and all of it's entries
+    /// unmaps a page
     pub unsafe fn unmap(&mut self, page: Page) {
-        // let entry = self.get_entry(page);
-        // debug_assert!(entry.is_some());
-        // if let Some(entry) = entry {
-        //     unsafe { entry.deallocate() };
-        // }
+        let entry = self.get_entry(page);
+        debug_assert!(entry.is_some());
+        if let Some(entry) = entry {
+            unsafe { entry.deallocate() };
+        }
     }
 }
