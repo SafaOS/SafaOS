@@ -1,4 +1,4 @@
-use crate::{cross_println, khalt};
+use crate::{cross_println, globals::KERNEL_ELF, khalt};
 use core::arch::asm;
 
 pub mod paging;
@@ -69,8 +69,11 @@ pub fn print_stack_trace() {
             let return_address_ptr = fp.offset(1);
             let return_address = *return_address_ptr;
 
-            let name = "??";
-
+            let name = {
+                let sym = KERNEL_ELF.sym_from_value_range(return_address);
+                sym.and_then(|sym| KERNEL_ELF.string_table_index(sym.name_index))
+            };
+            let name = name.as_deref().unwrap_or("???");
             cross_println!("  {:#x} <{}>", return_address, name);
             fp = *fp as *const usize;
         }
