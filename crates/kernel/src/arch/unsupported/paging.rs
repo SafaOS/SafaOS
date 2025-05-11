@@ -11,9 +11,10 @@ use core::ops::{Index, IndexMut};
 
 /// A hack that returns the last level (root) table's index from a VirtAddr
 /// level 4 in x86_64
-/// FIXME: bad name and broken usage
-pub fn p4_index(addr: VirtAddr) -> usize {
-    todo!()
+/// l0 in aarch64
+/// FIXME: bad usage
+pub fn root_table_index(addr: VirtAddr) -> usize {
+    (addr >> 39) & 0x1FF
 }
 
 #[derive(Clone)]
@@ -43,8 +44,8 @@ pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
     todo!()
 }
 
-/// sets the current Page Table to `page_table`
-pub unsafe fn set_current_page_table(page_table: &'static mut PageTable) {
+/// sets the current higher half Page Table to `page_table`
+pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     todo!()
 }
 

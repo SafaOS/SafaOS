@@ -25,10 +25,12 @@ bitflags! {
         const NO_EXEC_UNPRIV = 1 << 54;
     }
 }
+
 /// A hack that returns the last level (root) table's index from a VirtAddr
 /// level 4 in x86_64
-pub fn p4_index(addr: VirtAddr) -> usize {
-    todo!()
+/// l0 in aarch64
+pub const fn root_table_index(addr: VirtAddr) -> usize {
+    l0_index(addr)
 }
 
 #[inline(always)]
@@ -159,10 +161,12 @@ pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
     }
 }
 
-// FIXME: remove or replace
-/// sets the current Page Table to `page_table`
-pub unsafe fn set_current_page_table(page_table: &'static mut PageTable) {
-    todo!()
+/// sets the current higher half Page Table to `page_table`
+pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
+    let ttbr1_el1: PhysAddr = page_table.phys_addr();
+    unsafe {
+        asm!("msr ttbr1_el1, {}", in(reg) ttbr1_el1);
+    }
 }
 
 // TODO: maybe use traits here

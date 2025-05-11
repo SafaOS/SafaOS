@@ -161,8 +161,7 @@ fn panic(info: &PanicInfo) -> ! {
 #[no_mangle]
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
-    // TODO: temporary removed because aarch64 doesn't like it
-    // memory::sorcery::init_page_table();
+    memory::sorcery::init_page_table();
     info!("terminal initialized");
     BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch

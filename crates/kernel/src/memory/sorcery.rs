@@ -1,8 +1,9 @@
-use super::paging::PAGE_SIZE;
+use super::{frame_allocator::FramePtr, paging::PAGE_SIZE};
 use core::fmt::Display;
 use lazy_static::lazy_static;
 
 use crate::{
+    arch::paging::set_current_higher_page_table,
     debug,
     limine::{self, MEMORY_END},
     memory::frame_allocator::{self},
@@ -33,10 +34,10 @@ impl PageTableBinding {
         );
 
         for page in from_iter {
-            // TODO: add a set entry function
-            let pml4_index = crate::arch::paging::p4_index(page.start_address);
+            // FIXME: this like copies 512 GB from page table to another rendering the loop and everything uselesss
+            let pml4_index = crate::arch::paging::root_table_index(page.start_address);
             let to_page = to_iter.next().unwrap();
-            let to_plm4_index = crate::arch::paging::p4_index(to_page.start_address);
+            let to_plm4_index = crate::arch::paging::root_table_index(to_page.start_address);
 
             to_page_table[to_plm4_index] = from_page_table[pml4_index].clone();
         }
@@ -76,22 +77,15 @@ impl<const N: usize> PageTableBindings<N> {
         None
     }
     /// creates a page table from bindings applied from current root pagetable
-    pub fn create_page_table(&self) -> Result<&'static mut PageTable, MapToError> {
-        let table = {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+    pub fn create_page_table(&self) -> Result<FramePtr<PageTable>, MapToError> {
+        let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
-            let virt_start_addr = frame.virt_addr();
-            let table = unsafe { &mut *(virt_start_addr as *mut PageTable) };
+        let mut table = unsafe { frame.into_ptr::<PageTable>() };
+        table.zeroize();
 
-            table.zeroize();
-            table
-        };
-
-        // FIXME: this is broken af
-        // unsafe {
-        //     self.apply_bindings(&mut super::current_root_table(), table);
-        // }
+        unsafe {
+            self.apply_bindings(&mut super::paging::current_higher_root_table(), &mut *table);
+        }
         Ok(table)
     }
 }
@@ -132,19 +126,19 @@ lazy_static! {
         )
     };
 }
-pub fn create_root_page_table() -> Result<&'static mut PageTable, MapToError> {
+pub fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
     ROOT_BINDINGS.create_page_table()
 }
 
+/// FIXME: extremely broken
 pub fn init_page_table() {
     debug!(PageTable, "initializing root page table ... ");
-    todo!()
-    // let previous_table = unsafe { super::current_root_table() };
-    // let table = create_root_page_table().unwrap();
-    // unsafe {
-    //     set_current_page_table(table);
-    // }
-    // // de-allocating the previous root table
-    // let frame = previous_table.frame();
-    // frame_allocator::deallocate_frame(frame)
+    let previous_table = unsafe { super::paging::current_higher_root_table() };
+    let table = create_root_page_table().unwrap();
+    unsafe {
+        set_current_higher_page_table(table);
+    }
+    // de-allocating the previous root table
+    let frame = previous_table.frame();
+    frame_allocator::deallocate_frame(frame)
 }

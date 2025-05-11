@@ -19,16 +19,17 @@ const HIGHER_HALF_ENTRY: usize = 256;
 
 /// A hack that returns the last level (root) table's index from a VirtAddr
 /// level 4 in x86_64
-pub fn p4_index(addr: VirtAddr) -> usize {
+/// l0 in aarch64
+pub const fn root_table_index(addr: VirtAddr) -> usize {
     (addr >> 39) & 0x1FF
 }
-fn p3_index(addr: VirtAddr) -> usize {
+const fn p3_index(addr: VirtAddr) -> usize {
     (addr >> 30) & 0x1FF
 }
-fn p2_index(addr: VirtAddr) -> usize {
+const fn p2_index(addr: VirtAddr) -> usize {
     (addr >> 21) & 0x1FF
 }
-fn p1_index(addr: VirtAddr) -> usize {
+const fn p1_index(addr: VirtAddr) -> usize {
     (addr >> 12) & 0x1FF
 }
 
@@ -37,7 +38,7 @@ fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
         p1_index(addr),
         p2_index(addr),
         p3_index(addr),
-        p4_index(addr),
+        root_table_index(addr),
     )
 }
 
@@ -303,9 +304,9 @@ pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
     ptr
 }
 
-/// sets the current Page Table to `page_table`
-pub unsafe fn set_current_page_table(page_table: &'static mut PageTable) {
-    let phys_addr = page_table as *mut _ as usize - limine::get_phy_offset();
+/// sets the current higher half Page Table to `page_table`
+pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
+    let phys_addr = page_table.phys_addr();
     unsafe {
         asm!("mov cr3, rax", in("rax") phys_addr);
     }
