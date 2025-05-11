@@ -13,7 +13,7 @@ use super::{
     VirtAddr,
 };
 
-pub use crate::arch::paging::{current_higher_root_table, PageTable};
+pub use crate::arch::paging::{current_higher_root_table, current_lower_root_table, PageTable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Page {
@@ -115,9 +115,9 @@ impl PhysPageTable {
     }
 
     /// creates a new PhysPageTable from the current pml4 table
-    /// takes ownership of the current pml4 table meaning it will free it when the PhysPageTable is dropped
+    /// takes ownership of the current lower half root page table meaning it will free it when the PhysPageTable is dropped
     pub unsafe fn from_current() -> Self {
-        let inner = current_higher_root_table();
+        let inner = current_lower_root_table();
         Self { inner }
     }
 

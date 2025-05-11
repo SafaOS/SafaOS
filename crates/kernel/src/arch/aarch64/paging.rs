@@ -161,6 +161,16 @@ pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
     }
 }
 
+/// Returns the current lower half root table
+pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
+    let ttbr0_el1: PhysAddr;
+    unsafe {
+        asm!("mrs {}, ttbr0_el1", out(reg) ttbr0_el1);
+        let frame = Frame::containing_address(ttbr0_el1);
+        frame.into_ptr()
+    }
+}
+
 /// sets the current higher half Page Table to `page_table`
 pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let ttbr1_el1: PhysAddr = page_table.phys_addr();

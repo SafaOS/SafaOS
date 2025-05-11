@@ -13,8 +13,8 @@ use core::ops::{Index, IndexMut};
 /// level 4 in x86_64
 /// l0 in aarch64
 /// FIXME: bad usage
-pub fn root_table_index(addr: VirtAddr) -> usize {
-    (addr >> 39) & 0x1FF
+pub const fn root_table_index(addr: VirtAddr) -> usize {
+    todo!()
 }
 
 #[derive(Clone)]
@@ -41,6 +41,12 @@ impl IndexMut<usize> for PageTable {
 /// returns the current higher half root page table
 /// in x86_64 the higher half table is the same as the lower one which is not the case in aarch64
 pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
+    todo!()
+}
+
+/// returns the current lower half root page table
+/// in x86_64 the higher half table is the same as the lower one which is not the case in aarch64
+pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
     todo!()
 }
 

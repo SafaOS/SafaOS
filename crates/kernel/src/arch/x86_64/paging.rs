@@ -304,6 +304,12 @@ pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
     ptr
 }
 
+/// returns the current pml4 from cr3
+/// equalivent to [`current_higher_root_table`] in x86_64
+pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
+    current_higher_root_table()
+}
+
 /// sets the current higher half Page Table to `page_table`
 pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let phys_addr = page_table.phys_addr();
