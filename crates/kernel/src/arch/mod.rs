@@ -21,9 +21,7 @@ pub mod threading {
     pub use super::arch::threading::{invoke_context_switch, restore_cpu_status, CPUStatus};
 }
 
-pub use arch::{
-    disable_interrupts, enable_interrupts, hlt, init_phase1, init_phase2, print_stack_trace,
-};
+pub use arch::{disable_interrupts, enable_interrupts, hlt, init_phase1, init_phase2};
 
 pub mod power {
     pub use super::arch::power::{reboot, shutdown};
@@ -36,6 +34,10 @@ pub mod serial {
 pub mod utils {
     #[allow(unused_imports)]
     pub use super::arch::utils::{time, CPU_INFO};
+}
+
+pub mod registers {
+    pub use super::arch::registers::StackFrame;
 }
 
 pub use arch::paging;

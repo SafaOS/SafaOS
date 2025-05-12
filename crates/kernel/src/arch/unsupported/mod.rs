@@ -28,7 +28,3 @@ pub unsafe fn enable_interrupts() {
 pub unsafe fn hlt() {
     todo!()
 }
-
-pub fn print_stack_trace() {
-    unimplemented!()
-}

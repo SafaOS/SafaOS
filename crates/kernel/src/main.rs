@@ -18,6 +18,9 @@
 mod test;
 
 mod arch;
+/// Contains macros and stuff related to debugging
+/// such as info!, debug! and StackTrace
+mod debug;
 mod devices;
 mod drivers;
 mod eve;
@@ -76,61 +79,6 @@ pub fn khalt() -> ! {
 
 #[allow(unused_imports)]
 use core::panic::PanicInfo;
-use core::sync::atomic::AtomicBool;
-pub const QUITE_PANIC: bool = true;
-pub static BOOTING: AtomicBool = AtomicBool::new(false);
-
-/// prints to both the serial and the terminal doesn't print to the terminal if it panicked or if
-/// it is not ready...
-#[macro_export]
-macro_rules! cross_println {
-    ($($arg:tt)*) => {
-        $crate::serial!($($arg)*);
-        $crate::serial!("\n");
-
-        if !$crate::QUITE_PANIC {
-            $crate::println!($($arg)*);
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! logln {
-    ($($arg:tt)*) => {
-        $crate::println!("{}", format_args!($($arg)*));
-        $crate::serial!("{}\n", format_args!($($arg)*));
-    };
-}
-
-/// logs line to the TTY only when the kernel is initializing
-/// logs to the serial in all cases
-#[macro_export]
-macro_rules! logln_boot {
-    ($($arg:tt)*) => {
-        if $crate::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
-            $crate::println!("{}", format_args!($($arg)*));
-        }
-        $crate::serial!("{}\n", format_args!($($arg)*));
-    };
-}
-
-/// runtime debug info that is only available though test feature
-/// takes a $mod and an Arguments, mod must be a type
-#[macro_export]
-macro_rules! debug {
-    ($mod: path, $($arg:tt)*) => {
-        // makes sure $mod is a valid type
-        let _ = core::marker::PhantomData::<$mod>;
-        $crate::logln_boot!("\x1B[0m[ \x1B[91m debug \x1B[0m ]\x1B[90m {}:\x1B[0m {}", stringify!($mod), format_args!($($arg)*));
-    };
-}
-
-#[macro_export]
-macro_rules! info {
-    ($($arg:tt)*) => {
-        $crate::logln!("[ \x1B[92m info \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*));
-    };
-}
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -139,18 +87,18 @@ fn panic(info: &PanicInfo) -> ! {
     }
     unsafe {
         arch::serial::SERIAL.force_unlock();
-        if !QUITE_PANIC {
+        if !debug::QUITE_PANIC {
             FRAMEBUFFER_TERMINAL.force_unlock_write();
             FRAMEBUFFER_TERMINAL.write().clear();
         }
     }
 
-    cross_println!(
-        "\x1B[38;2;255;0;0mkernel panic:\n{}, at {}\x1B[0m",
+    panic_println!(
+        "\x1B[31mkernel panic:\n{}, at {}\x1B[0m",
         info.message(),
         info.location().unwrap()
     );
-    crate::arch::print_stack_trace();
+    panic_println!("{}", unsafe { debug::StackTrace::current() });
 
     #[cfg(test)]
     arch::power::shutdown();
@@ -163,13 +111,13 @@ extern "C" fn kstart() -> ! {
     arch::init_phase1();
     memory::sorcery::init_page_table();
     info!("terminal initialized");
-    BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
+    debug::BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
     arch::init_phase2();
 
     unsafe {
         debug!(Scheduler, "Eve starting...");
-        BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
+        debug::BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
         Scheduler::init(eve::main, "Eve");
     }
 

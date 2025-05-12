@@ -1,4 +1,3 @@
-use crate::{cross_println, globals::KERNEL_ELF};
 use core::arch::{asm, global_asm};
 
 mod exceptions;
@@ -11,7 +10,7 @@ pub(super) mod threading;
 #[path = "../unsupported/utils.rs"]
 pub(super) mod utils;
 
-mod registers;
+pub(super) mod registers;
 
 global_asm!(
     "
@@ -73,27 +72,4 @@ pub unsafe fn enable_interrupts() {
 #[inline(always)]
 pub unsafe fn hlt() {
     asm!("wfe");
-}
-// FIXME: this can be simplified by implementing some sort of stack-frame type,,,
-pub fn print_stack_trace() {
-    let mut fp: *const usize;
-
-    unsafe {
-        core::arch::asm!("mov {}, fp", out(reg) fp);
-
-        cross_println!("\x1B[38;2;0;0;200mStack trace:");
-        while !fp.is_null() && fp.is_aligned() {
-            let return_address_ptr = fp.offset(1);
-            let return_address = *return_address_ptr;
-
-            let name = {
-                let sym = KERNEL_ELF.sym_from_value_range(return_address);
-                sym.and_then(|sym| KERNEL_ELF.string_table_index(sym.name_index))
-            };
-            let name = name.as_deref().unwrap_or("???");
-            cross_println!("  {:#x} <{}>", return_address, name);
-            fp = *fp as *const usize;
-        }
-        cross_println!("\x1B[0m");
-    }
 }
