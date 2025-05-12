@@ -1,6 +1,7 @@
-use crate::{cross_println, globals::KERNEL_ELF, khalt};
-use core::arch::asm;
+use crate::{cross_println, globals::KERNEL_ELF};
+use core::arch::{asm, global_asm};
 
+mod exceptions;
 pub mod paging;
 #[path = "../unsupported/power.rs"]
 pub(super) mod power;
@@ -10,21 +11,30 @@ pub(super) mod threading;
 #[path = "../unsupported/utils.rs"]
 pub(super) mod utils;
 
-/// parks all cores except for 0
-fn park_cores() {
-    let mut cpu_id: usize;
-    unsafe {
-        asm!("
-               mrs x1, mpidr_el1
-               and x1, x1, #3
-               mov {}, x1
-               ", out(reg) cpu_id);
+mod registers;
 
-        if cpu_id > 0 {
-            khalt()
-        }
-    }
-}
+global_asm!(
+    "
+.text
+.global kboot
+kboot:
+    # parks all cores except for core 0
+    mrs x1, mpidr_el1
+    and x1, x1, #3
+    cmp x1, #0
+    bne khalt
+
+    mov x0, sp
+    # Enables SP_ELx
+    mrs x1, spsel
+    orr x1, x1, #1
+    msr spsel, x1
+    # Restores the stack back after enabling
+    mov sp, x0
+
+    b kstart
+"
+);
 
 /// Switches to el1
 fn switch_to_el1() {
@@ -40,18 +50,25 @@ fn switch_to_el1() {
 
 #[inline(always)]
 pub fn init_phase1() {
-    park_cores();
     switch_to_el1();
+    exceptions::init_exceptions();
+    unsafe {
+        enable_interrupts();
+    }
 }
 
 #[inline(always)]
 pub fn init_phase2() {}
 
 #[inline(always)]
-pub unsafe fn disable_interrupts() {}
+pub unsafe fn disable_interrupts() {
+    unsafe { asm!("msr DAIFSet, #0b1111") }
+}
 
 #[inline(always)]
-pub unsafe fn enable_interrupts() {}
+pub unsafe fn enable_interrupts() {
+    unsafe { asm!("msr DAIFClr, #0b1111") }
+}
 
 #[inline(always)]
 pub unsafe fn hlt() {
