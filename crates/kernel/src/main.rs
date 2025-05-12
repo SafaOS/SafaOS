@@ -85,6 +85,7 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe {
         arch::disable_interrupts();
     }
+    let stack = unsafe { debug::StackTrace::current() };
     unsafe {
         arch::serial::SERIAL.force_unlock();
         if !debug::QUITE_PANIC {
@@ -98,7 +99,7 @@ fn panic(info: &PanicInfo) -> ! {
         info.message(),
         info.location().unwrap()
     );
-    panic_println!("{}", unsafe { debug::StackTrace::current() });
+    panic_println!("{}", stack);
 
     #[cfg(test)]
     arch::power::shutdown();
