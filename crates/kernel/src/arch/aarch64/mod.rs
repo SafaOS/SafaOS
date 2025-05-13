@@ -1,16 +1,16 @@
 use core::arch::{asm, global_asm};
 
 mod exceptions;
+mod gic;
 pub mod paging;
 #[path = "../unsupported/power.rs"]
 pub(super) mod power;
+pub(super) mod registers;
 pub(super) mod serial;
-#[path = "../unsupported/threading.rs"]
 pub(super) mod threading;
+mod timer;
 #[path = "../unsupported/utils.rs"]
 pub(super) mod utils;
-
-pub(super) mod registers;
 
 global_asm!(
     "
@@ -56,8 +56,11 @@ pub fn init_phase1() {
     }
 }
 
-#[inline(always)]
-pub fn init_phase2() {}
+#[inline(never)]
+pub fn init_phase2() {
+    gic::init_gic();
+    timer::init_generic_timer();
+}
 
 #[inline(always)]
 pub unsafe fn disable_interrupts() {
