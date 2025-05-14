@@ -1,3 +1,4 @@
+use core::str;
 use std::{
     io::{Read, Write, stdout},
     path::PathBuf,
@@ -131,35 +132,34 @@ pub fn build(opts: BuildOpts) {
 
 fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
     let mut stdout_pipe = child.stdout.take().expect("stdout handle not present");
-    let mut buffer = Vec::new();
+    let mut buffer: Vec<u8> = Vec::new();
 
     loop {
         let mut read = [0u8; 20];
         let amount = stdout_pipe.read(&mut read)?;
         let read = &read[..amount];
 
-        stdout().write(&read)?;
-
-        buffer.extend_from_slice(&read);
+        buffer.extend(&*read);
+        stdout().write_all(&read)?;
 
         let failure_message = b"kernel panic";
         // read tests output for failure
         if buffer
             .windows(failure_message.len())
             .any(|x| x == failure_message)
+            || read.ends_with(failure_message)
+            || read.starts_with(failure_message)
         {
             let start = Instant::now();
             // Timeout after 1 second
             let duration = Duration::from_secs(1);
             loop {
-                let mut read = [0u8; 20];
-                let amount = stdout_pipe.read(&mut read)?;
-                let read = &read[..amount];
-
-                stdout().write(&read)?;
-
                 if start.elapsed() >= duration || child.try_wait().is_ok_and(|s| s.is_some()) {
                     child.kill()?;
+                    let mut read = Vec::new();
+                    stdout_pipe.read_to_end(&mut read)?;
+                    stdout().write(&read)?;
+
                     println!("-------------- END QEMU OUTPUT --------------");
                     eprintln!("tests failed!");
                     std::process::exit(-1);
