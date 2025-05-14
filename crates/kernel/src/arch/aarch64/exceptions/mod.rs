@@ -5,22 +5,22 @@ use core::{
 
 use crate::VirtAddr;
 
-use super::registers::{Esr, GeneralPurpose};
+use super::registers::{Esr, Reg};
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 pub struct InterruptFrame {
     // x0 ..= x28
-    general_registers: [GeneralPurpose; 29],
+    pub general_registers: [Reg; 29],
     // x29
-    fp: GeneralPurpose,
+    pub fp: Reg,
     // TODO: these aren't really general puropse
-    pub elr: GeneralPurpose,
-    spsr: GeneralPurpose,
-    esr: Esr,
-    far: GeneralPurpose,
-    lr: GeneralPurpose,
-    xzr: GeneralPurpose,
+    pub elr: Reg,
+    pub spsr: Reg,
+    pub esr: Esr,
+    pub far: Reg,
+    pub lr: Reg,
+    pub xzr: Reg,
 }
 
 impl Display for InterruptFrame {
@@ -30,7 +30,7 @@ impl Display for InterruptFrame {
         let rows = self.general_registers.len() / cols;
 
         let write = |index: usize, f: &mut core::fmt::Formatter<'_>| {
-            write!(f, "x{index}: {:#016x}    ", *self.general_registers[index])
+            write!(f, "x{index}: {:x}    ", self.general_registers[index])
         };
 
         let mut left = self.general_registers.len();

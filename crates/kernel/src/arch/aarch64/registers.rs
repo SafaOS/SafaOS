@@ -6,27 +6,27 @@ use core::{
 
 use int_enum::IntEnum;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 #[repr(transparent)]
-pub(super) struct GeneralPurpose(u64);
+pub(super) struct Reg(pub u64);
 
 macro_rules! impl_common {
     ($mod: path) => {
         impl LowerHex for $mod {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                write!(f, "{:#x}", self.0)
+                write!(f, "{:#016x}", self.0)
             }
         }
 
         impl UpperHex for $mod {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                write!(f, "{:#X}", self.0)
+                write!(f, "{:#016X}", self.0)
             }
         }
 
         impl Debug for $mod {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                write!(f, "{:#x}", self)
+                write!(f, "Reg({:#x})", self)
             }
         }
 
@@ -39,7 +39,7 @@ macro_rules! impl_common {
     };
 }
 
-impl_common!(GeneralPurpose);
+impl_common!(Reg);
 
 #[derive(Clone, Copy, Debug, IntEnum, PartialEq, Eq)]
 #[repr(u8)]
@@ -57,7 +57,7 @@ pub enum ExcClass {
     FloatingPoint = 0b101100,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 #[repr(transparent)]
 pub(super) struct Esr(u64);
 impl_common!(Esr);
