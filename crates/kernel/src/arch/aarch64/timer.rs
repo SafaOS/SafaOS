@@ -47,7 +47,6 @@ pub fn init_generic_timer() {
 pub fn on_interrupt(ctx: &mut InterruptFrame) {
     gic::clear_pending(TIMER_IRQ);
     unsafe {
-        super::threading::context_switch(ctx);
-        reset_timer(10);
+        super::threading::context_switch(ctx, || reset_timer(10));
     }
 }
