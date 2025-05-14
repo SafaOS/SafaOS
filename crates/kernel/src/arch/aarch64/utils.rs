@@ -14,7 +14,7 @@ impl CpuInfo {
     fn fetch_core_count() -> u8 {
         let mpidr_el1: usize;
         unsafe {
-            asm!("msr {}, mpidr_el1", out(reg) mpidr_el1);
+            asm!("mrs {}, mpidr_el1", out(reg) mpidr_el1);
         }
         ((mpidr_el1 & 0x3) as u8) + 1
     }
