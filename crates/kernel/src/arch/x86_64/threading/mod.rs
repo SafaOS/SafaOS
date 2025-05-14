@@ -10,7 +10,7 @@ pub const ARGV_START: usize = ENVIRONMENT_START + 0xA000000000;
 pub const ENVIRONMENT_VARIABLES_START: usize = ENVIRONMENT_START + 0xE000000000;
 
 pub const ABI_STRUCTURES_START: usize = ENVIRONMENT_START + 0x1000000000;
-
+use crate::memory::{map_byte_slices, map_str_slices};
 use core::{
     arch::{asm, global_asm},
     ptr::NonNull,
@@ -111,115 +111,6 @@ pub struct CPUStatus {
 
 use safa_utils::abi::raw::{processes::AbiStructures, RawSlice};
 
-fn map_byte_slices(
-    page_table: &mut PhysPageTable,
-    slices: &[&[u8]],
-    map_start_addr: usize,
-) -> Result<Option<NonNull<RawSlice<u8>>>, MapToError> {
-    if slices.is_empty() {
-        return Ok(None);
-    }
-
-    let mut allocated_bytes_remaining = 0;
-    let mut current_page = map_start_addr;
-
-    let mut map_next = |page_table: &mut PhysPageTable, allocated_bytes_remaining: &mut usize| {
-        let results = unsafe {
-            page_table.map_to(
-                Page::containing_address(current_page),
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
-                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-            )
-        };
-        *allocated_bytes_remaining += 4096;
-        current_page += 4096;
-        results
-    };
-
-    let mut map_next_bytes = |bytes: usize,
-                              page_table: &mut PhysPageTable,
-                              allocated_bytes_remaining: &mut usize|
-     -> Result<(), MapToError> {
-        let pages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-
-        for _ in 0..pages {
-            map_next(page_table, allocated_bytes_remaining)?;
-        }
-        Ok(())
-    };
-
-    macro_rules! map_if_not_enough {
-        ($bytes: expr) => {
-            if allocated_bytes_remaining < $bytes {
-                map_next_bytes($bytes, page_table, &mut allocated_bytes_remaining)?;
-            } else {
-                allocated_bytes_remaining -= $bytes;
-            }
-        };
-    }
-
-    const USIZE_BYTES: usize = size_of::<usize>();
-    map_if_not_enough!(8);
-    let mut start_addr = map_start_addr;
-    // argc
-    copy_to_userspace(page_table, start_addr, &slices.len().to_ne_bytes());
-
-    // argv*
-    start_addr += USIZE_BYTES;
-
-    for slice in slices {
-        map_if_not_enough!(slice.len() + 1);
-
-        copy_to_userspace(page_table, start_addr, slice);
-        // null-terminate arg
-        copy_to_userspace(page_table, start_addr + slice.len(), b"\0");
-        start_addr += slice.len() + 1;
-    }
-
-    let mut start_addr = start_addr.next_multiple_of(USIZE_BYTES);
-    let slices_addr = start_addr;
-    let mut current_slice_ptr = map_start_addr + USIZE_BYTES /* after argc */;
-
-    for slice in slices {
-        map_if_not_enough!(size_of::<RawSlice<u8>>());
-
-        let raw_slice =
-            unsafe { RawSlice::from_raw_parts(current_slice_ptr as *const u8, slice.len()) };
-        let bytes: [u8; size_of::<RawSlice<u8>>()] = unsafe { core::mem::transmute(raw_slice) };
-
-        copy_to_userspace(page_table, start_addr, &bytes);
-        start_addr += bytes.len();
-
-        current_slice_ptr += slice.len() + 1; // skip the data (and null terminator)
-    }
-
-    Ok(Some(unsafe {
-        NonNull::new_unchecked(slices_addr as *mut RawSlice<u8>)
-    }))
-}
-
-/// Maps the arguments to the environment area in the given page table.
-/// returns an FFI safe pointer to the argv array
-/// returns None if arguments are empty
-///
-/// # Layout
-/// directly at `ARGV_START` is the argv length,
-/// followed by the argv raw bytes ([u8]),
-/// followed by the argv pointers (RawSlice<u8>).
-///
-/// the returned slice is a slice of the argv pointers, meaning it is not available until the page table is loaded
-/// there is an added null character at the end of each argument for compatibility with C
-fn map_argv(
-    page_table: &mut PhysPageTable,
-    args: &[&str],
-) -> Result<Option<NonNull<RawSlice<u8>>>, MapToError> {
-    return map_byte_slices(
-        page_table,
-        unsafe { core::mem::transmute(args) },
-        ARGV_START,
-    );
-}
-
 impl CPUStatus {
     pub fn at(&self) -> VirtAddr {
         self.rip as VirtAddr
@@ -258,7 +149,7 @@ impl CPUStatus {
         let argc = argv.len();
         let envc = env.len();
 
-        let argv_ptr = map_argv(page_table, argv)?;
+        let argv_ptr = map_str_slices(page_table, argv, ARGV_START)?;
         let argv_ptr = argv_ptr
             .map(|p| p.as_ptr())
             .unwrap_or(core::ptr::null_mut());
