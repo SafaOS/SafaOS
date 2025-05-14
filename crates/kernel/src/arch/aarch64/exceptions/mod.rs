@@ -5,7 +5,7 @@ use core::{
 
 use crate::VirtAddr;
 
-use super::registers::{Esr, Reg};
+use super::registers::{Esr, Reg, Spsr};
 
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
@@ -16,11 +16,12 @@ pub struct InterruptFrame {
     pub fp: Reg,
     // TODO: these aren't really general puropse
     pub elr: Reg,
-    pub spsr: Reg,
+    pub spsr: Spsr,
     pub esr: Esr,
     pub far: Reg,
     pub lr: Reg,
-    pub xzr: Reg,
+    /// The saved sp at the start of the interrupt (sp_el1)
+    pub sp: Reg,
 }
 
 impl Display for InterruptFrame {
@@ -51,7 +52,15 @@ impl Display for InterruptFrame {
 
         writeln!(f)?;
 
+        let sp_el0: u64;
+        unsafe {
+            asm!("mrs {}, sp_el0", out(reg) sp_el0);
+        }
         writeln!(f, "Special Registers:")?;
+        writeln!(f, "SP: {:?} (EL1)", self.sp)?;
+        writeln!(f, "SP_EL0: {:?}", Reg(sp_el0))?;
+        writeln!(f, "LR: {:?}", self.lr)?;
+        writeln!(f, "SPSR: {:?}", self.spsr)?;
         writeln!(f, "ELR: {:#x}", self.elr)?;
         writeln!(f, "{}", self.esr)?;
         write!(f, "FAR: {:?}", self.far)?;
@@ -94,9 +103,11 @@ global_asm!(
         stp xzr, xzr, [sp, #16 * 16]
     .endif
 
-   # store link register which is x30
-    stp x30, xzr, [sp, #16 * 17]
     mov x0, sp
+    mov x1, #CONTEXT_SIZE
+    add x1, x1, x0
+    # store link register which is x30 and the stack
+    stp x30, x1, [sp, #16 * 17]
 
 # call exception handler
     bl \\handler
@@ -106,7 +117,7 @@ global_asm!(
 
 .text
 # restores an interrupt frame at x0 without ereting, and therefore doesn't restore the lr netheir does it restore x0, and x1
-.global restore_frame
+.global restore_frame_partial
 restore_frame_partial:
 # load elr and spsr, these might be modified for example by context switching
     ldp x1, x2, [x0, #16 * 15]
@@ -133,14 +144,13 @@ restore_frame_partial:
 restore_frame:
     bl restore_frame_partial
 # esr and far doesn't have to be restored
-    ldp x30, xzr, [x0, #16 * 17]
+    ldp x30, x1, [x0, #16 * 17]
+    mov sp, x1
     ldp x0, x1, [x0, #16 * 0]
     eret
 
 exit_exception:
     mov x0, sp
-    # free the stack
-    add sp, sp, #CONTEXT_SIZE
     b restore_frame
 
 .global exc_vector_table
