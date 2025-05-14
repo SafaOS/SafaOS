@@ -30,7 +30,7 @@ jobs:
           path: out/safaos.iso
           if-no-files-found: error
       - name: Build aarch64
-        run: cargo run init && cargo run build -v -a aarch64
+        run: cargo run build -v -a aarch64
       - uses: actions/upload-artifact@v4
         with:
           name: aarch64-iso

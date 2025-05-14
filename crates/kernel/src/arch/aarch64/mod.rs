@@ -3,6 +3,7 @@ use core::arch::{asm, global_asm};
 mod exceptions;
 mod gic;
 pub mod paging;
+#[path = "../unsupported/power.rs"]
 pub(super) mod power;
 pub(super) mod registers;
 pub(super) mod serial;
