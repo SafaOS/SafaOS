@@ -5,7 +5,7 @@ use crate::info;
 use super::{exceptions::InterruptFrame, gic};
 
 // TODO: only works on qemu virt
-const TIMER_IRQ: u32 = 30;
+pub const TIMER_IRQ: u32 = 30;
 
 #[inline(always)]
 /// Resets the timer to count Nms again before tiggring interrupt
@@ -42,13 +42,12 @@ pub fn init_generic_timer() {
         "initialized generic timer with freq: {}Mhz",
         freq / 1000 / 1000
     );
-    loop {}
 }
 
-pub fn on_interrupt(_ctx: &mut InterruptFrame) {
+pub fn on_interrupt(ctx: &mut InterruptFrame) {
+    gic::clear_pending(TIMER_IRQ);
     unsafe {
-        super::serial::write_str(".");
-        gic::clear_pending(TIMER_IRQ);
+        super::threading::context_switch(ctx);
         reset_timer(10);
     }
 }

@@ -77,3 +77,15 @@ pub fn clear_pending(interrupt: u32) {
         core::ptr::write_volatile(gicd_icpendr, 1 << interrupt);
     }
 }
+
+fn gicd_ispendr0() -> *mut u32 {
+    (*GICD_BASE + 0x200) as *mut u32
+}
+
+pub fn set_pending(interrupt: u32) {
+    assert!(interrupt <= 32);
+    let ispender = gicd_ispendr0();
+    unsafe {
+        core::ptr::write_volatile(ispender, 1 << interrupt);
+    }
+}
