@@ -1,6 +1,8 @@
 use std::{
+    io::{Read, Write, stdout},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
+    time::{Duration, Instant},
 };
 
 use clap::Parser;
@@ -127,6 +129,50 @@ pub fn build(opts: BuildOpts) {
         .expect("build failed")
 }
 
+fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
+    let mut stdout_pipe = child.stdout.take().expect("stdout handle not present");
+    let mut buffer = Vec::new();
+
+    loop {
+        let mut read = [0u8; 20];
+        let amount = stdout_pipe.read(&mut read)?;
+        let read = &read[..amount];
+
+        stdout().write(&read)?;
+
+        buffer.extend_from_slice(&read);
+
+        let failure_message = b"kernel panic";
+        // read tests output for failure
+        if buffer
+            .windows(failure_message.len())
+            .any(|x| x == failure_message)
+        {
+            let start = Instant::now();
+            // Timeout after 1 second
+            let duration = Duration::from_secs(1);
+            loop {
+                let mut read = [0u8; 20];
+                let amount = stdout_pipe.read(&mut read)?;
+                let read = &read[..amount];
+
+                stdout().write(&read)?;
+
+                if start.elapsed() >= duration || child.try_wait().is_ok_and(|s| s.is_some()) {
+                    child.kill()?;
+                    println!("-------------- END QEMU OUTPUT --------------");
+                    eprintln!("tests failed!");
+                    std::process::exit(-1);
+                }
+            }
+        }
+
+        if let Ok(Some(exit)) = child.try_wait() {
+            return Ok(exit);
+        }
+    }
+}
+
 /// Runs qemu with options `opts` and iso at `path`, if `tests` is true, will scan output for tests failure or success
 pub fn run(opts: RunOpts, path: &str) {
     let qemu = get_qemu(opts.arch);
@@ -185,37 +231,25 @@ pub fn run(opts: RunOpts, path: &str) {
     }
     println!("--------------   QEMU OUTPUT   --------------");
     println!();
-    let output = cmd
-        .spawn()
-        .unwrap_or_else(|_| panic!("{} required to run", qemu))
-        .wait_with_output()
-        .expect("failed to wait for qemu to exit");
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // if tests is on we read stdout for scanning later so it is piped so we have to echo it...
-    if opts.tests {
-        print!("{}", stdout);
-    }
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|_| panic!("{} required to run", qemu));
+
+    let status = if opts.tests {
+        wait_for_tests(&mut child).expect("failed to wait for tests")
+    } else {
+        child
+            .wait_with_output()
+            .expect("failed to wait for qemu to exit")
+            .status
+    };
+
     println!();
     println!("-------------- END QEMU OUTPUT --------------");
 
-    if !output.status.success() {
-        eprintln!("qemu exited with {}", output.status);
+    if !status.success() {
+        eprintln!("qemu exited with {}", status);
         std::process::exit(-1);
-    }
-
-    if opts.tests {
-        let failure_message = b"kernel panic";
-        // read tests output for failure
-        if stdout
-            .as_bytes()
-            .windows(failure_message.len())
-            .any(|x| x == failure_message)
-        {
-            eprintln!("tests failed!");
-            std::process::exit(-1);
-        } else {
-            eprintln!("tests successful!");
-        }
     }
 }
