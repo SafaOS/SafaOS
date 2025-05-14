@@ -4,6 +4,7 @@ use core::{
     ops::Deref,
 };
 
+use bitflags::bitflags;
 use int_enum::IntEnum;
 
 #[derive(Clone, Copy, Default)]
@@ -144,5 +145,27 @@ impl StackFrame {
             return None;
         }
         unsafe { Some(&*prev) }
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, Default)]
+    #[repr(C)]
+    pub struct Spsr: u64 {
+        const Neg = 1 << 31;
+        const Zero = 1 << 30;
+        const Carry = 1 << 29;
+        const V = 1 << 28;
+        const Q = 1 << 27;
+
+        /// Debug interrupt mask
+        const D = 1 << 9;
+        /// SError exception mask
+        const A = 1 << 8;
+        /// IRQ interrupt mask
+        const I = 1 << 7;
+        /// FIQ interrupt mask
+        const F = 1 << 6;
+        const EL1H = 0b0101;
     }
 }
