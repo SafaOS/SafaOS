@@ -59,6 +59,7 @@ impl Display for InterruptFrame {
             asm!("mrs {}, sp_el0", out(reg) sp_el0);
         }
         writeln!(f, "Special Registers:")?;
+        writeln!(f, "FP: {:?}", self.fp)?;
         writeln!(f, "SP: {:?} (EL1)", self.sp)?;
         writeln!(f, "SP_EL0: {:?}", Reg(sp_el0))?;
         writeln!(f, "LR: {:?}", self.lr)?;

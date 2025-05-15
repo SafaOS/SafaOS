@@ -20,9 +20,29 @@ bitflags! {
         const ACCESS_FLAG = 1 << 10;
         // TODO: figure this out
         const MAIR_INDX_MASK = (1 << 2) | (1 << 3);
-        const NON_SECURE = 1 << 4;
+        const NON_SECURE = 1 << 5;
+        const AP_LOWER = 1 << 6;
+        const AP_HIGHER = 1 << 7;
         const NO_EXEC_PRIV = 1 << 53;
         const NO_EXEC_UNPRIV = 1 << 54;
+    }
+}
+
+impl From<EntryFlags> for ArchEntryFlags {
+    fn from(value: EntryFlags) -> Self {
+        let mut flags: ArchEntryFlags = ArchEntryFlags::PRESENT
+            | ArchEntryFlags::TABLE_DESC
+            | ArchEntryFlags::MAIR_INDX_MASK
+            | ArchEntryFlags::ACCESS_FLAG;
+        if !value.contains(EntryFlags::WRITE) {
+            // read-only flag
+            flags |= ArchEntryFlags::AP_HIGHER;
+        }
+
+        if value.contains(EntryFlags::USER_ACCESSIBLE) {
+            flags |= ArchEntryFlags::AP_LOWER;
+        }
+        flags
     }
 }
 
@@ -231,12 +251,7 @@ impl PageTable {
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
         let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.start_address);
-        // TODO: use
-        _ = flags;
-        let flags: ArchEntryFlags = ArchEntryFlags::PRESENT
-            | ArchEntryFlags::TABLE_DESC
-            | ArchEntryFlags::MAIR_INDX_MASK
-            | ArchEntryFlags::ACCESS_FLAG;
+        let flags: ArchEntryFlags = flags.into();
         let l1 = self[l0_index].map()?;
         let l2 = l1[l1_index].map()?;
         let l3 = l2[l2_index].map()?;
