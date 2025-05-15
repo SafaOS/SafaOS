@@ -20,9 +20,10 @@ use super::{
 };
 use crate::memory::paging::PAGE_SIZE;
 
+/// Store the context to switch to in the higher half, so that it isn't affected by lower half translation table switch
 static CURRENT_CONTEXT: SyncUnsafeCell<CPUStatus> =
     SyncUnsafeCell::new(unsafe { core::mem::zeroed() });
-// currently the same as x86_64's layout
+
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
 pub const STACK_START: usize = 0x00007A0000000000;
 pub const STACK_END: usize = STACK_START + STACK_SIZE;

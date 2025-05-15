@@ -6,6 +6,8 @@ pub mod paging;
 pub(super) mod power;
 pub(super) mod registers;
 pub(super) mod serial;
+#[cfg(test)]
+mod tests;
 pub(super) mod threading;
 mod timer;
 pub(super) mod utils;

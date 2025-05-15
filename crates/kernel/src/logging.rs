@@ -36,9 +36,11 @@ pub(crate) fn log_time_from_ms(ms: u64) -> (u32, u8, u8, u16) {
 #[macro_export]
 macro_rules! serial_log {
     ($($arg:tt)*) => {
-        let log_time = $crate::time!();
-        let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
-        $crate::serial!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
+        {
+            let log_time = $crate::time!();
+            let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
+            $crate::serial!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
+        }
     };
 }
 
