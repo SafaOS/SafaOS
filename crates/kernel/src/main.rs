@@ -13,19 +13,20 @@
 #![feature(naked_functions)]
 #![feature(sync_unsafe_cell)]
 #![feature(never_type)]
+#![feature(likely_unlikely)]
 
 #[cfg(test)]
 mod test;
 
 mod arch;
-/// Contains macros and stuff related to debugging
-/// such as info!, debug! and StackTrace
-mod debug;
 mod devices;
 mod drivers;
 mod eve;
 mod globals;
 mod limine;
+/// Contains macros and stuff related to debugging
+/// such as info!, debug! and StackTrace
+mod logging;
 mod memory;
 mod syscalls;
 mod terminal;
@@ -85,10 +86,10 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe {
         arch::disable_interrupts();
     }
-    let stack = unsafe { debug::StackTrace::current() };
+    let stack = unsafe { logging::StackTrace::current() };
     unsafe {
         arch::serial::SERIAL.force_unlock();
-        if !debug::QUITE_PANIC {
+        if !logging::QUITE_PANIC {
             FRAMEBUFFER_TERMINAL.force_unlock_write();
             FRAMEBUFFER_TERMINAL.write().clear();
         }
@@ -112,13 +113,13 @@ extern "C" fn kstart() -> ! {
     arch::init_phase1();
     memory::sorcery::init_page_table();
     info!("terminal initialized");
-    debug::BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
+    logging::BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
     arch::init_phase2();
 
     unsafe {
         debug!(Scheduler, "Eve starting...");
-        debug::BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
+        logging::BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
         Scheduler::init(eve::main, "Eve");
     }
 

@@ -5,6 +5,52 @@ use crate::{arch::registers::StackFrame, globals::KERNEL_ELF};
 pub const QUITE_PANIC: bool = true;
 pub static BOOTING: AtomicBool = AtomicBool::new(false);
 
+pub(crate) fn log_time_from_ms(ms: u64) -> (u32, u8, u8, u16) {
+    let into_seconds = || (ms / 1000, ms % 1000);
+    let into_minutes = || {
+        let (seconds, ms) = into_seconds();
+        (seconds / 60, seconds % 60, ms)
+    };
+    let into_hours = || {
+        let (minutes, seconds, ms) = into_minutes();
+        (minutes / 60, minutes % 60, seconds, ms)
+    };
+
+    match ms {
+        ..1000 => (0, 0, 0, ms as u16),
+        1000..60000 => {
+            let (seconds, ms) = into_seconds();
+            (0, 0, seconds as u8, ms as u16)
+        }
+        x if x <= 1000 * 60 * 60 && x >= 1000 * 60 => {
+            let (minutes, seconds, ms) = into_minutes();
+            (0, minutes as u8, seconds as u8, ms as u16)
+        }
+        _ => {
+            let (hours, minutes, seconds, ms) = into_hours();
+            (hours as u32, minutes as u8, seconds as u8, ms as u16)
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! serial_log {
+    ($($arg:tt)*) => {
+        let log_time = $crate::time!();
+        let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
+        $crate::serial!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
+    };
+}
+
+#[macro_export]
+macro_rules! tty_log {
+    ($($arg:tt)*) => {
+        let log_time = $crate::time!();
+        let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
+        $crate::println!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}", format_args!($($arg)*));
+    };
+}
+
 /// prints to both the serial and the terminal doesn't print to the terminal if it panicked or if
 /// it is not ready...
 #[macro_export]
@@ -21,7 +67,7 @@ macro_rules! panic_print {
     ($($arg:tt)*) => {
         $crate::serial!($($arg)*);
 
-        if !$crate::debug::QUITE_PANIC {
+        if !$crate::logging::QUITE_PANIC {
             $crate::print!($($arg)*);
         }
     };
@@ -30,8 +76,8 @@ macro_rules! panic_print {
 #[macro_export]
 macro_rules! logln {
     ($($arg:tt)*) => {
-        $crate::println!("{}", format_args!($($arg)*));
-        $crate::serial!("{}\n", format_args!($($arg)*));
+        $crate::tty_log!("{}", format_args!($($arg)*));
+        $crate::serial_log!("{}", format_args!($($arg)*));
     };
 }
 
@@ -40,10 +86,10 @@ macro_rules! logln {
 #[macro_export]
 macro_rules! logln_boot {
     ($($arg:tt)*) => {
-        if $crate::debug::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
-            $crate::println!("{}", format_args!($($arg)*));
+        if $crate::logging::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
+            $crate::tty_log!("{}", format_args!($($arg)*));
         }
-        $crate::serial!("{}\n", format_args!($($arg)*));
+        $crate::serial_log!("{}", format_args!($($arg)*));
     };
 }
 
