@@ -46,5 +46,5 @@ pub fn time() -> u64 {
             frq = out(reg) freq,
         );
     }
-    count / freq * 1000
+    count / (freq / 1000)
 }
