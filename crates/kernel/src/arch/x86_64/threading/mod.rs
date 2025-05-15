@@ -11,17 +11,14 @@ pub const ENVIRONMENT_VARIABLES_START: usize = ENVIRONMENT_START + 0xE000000000;
 
 pub const ABI_STRUCTURES_START: usize = ENVIRONMENT_START + 0x1000000000;
 use crate::memory::{map_byte_slices, map_str_slices};
-use core::{
-    arch::{asm, global_asm},
-    ptr::NonNull,
-};
+use core::arch::{asm, global_asm};
 
 use bitflags::bitflags;
 
 use crate::{
     memory::{
-        copy_to_userspace, frame_allocator,
-        paging::{EntryFlags, MapToError, Page, PhysPageTable, PAGE_SIZE},
+        copy_to_userspace,
+        paging::{EntryFlags, MapToError, PhysPageTable, PAGE_SIZE},
     },
     threading::swtch,
     VirtAddr,
@@ -109,7 +106,7 @@ pub struct CPUStatus {
     xmm0: [u8; 16],
 }
 
-use safa_utils::abi::raw::{processes::AbiStructures, RawSlice};
+use safa_utils::abi::raw::processes::AbiStructures;
 
 impl CPUStatus {
     pub fn at(&self) -> VirtAddr {

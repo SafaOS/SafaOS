@@ -11,7 +11,6 @@ mod tests;
 pub mod threading;
 pub mod utils;
 
-use crate::globals::KERNEL_ELF;
 use core::arch::asm;
 use interrupts::{apic, init_idt};
 use serial::init_serial;
