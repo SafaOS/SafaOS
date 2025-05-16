@@ -143,6 +143,8 @@ fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
         stdout().write_all(&read)?;
 
         let failure_message = b"kernel panic";
+        let exit_request = b"PLEASE EXIT";
+
         // read tests output for failure
         if buffer
             .windows(failure_message.len())
@@ -167,6 +169,15 @@ fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
             }
         }
 
+        if buffer
+            .windows(exit_request.len())
+            .any(|x| x == exit_request)
+            || read.ends_with(exit_request)
+            || read.starts_with(exit_request)
+        {
+            child.kill()?;
+            return Ok(ExitStatus::default());
+        }
         if let Ok(Some(exit)) = child.try_wait() {
             return Ok(exit);
         }
