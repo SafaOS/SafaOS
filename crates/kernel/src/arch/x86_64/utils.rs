@@ -7,7 +7,7 @@ use spin::Lazy;
 pub struct CpuInfo {
     vendor_id: heapless::String<12>,
     model: heapless::String<48>,
-
+    arch: &'static str,
     physical_address_space: u8,
     virtual_address_space: u8,
     core_count: u8,
@@ -100,6 +100,7 @@ impl CpuInfo {
             virtual_address_space,
             core_count,
             easter_egg,
+            arch: "x86_64",
         }
     }
 }

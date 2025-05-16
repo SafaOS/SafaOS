@@ -86,7 +86,7 @@ fn print() -> io::Result<()> {
             .map(|s| s.as_str())
             .unwrap_or("none")
     );
-    print_field!("CPU", "{}", cpuinfo.model());
+    print_field!("CPU", "{} ({:?})", cpuinfo.model(), cpuinfo.arch());
     print_field!(
         "Memory",
         "{}MiB/{}MiB",

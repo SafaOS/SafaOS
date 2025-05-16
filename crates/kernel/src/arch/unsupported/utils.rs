@@ -5,6 +5,7 @@ use spin::Lazy;
 pub struct CpuInfo {
     vendor_id: heapless::String<12>,
     model: heapless::String<48>,
+    arch: &'static str,
     core_count: u8,
 }
 
@@ -16,6 +17,7 @@ impl CpuInfo {
         Self {
             vendor_id,
             model,
+            arch: "UNKNOWN",
             core_count: -1i8 as u8,
         }
     }
