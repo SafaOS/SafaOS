@@ -98,6 +98,7 @@ fn print() -> io::Result<()> {
     print_colors();
 
     println!("\x1b[2B");
+    stdout().flush()?;
     Ok(())
 }
 
