@@ -1,5 +1,7 @@
 use core::arch::asm;
 
+use super::registers::MIDR;
+use core::fmt::Write;
 use serde::Serialize;
 use spin::Lazy;
 
@@ -20,8 +22,27 @@ impl CpuInfo {
         ((mpidr_el1 & 0x3) as u8) + 1
     }
     pub fn fetch() -> Self {
-        let vendor_id = heapless::String::new();
-        let model = heapless::String::new();
+        let midr = MIDR::read();
+        crate::serial!(
+            "{:?}, {:#x}, {}\n",
+            midr.implementer(),
+            midr.partnum(),
+            midr.variant()
+        );
+
+        let mut vendor_id = heapless::String::new();
+
+        let implementer = midr.implementer();
+        let partnum = midr.partnum();
+
+        write!(vendor_id, "{:?}", implementer).expect("vendor id too long");
+
+        let mut model = heapless::String::new();
+        if let Some(model_id) = implementer.cpu_model(partnum) {
+            write!(model, "{}", model_id).expect("model name too long");
+        } else {
+            write!(model, "{:#x}", partnum).expect("model number too long");
+        }
 
         Self {
             vendor_id,

@@ -169,3 +169,67 @@ bitflags! {
         const EL1H = 0b0101;
     }
 }
+
+#[derive(Debug, Clone, Copy, IntEnum)]
+#[repr(u8)]
+pub enum MIDRImplementer {
+    Unknown = 0x0,
+    ArmLimited = 0x41,
+    BroadcomCor = 0x42,
+    CaviumInc = 0x43,
+    DEC = 0x44,
+    FujitsuLtd = 0x46,
+    Infineon = 0x49,
+    Motorola = 0x4D,
+    Nividia = 0x4E,
+    AMCC = 0x50,
+    QualcommInc = 0x51,
+    Marvell = 0x56,
+    IntelLtd = 0x69,
+    AmpereComputing = 0xC0,
+}
+
+impl MIDRImplementer {
+    /// FIXME: this shouldn't be relayed upon instead we should return raw numbers and let the software figure it out
+    /// however i have defined some cpu models for now
+    pub fn cpu_model(&self, partnum: u16) -> Option<&'static str> {
+        match self {
+            Self::ArmLimited => match partnum {
+                0xD0A => Some("Cortex-A75"),
+                0xD08 => Some("Cortex-A72"),
+                0xD03 => Some("Cortex-A53"),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct MIDR {
+    part_and_revision: u16,
+    arch_variant: u8,
+    implementer: u8,
+}
+
+impl MIDR {
+    pub fn read() -> Self {
+        let midr: u32;
+        unsafe {
+            asm!("mrs {:x}, midr_el1", out(reg) midr);
+        }
+        unsafe { core::mem::transmute(midr) }
+    }
+    pub fn implementer(&self) -> MIDRImplementer {
+        MIDRImplementer::try_from(self.implementer).unwrap_or(MIDRImplementer::Unknown)
+    }
+
+    pub fn variant(&self) -> u8 {
+        self.arch_variant >> 4
+    }
+
+    pub fn partnum(&self) -> u16 {
+        self.part_and_revision >> 4
+    }
+}
