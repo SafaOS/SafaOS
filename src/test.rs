@@ -22,7 +22,7 @@ fn arch_test_args(arch: ArchTarget) -> RunArgs {
         debugger: false,
         qemu_args: String::new(),
         build_args: BuildArgs {
-            output: Some(format!("out/safa-tests-{}.iso", arch.as_str())),
+            output: Some(format!("out/safaos-tests-{}.iso", arch.as_str())),
             verbose: true,
             arch,
         },
