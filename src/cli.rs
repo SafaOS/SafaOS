@@ -88,15 +88,15 @@ impl<'a> BuildOpts<'a> {
 pub struct RunArgs {
     #[arg(long, default_value = "false")]
     /// runs with kvm disabled
-    no_kvm: bool,
+    pub no_kvm: bool,
     #[arg(long, default_value = "false")]
     /// runs with gui disabled
-    no_gui: bool,
+    pub no_gui: bool,
     #[arg(long, default_value = "false")]
     /// runs with debugger enabled on port 1234
-    debugger: bool,
+    pub debugger: bool,
     #[arg(long, default_value = "")]
-    qemu_args: String,
+    pub qemu_args: String,
     #[command(flatten)]
     pub build_args: BuildArgs,
 }
