@@ -90,8 +90,10 @@ static SYSROOT: LazyLock<PathBuf> = LazyLock::new(|| {
     path
 });
 
-static TOOLCHAIN_ROOT: LazyLock<PathBuf> =
-    LazyLock::new(|| SYSROOT.join("lib/rustlib/x86_64-unknown-safaos"));
+static TOOLCHAIN_SYSROOT: LazyLock<PathBuf> = LazyLock::new(|| SYSROOT.join("lib/rustlib/"));
+fn toolchain_root(arch: ArchTarget) -> PathBuf {
+    TOOLCHAIN_SYSROOT.join(format!("{}-unknown-safaos", arch.as_str()))
+}
 
 pub fn install_safaos_toolchain(arch: ArchTarget) -> io::Result<()> {
     log!("installing the SafaOS toolchain");
@@ -150,7 +152,7 @@ pub fn install_safaos_toolchain(arch: ArchTarget) -> io::Result<()> {
     file.flush()?;
     file.seek(io::SeekFrom::Start(0))?;
 
-    let toolchain_root = &*TOOLCHAIN_ROOT;
+    let toolchain_root = toolchain_root(arch);
     log!(
         "extracting downloaded file from {} to {}",
         file.path().display(),
