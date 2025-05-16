@@ -27,7 +27,7 @@ fn main() {
             Some(RunOpts::from_args(&c, true)),
         ),
         Some(SubCommand::Build(b)) => (false, b, None),
-        Some(SubCommand::Init) => {
+        Some(SubCommand::Init { arch }) => {
             Command::new("git")
                 .arg("submodule")
                 .arg("update")
@@ -37,7 +37,7 @@ fn main() {
                 .expect("failed to spawn git")
                 .wait()
                 .expect("failed to wait for get");
-            safa_builder::rustc::install_safaos_toolchain()
+            safa_builder::rustc::install_safaos_toolchain(arch)
                 .expect("failed to install the SafaOS toolchain");
             std::process::exit(0);
         }

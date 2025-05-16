@@ -113,7 +113,10 @@ pub struct Cli {
 #[command(version, about, long_about = None)]
 pub enum SubCommand {
     /// Initializes the submodules and installs the SafaOS's toolchain (rustc target)
-    Init,
+    Init {
+        #[arg(short, long, default_value_t = utils::DEFAULT_ARCH)]
+        arch: ArchTarget,
+    },
     /// Builds a SafaOS iso
     Build(BuildArgs),
     /// Builds and Runs a normal SafaOS iso, requires qemu (default)
