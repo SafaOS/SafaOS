@@ -19,7 +19,7 @@ jobs:
         with:
           version: 0.14.0
       - name: Install deps
-        run: sudo apt update -y && sudo apt install xorriso qemu-system-x86_64 -y
+        run: sudo apt update -y && sudo apt install xorriso -y
       - name: Setup
         run: rustup update
       - name: Initialize
@@ -39,7 +39,7 @@ jobs:
         with:
           version: 0.14.0
       - name: Install deps
-        run: sudo apt update -y && sudo apt install xorriso qemu-system-aarch64 -y
+        run: sudo apt update -y && sudo apt install xorriso -y
       - name: Setup
         run: rustup update
       - name: Initialize
