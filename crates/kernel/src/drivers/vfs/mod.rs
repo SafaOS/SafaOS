@@ -51,6 +51,7 @@ impl FileDescriptor {
     }
 
     pub fn close(&mut self) {
+        _ = self.node.sync();
         self.node.close();
     }
 
