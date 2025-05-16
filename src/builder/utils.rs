@@ -21,8 +21,7 @@ impl ArchTarget {
     /// used for architectures currently in development:w
     pub const fn has_rustc_target(&self) -> bool {
         match self {
-            Self::X86_64 => true,
-            Self::Arm64 => false,
+            Self::X86_64 | Self::Arm64 => true,
         }
     }
     /// Gets the host architecture
