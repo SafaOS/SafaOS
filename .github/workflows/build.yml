@@ -11,7 +11,47 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  build-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
+      - name: Install deps
+        run: sudo apt update -y && sudo apt install xorriso qemu-system-x86_64 -y
+      - name: Setup
+        run: rustup update
+      - name: Initialize
+        run: cargo run init --arch x86_64
+      - name: Build
+        run: cargo run build -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-iso
+          path: out/safaos.iso
+          if-no-files-found: error
+  build-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
+      - name: Install deps
+        run: sudo apt update -y && sudo apt install xorriso qemu-system-aarch64 -y
+      - name: Setup
+        run: rustup update
+      - name: Initialize
+        run: cargo run init --arch aarch64
+      - name: Build
+        run: cargo run build -v -a aarch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-iso
+          path: out/safaos.iso
+          if-no-files-found: error
+  run-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,39 +61,19 @@ jobs:
       - name: Install deps
         run: sudo apt update -y && sudo apt install xorriso qemu-system -y
       - name: Setup
-        run: rustup update && rustup install nightly && rustup +nightly target add x86_64-unknown-none && rustup target add x86_64-unknown-none
+        run: rustup update
       - name: Initialize
         run: cargo run init --arch x86_64 && cargo run init --arch aarch64
-      - name: Build x86_64
-        run: cargo run build -v
-      - uses: actions/upload-artifact@v4
-        with:
-          name: x86_64-iso
-          path: out/safaos.iso
-          if-no-files-found: error
-      - name: Build aarch64
-        run: cargo run build -v -a aarch64
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aarch64-iso
-          path: out/safaos.iso
-          if-no-files-found: error
-      - name: ls
-        run: pwd && ls
-      # TODO: make cargo test run tests for all architectures
-      - name: Run tests x86_64
-        run: cargo run -- test --no-kvm --no-gui
+      - name: Run tests
+        run: cargo test
       # TODO: add building tests
       - uses: actions/upload-artifact@v4
         with:
           name: x86_64-tests-iso
-          path: out/safaos-tests.iso
+          path: out/safaos-tests-x86_64.iso
           if-no-files-found: error
-      - name: Run tests aarch64
-        run: cargo run -- test --no-kvm --no-gui -a aarch64
-      # TODO: add building tests
       - uses: actions/upload-artifact@v4
         with:
           name: aarch64-tests-iso
-          path: out/safaos-tests.iso
+          path: out/safaos-tests-aarch64.iso
           if-no-files-found: error
