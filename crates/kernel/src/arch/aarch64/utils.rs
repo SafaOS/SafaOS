@@ -23,13 +23,6 @@ impl CpuInfo {
     }
     pub fn fetch() -> Self {
         let midr = MIDR::read();
-        crate::serial!(
-            "{:?}, {:#x}, {}\n",
-            midr.implementer(),
-            midr.partnum(),
-            midr.variant()
-        );
-
         let mut vendor_id = heapless::String::new();
 
         let implementer = midr.implementer();
