@@ -225,10 +225,6 @@ impl MIDR {
         MIDRImplementer::try_from(self.implementer).unwrap_or(MIDRImplementer::Unknown)
     }
 
-    pub fn variant(&self) -> u8 {
-        self.arch_variant >> 4
-    }
-
     pub fn partnum(&self) -> u16 {
         self.part_and_revision >> 4
     }
