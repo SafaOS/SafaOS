@@ -126,6 +126,9 @@ you can also check `crates-user/` for examples of programs written in rust.
 
 > Aside from the rust stdandard library another method to interact with the kernel is through the [safa-api](https://github.com/SafaOS/safa-api) which provides low-level wrapper functions around the syscalls, and also some high-level wrappers (such as a userspace allocator which is a very high-level wrapper around the sbrk syscall, ofc the raw sbrk syscall is still exposed).
 
+## Contributing
+check out [CONTRIBUTING.md](/CONTRIBUTING.md)
+
 ## Credits
 currently uses the [limine](https://limine-bootloader.org/) bootloader.
 
