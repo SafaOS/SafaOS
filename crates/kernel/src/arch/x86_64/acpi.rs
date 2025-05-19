@@ -1,6 +1,6 @@
 use core::mem::offset_of;
 
-use crate::{limine::HDDM, RSDP_ADDR};
+use crate::{limine::HHDM, RSDP_ADDR};
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
@@ -206,7 +206,7 @@ impl SDT for RSDT {
 
     unsafe fn nth(&self, n: usize) -> (usize, usize) {
         let addr = *self.table.as_ptr().add(n) as usize;
-        let addr = addr | *HDDM;
+        let addr = addr | *HHDM;
 
         (addr, 0)
     }
@@ -225,7 +225,7 @@ impl SDT for XSDT {
 
         let addr = table_ptr.add(n);
         let addr = core::ptr::read_unaligned(addr) as usize;
-        let addr = addr | *HDDM;
+        let addr = addr | *HHDM;
 
         (addr, 0)
     }
@@ -303,7 +303,7 @@ impl MADT {
 }
 
 fn get_rsdp() -> RSDPDesc {
-    let addr = *RSDP_ADDR | *HDDM;
+    let addr = *RSDP_ADDR | *HHDM;
     let ptr = addr as *mut RSDPDesc;
 
     let desc = unsafe { *ptr };
@@ -315,13 +315,13 @@ pub fn get_sdt() -> &'static dyn PTSD {
     let rsdp = get_rsdp();
 
     if rsdp.xsdt_addr != 0 {
-        let xsdt_addr = rsdp.xsdt_addr as usize | *HDDM;
+        let xsdt_addr = rsdp.xsdt_addr as usize | *HHDM;
         let xsdt_ptr = xsdt_addr as *const XSDT;
 
         return unsafe { &*xsdt_ptr };
     }
 
-    let rsdt_addr = rsdp.rsdt_addr as usize | *HDDM;
+    let rsdt_addr = rsdp.rsdt_addr as usize | *HHDM;
     let rsdt_ptr = rsdt_addr as *const RSDT;
 
     unsafe { &*rsdt_ptr }

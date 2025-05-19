@@ -29,7 +29,7 @@ static BASE_REVISION: BaseRevision = BaseRevision::new();
 static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
 lazy_static! {
-    pub static ref HDDM: usize = get_phy_offset();
+    pub static ref HHDM: usize = get_phy_offset();
 }
 
 #[used]

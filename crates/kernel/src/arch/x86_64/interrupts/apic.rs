@@ -1,19 +1,24 @@
-use core::{arch::asm, sync::atomic::AtomicUsize};
+use core::arch::asm;
 
 use super::{pit, read_msr};
-use bitflags::bitflags;
-
 use crate::{
-    arch::x86_64::{
-        acpi::{self, MADT},
-        utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
+    arch::{
+        paging::current_higher_root_table,
+        x86_64::{
+            acpi::{self, MADT},
+            utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
+        },
     },
     info,
-    limine::HDDM,
+    limine::HHDM,
+    memory::{
+        frame_allocator::Frame,
+        paging::{EntryFlags, Page},
+    },
     serial, PhysAddr, VirtAddr,
 };
-
-pub static IOAPIC_ADDR: AtomicUsize = AtomicUsize::new(0);
+use bitflags::bitflags;
+use lazy_static::lazy_static;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LVTEntry {
@@ -61,19 +66,40 @@ pub struct MADTIOApic {
 }
 
 #[inline(always)]
-pub fn get_io_apic_addr(madt: &MADT) -> VirtAddr {
-    unsafe {
-        let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
-        let addr = (*record).ioapic_address as PhysAddr | *HDDM;
-        addr
-    }
+pub fn get_io_apic_addr() -> VirtAddr {
+    *IOAPIC_ADDR
 }
 
+lazy_static! {
+    static ref LAPIC_ADDR: VirtAddr = {
+        let phys = read_msr(0x1B) & 0xFFFFF000;
+        let frame = Frame::containing_address(phys);
+        let virt_addr = phys | *HHDM;
+        let page = Page::containing_address(virt_addr);
+
+        unsafe {
+            current_higher_root_table()
+                .map_to(page, frame, EntryFlags::WRITE)
+                .expect("failed to map the local apic")
+        };
+        virt_addr
+    };
+    static ref IOAPIC_ADDR: VirtAddr = unsafe {
+        let madt = MADT::get(acpi::get_sdt());
+        let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
+        let addr = (*record).ioapic_address as PhysAddr;
+        let frame = Frame::containing_address(addr);
+        let virt_addr = addr | *HHDM;
+        let page = Page::containing_address(virt_addr);
+        current_higher_root_table()
+            .map_to(page, frame, EntryFlags::WRITE)
+            .expect("failed to map the local apic");
+        virt_addr
+    };
+}
 #[inline(always)]
 pub fn get_local_apic_addr() -> VirtAddr {
-    let address = (read_msr(0x1B) & 0xFFFFF000) | *HDDM;
-
-    address
+    *LAPIC_ADDR
 }
 
 #[inline(always)]
@@ -107,7 +133,7 @@ impl IOREDTBL {
 }
 
 pub unsafe fn write_ioapic_irq(n: u8, table: IOREDTBL) {
-    let ioapic_addr = IOAPIC_ADDR.load(core::sync::atomic::Ordering::Relaxed) as VirtAddr;
+    let ioapic_addr = get_io_apic_addr();
     let offset1 = 0x10 + n * 2;
     let offset2 = offset1 + 1;
 
@@ -197,9 +223,7 @@ pub fn enable_apic_interrupts() {
     unsafe {
         core::ptr::write_volatile(sivr, 0x1ff);
 
-        let madt = MADT::get(acpi::get_sdt());
-        let ioapic_addr = get_io_apic_addr(madt);
-        IOAPIC_ADDR.store(ioapic_addr as usize, core::sync::atomic::Ordering::Relaxed);
+        let ioapic_addr = get_io_apic_addr();
 
         let apic_id = *(get_local_apic_reg(local_apic_addr, 0x20) as *const u8);
         info!("enabled APIC, apic_id is {apic_id}, IO APIC is at {ioapic_addr:#x}, local APIC is at {local_apic_addr:#x}");

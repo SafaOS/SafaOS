@@ -3,10 +3,8 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-use crate::utils::locks::Mutex;
+use crate::{limine::HHDM, utils::locks::Mutex};
 use lazy_static::lazy_static;
-
-use crate::limine::HDDM;
 
 use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
 
@@ -15,7 +13,7 @@ use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
 pub struct FramePtr<T>(*mut T);
 impl<T> FramePtr<T> {
     pub fn phys_addr(&self) -> PhysAddr {
-        (self.0 as usize) - *HDDM
+        (self.0 as usize) - *HHDM
     }
 
     pub fn frame(&self) -> Frame {
@@ -55,7 +53,7 @@ impl Frame {
 
     #[inline]
     pub fn virt_addr(&self) -> VirtAddr {
-        self.0 | *HDDM
+        self.0 | *HHDM
     }
 
     pub fn iter_frames(start: Frame, end: Frame) -> FrameIter {

@@ -1,12 +1,12 @@
 use core::fmt::{self, Write};
 
-use crate::limine::HDDM;
+use crate::limine::HHDM;
 use crate::utils::Locked;
 use lazy_static::lazy_static;
 
 // TODO: device trees and figure this out from there?
 lazy_static! {
-    static ref UART: usize = *HDDM + 0x09000000;
+    static ref UART: usize = *HHDM + 0x09000000;
 }
 
 #[inline(always)]
