@@ -2,7 +2,6 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{
     debug,
-    limine::get_phy_offset_end,
     memory::{frame_allocator, paging::MapToError},
     utils::{LazyLock, Locked},
 };
@@ -132,7 +131,7 @@ impl BuddyAllocator<'_> {
     }
 
     pub fn create() -> Result<Self, MapToError> {
-        let possible_start = get_phy_offset_end();
+        let (possible_start, _) = *super::sorcery::HEAP;
 
         let start = align_up(possible_start, size_of::<Block>());
         let start = align_up(start, 2);
@@ -147,7 +146,7 @@ impl BuddyAllocator<'_> {
             Page::iter_pages(heap_start_page, heap_end_page)
         };
 
-        let flags = EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE;
+        let flags = EntryFlags::WRITE;
         let mut root_table = unsafe { current_higher_root_table() };
         for page in page_range {
             let frame =

@@ -14,7 +14,6 @@ use crate::{debug, utils::Locked};
 use super::{
     align_up, frame_allocator,
     paging::{current_higher_root_table, EntryFlags, MapToError, Page, PAGE_SIZE},
-    sorcery::ROOT_BINDINGS,
 };
 
 /// a bitmap page allocator which allocates contiguous virtual memory pages
@@ -32,14 +31,12 @@ pub struct PageAllocator {
 
 impl PageAllocator {
     pub fn new() -> Self {
-        let (start, size) = ROOT_BINDINGS
-            .get("LARGE_HEAP")
-            .expect("failed to get LARGE_HEAP binding");
+        let (heap_start, heap_end) = *super::sorcery::LARGE_HEAP;
 
         debug!(PageAllocator, "initialized allocator",);
         Self {
-            heap_start: start as usize,
-            heap_end: start as usize + size,
+            heap_start,
+            heap_end,
             bitmap: vec![0; 8],
             next_large_allocation_index: 0,
             next_small_allocation_index: 0,

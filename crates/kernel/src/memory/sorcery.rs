@@ -1,136 +1,116 @@
-use super::{frame_allocator::FramePtr, paging::PAGE_SIZE};
-use core::fmt::Display;
+use core::sync::atomic::AtomicUsize;
+
+use super::{
+    frame_allocator::{Frame, FramePtr},
+    paging::{EntryFlags, PAGE_SIZE},
+    VirtAddr,
+};
+use ::limine::memory_map::EntryType;
 use lazy_static::lazy_static;
 
 use crate::{
-    arch::paging::set_current_higher_page_table,
+    arch::{
+        self,
+        paging::{current_higher_root_table, set_current_higher_page_table},
+    },
     debug,
-    limine::{self, MEMORY_END},
-    memory::frame_allocator::{self},
+    limine::{self, HHDM},
+    memory::{
+        align_up,
+        frame_allocator::{self},
+    },
 };
 
 use super::paging::{MapToError, Page, PageTable};
 
-pub struct PageTableBinding {
-    name: &'static str,
-    from: (usize, usize),
-    to: (usize, usize),
+static HHDM_END: AtomicUsize = AtomicUsize::new(0);
+lazy_static! {
+    pub static ref HEAP: (usize, usize) = {
+        let end = HHDM_END.load(core::sync::atomic::Ordering::Relaxed);
+
+        (end, end + super::buddy_allocator::INIT_HEAP_SIZE)
+    };
+    pub static ref LARGE_HEAP: (usize, usize) = {
+        let (_, end) = *HEAP;
+        (end, 0xffffffff80000000)
+    };
 }
 
-pub struct PageTableBindings<const N: usize> {
-    bindings: [PageTableBinding; N],
-}
+fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
+    let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
-impl PageTableBinding {
-    pub fn apply_binding(&self, from_page_table: &mut PageTable, to_page_table: &mut PageTable) {
-        let from_iter = Page::iter_pages(
-            Page::containing_address(self.from.0),
-            Page::containing_address(self.from.1),
-        );
+    let mut table = unsafe { frame.into_ptr::<PageTable>() };
+    table.zeroize();
+    unsafe {
+        let current = current_higher_root_table();
 
-        let mut to_iter = Page::iter_pages(
-            Page::containing_address(self.to.0),
-            Page::containing_address(self.to.1),
-        );
+        let current = &*current;
+        let dest = &mut *table;
 
-        for page in from_iter {
-            // FIXME: this like copies 512 GB from page table to another rendering the loop and everything uselesss
-            let pml4_index = crate::arch::paging::root_table_index(page.start_address);
-            let to_page = to_iter.next().unwrap();
-            let to_plm4_index = crate::arch::paging::root_table_index(to_page.start_address);
-
-            to_page_table[to_plm4_index] = from_page_table[pml4_index].clone();
-        }
-    }
-}
-
-impl Display for PageTableBinding {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "{}: {:#x} .. {:#x} <{:#x} .. {:#x}>",
-            self.name, self.to.0, self.to.1, self.from.0, self.from.1
-        )
-    }
-}
-
-impl<const N: usize> PageTableBindings<N> {
-    pub fn apply_bindings(&self, from_page_table: &mut PageTable, to_page_table: &mut PageTable) {
-        debug!(PageTableBindings<N>, "applying:\n{}", self);
-
-        for binding in &self.bindings {
-            binding.apply_binding(from_page_table, to_page_table);
-        }
-        debug!(PageTableBindings<N>, "done");
+        let hhdm_end = map_hhdm(dest)?;
+        arch::paging::map_devices(dest)?;
+        map_top_2gb(current, dest)?;
+        HHDM_END.store(hhdm_end, core::sync::atomic::Ordering::Relaxed);
     }
 
-    /// gets a PageTableBinding named `name`, returns it's start address as a pointer and it's
-    /// size, pointer is valid only if that binding is applied on the current page table, and it's
-    /// pages is mapped
-    pub fn get(&self, name: &'static str) -> Option<(*mut u8, usize)> {
-        for binding in &self.bindings {
-            if binding.name == name {
-                return Some((binding.to.0 as *mut u8, binding.to.1 - binding.to.0));
+    Ok(table)
+}
+
+unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
+    debug!(
+        PageTable,
+        "mapping HHDM, limine's: {:#x}",
+        limine::get_phy_offset()
+    );
+    let flags = EntryFlags::WRITE;
+    let mut largest_addr: VirtAddr = 0;
+
+    for entry in limine::mmap_request().entries() {
+        if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
+            let start_addr = *HHDM + entry.base as usize;
+            let end_addr = start_addr + entry.length as usize;
+            let end_addr = align_up(end_addr, PAGE_SIZE);
+
+            let start = Page::containing_address(start_addr);
+            let end = Page::containing_address(end_addr);
+
+            let page_iter = Page::iter_pages(start, end);
+            for page in page_iter {
+                let addr = page.start_address;
+                if addr > largest_addr {
+                    largest_addr = addr;
+                }
+
+                let frame_addr = addr - *HHDM;
+                let frame = Frame::containing_address(frame_addr);
+                dest.map_to(page, frame, flags)?;
             }
         }
-
-        None
     }
-    /// creates a page table from bindings applied from current root pagetable
-    pub fn create_page_table(&self) -> Result<FramePtr<PageTable>, MapToError> {
-        let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+    debug!(
+        PageTable,
+        "mapped HHDM from {:#x} to {:#x}", *HHDM, largest_addr
+    );
+    Ok(largest_addr + PAGE_SIZE)
+}
 
-        let mut table = unsafe { frame.into_ptr::<PageTable>() };
-        table.zeroize();
+unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> {
+    debug!(PageTable, "mapping kernel");
+    let start = Page::containing_address(0xffffffff80000000);
+    let end = Page::containing_address(0xffffffffffffffff);
+    let iter = Page::iter_pages(start, end);
+    let flags = EntryFlags::WRITE;
 
-        unsafe {
-            self.apply_bindings(&mut super::paging::current_higher_root_table(), &mut *table);
-        }
-        Ok(table)
+    for page in iter {
+        let Some(frame) = src.get_frame(page) else {
+            continue;
+        };
+        dest.map_to(page, frame, flags)?;
     }
+    debug!(PageTable, "mapped kernel");
+    Ok(())
 }
 
-impl<const N: usize> Display for PageTableBindings<N> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for binding in &self.bindings {
-            writeln!(f, "{}", binding)?;
-        }
-        Ok(())
-    }
-}
-
-macro_rules! create_page_table_bindings {
-    ($($name: literal => {$from_start: expr, $from_end: expr $(=> $to_start: expr, $to_end: expr)?}),*) => {
-           PageTableBindings{bindings: [$(
-                            PageTableBinding {
-                                name: $name,
-                                from: ($from_start, $from_end),
-                                to: { ($from_start, $from_end) $(; ($to_start, $to_end))? },
-                            },
-            )*]}
-    };
-}
-
-lazy_static! {
-    pub static ref ROOT_BINDINGS: PageTableBindings<4> = {
-        let heap_start = limine::get_phy_offset_end();
-        let heap_end = heap_start + *MEMORY_END;
-        // we only want to keep the phys mem mapping and the TOP_MOST_2GB
-        // assuming that the framebuffer and all the kernel modules is in the range of phys_mem
-        // getting page faults is better then UB
-        create_page_table_bindings!(
-            "PHYS_MEM" => { limine::get_phy_offset(), limine::get_phy_offset_end() },
-            "HEAP" => { 0, 0 => heap_start, heap_end },
-            "LARGE_HEAP" => { 0, 0 => super::align_up(heap_end, PAGE_SIZE), 0xffffffff80000000 },
-            "TOP_MOST_2GB" => { 0xffffffff80000000, 0xffffffffffffffff }
-        )
-    };
-}
-pub fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
-    ROOT_BINDINGS.create_page_table()
-}
-
-/// FIXME: extremely broken
 pub fn init_page_table() {
     debug!(PageTable, "initializing root page table ... ");
     let previous_table = unsafe { super::paging::current_higher_root_table() };

@@ -1,6 +1,16 @@
 use lazy_static::lazy_static;
 
-use crate::info;
+use crate::{
+    arch::paging::current_higher_root_table,
+    info,
+    limine::HHDM,
+    memory::{
+        frame_allocator::Frame,
+        paging::{EntryFlags, MapToError, Page},
+    },
+};
+
+use super::paging::PageTable;
 
 lazy_static! {
     // FIXME: only works for qemu virt
@@ -38,7 +48,24 @@ fn gicd_icpendr() -> *mut u32 {
     (*GICD_BASE + 0x0280) as *mut u32
 }
 
+unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
+    let flags = EntryFlags::WRITE;
+    dest.map_to(
+        Page::containing_address(*GICC_BASE),
+        Frame::containing_address(*GICC_BASE - *HHDM),
+        flags,
+    )?;
+    dest.map_to(
+        Page::containing_address(*GICD_BASE),
+        Frame::containing_address(*GICD_BASE - *HHDM),
+        flags,
+    )?;
+    Ok(())
+}
 pub fn init_gic() {
+    unsafe {
+        map_gic(&mut *current_higher_root_table()).expect("failed to map gic");
+    }
     let gicd_ctlr = gicd_ctlr();
     let gicc_ctlr = gicc_ctlr();
     info!(
