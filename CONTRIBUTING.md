@@ -1,8 +1,8 @@
 # Contributing
 ## Configuring Rust Analyzer
-Unfortunately `rust-analyzer` does some weird shenaganis to discover projects and sadly the build system being at the root of the repo breaks it so you have to manually configure it to pick up the packages you want to edit,
+Unfortunately `rust-analyzer` does some weird shenaganis to discover projects and the build system being at the root of the repo breaks it so you have to configure it to pick up the packages you want to edit,
 
-Sadly there is `rust-analyzer.toml` is not stable yet so you have to configure it for your editor yourself you can use: [rust-analyzer.linkedProjects](https://rust-analyzer.github.io/book/configuration.html#linkedProjects), add the paths to the Cargo.toml(s) you want to edit for example i edit everything and i am using [Zed](https://zed.dev/) so my `.zed/settings.json` looks like this:
+Sadly `rust-analyzer.toml` is not stable yet so you have to configure it for your editor yourself you can use: [rust-analyzer.linkedProjects](https://rust-analyzer.github.io/book/configuration.html#linkedProjects), add the paths to the Cargo.toml(s) you want to edit for example i edit everything and i am using [Zed](https://zed.dev/) so my `.zed/settings.json` looks like this:
 ```
 {
   "lsp": {
