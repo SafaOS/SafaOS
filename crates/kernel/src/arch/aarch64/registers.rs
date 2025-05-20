@@ -229,3 +229,108 @@ impl MIDR {
         self.part_and_revision >> 4
     }
 }
+
+const MAIR_IIII_MASK: u8 = 1 << 0 | 1 << 1 | 1 << 2 | 1 << 3;
+const MAIR_OOOO_MASK: u8 = 1 << 4 | 1 << 5 | 1 << 6 | 1 << 7;
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct MAIRDeviceAttr: u8 {
+        const NO_XS = 1 << 0;
+        const NGNRE = 1 << 2;
+        const NGRE = 1 << 3;
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct MAIRNormal: u8 {
+        // oooo
+        const OUTER_WRITE = 1 << 0;
+        const OUTER_READ = 1 << 1;
+        const OUTER_NON_CACHEABLE = 1 << 2;
+        const OUTER_WRITE_BACK_TR =  1 << 2;
+        const OUTER_WRITE_THROUGH_NOTR = 1 << 3;
+        const OUTER_WRITE_BACK_NOTR = 1 << 2 | 1 << 3;
+        // iiii
+        const INNER_WRITE = 1 << 4;
+        const INNER_READ = 1 << 5;
+        const INNER_NON_CACHEABLE = 1 << 6;
+        const INNER_WRITE_BACK_TR =  1 << 6;
+        const INNER_WRITE_THROUGH_NOTR = 1 << 7;
+        const INNER_WRITE_BACK_NOTR = 1 << 6 | 1 << 7;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MAIRAttr {
+    Device(MAIRDeviceAttr),
+    Normal(MAIRNormal),
+    Other(u8),
+}
+
+impl MAIRAttr {
+    pub fn from_raw(value: u8) -> Self {
+        match value {
+            0 => Self::Device(MAIRDeviceAttr::empty()),
+            x if x & MAIR_OOOO_MASK == 0 && x & (1 << 0) == 0 => {
+                MAIRAttr::Device(MAIRDeviceAttr::from_bits_retain(x))
+            }
+            x if x & MAIR_OOOO_MASK != 0 && x & MAIR_IIII_MASK != 0 => {
+                MAIRAttr::Normal(MAIRNormal::from_bits_retain(x))
+            }
+            x => Self::Other(x),
+        }
+    }
+
+    pub const fn to_raw(self) -> u8 {
+        match self {
+            Self::Device(d) => d.bits(),
+            Self::Normal(n) => n.bits(),
+            Self::Other(o) => o,
+        }
+    }
+}
+
+/// System MAIR Register (memory cache configuration)
+pub const SYS_MAIR: MAIR = {
+    let mut this = MAIR::new();
+    // TODO: configure caching better, especially for devices
+    this.set(0, MAIRAttr::Normal(MAIRNormal::all()));
+    this
+};
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct MAIR {
+    attributes: [u8; 8],
+}
+
+impl MAIR {
+    pub const fn new() -> Self {
+        Self { attributes: [0; 8] }
+    }
+
+    pub const fn set(&mut self, index: usize, attr: MAIRAttr) {
+        let raw = attr.to_raw();
+        self.attributes[index] = raw;
+    }
+
+    /// Sets MAIR_EL1 register to `self`
+    pub unsafe fn sync(self) {
+        let mair_el1: u64 = unsafe { core::mem::transmute(self) };
+        unsafe {
+            asm!("msr mair_el1, {}", in(reg) mair_el1);
+        }
+    }
+}
+
+impl Debug for MAIR {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut debug_list = f.debug_list();
+        for attr in self.attributes {
+            debug_list.entry(&MAIRAttr::from_raw(attr));
+        }
+        debug_list.finish()
+    }
+}

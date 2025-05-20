@@ -1,6 +1,7 @@
 use bitflags::bitflags;
 
 use crate::{
+    arch::aarch64::registers::SYS_MAIR,
     limine::HHDM,
     memory::{
         frame_allocator::{self, Frame, FramePtr},
@@ -21,8 +22,11 @@ bitflags! {
         const PRESENT = 1 << 0;
         const TABLE_DESC = 1 << 1;
         const ACCESS_FLAG = 1 << 10;
-        // TODO: figure this out
-        const MAIR_INDX_MASK = (1 << 2) | (1 << 3);
+
+        const MAIR1 = 1 << 2;
+        const MAIR2 = 1 << 3;
+        const MAIR3 = 1 << 4;
+
         const NON_SECURE = 1 << 5;
         const AP_LOWER = 1 << 6;
         const AP_HIGHER = 1 << 7;
@@ -33,10 +37,9 @@ bitflags! {
 
 impl From<EntryFlags> for ArchEntryFlags {
     fn from(value: EntryFlags) -> Self {
-        let mut flags: ArchEntryFlags = ArchEntryFlags::PRESENT
-            | ArchEntryFlags::TABLE_DESC
-            | ArchEntryFlags::MAIR_INDX_MASK
-            | ArchEntryFlags::ACCESS_FLAG;
+        let mut flags: ArchEntryFlags =
+            // MAIR index 0 for now
+            ArchEntryFlags::PRESENT | ArchEntryFlags::TABLE_DESC | ArchEntryFlags::ACCESS_FLAG;
         if !value.contains(EntryFlags::WRITE) {
             // read-only flag
             flags |= ArchEntryFlags::AP_HIGHER;
@@ -47,13 +50,6 @@ impl From<EntryFlags> for ArchEntryFlags {
         }
         flags
     }
-}
-
-/// A hack that returns the last level (root) table's index from a VirtAddr
-/// level 4 in x86_64
-/// l0 in aarch64
-pub const fn root_table_index(addr: VirtAddr) -> usize {
-    l0_index(addr)
 }
 
 #[inline(always)]
@@ -231,6 +227,8 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
         tlbi VMALLE1
         dsb ISH
         isb", in(reg) ttbr1_el1);
+        let mair = SYS_MAIR;
+        mair.sync();
     }
 }
 

@@ -16,10 +16,7 @@ use crate::{
 const ENTRY_COUNT: usize = 512;
 const HIGHER_HALF_ENTRY: usize = 256;
 
-/// A hack that returns the last level (root) table's index from a VirtAddr
-/// level 4 in x86_64
-/// l0 in aarch64
-pub const fn root_table_index(addr: VirtAddr) -> usize {
+const fn p4_index(addr: VirtAddr) -> usize {
     (addr >> 39) & 0x1FF
 }
 const fn p3_index(addr: VirtAddr) -> usize {
@@ -37,7 +34,7 @@ fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
         p1_index(addr),
         p2_index(addr),
         p3_index(addr),
-        root_table_index(addr),
+        p4_index(addr),
     )
 }
 
