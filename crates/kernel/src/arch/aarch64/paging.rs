@@ -1,6 +1,7 @@
 use bitflags::bitflags;
 
 use crate::{
+    limine::HHDM,
     memory::{
         frame_allocator::{self, Frame, FramePtr},
         paging::{EntryFlags, MapToError, Page},
@@ -11,6 +12,8 @@ use core::{
     arch::asm,
     ops::{Index, IndexMut},
 };
+
+use super::serial::UART_ADDR;
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -93,7 +96,11 @@ impl Entry {
     }
 
     fn frame(&self) -> Option<Frame> {
-        if self.flags().contains(ArchEntryFlags::PRESENT) {
+        let flags = self.flags();
+        if flags.contains(ArchEntryFlags::PRESENT)
+            || flags.contains(ArchEntryFlags::TABLE_DESC)
+            || flags.contains(ArchEntryFlags::ACCESS_FLAG)
+        {
             return Some(Frame::containing_address(
                 // TODO: simplify this
                 // 47 bits set after the first 12 bits
@@ -219,7 +226,11 @@ pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
 pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let ttbr1_el1: PhysAddr = page_table.phys_addr();
     unsafe {
-        asm!("msr ttbr1_el1, {}", in(reg) ttbr1_el1);
+        asm!("
+        msr ttbr1_el1, {}
+        tlbi VMALLE1
+        dsb ISH
+        isb", in(reg) ttbr1_el1);
     }
 }
 
@@ -272,7 +283,7 @@ impl PageTable {
     }
 
     /// gets the frame page points to
-    pub fn get_frame(&mut self, page: Page) -> Option<Frame> {
+    pub fn get_frame(&self, page: Page) -> Option<Frame> {
         let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.start_address);
         let l1 = self[l0_index].mapped_to()?;
         let l2 = l1[l1_index].mapped_to()?;
@@ -300,4 +311,15 @@ impl PageTable {
             unsafe { entry.deallocate() };
         }
     }
+}
+
+/// Maps architecture specific devices such as the UART serial in aarch64
+pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
+    let flags = EntryFlags::WRITE;
+    table.map_to(
+        Page::containing_address(*HHDM | UART_ADDR),
+        Frame::containing_address(UART_ADDR),
+        flags,
+    )?;
+    Ok(())
 }

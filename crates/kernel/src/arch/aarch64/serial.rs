@@ -2,11 +2,13 @@ use core::fmt::{self, Write};
 
 use crate::limine::HHDM;
 use crate::utils::Locked;
+use crate::PhysAddr;
 use lazy_static::lazy_static;
 
+pub const UART_ADDR: PhysAddr = 0x09000000;
 // TODO: device trees and figure this out from there?
 lazy_static! {
-    static ref UART: usize = *HHDM + 0x09000000;
+    static ref UART: usize = *HHDM + UART_ADDR;
 }
 
 #[inline(always)]

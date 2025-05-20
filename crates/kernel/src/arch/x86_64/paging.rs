@@ -245,7 +245,7 @@ impl PageTable {
     }
 
     /// gets the frame page points to
-    pub fn get_frame(&mut self, page: Page) -> Option<Frame> {
+    pub fn get_frame(&self, page: Page) -> Option<Frame> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
             translate(page.start_address);
         let level_3_table = self[level_4_index].mapped_to()?;
@@ -315,4 +315,10 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     unsafe {
         asm!("mov cr3, rax", in("rax") phys_addr);
     }
+}
+
+/// Maps architecture specific devices such as the UART serial in aarch64
+pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
+    _ = table;
+    Ok(())
 }
