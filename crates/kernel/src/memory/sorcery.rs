@@ -103,7 +103,7 @@ unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapTo
 
     for page in iter {
         let Some(frame) = src.get_frame(page) else {
-            continue;
+            break;
         };
         dest.map_to(page, frame, flags)?;
     }
