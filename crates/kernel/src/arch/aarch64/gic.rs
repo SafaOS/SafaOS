@@ -13,9 +13,8 @@ use crate::{
 use super::paging::PageTable;
 
 lazy_static! {
-    // FIXME: only works for qemu virt
-    static ref GICD_BASE: usize = *crate::limine::HHDM + 0x08000000;
-    static ref GICC_BASE: usize = *crate::limine::HHDM + 0x08010000;
+    static ref GICD_BASE: usize = *crate::limine::HHDM + super::cpu::GIC.0;
+    static ref GICC_BASE: usize = *crate::limine::HHDM + super::cpu::GIC.1;
 }
 
 #[inline(always)]

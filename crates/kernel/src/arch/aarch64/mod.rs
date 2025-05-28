@@ -1,5 +1,6 @@
 use core::arch::{asm, global_asm};
 
+mod cpu;
 mod exceptions;
 mod gic;
 pub mod paging;
@@ -51,6 +52,8 @@ fn switch_to_el1() {
 pub fn init_phase1() {
     switch_to_el1();
     exceptions::init_exceptions();
+
+    cpu::init();
     unsafe {
         enable_interrupts();
     }

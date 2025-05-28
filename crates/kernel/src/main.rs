@@ -14,6 +14,8 @@
 #![feature(sync_unsafe_cell)]
 #![feature(never_type)]
 #![feature(likely_unlikely)]
+#![feature(slice_as_array)]
+#![feature(iter_array_chunks)]
 
 #[cfg(test)]
 mod test;

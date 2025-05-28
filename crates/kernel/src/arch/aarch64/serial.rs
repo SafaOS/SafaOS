@@ -1,20 +1,23 @@
 use core::fmt::{self, Write};
+use core::hint::unlikely;
 
 use crate::limine::HHDM;
 use crate::utils::Locked;
-use crate::PhysAddr;
 use lazy_static::lazy_static;
 
-pub const UART_ADDR: PhysAddr = 0x09000000;
-// TODO: device trees and figure this out from there?
 lazy_static! {
-    static ref UART: usize = *HHDM + UART_ADDR;
+    static ref PL011: usize = *HHDM + *super::cpu::PL011BASE;
 }
 
 #[inline(always)]
 fn putbyte(c: u8) {
     unsafe {
-        core::ptr::write_volatile(*UART as *mut u8, c);
+        if unlikely(!super::cpu::serial_ready()) {
+            let qemu_addr = *HHDM | 0x09000000;
+            core::ptr::write_volatile(qemu_addr as *mut u8, c);
+        } else {
+            core::ptr::write_volatile(*PL011 as *mut u8, c);
+        }
     }
 }
 

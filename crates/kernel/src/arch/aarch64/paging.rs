@@ -14,8 +14,6 @@ use core::{
     ops::{Index, IndexMut},
 };
 
-use super::serial::UART_ADDR;
-
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     struct ArchEntryFlags: u64 {
@@ -315,8 +313,8 @@ impl PageTable {
 pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
     let flags = EntryFlags::WRITE;
     table.map_to(
-        Page::containing_address(*HHDM | UART_ADDR),
-        Frame::containing_address(UART_ADDR),
+        Page::containing_address(*HHDM | *super::cpu::PL011BASE),
+        Frame::containing_address(*super::cpu::PL011BASE),
         flags,
     )?;
     Ok(())
