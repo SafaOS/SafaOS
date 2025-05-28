@@ -1,8 +1,8 @@
 //! CPU sepicific stuff
 //! uses device trees only for now
 
+use core::str::FromStr;
 use core::{cell::SyncUnsafeCell, mem::zeroed};
-
 use lazy_static::lazy_static;
 
 use crate::{
@@ -89,7 +89,7 @@ impl DeviceInfo for TimerInfo {
         self.populated = true;
     }
     fn compatible(&self) -> &'static [&'static str] {
-        &["arm,armv8-timer"]
+        &["arm,armv8-timer", "arm,armv7-timer"]
     }
 }
 
@@ -122,6 +122,12 @@ const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 3] {
 
 fn init_from_tree(tree: &DeviceTree) {
     let root = tree.root_node();
+    let s = root.get_model().unwrap_or("UNKNOWN");
+    unsafe {
+        MODEL
+            .get()
+            .write_volatile(heapless::String::from_str(s).unwrap());
+    }
 
     // list of devices requirng initialization
     let mut devices = unsafe { devices() };
@@ -162,6 +168,9 @@ pub fn serial_ready() -> bool {
     let r = unsafe { &*PL011RAW.get() };
     r.populated
 }
+
+pub static MODEL: SyncUnsafeCell<heapless::String<48>> =
+    SyncUnsafeCell::new(heapless::String::new());
 
 lazy_static! {
     pub static ref TIMER_IRQ: u32 = unsafe {

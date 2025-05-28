@@ -224,10 +224,6 @@ impl MIDR {
     pub fn implementer(&self) -> MIDRImplementer {
         MIDRImplementer::try_from(self.implementer).unwrap_or(MIDRImplementer::Unknown)
     }
-
-    pub fn partnum(&self) -> u16 {
-        self.part_and_revision >> 4
-    }
 }
 
 const MAIR_IIII_MASK: u8 = 1 << 0 | 1 << 1 | 1 << 2 | 1 << 3;

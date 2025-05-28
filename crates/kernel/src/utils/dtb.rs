@@ -252,7 +252,9 @@ impl<'a> Node<'a> {
                 NodeValue::U32(u32::from_be_bytes(*property))
             }
             "compatible" => NodeValue::StrList(StrList::new(property)),
-            "status" | "model" => NodeValue::Str(unsafe { str::from_utf8_unchecked(property) }),
+            "status" | "model" => NodeValue::Str(unsafe {
+                str::from_utf8_unchecked(property).trim_matches(|c| c as u8 == b'\0')
+            }),
             _ => {
                 if property.is_empty() {
                     NodeValue::Empty
@@ -264,11 +266,11 @@ impl<'a> Node<'a> {
     }
 
     fn get_compatible(&'a self) -> Option<StrList<'a>> {
-        let prop = self.get_prop("compatible")?;
-        let NodeValue::StrList(list) = prop else {
-            unreachable!();
-        };
-        Some(list)
+        node_get_prop_unchecked!(self, "compatible", NodeValue::StrList)
+    }
+
+    pub fn get_model(&'a self) -> Option<&'a str> {
+        node_get_prop_unchecked!(self, "model", NodeValue::Str)
     }
 
     /// Returns whether or not the node is describes a device compatible with any items in the list `compatible_list`

@@ -8,7 +8,7 @@ use spin::Lazy;
 #[derive(Serialize, Debug)]
 pub struct CpuInfo {
     vendor_id: heapless::String<12>,
-    model: heapless::String<48>,
+    model: &'static str,
     arch: &'static str,
     core_count: u8,
 }
@@ -26,20 +26,11 @@ impl CpuInfo {
         let mut vendor_id = heapless::String::new();
 
         let implementer = midr.implementer();
-        let partnum = midr.partnum();
-
         write!(vendor_id, "{:?}", implementer).expect("vendor id too long");
-
-        let mut model = heapless::String::new();
-        if let Some(model_id) = implementer.cpu_model(partnum) {
-            write!(model, "{}", model_id).expect("model name too long");
-        } else {
-            write!(model, "{:#x}", partnum).expect("model number too long");
-        }
 
         Self {
             vendor_id,
-            model,
+            model: unsafe { &*super::cpu::MODEL.get() },
             arch: "aarch64",
             core_count: Self::fetch_core_count(),
         }
