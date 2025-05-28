@@ -4,6 +4,7 @@ use limine::file::File;
 use limine::framebuffer::MemoryModel;
 use limine::modules::InternalModule;
 use limine::modules::ModuleFlags;
+use limine::request::DeviceTreeBlobRequest;
 use limine::request::FramebufferRequest;
 use limine::request::HhdmRequest;
 use limine::request::KernelAddressRequest;
@@ -23,6 +24,10 @@ use crate::utils::ustar::TarArchiveIter;
 #[used]
 #[link_section = ".requests"]
 static BASE_REVISION: BaseRevision = BaseRevision::new();
+
+#[used]
+#[link_section = ".requests"]
+static DEVICE_TREE_REQUEST: DeviceTreeBlobRequest = DeviceTreeBlobRequest::new();
 
 #[used]
 #[link_section = ".requests"]
@@ -60,6 +65,10 @@ const RAMDISK_MODULE: InternalModule = InternalModule::new()
 #[link_section = ".requests"]
 static MODULES_REQUEST: ModuleRequest =
     ModuleRequest::new().with_internal_modules(&[&RAMDISK_MODULE]);
+
+pub fn device_tree_addr() -> Option<*const ()> {
+    DEVICE_TREE_REQUEST.get_response().map(|r| r.dtb_ptr())
+}
 
 pub fn get_phy_offset() -> usize {
     HHDM_REQUEST.get_response().unwrap().offset() as usize
