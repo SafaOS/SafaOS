@@ -2,14 +2,13 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{
     debug,
-    limine::get_phy_offset_end,
     memory::{frame_allocator, paging::MapToError},
     utils::{LazyLock, Locked},
 };
 
 use super::{
     align_up,
-    paging::{current_root_table, EntryFlags, Page},
+    paging::{current_higher_root_table, EntryFlags, Page},
 };
 
 pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
@@ -117,13 +116,12 @@ impl BuddyAllocator<'_> {
         let start = Page::containing_address(self.heap_end);
         let end = Page::containing_address(self.heap_end + size);
 
+        let mut root_table = unsafe { current_higher_root_table() };
         for page in Page::iter_pages(start, end) {
-            unsafe {
-                if current_root_table().get_frame(page).is_none() {
-                    let frame = frame_allocator::allocate_frame()?;
-                    current_root_table()
-                        .map_to(page, frame, EntryFlags::PRESENT | EntryFlags::WRITABLE)
-                        .ok()?;
+            if root_table.get_frame(page).is_none() {
+                let frame = frame_allocator::allocate_frame()?;
+                unsafe {
+                    root_table.map_to(page, frame, EntryFlags::WRITE).ok()?;
                 }
             }
         }
@@ -133,7 +131,7 @@ impl BuddyAllocator<'_> {
     }
 
     pub fn create() -> Result<Self, MapToError> {
-        let possible_start = get_phy_offset_end();
+        let (possible_start, _) = *super::sorcery::HEAP;
 
         let start = align_up(possible_start, size_of::<Block>());
         let start = align_up(start, 2);
@@ -148,13 +146,14 @@ impl BuddyAllocator<'_> {
             Page::iter_pages(heap_start_page, heap_end_page)
         };
 
-        let flags = EntryFlags::PRESENT | EntryFlags::WRITABLE | EntryFlags::USER_ACCESSIBLE;
+        let flags = EntryFlags::WRITE;
+        let mut root_table = unsafe { current_higher_root_table() };
         for page in page_range {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
             unsafe {
-                current_root_table().map_to(page, frame, flags)?;
+                root_table.map_to(page, frame, flags)?;
             };
         }
 

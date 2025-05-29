@@ -72,15 +72,15 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "safa-abi"
-version = "0.1.2"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "279c826c2c912b9aa12da09cf297891b2f38b78ccc6bfc917411ed5703eba92d"
+checksum = "617b641b6bb77bea88fd0b0eec72d76297085c4d4649274ade76ff82a0972b75"
 
 [[package]]
 name = "safa-api"
-version = "0.1.7"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35a9fb716e9d0a408b5d6a0799f0c628b3ff21a608b97f6f2bdc45bbdf7a8a2b"
+checksum = "a173b967d91e0e2af4b5e909da9372d8ecb90b3471f8cd047e41e59ecf950931"
 dependencies = [
  "safa-abi",
 ]

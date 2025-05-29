@@ -102,7 +102,9 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
 // always runs last because it is given the lowest priority (`[TestPiritory::Lowest`] because it is in this module)
 #[test_case]
 fn userspace_test_script() {
-    unsafe { core::arch::asm!("cli") }
+    unsafe {
+        crate::arch::disable_interrupts();
+    }
     use crate::drivers::vfs::expose::File;
 
     let stdio = File::open(make_path!("dev", "/ss")).unwrap();
@@ -120,5 +122,7 @@ fn userspace_test_script() {
     let ret = wait(pid);
 
     assert_eq!(ret, 0);
-    unsafe { core::arch::asm!("sti") }
+    unsafe {
+        crate::arch::enable_interrupts();
+    }
 }

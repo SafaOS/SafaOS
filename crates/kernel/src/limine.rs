@@ -4,6 +4,7 @@ use limine::file::File;
 use limine::framebuffer::MemoryModel;
 use limine::modules::InternalModule;
 use limine::modules::ModuleFlags;
+use limine::request::DeviceTreeBlobRequest;
 use limine::request::FramebufferRequest;
 use limine::request::HhdmRequest;
 use limine::request::KernelAddressRequest;
@@ -26,10 +27,14 @@ static BASE_REVISION: BaseRevision = BaseRevision::new();
 
 #[used]
 #[link_section = ".requests"]
+static DEVICE_TREE_REQUEST: DeviceTreeBlobRequest = DeviceTreeBlobRequest::new();
+
+#[used]
+#[link_section = ".requests"]
 static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
 lazy_static! {
-    pub static ref HDDM: usize = get_phy_offset();
+    pub static ref HHDM: usize = get_phy_offset();
 }
 
 #[used]
@@ -61,6 +66,10 @@ const RAMDISK_MODULE: InternalModule = InternalModule::new()
 static MODULES_REQUEST: ModuleRequest =
     ModuleRequest::new().with_internal_modules(&[&RAMDISK_MODULE]);
 
+pub fn device_tree_addr() -> Option<*const ()> {
+    DEVICE_TREE_REQUEST.get_response().map(|r| r.dtb_ptr())
+}
+
 pub fn get_phy_offset() -> usize {
     HHDM_REQUEST.get_response().unwrap().offset() as usize
 }
@@ -84,25 +93,6 @@ pub fn kernel_image_info() -> (*const u8, usize) {
 
 pub fn mmap_request() -> &'static MemoryMapResponse {
     MMAP_REQUEST.get_response().unwrap()
-}
-
-lazy_static! {
-    pub static ref MEMORY_END: usize = {
-        let mut largest_addr = 0;
-        for entry in mmap_request().entries() {
-            let end = (entry.base + entry.length) as usize;
-
-            if end > largest_addr {
-                largest_addr = end;
-            }
-        }
-
-        core::cmp::max(0x0000_0001_0000_0000, largest_addr)
-    };
-}
-
-pub fn get_phy_offset_end() -> usize {
-    get_phy_offset() + *MEMORY_END
 }
 
 pub fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {

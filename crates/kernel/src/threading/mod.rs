@@ -6,7 +6,6 @@ mod tests;
 
 pub type Pid = usize;
 
-use core::arch::asm;
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
@@ -43,7 +42,7 @@ impl Scheduler {
     /// inits the scheduler
     pub unsafe fn init(function: fn() -> !, name: &str) -> ! {
         debug!(Scheduler, "initing ...");
-        asm!("cli");
+        crate::arch::disable_interrupts();
         let mut page_table = PhysPageTable::from_current();
         let context = CPUStatus::create(
             &mut page_table,
@@ -82,7 +81,9 @@ impl Scheduler {
 
     /// context switches into next task, takes current context outputs new context
     pub unsafe fn switch(&mut self, context: CPUStatus) -> CPUStatus {
-        unsafe { asm!("cli") }
+        unsafe {
+            crate::arch::disable_interrupts();
+        }
 
         self.current().set_context(context);
         for task in self.tasks.continue_iter() {

@@ -31,8 +31,22 @@ pub struct ElfInstrSet(u16);
 
 #[display_consts]
 impl ElfInstrSet {
-    pub const AMD64: Self = Self(0x3E);
+    const AMD64: Self = Self(0x3E);
+    const AARCH64: Self = Self(0xB7);
 }
+
+use cfg_if::cfg_if;
+const SUPPORTED_INSTRUCTION_SETS: &[ElfInstrSet] = {
+    cfg_if! {
+        if #[cfg(target_arch = "x86_64")] {
+            &[ElfInstrSet::AMD64]
+        } else if #[cfg(target_arch = "aarch64")] {
+            &[ElfInstrSet::AARCH64]
+        } else {
+            &[]
+        }
+    }
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ElfIEndianness(u8);
@@ -66,7 +80,7 @@ pub struct ElfHeader {
     pub _padding: [u8; 7],
 
     pub kind: ElfType,
-    pub insturction_set: ElfInstrSet,
+    pub instruction_set: ElfInstrSet,
     pub version_2: u32,
 
     pub entry_point: VirtAddr,
@@ -89,7 +103,7 @@ pub enum ElfError {
     UnsupportedClass,
     UnsupportedEndianness,
     UnsupportedKind,
-    UnsupportedInsturctionSet,
+    UnsupportedInstructionSet,
     NotAnElf,
     NotAnExecutable,
     MapToError,
@@ -107,7 +121,7 @@ impl IntoErr for ElfError {
             Self::NotAnExecutable | Self::NotAnElf => ErrorStatus::NotExecutable,
             Self::MapToError => ErrorStatus::MMapError,
             Self::UnsupportedKind
-            | Self::UnsupportedInsturctionSet
+            | Self::UnsupportedInstructionSet
             | Self::UnsupportedClass
             | Self::UnsupportedEndianness => ErrorStatus::NotSupported,
         }
@@ -136,8 +150,8 @@ impl ElfHeader {
             Err(ElfError::UnsupportedEndianness)
         } else if ![ElfType::EXE, ElfType::RELOC].contains(&self.kind) {
             Err(ElfError::UnsupportedKind)
-        } else if self.insturction_set != ElfInstrSet::AMD64 {
-            Err(ElfError::UnsupportedInsturctionSet)
+        } else if !SUPPORTED_INSTRUCTION_SETS.contains(&self.instruction_set) {
+            Err(ElfError::UnsupportedInstructionSet)
         } else {
             Ok(())
         }
@@ -468,18 +482,18 @@ impl<'a, T: Readable> Elf<'a, T> {
                 continue;
             }
 
-            let mut entry_flags = EntryFlags::PRESENT | EntryFlags::USER_ACCESSIBLE;
+            let mut entry_flags = EntryFlags::USER_ACCESSIBLE;
 
             if header.flags.contains(ProgramFlags::READ) {
                 entry_flags |= EntryFlags::empty();
             }
 
             if header.flags.contains(ProgramFlags::WRITE) {
-                entry_flags |= EntryFlags::WRITABLE;
+                entry_flags |= EntryFlags::WRITE;
             }
 
             if header.flags.contains(ProgramFlags::EXEC) {
-                entry_flags |= EntryFlags::WRITABLE;
+                entry_flags |= EntryFlags::WRITE;
             }
 
             let start_page = Page::containing_address(header.vaddr);

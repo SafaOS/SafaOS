@@ -10,7 +10,10 @@ use std::{
 use flate2::bufread::GzDecoder;
 use tempfile::NamedTempFile;
 
-use crate::{ROOT_REPO_PATH, log, utils};
+use crate::{
+    ROOT_REPO_PATH, log,
+    utils::{self, ArchTarget},
+};
 
 /// The latest supported stable Rust version of the SafaOS target according to common/.latest_stable_rustc_version.lock
 static LATEST_SUPPORTED_STABLE_RUSTC_VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -87,10 +90,12 @@ static SYSROOT: LazyLock<PathBuf> = LazyLock::new(|| {
     path
 });
 
-static TOOLCHAIN_ROOT: LazyLock<PathBuf> =
-    LazyLock::new(|| SYSROOT.join("lib/rustlib/x86_64-unknown-safaos"));
+static TOOLCHAIN_SYSROOT: LazyLock<PathBuf> = LazyLock::new(|| SYSROOT.join("lib/rustlib/"));
+fn toolchain_root(arch: ArchTarget) -> PathBuf {
+    TOOLCHAIN_SYSROOT.join(format!("{}-unknown-safaos", arch.as_str()))
+}
 
-pub fn install_safaos_toolchain() -> io::Result<()> {
+pub fn install_safaos_toolchain(arch: ArchTarget) -> io::Result<()> {
     log!("installing the SafaOS toolchain");
     let api_url = "https://api.github.com/repos/SafaOS/rust/releases";
 
@@ -105,6 +110,7 @@ pub fn install_safaos_toolchain() -> io::Result<()> {
     let response_json: Vec<serde_json::Value> = serde_json::from_str(&response)?;
 
     let mut results = response_json.iter();
+    // FIXME: might be a little bit ugly
     let download_url = results
         .find(|x| {
             x.get("tag_name").is_some_and(|tag_name| {
@@ -116,7 +122,12 @@ pub fn install_safaos_toolchain() -> io::Result<()> {
         })
         .and_then(|x| x.get("assets"))
         .and_then(|x| x.as_array())
-        .and_then(|x| x.get(0))
+        .and_then(|x| {
+            x.iter().find(|x| {
+                x.get("name")
+                    .is_some_and(|name| name.as_str().unwrap().contains(arch.as_str()))
+            })
+        })
         .and_then(|x| x.get("browser_download_url"))
         .and_then(|x| x.as_str())
         .unwrap_or_else(|| {
@@ -141,7 +152,7 @@ pub fn install_safaos_toolchain() -> io::Result<()> {
     file.flush()?;
     file.seek(io::SeekFrom::Start(0))?;
 
-    let toolchain_root = &*TOOLCHAIN_ROOT;
+    let toolchain_root = toolchain_root(arch);
     log!(
         "extracting downloaded file from {} to {}",
         file.path().display(),
@@ -154,9 +165,9 @@ pub fn install_safaos_toolchain() -> io::Result<()> {
     archive.set_overwrite(true);
     archive.unpack(toolchain_root)?;
 
-    let extracted_path = toolchain_root.join("x86_64-unknown-safaos-toolchain");
-    // recursively copy extracted_path to toolchain_root
-    utils::recursive_copy(&extracted_path, toolchain_root)?;
-    std::fs::remove_dir_all(extracted_path)?;
+    // let extracted_path = toolchain_root;
+    // // recursively copy extracted_path to toolchain_root
+    // utils::recursive_copy(&extracted_path, toolchain_root)?;
+    // std::fs::remove_dir_all(extracted_path)?;
     Ok(())
 }

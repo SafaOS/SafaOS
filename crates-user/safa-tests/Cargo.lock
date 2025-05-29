@@ -4,15 +4,15 @@ version = 4
 
 [[package]]
 name = "safa-abi"
-version = "0.1.1"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "106573f044c3ae6fd884bbc7f6b9fe58a37fa1cbf1d8d18d75a3ad190da2d1ec"
+checksum = "617b641b6bb77bea88fd0b0eec72d76297085c4d4649274ade76ff82a0972b75"
 
 [[package]]
 name = "safa-api"
-version = "0.1.6"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27a08d057f1b114aced0e4b972527a7b813b2ae9eb0d0fbc6625d67a168e8e16"
+checksum = "a173b967d91e0e2af4b5e909da9372d8ecb90b3471f8cd047e41e59ecf950931"
 dependencies = [
  "safa-abi",
 ]

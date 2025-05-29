@@ -1,5 +1,5 @@
+use core::hint::unlikely;
 use core::{arch::x86_64::__cpuid, cell::SyncUnsafeCell};
-
 use serde::Serialize;
 use spin::Lazy;
 
@@ -7,7 +7,7 @@ use spin::Lazy;
 pub struct CpuInfo {
     vendor_id: heapless::String<12>,
     model: heapless::String<48>,
-
+    arch: &'static str,
     physical_address_space: u8,
     virtual_address_space: u8,
     core_count: u8,
@@ -100,19 +100,20 @@ impl CpuInfo {
             virtual_address_space,
             core_count,
             easter_egg,
+            arch: "x86_64",
         }
     }
 }
 
 pub static CPU_INFO: Lazy<CpuInfo> = Lazy::new(CpuInfo::fetch);
 
-pub static TICKS_PER_MS: SyncUnsafeCell<u64> = SyncUnsafeCell::new(1);
+pub static TICKS_PER_MS: SyncUnsafeCell<u64> = SyncUnsafeCell::new(0);
 pub static APIC_TIMER_TICKS_PER_MS: SyncUnsafeCell<u64> = SyncUnsafeCell::new(1);
 
 #[inline(always)]
 /// Returns the number of clock cpu cycles per 1ms
-pub fn ticks_per_ms() -> u64 {
-    unsafe { core::ptr::read_volatile(TICKS_PER_MS.get()) }
+fn ticks_per_ms() -> u64 {
+    unsafe { core::ptr::read(TICKS_PER_MS.get()) }
 }
 
 #[inline(always)]
@@ -125,5 +126,9 @@ pub fn time() -> u64 {
         core::arch::x86_64::_mm_lfence();
         core::arch::x86_64::_rdtsc()
     };
-    ticks / ticks_per_ms
+    if unlikely(ticks_per_ms == 0) {
+        0
+    } else {
+        ticks / ticks_per_ms
+    }
 }

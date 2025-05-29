@@ -1,7 +1,7 @@
 [workspace]
 [package]
 name = "kernel-snowball"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
@@ -30,6 +30,9 @@ slab = { version = "0.4", default-features = false }
 thiserror = { version = "2.0.12", default-features = false }
 lock_api = "0.4.12"
 const-str = { version = "0.6.2", default-features = false }
+cfg-if = "1.0.0"
+compiler_builtins = "0.1.158"
+hermit-dtb = "0.1.1"
 [dev-dependencies]
 
 [profile.dev]

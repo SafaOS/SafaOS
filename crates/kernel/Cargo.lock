@@ -27,6 +27,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "cfg-if"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
+
+[[package]]
 name = "compile-time"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -39,6 +45,12 @@ dependencies = [
  "semver",
  "time",
 ]
+
+[[package]]
+name = "compiler_builtins"
+version = "0.1.158"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "164cdc689e4c6d69417f77a5f48be240c291e84fbef0b1281755dc754b19c809"
 
 [[package]]
 name = "const-str"
@@ -99,6 +111,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermit-dtb"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89e0de208fa9b99664812350b33072d0d9b3a63caaebb03eeb23316eeedfb8d0"
+
+[[package]]
 name = "int-enum"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -119,13 +137,16 @@ checksum = "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674"
 
 [[package]]
 name = "kernel-snowball"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bitflags",
+ "cfg-if",
  "compile-time",
+ "compiler_builtins",
  "const-str",
  "hashbrown",
  "heapless",
+ "hermit-dtb",
  "int-enum",
  "lazy_static",
  "limine",

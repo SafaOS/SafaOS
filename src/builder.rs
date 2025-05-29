@@ -6,6 +6,8 @@ use std::{
     sync::LazyLock,
 };
 
+use utils::ArchTarget;
+
 pub static ROOT_REPO_PATH: LazyLock<PathBuf> = LazyLock::new(|| env!("CARGO_MANIFEST_DIR").into());
 
 #[path = "builder/cargo.rs"]
@@ -18,8 +20,19 @@ mod make;
 pub mod rustc;
 
 #[path = "builder/utils.rs"]
-mod utils;
+pub mod utils;
 
+/// Will only remove a directory if it is found
+fn remove_dir_all_found<P: AsRef<Path>>(path: P) -> io::Result<()> {
+    std::fs::remove_dir_all(path).or_else(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })?;
+    Ok(())
+}
 const KERNEL_PATH: &'static str = "crates/kernel";
 /// A bunch of binary crates which built results are included in the ramdisk in `sys:/bin/`
 const USERSPACE_CRATES_PATH: &'static str = "crates-user";
@@ -45,6 +58,7 @@ pub struct Builder<'a> {
     ramdisk: Vec<(PathBuf, PathBuf)>,
     is_tests: bool,
     verbose: bool,
+    arch: ArchTarget,
 }
 
 #[macro_export]
@@ -66,7 +80,7 @@ macro_rules! log {
 
 impl<'a> Builder<'a> {
     /// Constructs a new builder with the default settings
-    pub fn create_advanced(root_repo_path: &'a Path, iso_name: &str) -> Self {
+    pub fn create_advanced(root_repo_path: &'a Path, iso_name: &str, arch: ArchTarget) -> Self {
         Self {
             is_tests: false,
             verbose: false,
@@ -74,13 +88,14 @@ impl<'a> Builder<'a> {
             build_root_path: root_repo_path.join("out/iso_root"),
             out_path: root_repo_path.join(iso_name),
             ramdisk: Vec::new(),
+            arch,
         }
     }
 
     /// Create a SafaOS ISO builder
     /// this functions uses env!("CARGO_MANIFEST_DIR") as the root repo path
     /// and includes the ramdisk-include directory contents in the ramdisk
-    pub fn create(iso_name: &str) -> Self {
+    pub fn create(iso_name: &str, arch: ArchTarget) -> Self {
         let root_repo_path = &*ROOT_REPO_PATH;
 
         let ramdisk_include_dir = root_repo_path
@@ -92,7 +107,7 @@ impl<'a> Builder<'a> {
             .filter_map(|s| s.ok())
             .map(|entry| (entry.path(), PathBuf::from(entry.file_name())));
 
-        Builder::create_advanced(root_repo_path, iso_name).include_paths(ramdisk_include)
+        Builder::create_advanced(root_repo_path, iso_name, arch).include_paths(ramdisk_include)
     }
 
     /// Builds an ISO that has tests either enabled or disabled for running tests.depends onv value
@@ -116,6 +131,15 @@ impl<'a> Builder<'a> {
     /// Builds all the binary crates in [`USERSPACE_CRATES_PATH`] subdirecotry of self.root_repo_path
     /// returns a Vec of (the built executable path, the path in the ramdisk)
     fn build_userspace(&self) -> Vec<(PathBuf, PathBuf)> {
+        // Skip userspace if it is not Buildable on the current arch
+        if !self.arch.has_rustc_target() {
+            log!(
+                "arch {} doesn't currently have a rust target, skipping the userspace...",
+                self.arch.as_str()
+            );
+            return Vec::new();
+        }
+
         let userspace_crates_path = self.root_repo_path.join(USERSPACE_CRATES_PATH);
         let userspace_crates_dir =
             fs::read_dir(userspace_crates_path).expect("failed to read the crates-user dir");
@@ -128,7 +152,7 @@ impl<'a> Builder<'a> {
 
         let mut results = Vec::with_capacity(crates.len());
         for cr in crates {
-            let binaries = cargo::build_safaos(&cr, &["--release"]);
+            let binaries = cargo::build_safaos(&cr, self.arch, &["--release"]);
             for (path, name) in binaries {
                 results.push((path, format!("bin/{}", name).into()));
             }
@@ -195,12 +219,16 @@ impl<'a> Builder<'a> {
     fn package_kernel(
         &self,
         boot_build_path: &Path,
-        build_function: impl FnOnce(&Path, &'static [&'static str]) -> Vec<(PathBuf, String)>,
+        build_function: impl FnOnce(
+            &Path,
+            ArchTarget,
+            &'static [&'static str],
+        ) -> Vec<(PathBuf, String)>,
     ) {
         fs::create_dir_all(boot_build_path).expect("failed to create boot build dir");
 
         let kernel_crate_path = self.root_repo_path.join(KERNEL_PATH);
-        let mut kernel_elf = build_function(&kernel_crate_path, &[]).into_iter();
+        let mut kernel_elf = build_function(&kernel_crate_path, self.arch, &[]).into_iter();
         assert_eq!(
             kernel_elf.len(),
             1,
@@ -221,34 +249,51 @@ impl<'a> Builder<'a> {
             .expect("failed to copy the kernel elf to iso build dir");
     }
 
+    const fn boot_efi_files(&self) -> &'static [&'static str] {
+        match self.arch {
+            ArchTarget::X86_64 => &["BOOTX64.EFI", "BOOTIA32.EFI"],
+            ArchTarget::Arm64 => &["BOOTAA64.EFI"],
+        }
+    }
+
+    const fn limine_bios_files(&self) -> &'static [&'static str] {
+        match self.arch {
+            ArchTarget::X86_64 => &[
+                "limine-bios.sys",
+                "limine-bios-cd.bin",
+                "limine-uefi-cd.bin",
+            ],
+            ArchTarget::Arm64 => &["limine-uefi-cd.bin"],
+        }
+    }
+
     /// Builds and copies limine to the iso_root
-    fn package_limine(&self, boot_build_path: &Path) {
+    fn package_limine(&self, boot_build_path: &Path) -> io::Result<()> {
         log!("building limine...");
         let limine_path = self.root_repo_path.join("limine");
         let limine_build_path = boot_build_path.join("limine");
         let efi_boot_build_path = self.build_root_path.join("EFI/BOOT");
 
-        fs::create_dir_all(&limine_build_path).expect("failed to create limine build dir");
-        fs::create_dir_all(&efi_boot_build_path).expect("failed to create efi build dir");
+        fs::create_dir_all(&limine_build_path)?;
+        fs::create_dir_all(&efi_boot_build_path)?;
 
         make::build(&limine_path);
-        for src in [
-            limine_path.join("limine-bios.sys"),
-            limine_path.join("limine-bios-cd.bin"),
-            limine_path.join("limine-uefi-cd.bin"),
-            self.root_repo_path.join("limine.conf"),
-        ] {
+
+        let limine_bios_files = self.limine_bios_files();
+        let limine_bios_files = limine_bios_files.iter().map(|f| limine_path.join(f));
+        let limine_files = limine_bios_files.chain([self.root_repo_path.join("limine.conf")]);
+
+        for src in limine_files {
             log_verbose!(
                 self,
                 "building limine cp: {} => {}",
                 src.display(),
                 limine_build_path.display()
             );
-            fs::copy(&src, limine_build_path.join(src.file_name().unwrap()))
-                .expect("failed to copy file");
+            fs::copy(&src, limine_build_path.join(src.file_name().unwrap()))?;
         }
 
-        for src in ["BOOTIA32.EFI", "BOOTX64.EFI"] {
+        for src in self.boot_efi_files() {
             let full_path = limine_path.join(src);
             log_verbose!(
                 self,
@@ -257,23 +302,30 @@ impl<'a> Builder<'a> {
                 efi_boot_build_path.display()
             );
 
-            fs::copy(full_path, efi_boot_build_path.join(src)).expect("failed to copy file");
+            fs::copy(full_path, efi_boot_build_path.join(src))?;
         }
 
         log!("successfully built limine");
+        Ok(())
     }
 
     fn package_final_iso(self) {
         log!("packaging iso");
-        let status = Command::new("xorriso")
-            .arg("-as")
-            .arg("mkisofs")
-            .arg("-b")
-            .arg("boot/limine/limine-bios-cd.bin")
-            .arg("-no-emul-boot")
-            .arg("-boot-load-size")
-            .arg("4")
-            .arg("-boot-info-table")
+        let mut cmd = Command::new("xorriso");
+        cmd.arg("-as").arg("mkisofs").arg("-R").arg("-r").arg("-J");
+        // add bios options to limine
+        if self.arch == ArchTarget::X86_64 {
+            cmd.arg("-b")
+                .arg("boot/limine/limine-bios-cd.bin")
+                .arg("-no-emul-boot")
+                .arg("-boot-load-size")
+                .arg("4")
+                .arg("-boot-info-table");
+        }
+
+        cmd.arg("-hfsplus").arg("-apm-block-size").arg("2048");
+
+        let status = cmd
             .arg("--efi-boot")
             .arg("boot/limine/limine-uefi-cd.bin")
             .arg("-efi-boot-part")
@@ -293,13 +345,14 @@ impl<'a> Builder<'a> {
     }
 
     /// Builds the iso
-    pub fn build(self) {
+    pub fn build(self) -> std::io::Result<()> {
         clear_env();
+        remove_dir_all_found(&self.build_root_path)?;
         // the iso is structured like this:
         // /boot/kernel: the kernel elf
         // /boot/ramdisk.tar: the ramdisk
         // /boot/limine/: limine binaries and conf
-        // /boot/EFI: efi boot files
+        // /EFI/BOOT: efi boot files
         let boot_build_path = self.build_root_path.join("boot");
 
         let freestanding_build_function = if self.is_tests {
@@ -311,10 +364,9 @@ impl<'a> Builder<'a> {
         // the kernel
         self.package_kernel(&boot_build_path, freestanding_build_function);
         // the ramdisk
-        self.package_ramdisk(&boot_build_path)
-            .expect("failed to package ramdisk");
+        self.package_ramdisk(&boot_build_path)?;
         // the bootloader
-        self.package_limine(&boot_build_path);
-        self.package_final_iso()
+        self.package_limine(&boot_build_path)?;
+        Ok(self.package_final_iso())
     }
 }

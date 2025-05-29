@@ -1,29 +1,43 @@
 //! Architecture specific code,
-//! this module contains everything that would make a difference between architectures such initilization and handling context switching
-#[cfg(target_arch = "x86_64")]
-pub mod x86_64;
+//! this module contains everything that would make a difference between architectures such i   nitilization and handling context switching
+use cfg_if::cfg_if;
+
+cfg_if! {
+    if #[cfg(target_arch = "x86_64")] {
+        pub mod x86_64;
+        use x86_64 as arch;
+    }  else if #[cfg(target_arch = "aarch64")] {
+        pub mod aarch64;
+        use aarch64 as arch;
+    }
+    else {
+        pub mod unsupported;
+        use unsupported as arch;
+    }
+}
 
 /// Contains everything related to threading, such as code for context switching
 pub mod threading {
-    #[cfg(target_arch = "x86_64")]
-    pub use super::x86_64::threading::{restore_cpu_status, CPUStatus};
+    pub use super::arch::threading::{invoke_context_switch, restore_cpu_status, CPUStatus};
 }
 
-#[cfg(target_arch = "x86_64")]
-pub use x86_64::{init_phase1, init_phase2};
+pub use arch::{disable_interrupts, enable_interrupts, hlt, init_phase1, init_phase2};
 
 pub mod power {
-    #[cfg(target_arch = "x86_64")]
-    pub use super::x86_64::power::{reboot, shutdown};
+    pub use super::arch::power::{reboot, shutdown};
 }
 
 pub mod serial {
-    #[cfg(target_arch = "x86_64")]
-    pub use super::x86_64::serial::{Serial, SERIAL};
+    pub use super::arch::serial::{Serial, _serial, SERIAL};
 }
 
 pub mod utils {
-    #[cfg(target_arch = "x86_64")]
     #[allow(unused_imports)]
-    pub use super::x86_64::utils::{time, CPU_INFO};
+    pub use super::arch::utils::{time, CPU_INFO};
 }
+
+pub mod registers {
+    pub use super::arch::registers::StackFrame;
+}
+
+pub use arch::paging;

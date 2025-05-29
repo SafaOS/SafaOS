@@ -1,6 +1,6 @@
 [package]
 name = "safa-helper"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "The SafaOS's build system and helper tools"
 
@@ -15,6 +15,7 @@ harness = false
 
 [dependencies]
 cargo_metadata = "0.19.2"
+cfg-if = "1.0.0"
 clap = { version = "4.5.37", features = ["derive"] }
 curl = "0.4.47"
 flate2 = "1.1.1"

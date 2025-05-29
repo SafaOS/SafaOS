@@ -83,7 +83,7 @@ impl ProcessInfo {
     }
 
     /// Gets all process info in `proc:/`
-    /// returns a Vector of ProcessInfo, longest process name length, and longest pid length (as str) if sucessfull for formating pruposes
+    /// returns a Vector of ProcessInfo, longest process name length, and longest pid length (as str) if successful for formatting pruposes
     pub fn fetch_all() -> io::Result<(Vec<ProcessInfo>, usize, usize)> {
         let mut processes = Vec::new();
         let mut longest_name = 0;
@@ -119,10 +119,19 @@ impl ProcessInfo {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Copy)]
+pub enum Arch {
+    #[allow(non_camel_case_types)]
+    x86_64,
+    #[serde(rename = "aarch64")]
+    AArch64,
+}
+
 #[derive(Deserialize)]
 pub struct CpuInfo {
     vendor_id: heapless::String<128>,
     model: heapless::String<128>,
+    arch: Arch,
 }
 
 impl CpuInfo {
@@ -132,6 +141,10 @@ impl CpuInfo {
 
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    pub fn arch(&self) -> Arch {
+        self.arch
     }
 
     pub fn fetch() -> io::Result<Self> {

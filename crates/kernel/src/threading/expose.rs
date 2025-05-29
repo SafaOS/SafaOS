@@ -1,4 +1,4 @@
-use core::{arch::asm, sync::atomic::Ordering};
+use core::sync::atomic::Ordering;
 
 use crate::{
     arch::threading::CPUStatus,
@@ -37,19 +37,13 @@ pub fn thread_exit(code: usize) -> ! {
     drop(current);
 
     // enables interrupts if they were disabled to give control back to the scheduler
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        asm!("sti")
-    }
+    unsafe { crate::arch::enable_interrupts() }
     khalt()
 }
 
 #[no_mangle]
 pub fn thread_yield() {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        asm!("int 0x20")
-    }
+    crate::arch::threading::invoke_context_switch()
 }
 
 #[no_mangle]

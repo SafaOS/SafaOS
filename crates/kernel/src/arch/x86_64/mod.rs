@@ -1,7 +1,9 @@
 mod acpi;
 pub mod gdt;
 pub mod interrupts;
+pub mod paging;
 pub mod power;
+pub mod registers;
 pub mod serial;
 mod syscalls;
 #[cfg(test)]
@@ -10,7 +12,6 @@ pub mod threading;
 pub mod utils;
 
 use core::arch::asm;
-
 use interrupts::{apic, init_idt};
 use serial::init_serial;
 
@@ -96,4 +97,19 @@ pub fn init_phase2() {
     apic::enable_apic_interrupts();
     info!("enabling sse...");
     enable_sse();
+}
+
+#[inline(always)]
+pub unsafe fn disable_interrupts() {
+    unsafe { core::arch::asm!("cli") }
+}
+
+#[inline(always)]
+pub unsafe fn enable_interrupts() {
+    unsafe { core::arch::asm!("sti") }
+}
+
+#[inline(always)]
+pub unsafe fn hlt() {
+    unsafe { core::arch::asm!("hlt") }
 }
