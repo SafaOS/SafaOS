@@ -1,7 +1,14 @@
 use core::mem::offset_of;
 
+use lazy_static::lazy_static;
+
 use crate::{limine::HHDM, RSDP_ADDR};
 
+lazy_static! {
+    pub static ref PSDT_DESC: &'static dyn PTSD = get_sdt();
+    pub static ref MADT_DESC: &'static MADT = MADT::get(*PSDT_DESC);
+    pub static ref FADT_DESC: &'static FADT = FADT::get(*PSDT_DESC);
+}
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct RSDPDesc {
@@ -166,7 +173,7 @@ pub struct MADTRecord {
 }
 
 // any sdt
-pub trait SDT {
+pub trait SDT: Send + Sync {
     fn header(&self) -> &ACPIHeader;
 
     fn len(&self) -> u32 {
@@ -179,7 +186,7 @@ pub trait SDT {
 
 // RSDT and RSDT
 // stands for Parent Table of System Descriptors (yes it gave me ptsd)
-pub trait PTSD: SDT {
+pub trait PTSD: SDT + Send + Sync {
     // returns (ptr, offset)
     // offset can be used to iter
     // offset is the offset starting from the first byte of Self
@@ -311,7 +318,7 @@ fn get_rsdp() -> RSDPDesc {
     desc
 }
 
-pub fn get_sdt() -> &'static dyn PTSD {
+fn get_sdt() -> &'static dyn PTSD {
     let rsdp = get_rsdp();
 
     if rsdp.xsdt_addr != 0 {

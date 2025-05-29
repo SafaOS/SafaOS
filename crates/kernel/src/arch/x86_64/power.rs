@@ -2,16 +2,13 @@ use core::arch::asm;
 
 use crate::{arch::x86_64::gdt, println, serial};
 
-use super::{
-    acpi::{self, FADT},
-    outb, outw,
-};
+use super::{acpi, outb, outw};
 
 const SLP_TYP_S5: u16 = 0x1C00;
 const SLP_EN: u16 = 1 << 13;
 
 pub fn shutdown() -> ! {
-    let fadt = FADT::get(acpi::get_sdt());
+    let fadt = *acpi::FADT_DESC;
 
     let pm1a_cnt_blk = fadt.pm1a_cnt_blk as u16;
     let shutdown_command = SLP_TYP_S5 | SLP_EN;
@@ -31,7 +28,7 @@ pub fn shutdown() -> ! {
 pub fn reboot() -> ! {
     unsafe { asm!("cli") };
 
-    let fadt = FADT::get(acpi::get_sdt());
+    let fadt = *acpi::FADT_DESC;
     match fadt.reset_reg.address_space {
         1 => outb(fadt.reset_reg.address as u16, fadt.reset_value),
         _ => serial!("unknown fadt reset_reg? {:#?}\n", fadt.reset_reg),

@@ -5,7 +5,7 @@ use crate::{
     arch::{
         paging::current_higher_root_table,
         x86_64::{
-            acpi::{self, MADT},
+            acpi,
             utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
         },
     },
@@ -85,12 +85,14 @@ lazy_static! {
         virt_addr
     };
     static ref IOAPIC_ADDR: VirtAddr = unsafe {
-        let madt = MADT::get(acpi::get_sdt());
+        let madt = *acpi::MADT_DESC;
         let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
+
         let addr = (*record).ioapic_address as PhysAddr;
         let frame = Frame::containing_address(addr);
         let virt_addr = addr | *HHDM;
         let page = Page::containing_address(virt_addr);
+
         current_higher_root_table()
             .map_to(page, frame, EntryFlags::WRITE)
             .expect("failed to map the local apic");
