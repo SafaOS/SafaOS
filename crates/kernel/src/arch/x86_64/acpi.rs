@@ -1,13 +1,14 @@
-use core::mem::offset_of;
+use core::ptr::addr_of;
 
 use lazy_static::lazy_static;
 
-use crate::{limine::HHDM, RSDP_ADDR};
+use crate::{limine::HHDM, PhysAddr, RSDP_ADDR};
 
 lazy_static! {
     pub static ref PSDT_DESC: &'static dyn PTSD = get_sdt();
     pub static ref MADT_DESC: &'static MADT = MADT::get(*PSDT_DESC);
     pub static ref FADT_DESC: &'static FADT = FADT::get(*PSDT_DESC);
+    pub static ref MCFG_DESC: &'static MCFG = MCFG::get(*PSDT_DESC);
 }
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
@@ -65,6 +66,23 @@ pub struct RSDT {
 pub struct XSDT {
     pub header: ACPIHeader,
     table: [u64; 0],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MCFGEntry {
+    pub physical_addr: PhysAddr,
+    pub pci_sgn: u16,
+    pub pci_num0: u8,
+    pub pci_num1: u8,
+}
+
+#[repr(C, packed)]
+#[derive(Debug)]
+pub struct MCFG {
+    pub header: ACPIHeader,
+    _reserved: [u8; 8],
+    entries: [MCFGEntry; 0],
 }
 
 #[repr(C, packed)]
@@ -187,13 +205,11 @@ pub trait SDT: Send + Sync {
 // RSDT and RSDT
 // stands for Parent Table of System Descriptors (yes it gave me ptsd)
 pub trait PTSD: SDT + Send + Sync {
-    // returns (ptr, offset)
-    // offset can be used to iter
-    // offset is the offset starting from the first byte of Self
-    unsafe fn get_entry_of_signatrue(&self, signatrue: [u8; 4]) -> Option<*const ACPIHeader> {
+    unsafe fn get_entry(&self, signatrue: [u8; 4]) -> Option<*const ACPIHeader> {
         for i in 0..(self.count()) {
             let item = self.nth(i).0 as *const ACPIHeader;
-            if (*item).signatrue == signatrue {
+            let sign = (*item).signatrue;
+            if sign == signatrue {
                 return Some(item);
             }
         }
@@ -201,8 +217,12 @@ pub trait PTSD: SDT + Send + Sync {
     }
 
     // table item count
-    fn count(&self) -> usize {
-        (self.len() as usize - size_of::<ACPIHeader>()) / 4
+    fn count(&self) -> usize;
+}
+
+impl<'a> dyn PTSD + 'a {
+    unsafe fn get_entry_cast<T: SDT>(&self, signatrue: [u8; 4]) -> Option<*const T> {
+        self.get_entry(signatrue).map(|p| p as *const T)
     }
 }
 
@@ -225,11 +245,7 @@ impl SDT for XSDT {
     }
 
     unsafe fn nth(&self, n: usize) -> (usize, usize) {
-        let this = self as *const Self;
-
-        let offset = offset_of!(XSDT, table);
-        let table_ptr = this.byte_add(offset) as *const u64;
-
+        let table_ptr = addr_of!(self.table) as *const u64;
         let addr = table_ptr.add(n);
         let addr = core::ptr::read_unaligned(addr) as usize;
         let addr = addr | *HHDM;
@@ -238,8 +254,16 @@ impl SDT for XSDT {
     }
 }
 
-impl PTSD for XSDT {}
-impl PTSD for RSDT {}
+impl PTSD for XSDT {
+    fn count(&self) -> usize {
+        (self.len() as usize - size_of::<ACPIHeader>()) / size_of::<u64>()
+    }
+}
+impl PTSD for RSDT {
+    fn count(&self) -> usize {
+        (self.len() as usize - size_of::<ACPIHeader>()) / size_of::<u32>()
+    }
+}
 
 impl SDT for FADT {
     fn header(&self) -> &ACPIHeader {
@@ -252,8 +276,40 @@ impl SDT for FADT {
 }
 
 impl FADT {
-    pub fn get(ptsd: &dyn PTSD) -> &FADT {
-        unsafe { &*(ptsd.get_entry_of_signatrue(*b"FACP").unwrap() as *const FADT) }
+    fn get(ptsd: &dyn PTSD) -> &Self {
+        unsafe { &*(ptsd.get_entry_cast(*b"FACP").unwrap()) }
+    }
+}
+
+impl MCFG {
+    pub fn nth(&self, n: usize) -> Option<&MCFGEntry> {
+        let table = addr_of!(self.entries) as *const MCFGEntry;
+        unsafe {
+            if n >= self.count() {
+                None
+            } else {
+                let ptr = table.add(n);
+                Some(&*ptr)
+            }
+        }
+    }
+
+    fn get(ptsd: &dyn PTSD) -> &Self {
+        unsafe { &*(ptsd.get_entry_cast(*b"MCFG").unwrap()) }
+    }
+    /// Returns the number of entries in [`Self`]
+    pub fn count(&self) -> usize {
+        let len = self.len() as usize;
+        (len - size_of::<Self>()) / size_of::<MCFGEntry>()
+    }
+}
+
+impl SDT for MCFG {
+    fn header(&self) -> &ACPIHeader {
+        &self.header
+    }
+    unsafe fn nth(&self, _: usize) -> (usize, usize) {
+        unimplemented!()
     }
 }
 
@@ -305,7 +361,7 @@ impl MADT {
     }
 
     pub fn get(ptsd: &dyn PTSD) -> &MADT {
-        unsafe { &*(ptsd.get_entry_of_signatrue(*b"APIC").unwrap() as *const MADT) }
+        unsafe { &*(ptsd.get_entry_cast(*b"APIC").unwrap()) }
     }
 }
 
