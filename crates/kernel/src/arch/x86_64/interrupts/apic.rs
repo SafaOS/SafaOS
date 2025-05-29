@@ -1,9 +1,7 @@
-use core::arch::asm;
-
 use super::{pit, read_msr};
 use crate::{
     arch::{
-        paging::current_higher_root_table,
+        paging::{DEVICE_MAPPING_END, DEVICE_MAPPING_START},
         x86_64::{
             acpi,
             utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
@@ -11,13 +9,10 @@ use crate::{
     },
     info,
     limine::HHDM,
-    memory::{
-        frame_allocator::Frame,
-        paging::{EntryFlags, Page},
-    },
     serial, PhysAddr, VirtAddr,
 };
 use bitflags::bitflags;
+use core::arch::asm;
 use lazy_static::lazy_static;
 
 #[derive(Debug, Clone, Copy)]
@@ -73,15 +68,8 @@ pub fn get_io_apic_addr() -> VirtAddr {
 lazy_static! {
     static ref LAPIC_ADDR: VirtAddr = {
         let phys = read_msr(0x1B) & 0xFFFFF000;
-        let frame = Frame::containing_address(phys);
+        assert!(phys >= DEVICE_MAPPING_START && phys <= DEVICE_MAPPING_END);
         let virt_addr = phys | *HHDM;
-        let page = Page::containing_address(virt_addr);
-
-        unsafe {
-            current_higher_root_table()
-                .map_to(page, frame, EntryFlags::WRITE)
-                .expect("failed to map the local apic")
-        };
         virt_addr
     };
     static ref IOAPIC_ADDR: VirtAddr = unsafe {
@@ -89,13 +77,9 @@ lazy_static! {
         let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
 
         let addr = (*record).ioapic_address as PhysAddr;
-        let frame = Frame::containing_address(addr);
+        assert!(addr >= DEVICE_MAPPING_START && addr <= DEVICE_MAPPING_END);
         let virt_addr = addr | *HHDM;
-        let page = Page::containing_address(virt_addr);
 
-        current_higher_root_table()
-            .map_to(page, frame, EntryFlags::WRITE)
-            .expect("failed to map the local apic");
         virt_addr
     };
 }

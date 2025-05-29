@@ -3,6 +3,7 @@ use core::fmt::Debug;
 use core::ops::IndexMut;
 use core::{arch::asm, ops::Index};
 
+use crate::limine::HHDM;
 use crate::memory::paging::{EntryFlags, Page};
 use crate::VirtAddr;
 use crate::{
@@ -314,8 +315,20 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     }
 }
 
+pub(super) const DEVICE_MAPPING_START: PhysAddr = 0xC000_0000;
+pub(super) const DEVICE_MAPPING_END: PhysAddr = 0xFFFF_FFFF;
+
 /// Maps architecture specific devices such as the UART serial in aarch64
+/// Maps from 0xC0000000 to 0xFFFFFFFF in x86_64
 pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
-    _ = table;
+    let start_page = Page::containing_address(DEVICE_MAPPING_START | *HHDM);
+    let end_page = Page::containing_address(DEVICE_MAPPING_END | *HHDM);
+    let iter = Page::iter_pages(start_page, end_page);
+    let iter = iter.map(|page| (page, Frame::containing_address(page.start_address - *HHDM)));
+    for (page, frame) in iter {
+        if table.get_frame(page).is_none() {
+            table.map_to(page, frame, EntryFlags::WRITE)?;
+        }
+    }
     Ok(())
 }
