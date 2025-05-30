@@ -220,7 +220,7 @@ pub fn run(opts: RunOpts, path: &str) {
             "-device",
             "ramfb",
         ],
-        ArchTarget::X86_64 => &[],
+        ArchTarget::X86_64 => &["-machine", "q35", "-device", "qemu-xhci"],
     };
 
     cmd.args(arch_args);
