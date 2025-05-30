@@ -38,6 +38,11 @@ impl From<EntryFlags> for ArchEntryFlags {
         let mut flags: ArchEntryFlags =
             // MAIR index 0 for now
             ArchEntryFlags::PRESENT | ArchEntryFlags::TABLE_DESC | ArchEntryFlags::ACCESS_FLAG;
+
+        if value.contains(EntryFlags::DEVICE_UNCACHEABLE) {
+            flags |= ArchEntryFlags::MAIR1;
+        }
+
         if !value.contains(EntryFlags::WRITE) {
             // read-only flag
             flags |= ArchEntryFlags::AP_HIGHER;
