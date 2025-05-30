@@ -4,6 +4,7 @@ use crate::{
     arch::threading::CPUStatus,
     memory::paging::{MapToError, PhysPageTable},
     utils::types::Name,
+    VirtAddr,
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
@@ -184,12 +185,12 @@ pub fn function_spawn(
                 argv,
                 env,
                 structures,
-                function as usize,
+                VirtAddr::from(function as usize),
                 false,
             )
         }?;
 
-        let task = Task::new(name, 0, ppid, cwd, page_table, context, 0);
+        let task = Task::new(name, 0, ppid, cwd, page_table, context, VirtAddr::null());
         Ok(task)
     })
 }

@@ -40,8 +40,9 @@ pub struct IterPage {
 
 impl Page {
     pub const fn containing_address(address: VirtAddr) -> Self {
+        let aligned = align_down(address.into_raw(), PAGE_SIZE);
         Self {
-            start_address: align_down(address, PAGE_SIZE),
+            start_address: VirtAddr::from(aligned),
         }
     }
 
@@ -51,7 +52,7 @@ impl Page {
 
     /// creates an iterator'able struct
     /// requires that start.start_address is smaller then end.start_address
-    pub const fn iter_pages(start: Page, end: Page) -> IterPage {
+    pub fn iter_pages(start: Page, end: Page) -> IterPage {
         assert!(start.start_address <= end.start_address);
         IterPage { start, end }
     }
@@ -182,7 +183,7 @@ impl PhysPageTable {
             }
 
             unsafe {
-                core::ptr::write_bytes(virt_addr as *mut u8, 0, PAGE_SIZE);
+                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
             }
         }
 

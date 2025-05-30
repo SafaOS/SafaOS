@@ -9,6 +9,7 @@ use crate::{
 use super::{
     align_up,
     paging::{current_higher_root_table, EntryFlags, Page},
+    VirtAddr,
 };
 
 pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
@@ -66,7 +67,7 @@ impl Block {
 pub struct BuddyAllocator<'a> {
     head: &'a mut Block,
     tail: &'a mut Block,
-    heap_end: usize,
+    heap_end: VirtAddr,
 }
 
 fn align_to_power_of_2(size: usize) -> usize {
@@ -100,7 +101,7 @@ impl BuddyAllocator<'_> {
     /// self.heap_end .. self.heap_end + size shall be mapped and not used by anything
     /// adds a free block with size `size` to the end of the allocator
     pub unsafe fn add_free<'b>(&mut self, size: usize) -> &'b mut Block {
-        let new_block = self.heap_end as *mut Block;
+        let new_block = self.heap_end.into_ptr::<Block>();
         unsafe {
             (*new_block).free = true;
             (*new_block).size = size;
@@ -135,8 +136,9 @@ impl BuddyAllocator<'_> {
 
         let start = align_up(possible_start, size_of::<Block>());
         let start = align_up(start, 2);
+        let start = VirtAddr::from(start);
 
-        let diff = start - possible_start;
+        let diff = start.into_raw() - possible_start;
         let size = align_down_to_power_of_2(INIT_HEAP_SIZE - diff);
         let end = start + size;
 
@@ -167,7 +169,7 @@ impl BuddyAllocator<'_> {
         );
 
         unsafe {
-            let head = &mut *(start as *mut Block);
+            let head = &mut *(start.into_ptr::<Block>());
             head.free = true;
             head.size = size;
 
@@ -182,8 +184,8 @@ impl BuddyAllocator<'_> {
 
     #[inline]
     /// safe wrapper around Block::next
-    pub fn next<'b>(heap_end: usize, block: &Block) -> Option<&'b mut Block> {
-        if (block as *const _ as usize + block.size) >= heap_end {
+    pub fn next<'b>(heap_end: VirtAddr, block: &Block) -> Option<&'b mut Block> {
+        if VirtAddr::from(block as *const _ as usize + block.size) >= heap_end {
             None
         } else {
             unsafe { Some(block.next()) }

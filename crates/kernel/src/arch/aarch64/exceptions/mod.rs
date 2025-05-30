@@ -3,7 +3,7 @@ use core::{
     fmt::Display,
 };
 
-use crate::{syscalls::syscall, VirtAddr};
+use crate::syscalls::syscall;
 
 use super::registers::{Esr, ExcClass, Reg, Spsr};
 
@@ -118,7 +118,7 @@ fn exception(kind: ExcClass, frame: &mut InterruptFrame) {
 
 #[inline(always)]
 pub(super) fn init_exceptions() {
-    let exc_vector_table: VirtAddr;
+    let exc_vector_table: usize;
     unsafe {
         asm!("adr {0}, exc_vector_table", out(reg) exc_vector_table);
         asm!("msr VBAR_EL1, {0}", in(reg) exc_vector_table);

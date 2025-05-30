@@ -3,7 +3,6 @@ use core::fmt::Debug;
 use core::ops::IndexMut;
 use core::{arch::asm, ops::Index};
 
-use crate::limine::HHDM;
 use crate::memory::paging::{EntryFlags, Page};
 use crate::VirtAddr;
 use crate::{
@@ -17,20 +16,21 @@ use crate::{
 const ENTRY_COUNT: usize = 512;
 const HIGHER_HALF_ENTRY: usize = 256;
 
-const fn p4_index(addr: VirtAddr) -> usize {
+const fn p4_index(addr: usize) -> usize {
     (addr >> 39) & 0x1FF
 }
-const fn p3_index(addr: VirtAddr) -> usize {
+const fn p3_index(addr: usize) -> usize {
     (addr >> 30) & 0x1FF
 }
-const fn p2_index(addr: VirtAddr) -> usize {
+const fn p2_index(addr: usize) -> usize {
     (addr >> 21) & 0x1FF
 }
-const fn p1_index(addr: VirtAddr) -> usize {
+const fn p1_index(addr: usize) -> usize {
     (addr >> 12) & 0x1FF
 }
 
-fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
+const fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
+    let addr = addr.into_raw();
     (
         p1_index(addr),
         p2_index(addr),
@@ -41,7 +41,7 @@ fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
 
 #[derive(Clone)]
 /// A page table's entry
-pub struct Entry(PhysAddr);
+pub struct Entry(usize);
 impl Debug for Entry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Entry")
@@ -56,7 +56,9 @@ impl Entry {
         if self.flags().contains(ArchEntryFlags::PRESENT) {
             // FIXME: real hardware problem here
             // TODO: figure out more info about the max physical address width
-            return Some(Frame::containing_address(self.0 & 0x000F_FFFF_FFFF_F000));
+            return Some(Frame::containing_address(PhysAddr::from(
+                self.0 & 0x000F_FFFF_FFFF_F000,
+            )));
         }
         None
     }
@@ -66,7 +68,7 @@ impl Entry {
     }
 
     const fn new(flags: ArchEntryFlags, addr: PhysAddr) -> Self {
-        Self(addr | flags.bits() as usize)
+        Self(addr.into_raw() | flags.bits() as usize)
     }
 
     const fn set(&mut self, flags: ArchEntryFlags, addr: PhysAddr) {
@@ -81,7 +83,7 @@ impl Entry {
         let frame = self.frame().unwrap();
 
         if level != 0 {
-            let table = &mut *(frame.virt_addr() as *mut PageTable);
+            let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
             table.free(level);
         }
         self.deallocate();
@@ -93,7 +95,7 @@ impl Entry {
     unsafe fn deallocate(&mut self) {
         if let Some(frame) = self.frame() {
             frame_allocator::deallocate_frame(frame);
-            self.set(ArchEntryFlags::empty(), 0);
+            self.set(ArchEntryFlags::empty(), PhysAddr::null());
         }
     }
 
@@ -107,7 +109,7 @@ impl Entry {
 
             self.set(flags, addr);
             let virt_addr = frame.virt_addr();
-            let entry_ptr = virt_addr as *mut PageTable;
+            let entry_ptr = virt_addr.into_ptr::<PageTable>();
 
             Ok(unsafe { &mut *(entry_ptr) })
         } else {
@@ -118,7 +120,7 @@ impl Entry {
             self.set(flags, addr);
 
             let virt_addr = frame.virt_addr();
-            let table_ptr = virt_addr as *mut PageTable;
+            let table_ptr = virt_addr.into_ptr::<PageTable>();
 
             Ok(unsafe {
                 (*table_ptr).zeroize();
@@ -131,7 +133,7 @@ impl Entry {
     fn mapped_to(&self) -> Option<&'static mut PageTable> {
         if let Some(frame) = self.frame() {
             let virt_addr = frame.virt_addr();
-            let entry_ptr = virt_addr as *mut PageTable;
+            let entry_ptr = virt_addr.into_ptr::<PageTable>();
 
             return Some(unsafe { &mut *entry_ptr });
         }
@@ -290,11 +292,12 @@ impl IndexMut<usize> for PageTable {
 
 /// returns the current pml4 from cr3
 pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
-    let phys_addr: PhysAddr;
+    let phys_addr: usize;
     unsafe {
         asm!("mov {}, cr3", out(reg) phys_addr);
     }
 
+    let phys_addr = PhysAddr::from(phys_addr);
     let frame = Frame::containing_address(phys_addr);
     let ptr = frame.into_ptr();
     ptr
@@ -310,20 +313,20 @@ pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
 pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let phys_addr = page_table.phys_addr();
     unsafe {
-        asm!("mov cr3, rax", in("rax") phys_addr);
+        asm!("mov cr3, rax", in("rax") phys_addr.into_raw());
     }
 }
 
-pub(super) const DEVICE_MAPPING_START: PhysAddr = 0xC000_0000;
-pub(super) const DEVICE_MAPPING_END: PhysAddr = 0xFFFF_FFFF;
-pub(super) const DEVICE_MAPPING_SIZE: usize = DEVICE_MAPPING_END - DEVICE_MAPPING_START;
+pub(super) const DEVICE_MAPPING_START: PhysAddr = PhysAddr::from(0xC000_0000);
+pub(super) const DEVICE_MAPPING_END: PhysAddr = PhysAddr::from(0xFFFF_FFFF);
+pub(super) const DEVICE_MAPPING_SIZE: usize =
+    DEVICE_MAPPING_END.into_raw() - DEVICE_MAPPING_START.into_raw();
 
 /// Maps architecture specific devices such as the UART serial in aarch64
 /// Maps from 0xC0000000 to 0xFFFFFFFF in x86_64
 pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
-    let start_virt_addr = DEVICE_MAPPING_START | *HHDM;
     table.map_contiguous_pages(
-        start_virt_addr,
+        DEVICE_MAPPING_START.into_virt(),
         DEVICE_MAPPING_START,
         DEVICE_MAPPING_SIZE / PAGE_SIZE,
         EntryFlags::WRITE,

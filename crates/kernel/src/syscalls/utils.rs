@@ -38,6 +38,6 @@ pub fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), Er
 // on fail returns null for unknown reasons
 pub fn syssbrk(amount: isize, results: &mut VirtAddr) -> Result<(), ErrorStatus> {
     let res = threading::expose::sbrk(amount)?;
-    *results = res as VirtAddr;
+    *results = VirtAddr::from_ptr(res);
     Ok(())
 }

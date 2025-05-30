@@ -3,10 +3,10 @@ use core::hint::unlikely;
 
 use crate::limine::HHDM;
 use crate::utils::Locked;
+use crate::VirtAddr;
 use lazy_static::lazy_static;
-
 lazy_static! {
-    static ref PL011: usize = *HHDM + *super::cpu::PL011BASE;
+    static ref PL011: VirtAddr = super::cpu::PL011BASE.into_virt();
 }
 
 #[inline(always)]
@@ -16,7 +16,7 @@ fn putbyte(c: u8) {
             let qemu_addr = *HHDM | 0x09000000;
             core::ptr::write_volatile(qemu_addr as *mut u8, c);
         } else {
-            core::ptr::write_volatile(*PL011 as *mut u8, c);
+            core::ptr::write_volatile(PL011.into_ptr(), c);
         }
     }
 }

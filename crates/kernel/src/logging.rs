@@ -1,6 +1,6 @@
 use core::{fmt::Display, sync::atomic::AtomicBool};
 
-use crate::{arch::registers::StackFrame, globals::KERNEL_ELF};
+use crate::{arch::registers::StackFrame, globals::KERNEL_ELF, VirtAddr};
 
 pub const QUITE_PANIC: bool = true;
 pub static BOOTING: AtomicBool = AtomicBool::new(false);
@@ -133,7 +133,7 @@ impl<'a> Display for StackTrace<'a> {
                 let return_address = fp.return_ptr();
 
                 let name = {
-                    let sym = KERNEL_ELF.sym_from_value_range(return_address as usize);
+                    let sym = KERNEL_ELF.sym_from_value_range(VirtAddr::from_ptr(return_address));
                     sym.and_then(|sym| KERNEL_ELF.string_table_index(sym.name_index))
                 };
                 let name = name.as_deref().unwrap_or("???");

@@ -48,7 +48,7 @@ fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
         let hhdm_end = map_hhdm(dest)?;
         arch::paging::map_devices(dest)?;
         map_top_2gb(current, dest)?;
-        HHDM_END.store(hhdm_end, core::sync::atomic::Ordering::Relaxed);
+        HHDM_END.store(hhdm_end.into_raw(), core::sync::atomic::Ordering::Relaxed);
     }
 
     Ok(table)
@@ -61,22 +61,22 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
         limine::get_phy_offset()
     );
     let flags = EntryFlags::WRITE;
-    let mut largest_addr: VirtAddr = 0;
+    let mut largest_addr: VirtAddr = VirtAddr::null();
 
     for entry in limine::mmap_request().entries() {
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
-            let start_phys_addr = entry.base as PhysAddr;
-            let start_virt_addr = *HHDM | start_phys_addr;
+            let phys_addr = PhysAddr::from(entry.base as usize);
+            let virt_addr = phys_addr.into_virt();
 
             let size = align_up(entry.length as usize, PAGE_SIZE);
             let page_num = size / PAGE_SIZE;
 
             unsafe {
-                dest.map_contiguous_pages(start_virt_addr, start_phys_addr, page_num, flags)?;
+                dest.map_contiguous_pages(virt_addr, phys_addr, page_num, flags)?;
             }
 
-            if start_virt_addr + size > largest_addr {
-                largest_addr = start_virt_addr + size;
+            if virt_addr + size > largest_addr {
+                largest_addr = virt_addr + size;
             }
         }
     }
@@ -89,8 +89,8 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
 
 unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> {
     debug!(PageTable, "mapping kernel");
-    let start = Page::containing_address(0xffffffff80000000);
-    let end = Page::containing_address(0xffffffffffffffff);
+    let start = Page::containing_address(VirtAddr::from(0xffffffff80000000));
+    let end = Page::containing_address(VirtAddr::from(0xffffffffffffffff));
     let iter = Page::iter_pages(start, end);
     let flags = EntryFlags::WRITE;
 

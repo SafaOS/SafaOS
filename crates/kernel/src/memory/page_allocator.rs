@@ -14,6 +14,7 @@ use crate::{debug, utils::Locked};
 use super::{
     align_up, frame_allocator,
     paging::{current_higher_root_table, EntryFlags, MapToError, Page, PAGE_SIZE},
+    VirtAddr,
 };
 
 /// a bitmap page allocator which allocates contiguous virtual memory pages
@@ -175,8 +176,9 @@ impl PageAllocator {
             .try_find_pages(page_count)
             .ok_or(MapToError::FrameAllocationFailed)?;
 
-        let start_page = Page::containing_address(ptr as usize);
-        let end_page = Page::containing_address(ptr as usize + pages * PAGE_SIZE);
+        let addr = VirtAddr::from_ptr(ptr);
+        let start_page = Page::containing_address(addr);
+        let end_page = Page::containing_address(addr + (pages * PAGE_SIZE));
 
         let mut root_table = unsafe { current_higher_root_table() };
         for page in Page::iter_pages(start_page, end_page) {
@@ -202,7 +204,7 @@ impl PageAllocator {
 
         let size = page_count * PAGE_SIZE;
 
-        let start = ptr as usize;
+        let start: VirtAddr = ptr.into();
         let end = start + size;
 
         let start = Page::containing_address(start);

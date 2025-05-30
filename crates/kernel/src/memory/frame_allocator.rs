@@ -3,7 +3,7 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{limine::HHDM, utils::locks::Mutex};
+use crate::utils::locks::Mutex;
 use lazy_static::lazy_static;
 
 use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
@@ -13,7 +13,8 @@ use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
 pub struct FramePtr<T>(*mut T);
 impl<T> FramePtr<T> {
     pub fn phys_addr(&self) -> PhysAddr {
-        (self.0 as usize) - *HHDM
+        let virt_addr = VirtAddr::from_ptr(self.0);
+        virt_addr.into_phys()
     }
 
     pub fn frame(&self) -> Frame {
@@ -41,9 +42,8 @@ impl Frame {
     #[inline(always)]
     // returns the frame that contains an address
     pub fn containing_address(address: PhysAddr) -> Self {
-        Self(
-            align_down(address, PAGE_SIZE), // for now frames can only be 1 normal page sized
-        )
+        let aligned = align_down(address.into_raw(), PAGE_SIZE);
+        Self(PhysAddr::from(aligned))
     }
 
     #[inline]
@@ -51,9 +51,9 @@ impl Frame {
         self.0
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn virt_addr(&self) -> VirtAddr {
-        self.0 | *HHDM
+        self.0.into_virt()
     }
 
     pub fn iter_frames(start: Frame, end: Frame) -> FrameIter {
@@ -65,7 +65,8 @@ impl Frame {
     /// # Safety
     /// unsafe because the caller must ensure that the frame is valid and points to data containing [`T`]
     pub unsafe fn into_ptr<T>(self) -> FramePtr<T> {
-        FramePtr(self.virt_addr() as *mut T)
+        let addr = self.virt_addr();
+        FramePtr(addr.into_ptr::<T>())
     }
 }
 
@@ -115,7 +116,7 @@ impl<'a> RegionNode<'a> {
     /// the caller must ensure that the frame is not used anymore
     unsafe fn new_in(frame: Frame) -> &'a mut Self {
         let frame_addr = frame.virt_addr();
-        let region_pointer = frame_addr as *mut RegionNode;
+        let region_pointer = frame_addr.into_ptr::<RegionNode>();
 
         *region_pointer = RegionNode::new(frame.start_address());
         unsafe { &mut *region_pointer }
@@ -193,8 +194,11 @@ impl<'a> RegionListAllocator<'a> {
 
         for entry in mmap.entries() {
             if entry.entry_type == limine::memory_map::EntryType::USABLE {
-                let frame = Frame::containing_address(entry.base as usize);
-                let end_frame = Frame::containing_address((entry.base + entry.length) as usize);
+                let start_addr = PhysAddr::from(entry.base as usize);
+                let end_addr = start_addr + (entry.length as usize);
+
+                let frame = Frame::containing_address(start_addr);
+                let end_frame = Frame::containing_address(end_addr);
 
                 for frame in Frame::iter_frames(frame, end_frame) {
                     usable_regions += 1;

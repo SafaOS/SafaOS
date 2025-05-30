@@ -67,7 +67,7 @@ impl<'a> Iterator for NodeRegProp<'a> {
             u32::from_be(*item.next().unwrap()) as usize
         };
 
-        Some((addr, size))
+        Some((PhysAddr::from(addr), size))
     }
 }
 

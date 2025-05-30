@@ -59,14 +59,14 @@ impl CPUStatus {
 
     /// SHOULD ONLY BE CALLED FROM EL1
     unsafe fn from_current(frame: &mut InterruptFrame) -> Self {
-        let ttbr0: PhysAddr;
-        let sp_el0: VirtAddr;
+        let ttbr0: usize;
+        let sp_el0: usize;
 
         unsafe {
             asm!("mrs {}, sp_el0; mrs {}, ttbr0_el1", out(reg) sp_el0, out(reg) ttbr0);
         }
 
-        Self::new(frame, ttbr0, sp_el0)
+        Self::new(frame, PhysAddr::from(ttbr0), VirtAddr::from(sp_el0))
     }
 }
 
@@ -107,32 +107,44 @@ impl CPUStatus {
         argv: &[&str],
         env: &[&[u8]],
         structures: AbiStructures,
-        entry_point: usize,
+        entry_point: VirtAddr,
         userspace: bool,
     ) -> Result<Self, MapToError> {
-        let entry_point = entry_point as u64;
+        let entry_point = entry_point.into_raw() as u64;
+
+        let stack_start = VirtAddr::from(STACK_START);
+        let stack_end = VirtAddr::from(STACK_END);
+        let el1_stack_start = VirtAddr::from(EL1_STACK_START);
+        let el1_stack_end = VirtAddr::from(EL1_STACK_END);
+
+        let argv_start = VirtAddr::from(ARGV_START);
+        let environment_variables_start = VirtAddr::from(ENVIRONMENT_VARIABLES_START);
+
+        let abi_structures_start = VirtAddr::from(ABI_STRUCTURES_START);
+        let abi_structures_end = VirtAddr::from(ABI_STRUCTURES_START + PAGE_SIZE);
+
         // allocate the stack
         page_table.alloc_map(
-            STACK_START,
-            STACK_END,
+            stack_start,
+            stack_end,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         page_table.alloc_map(
-            EL1_STACK_START,
-            EL1_STACK_END,
+            el1_stack_start,
+            el1_stack_end,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         let argc = argv.len();
         let envc = env.len();
 
-        let argv_ptr = map_str_slices(page_table, argv, ARGV_START)?;
+        let argv_ptr = map_str_slices(page_table, argv, argv_start)?;
         let argv_ptr = argv_ptr
             .map(|p| p.as_ptr())
             .unwrap_or(core::ptr::null_mut());
 
-        let env_ptr = map_byte_slices(page_table, env, ENVIRONMENT_VARIABLES_START)?;
+        let env_ptr = map_byte_slices(page_table, env, environment_variables_start)?;
         let env_ptr = env_ptr.map(|p| p.as_ptr()).unwrap_or(core::ptr::null_mut());
 
         // ABI structures are structures that are passed to tasks by the kernel
@@ -141,13 +153,13 @@ impl CPUStatus {
             &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) };
 
         page_table.alloc_map(
-            ABI_STRUCTURES_START,
-            ABI_STRUCTURES_START + PAGE_SIZE,
+            abi_structures_start,
+            abi_structures_end,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
-        copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
+        copy_to_userspace(page_table, abi_structures_start, structures_bytes);
 
-        let abi_structures_ptr = ABI_STRUCTURES_START as *const AbiStructures;
+        let abi_structures_ptr = abi_structures_start.into_ptr::<AbiStructures>();
 
         let mut general_registers = [Reg::default(); 29];
         general_registers[0] = Reg(argc as u64);
@@ -157,7 +169,7 @@ impl CPUStatus {
         general_registers[4] = Reg(abi_structures_ptr as u64);
 
         Ok(Self {
-            sp_el0: STACK_END,
+            sp_el0: stack_end,
             ttbr0: page_table.phys_addr(),
             frame: InterruptFrame {
                 general_registers,
@@ -175,7 +187,7 @@ impl CPUStatus {
     }
 
     pub fn at(&self) -> VirtAddr {
-        *self.frame.elr as VirtAddr
+        VirtAddr::from(*self.frame.elr as usize)
     }
 
     pub fn stack_at(&self) -> VirtAddr {

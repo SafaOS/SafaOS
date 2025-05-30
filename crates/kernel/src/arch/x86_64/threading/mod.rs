@@ -61,12 +61,12 @@ bitflags! {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct CPUStatus {
-    rsp: u64,
+    rsp: VirtAddr,
     rflags: RFLAGS,
     ss: u64,
     cs: u64,
 
-    rip: u64,
+    rip: VirtAddr,
 
     r15: u64,
     r14: u64,
@@ -110,11 +110,11 @@ use safa_utils::abi::raw::processes::AbiStructures;
 
 impl CPUStatus {
     pub fn at(&self) -> VirtAddr {
-        self.rip as VirtAddr
+        self.rip
     }
 
     pub fn stack_at(&self) -> VirtAddr {
-        self.rsp as VirtAddr
+        self.rsp
     }
 
     /// Initializes a new userspace `CPUStatus` instance, initializes the stack, argv, etc...
@@ -126,32 +126,32 @@ impl CPUStatus {
         argv: &[&str],
         env: &[&[u8]],
         structures: AbiStructures,
-        entry_point: usize,
+        entry_point: VirtAddr,
         userspace: bool,
     ) -> Result<Self, MapToError> {
         // allocate the stack
         page_table.alloc_map(
-            STACK_START,
-            STACK_END,
+            STACK_START.into(),
+            STACK_END.into(),
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         // allocate the syscall stack
         page_table.alloc_map(
-            RING0_STACK_START,
-            RING0_STACK_END,
+            RING0_STACK_START.into(),
+            RING0_STACK_END.into(),
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         let argc = argv.len();
         let envc = env.len();
 
-        let argv_ptr = map_str_slices(page_table, argv, ARGV_START)?;
+        let argv_ptr = map_str_slices(page_table, argv, ARGV_START.into())?;
         let argv_ptr = argv_ptr
             .map(|p| p.as_ptr())
             .unwrap_or(core::ptr::null_mut());
 
-        let env_ptr = map_byte_slices(page_table, env, ENVIRONMENT_VARIABLES_START)?;
+        let env_ptr = map_byte_slices(page_table, env, ENVIRONMENT_VARIABLES_START.into())?;
         let env_ptr = env_ptr.map(|p| p.as_ptr()).unwrap_or(core::ptr::null_mut());
 
         // ABI structures are structures that are passed to tasks by the kernel
@@ -160,11 +160,11 @@ impl CPUStatus {
             &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) };
 
         page_table.alloc_map(
-            ABI_STRUCTURES_START,
-            ABI_STRUCTURES_START + PAGE_SIZE,
+            ABI_STRUCTURES_START.into(),
+            (ABI_STRUCTURES_START + PAGE_SIZE).into(),
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
-        copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
+        copy_to_userspace(page_table, ABI_STRUCTURES_START.into(), structures_bytes);
 
         let abi_structures_ptr = ABI_STRUCTURES_START as *const AbiStructures;
 
@@ -184,14 +184,14 @@ impl CPUStatus {
 
         Ok(Self {
             rflags,
-            rip: entry_point as u64,
+            rip: entry_point,
             rdi: argc as u64,
             rsi: argv_ptr as u64,
             rdx: envc as u64,
             rcx: env_ptr as u64,
             r8: abi_structures_ptr as u64,
-            cr3: page_table.phys_addr() as u64,
-            rsp: STACK_END as u64,
+            cr3: page_table.phys_addr().into_raw() as u64,
+            rsp: VirtAddr::from(STACK_END),
             cs,
             ss,
             ..Default::default()

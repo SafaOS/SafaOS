@@ -3,60 +3,60 @@ use lazy_static::lazy_static;
 use crate::{
     arch::paging::current_higher_root_table,
     info,
-    limine::HHDM,
     memory::{
         frame_allocator::Frame,
         paging::{EntryFlags, MapToError, Page},
     },
+    VirtAddr,
 };
 
 use super::paging::PageTable;
 
 lazy_static! {
-    static ref GICD_BASE: usize = *crate::limine::HHDM + super::cpu::GIC.0;
-    static ref GICC_BASE: usize = *crate::limine::HHDM + super::cpu::GIC.1;
+    static ref GICD_BASE: VirtAddr = super::cpu::GIC.0.into_virt();
+    static ref GICC_BASE: VirtAddr = super::cpu::GIC.1.into_virt();
 }
 
 #[inline(always)]
 fn gicd_ctlr() -> *mut u32 {
-    *GICD_BASE as *mut u32
+    GICD_BASE.into_ptr::<u32>()
 }
 
 #[inline(always)]
 fn gicd_isenabler() -> *mut u32 {
-    (*GICD_BASE + 0x100) as *mut u32
+    (*GICD_BASE + 0x100).into_ptr::<u32>()
 }
 
 #[inline(always)]
 fn gicc_ctlr() -> *mut u32 {
-    *GICC_BASE as *mut u32
+    GICC_BASE.into_ptr::<u32>()
 }
 
 #[inline(always)]
 fn gicc_pmr() -> *mut u32 {
-    (*GICC_BASE + 0x4) as *mut u32
+    (*GICC_BASE + 0x4).into_ptr::<u32>()
 }
 
 #[inline(always)]
 fn gicc_bpr() -> *mut u32 {
-    (*GICC_BASE + 0x8) as *mut u32
+    (*GICC_BASE + 0x8).into_ptr::<u32>()
 }
 
 #[inline(always)]
 fn gicd_icpendr() -> *mut u32 {
-    (*GICD_BASE + 0x0280) as *mut u32
+    (*GICD_BASE + 0x0280).into_ptr::<u32>()
 }
 
 unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
     let flags = EntryFlags::WRITE;
     dest.map_to(
         Page::containing_address(*GICC_BASE),
-        Frame::containing_address(*GICC_BASE - *HHDM),
+        Frame::containing_address(GICC_BASE.into_phys()),
         flags,
     )?;
     dest.map_to(
         Page::containing_address(*GICD_BASE),
-        Frame::containing_address(*GICD_BASE - *HHDM),
+        Frame::containing_address(GICD_BASE.into_phys()),
         flags,
     )?;
     Ok(())
@@ -105,7 +105,7 @@ pub fn clear_pending(interrupt: u32) {
 }
 
 fn gicd_ispendr0() -> *mut u32 {
-    (*GICD_BASE + 0x200) as *mut u32
+    (*GICD_BASE + 0x200).into_ptr::<u32>()
 }
 
 pub fn set_pending(interrupt: u32) {

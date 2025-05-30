@@ -1,7 +1,6 @@
 use crate::{
     drivers::pci::PCI,
     info,
-    limine::HHDM,
     memory::{
         align_up,
         paging::{EntryFlags, PAGE_SIZE},
@@ -12,7 +11,7 @@ use super::{cpu, paging::current_higher_root_table};
 
 pub fn init() -> PCI {
     let (start_phys_addr, size, bus_start, bus_end) = *cpu::PCIE;
-    let start_virt_addr = start_phys_addr | *HHDM;
+    let start_virt_addr = start_phys_addr.into_virt();
 
     info!("initializing PCI from bus: {bus_start:#x} to bus: {bus_end:#x}");
 

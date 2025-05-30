@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 
-use crate::{limine::HHDM, PhysAddr};
+use crate::PhysAddr;
 
 pub struct PCI {
     base_ptr: *const (),
@@ -84,7 +84,7 @@ impl PCI {
     /// TODO: For now only PCIe is implemented
     pub fn new(addr: PhysAddr, start_bus: u8, end_bus: u8) -> Self {
         Self {
-            base_ptr: (addr | *HHDM) as *const (),
+            base_ptr: addr.into_virt().into_ptr::<()>(),
             start_bus,
             end_bus,
         }
