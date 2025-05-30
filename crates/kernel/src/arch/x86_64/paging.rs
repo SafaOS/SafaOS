@@ -9,7 +9,7 @@ use crate::VirtAddr;
 use crate::{
     memory::{
         frame_allocator::{self, Frame, FramePtr},
-        paging::MapToError,
+        paging::{MapToError, PAGE_SIZE},
     },
     PhysAddr,
 };
@@ -219,7 +219,7 @@ impl PageTable {
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.start_address);
+            translate(page.virt_addr());
         let flags: ArchEntryFlags = flags.into();
         let level_3_table = self[level_4_index].map(flags)?;
 
@@ -231,11 +231,10 @@ impl PageTable {
         // TODO: stress test this
         debug_assert!(
                 entry.frame().is_none(),
-                "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {:#x}",
+                "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {page:?}",
                 entry,
                 entry.frame(),
                 frame,
-                page.start_address
             );
 
         *entry = Entry::new(flags, frame.start_address());
@@ -245,7 +244,7 @@ impl PageTable {
     /// gets the frame page points to
     pub fn get_frame(&self, page: Page) -> Option<Frame> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.start_address);
+            translate(page.virt_addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
         let level_1_table = level_2_table[level_2_index].mapped_to()?;
@@ -258,7 +257,7 @@ impl PageTable {
     /// get a mutable reference to the entry for a given page
     fn get_entry(&self, page: Page) -> Option<&mut Entry> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.start_address);
+            translate(page.virt_addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
         let level_1_table = level_2_table[level_2_index].mapped_to()?;
@@ -317,18 +316,17 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
 
 pub(super) const DEVICE_MAPPING_START: PhysAddr = 0xC000_0000;
 pub(super) const DEVICE_MAPPING_END: PhysAddr = 0xFFFF_FFFF;
+pub(super) const DEVICE_MAPPING_SIZE: usize = DEVICE_MAPPING_END - DEVICE_MAPPING_START;
 
 /// Maps architecture specific devices such as the UART serial in aarch64
 /// Maps from 0xC0000000 to 0xFFFFFFFF in x86_64
 pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
-    let start_page = Page::containing_address(DEVICE_MAPPING_START | *HHDM);
-    let end_page = Page::containing_address(DEVICE_MAPPING_END | *HHDM);
-    let iter = Page::iter_pages(start_page, end_page);
-    let iter = iter.map(|page| (page, Frame::containing_address(page.start_address - *HHDM)));
-    for (page, frame) in iter {
-        if table.get_frame(page).is_none() {
-            table.map_to(page, frame, EntryFlags::WRITE)?;
-        }
-    }
+    let start_virt_addr = DEVICE_MAPPING_START | *HHDM;
+    table.map_contiguous_pages(
+        start_virt_addr,
+        DEVICE_MAPPING_START,
+        DEVICE_MAPPING_SIZE / PAGE_SIZE,
+        EntryFlags::WRITE,
+    )?;
     Ok(())
 }

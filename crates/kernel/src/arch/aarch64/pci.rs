@@ -3,34 +3,31 @@ use crate::{
     info,
     limine::HHDM,
     memory::{
-        frame_allocator::Frame,
-        paging::{EntryFlags, Page},
+        align_up,
+        paging::{EntryFlags, PAGE_SIZE},
     },
 };
 
 use super::{cpu, paging::current_higher_root_table};
 
 pub fn init() -> PCI {
-    let (start, size, bus_start, bus_end) = *cpu::PCIE;
-    info!("initializing PCI from bus: {bus_start:#x} to bus: {bus_end:#x}");
-    let end_addr = start + size;
+    let (start_phys_addr, size, bus_start, bus_end) = *cpu::PCIE;
+    let start_virt_addr = start_phys_addr | *HHDM;
 
-    let start_page = Page::containing_address(start | *HHDM);
-    let end_page = Page::containing_address(end_addr | *HHDM);
-    let pages = Page::iter_pages(start_page, end_page);
-    for page in pages {
-        let frame = Frame::containing_address(page.start_address - *HHDM);
-        unsafe {
-            current_higher_root_table()
-                .map_to(
-                    page,
-                    frame,
-                    EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
-                )
-                .expect("failed to map PCIe")
-        }
+    info!("initializing PCI from bus: {bus_start:#x} to bus: {bus_end:#x}");
+
+    let page_num = align_up(size, PAGE_SIZE) / PAGE_SIZE;
+    unsafe {
+        current_higher_root_table()
+            .map_contiguous_pages(
+                start_virt_addr,
+                start_phys_addr,
+                page_num,
+                EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
+            )
+            .expect("failed to map PCIe");
     }
-    info!("mapped PCIe from {start_page:#x} to {end_page:#x}");
+    info!("mapped PCIe from {start_virt_addr:#x} with size {size:#x}");
     // FIXME: hardcoded bus numbers
-    PCI::new(start, bus_start as u8, bus_end as u8)
+    PCI::new(start_phys_addr, bus_start as u8, bus_end as u8)
 }

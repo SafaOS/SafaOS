@@ -1,7 +1,7 @@
 use core::sync::atomic::AtomicUsize;
 
 use super::{
-    frame_allocator::{Frame, FramePtr},
+    frame_allocator::FramePtr,
     paging::{EntryFlags, PAGE_SIZE},
     VirtAddr,
 };
@@ -15,10 +15,8 @@ use crate::{
     },
     debug,
     limine::{self, HHDM},
-    memory::{
-        align_up,
-        frame_allocator::{self},
-    },
+    memory::{align_up, frame_allocator},
+    PhysAddr,
 };
 
 use super::paging::{MapToError, Page, PageTable};
@@ -67,23 +65,18 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
 
     for entry in limine::mmap_request().entries() {
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
-            let start_addr = *HHDM + entry.base as usize;
-            let end_addr = start_addr + entry.length as usize;
-            let end_addr = align_up(end_addr, PAGE_SIZE);
+            let start_phys_addr = entry.base as PhysAddr;
+            let start_virt_addr = *HHDM | start_phys_addr;
 
-            let start = Page::containing_address(start_addr);
-            let end = Page::containing_address(end_addr);
+            let size = align_up(entry.length as usize, PAGE_SIZE);
+            let page_num = size / PAGE_SIZE;
 
-            let page_iter = Page::iter_pages(start, end);
-            for page in page_iter {
-                let addr = page.start_address;
-                if addr > largest_addr {
-                    largest_addr = addr;
-                }
+            unsafe {
+                dest.map_contiguous_pages(start_virt_addr, start_phys_addr, page_num, flags)?;
+            }
 
-                let frame_addr = addr - *HHDM;
-                let frame = Frame::containing_address(frame_addr);
-                dest.map_to(page, frame, flags)?;
+            if start_virt_addr + size > largest_addr {
+                largest_addr = start_virt_addr + size;
             }
         }
     }

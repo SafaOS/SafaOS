@@ -31,7 +31,7 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
 
     for i in 0..pages_required {
         let page = Page::containing_address(addr + copied);
-        let diff = if i == 0 { addr - page.start_address } else { 0 };
+        let diff = if i == 0 { addr - page.virt_addr() } else { 0 };
         let will_copy = if (to_copy + diff) >= PAGE_SIZE {
             PAGE_SIZE - diff
         } else {
