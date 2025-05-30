@@ -226,7 +226,7 @@ macro_rules! node_get_prop_unchecked {
 }
 
 impl<'a> Node<'a> {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         let mut path_spilt = self.path.split('/');
         let mut name = "";
         while let Some(part) = path_spilt.next_back() {
@@ -296,6 +296,11 @@ impl<'a> Node<'a> {
         let size_cells = node_get_prop_unchecked!(self, "#size-cells", NodeValue::U32).unwrap_or(1);
 
         Some(NodeRegProp::from_bytes(bytes, address_cells, size_cells))
+    }
+    /// Gets the `reg` property from the node if available without respecting address-cells and size-cells
+    pub fn get_reg_no_cells(&self) -> Option<NodeRegProp> {
+        let bytes = node_get_prop_unchecked!(self, "reg")?;
+        Some(NodeRegProp::from_bytes(bytes, 2, 2))
     }
 
     pub fn subnodes<'b>(&'b self) -> EnumSubNodes<'a, 'b> {

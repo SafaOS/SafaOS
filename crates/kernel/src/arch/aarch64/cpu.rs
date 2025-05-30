@@ -26,6 +26,14 @@ struct PL011Serial {
     populated: bool,
 }
 
+struct PCIe {
+    base: PhysAddr,
+    size: usize,
+    bus_start: u32,
+    bus_end: u32,
+    populated: bool,
+}
+
 trait DeviceInfo {
     fn populated(&self) -> bool;
     fn compatible(&self) -> &'static [&'static str];
@@ -110,14 +118,51 @@ impl DeviceInfo for PL011Serial {
     }
 }
 
+impl DeviceInfo for PCIe {
+    fn compatible(&self) -> &'static [&'static str] {
+        &["pci-host-ecam-generic"]
+    }
+    fn populated(&self) -> bool {
+        self.populated
+    }
+    fn populate<'a>(&mut self, node: dtb::Node) {
+        let mut reg = node.get_reg_no_cells().unwrap();
+        let (start, size) = reg.next().unwrap();
+
+        let Some(NodeValue::Other(bytes)) = node.get_prop("bus-range") else {
+            unreachable!()
+        };
+
+        let bus_start_bytes = bytes[..4].as_array::<4>().unwrap();
+        let bus_end_bytes = bytes[4..8].as_array::<4>().unwrap();
+        let bus_start = u32::from_be_bytes(*bus_start_bytes);
+        let bus_end = u32::from_be_bytes(*bus_end_bytes);
+
+        self.bus_start = bus_start;
+        self.bus_end = bus_end;
+
+        self.base = start;
+        self.size = size;
+        self.populated = true;
+    }
+}
+
 static GICRAW: SyncUnsafeCell<GICInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
 static TIMERRAW: SyncUnsafeCell<TimerInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
 static PL011RAW: SyncUnsafeCell<PL011Serial> = SyncUnsafeCell::new(unsafe { zeroed() });
+static PCIERAW: SyncUnsafeCell<PCIe> = SyncUnsafeCell::new(unsafe { zeroed() });
 
-const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 3] {
+const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 4] {
     let gic = &mut *GICRAW.get();
     let gic: &'static mut dyn DeviceInfo = gic;
-    unsafe { [gic, &mut *TIMERRAW.get(), &mut *PL011RAW.get()] }
+    unsafe {
+        [
+            gic,
+            &mut *TIMERRAW.get(),
+            &mut *PL011RAW.get(),
+            &mut *PCIERAW.get(),
+        ]
+    }
 }
 
 fn init_from_tree(tree: &DeviceTree) {
@@ -193,5 +238,12 @@ lazy_static! {
             init();
         }
         (r.gicc_base, r.gicd_base)
+    };
+    pub static ref PCIE: (PhysAddr, usize, u32, u32) = unsafe {
+        let r = &mut *PCIERAW.get();
+        if !r.populated() {
+            init();
+        }
+        (r.base, r.size, r.bus_start, r.bus_end)
     };
 }

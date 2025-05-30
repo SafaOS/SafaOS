@@ -40,4 +40,8 @@ pub mod registers {
     pub use super::arch::registers::StackFrame;
 }
 
+pub mod pci {
+    pub use super::arch::pci::init;
+}
+
 pub use arch::paging;

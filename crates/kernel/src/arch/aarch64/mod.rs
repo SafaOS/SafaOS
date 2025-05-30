@@ -4,6 +4,7 @@ mod cpu;
 mod exceptions;
 mod gic;
 pub mod paging;
+pub(super) mod pci;
 pub(super) mod power;
 pub(super) mod registers;
 pub(super) mod serial;

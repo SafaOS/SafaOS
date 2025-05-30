@@ -1,8 +1,8 @@
 mod acpi;
-pub mod gdt;
+mod gdt;
 pub mod interrupts;
 pub mod paging;
-mod pci;
+pub mod pci;
 pub mod power;
 pub mod registers;
 pub mod serial;
@@ -96,7 +96,6 @@ pub fn init_phase1() {
 pub fn init_phase2() {
     info!("enabling apic interrupts...");
     apic::enable_apic_interrupts();
-    pci::init();
     info!("enabling sse...");
     enable_sse();
 }

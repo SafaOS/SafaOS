@@ -118,6 +118,7 @@ extern "C" fn kstart() -> ! {
     logging::BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
     arch::init_phase2();
+    drivers::pci::init();
 
     unsafe {
         debug!(Scheduler, "Eve starting...");
