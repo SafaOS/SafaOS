@@ -5,11 +5,30 @@ use bitflags::bitflags;
 use crate::{
     arch::paging::current_higher_root_table,
     debug,
+    drivers::pci::PCICommandReg,
     memory::paging::{EntryFlags, PAGE_SIZE},
     time, PhysAddr, VirtAddr,
 };
 
 use super::pci::PCIDevice;
+
+// Thanks to optimizations I have to perform voliatile reads and writes otherwise it doesn't work
+// safe because it is a reference anyways
+// used for giving commands to the controller
+
+/// Performs a safe volitate read to a structure field
+macro_rules! read_ref {
+    ($ref: expr) => {
+        unsafe { core::ptr::read_volatile(&raw const $ref) }
+    };
+}
+
+/// Performs a safe volitate write to a structure's field
+macro_rules! write_ref {
+    ($ref: expr, $value: expr) => {
+        unsafe { core::ptr::write_volatile(&raw mut $ref, $value) }
+    };
+}
 
 #[repr(C)]
 struct CapsReg {
@@ -244,18 +263,6 @@ impl XHCI {
     /// Resets the XHCI controller
     fn reset(&mut self) {
         let regs = self.operational_regs();
-        // Thanks to optimizations I have to perform voliatile reads and writes otherwise it doesn't work
-        // safe because it is a reference anyways
-        macro_rules! read_ref {
-            ($ref: expr) => {
-                unsafe { core::ptr::read_volatile(&raw const $ref) }
-            };
-        }
-        macro_rules! write_ref {
-            ($ref: expr, $value: expr) => {
-                unsafe { core::ptr::write_volatile(&raw mut $ref, $value) }
-            };
-        }
 
         write_ref!(regs.usbcmd, regs.usbcmd & !USBCmd::RUN);
 
@@ -307,8 +314,12 @@ impl PCIDevice for XHCI {
         (0xc, 0x3, 0x30)
     }
 
-    fn create(header: super::pci::PCIHeader) -> Self {
+    fn create(mut header: super::pci::PCIHeader) -> Self {
         let header = header.unwrap_general();
+        write_ref!(
+            header.common.command,
+            PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE
+        );
 
         let (base_addr, size) = header.get_bars()[0];
         let virt_base_addr = base_addr.into_virt();

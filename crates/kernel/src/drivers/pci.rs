@@ -28,7 +28,7 @@ unsafe impl Sync for PCI {}
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
-    struct PCICommandReg: u16 {
+    pub struct PCICommandReg: u16 {
         const IO_SPACE = 1 << 0;
         const MEM_SPACE = 1 << 1;
         const BUS_MASTER = 1 << 2;
@@ -44,7 +44,7 @@ pub struct CommonPCIHeader {
     vendor_id: u16,
     device_id: u16,
     // reg 1
-    command: PCICommandReg,
+    pub command: PCICommandReg,
     status: u16,
     // reg 2
     revision: u8,
@@ -61,7 +61,7 @@ pub struct CommonPCIHeader {
 #[derive(Debug)]
 #[repr(C)]
 pub struct GeneralPCIHeader {
-    common: CommonPCIHeader,
+    pub common: CommonPCIHeader,
     bar0: u32,
     bar1: u32,
     bar2: u32,
@@ -157,8 +157,8 @@ impl GeneralPCIHeader {
 
 #[derive(Debug)]
 pub enum PCIHeader<'a> {
-    General(&'a GeneralPCIHeader),
-    Other(&'a CommonPCIHeader),
+    General(&'a mut GeneralPCIHeader),
+    Other(&'a mut CommonPCIHeader),
 }
 
 impl<'a> PCIHeader<'a> {
@@ -170,10 +170,10 @@ impl<'a> PCIHeader<'a> {
     }
 
     /// Unwraps into GeneralPCIHeader, panciks if it isn't a GeneralPCIHeader
-    pub fn unwrap_general(&self) -> &GeneralPCIHeader {
+    pub fn unwrap_general(&mut self) -> &mut GeneralPCIHeader {
         let header_type = self.common().header_type & 0x0F;
         match self {
-            Self::General(g) => &g,
+            Self::General(g) => g,
             _ => panic!("expected GeneralPCIHeader with header_type: 0x0, got {header_type:#x}"),
         }
     }
@@ -206,7 +206,7 @@ impl PCI {
         header.map(|header| T::create(header))
     }
 
-    fn get_common_header(&self, bus: u8, slot: u8, function: u8) -> &CommonPCIHeader {
+    fn get_common_header(&self, bus: u8, slot: u8, function: u8) -> &mut CommonPCIHeader {
         let bus = bus as usize;
         let slot = slot as usize;
         let function = function as usize;
@@ -215,8 +215,8 @@ impl PCI {
         let offset = ((bus * 256) + (slot * 8) + function) * 4096;
         unsafe {
             let ptr = ptr.add(offset);
-            let ptr = ptr as *const CommonPCIHeader;
-            &*ptr
+            let ptr = ptr as *mut CommonPCIHeader;
+            &mut *ptr
         }
     }
 
@@ -225,7 +225,7 @@ impl PCI {
         let ty = common.header_type & 0xF;
         unsafe {
             match ty {
-                0 => PCIHeader::General(&*(common as *const _ as *const GeneralPCIHeader)),
+                0 => PCIHeader::General(&mut *(common as *mut _ as *mut GeneralPCIHeader)),
                 _ => PCIHeader::Other(common),
             }
         }
