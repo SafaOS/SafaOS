@@ -165,6 +165,10 @@ impl From<EntryFlags> for ArchEntryFlags {
             this |= ArchEntryFlags::WRITABLE;
         }
 
+        if value.contains(EntryFlags::DEVICE_UNCACHEABLE) {
+            this |= ArchEntryFlags::NO_CACHE;
+        }
+
         if value.contains(EntryFlags::USER_ACCESSIBLE) {
             this |= ArchEntryFlags::USER_ACCESSIBLE;
         }

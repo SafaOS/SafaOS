@@ -1,6 +1,21 @@
+use super::xhci::XHCI;
+use alloc::boxed::Box;
+use bitflags::bitflags;
+use core::{fmt::Debug, u32, u64};
 use lazy_static::lazy_static;
 
-use crate::PhysAddr;
+use crate::{info, PhysAddr};
+
+pub trait PCIDevice: Send + Sync + Debug {
+    fn name(&self) -> &'static str;
+    fn create(header: PCIHeader) -> Self
+    where
+        Self: Sized;
+    /// Returns the devices class, subclass and prog_if
+    fn class() -> (u8, u8, u8)
+    where
+        Self: Sized;
+}
 
 pub struct PCI {
     base_ptr: *const (),
@@ -11,13 +26,25 @@ pub struct PCI {
 unsafe impl Send for PCI {}
 unsafe impl Sync for PCI {}
 
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    struct PCICommandReg: u16 {
+        const IO_SPACE = 1 << 0;
+        const MEM_SPACE = 1 << 1;
+        const BUS_MASTER = 1 << 2;
+        const PARITY_ERR = 1 << 6;
+        const SSER = 1 << 8;
+        const INTERRUPT_MASK = 1 << 10;
+    }
+}
+
 #[derive(Debug)]
 #[repr(C)]
-struct CommonPCIHeader {
+pub struct CommonPCIHeader {
     vendor_id: u16,
     device_id: u16,
     // reg 1
-    command: u16,
+    command: PCICommandReg,
     status: u16,
     // reg 2
     revision: u8,
@@ -33,7 +60,7 @@ struct CommonPCIHeader {
 
 #[derive(Debug)]
 #[repr(C)]
-struct GeneralPCIHeader {
+pub struct GeneralPCIHeader {
     common: CommonPCIHeader,
     bar0: u32,
     bar1: u32,
@@ -54,8 +81,82 @@ struct GeneralPCIHeader {
     max_latency: u8,
 }
 
+impl GeneralPCIHeader {
+    /// Gets at most 6 base address registers addresses from the header and their sizes
+    pub fn get_bars(&self) -> heapless::Vec<(PhysAddr, usize), 6> {
+        let mut results = heapless::Vec::new();
+        let bars_raw = [
+            &raw const self.bar0,
+            &raw const self.bar1,
+            &raw const self.bar2,
+            &raw const self.bar3,
+            &raw const self.bar4,
+            &raw const self.bar5,
+        ];
+
+        let mut raw_bars_iter = bars_raw.into_iter();
+        while let Some(raw_bar_ptr) = raw_bars_iter.next() {
+            let raw_bar = unsafe { *raw_bar_ptr };
+            if raw_bar == 0 {
+                continue;
+            }
+
+            let info_bits: u8 = raw_bar as u8 & 0xF;
+            assert!(info_bits & 1 == 0, "I/O unimplemented");
+
+            let locatable = (info_bits >> 1) & 0b11;
+
+            let addr;
+            let size: usize;
+
+            // locatable is only 2 bits
+            // 1 is valid but I don't handle it yet
+            if locatable == 0 {
+                // 32 bit address space
+                unsafe {
+                    // FIXME: not sure if this is safe with optimizations,
+                    // maybe it is safer with a muttable reference
+                    let bar_ptr = raw_bar_ptr as *mut u32;
+
+                    let saved_bar = core::ptr::read_volatile(bar_ptr);
+                    // to read the size we have to write all 1s to the BAR
+                    core::ptr::write_volatile(bar_ptr, u32::MAX);
+                    let neg_size = core::ptr::read_volatile(bar_ptr);
+                    // write back the old value
+                    core::ptr::write_volatile(bar_ptr, saved_bar);
+
+                    addr = PhysAddr::from((saved_bar & 0xFFFFFFF0) as usize);
+                    // size is basically -whatever_we_read with the information bits masked
+                    size = ((!(neg_size & 0xFFFFFFF0)) + 1) as usize;
+                }
+            } else if locatable == 2 {
+                // 64 bit address space
+                // we actually need 2 bars in this case
+                let _ = raw_bars_iter.next().unwrap();
+                unsafe {
+                    let bar_ptr = raw_bar_ptr as *mut u64;
+
+                    let saved_bar = core::ptr::read_volatile(bar_ptr);
+                    core::ptr::write_volatile(bar_ptr, u64::MAX);
+                    let neg_size = core::ptr::read_volatile(bar_ptr);
+                    core::ptr::write_volatile(bar_ptr, saved_bar);
+
+                    addr = PhysAddr::from((saved_bar & 0xFFFFFFFFFFFFFFF0) as usize);
+                    size = ((!(neg_size & 0xFFFFFFFFFFFFFFF0)) + 1) as usize;
+                }
+            } else {
+                unimplemented!()
+            };
+
+            results.push((addr, size)).unwrap();
+        }
+
+        results
+    }
+}
+
 #[derive(Debug)]
-enum PCIHeader<'a> {
+pub enum PCIHeader<'a> {
     General(&'a GeneralPCIHeader),
     Other(&'a CommonPCIHeader),
 }
@@ -65,6 +166,15 @@ impl<'a> PCIHeader<'a> {
         match self {
             Self::Other(c) => c,
             Self::General(g) => &g.common,
+        }
+    }
+
+    /// Unwraps into GeneralPCIHeader, panciks if it isn't a GeneralPCIHeader
+    pub fn unwrap_general(&self) -> &GeneralPCIHeader {
+        let header_type = self.common().header_type & 0x0F;
+        match self {
+            Self::General(g) => &g,
+            _ => panic!("expected GeneralPCIHeader with header_type: 0x0, got {header_type:#x}"),
         }
     }
 
@@ -90,17 +200,10 @@ impl PCI {
         }
     }
 
-    /// Initializes and registers drivers that uses PCI
-    pub fn init_pci_devices(&self) {
-        self.print();
-        let xhci = self.lookup(0xc, 0x3, 0x30);
-        let xhci = xhci.map(|header| {
-            let PCIHeader::General(g) = header else {
-                unreachable!();
-            };
-            g
-        });
-        crate::serial!("XHCI is {xhci:#x?}\n");
+    fn create_device<T: PCIDevice + Sized>(&self) -> Option<T> {
+        let (class, subclass, prog_if) = T::class();
+        let header = self.lookup(class, subclass, prog_if);
+        header.map(|header| T::create(header))
     }
 
     fn get_common_header(&self, bus: u8, slot: u8, function: u8) -> &CommonPCIHeader {
@@ -179,11 +282,44 @@ impl PCI {
     }
 }
 
+struct PCIDeviceManager<const N: usize> {
+    devices: heapless::Vec<Box<dyn PCIDevice>, N>,
+}
+
+impl<const N: usize> PCIDeviceManager<N> {
+    pub const fn new() -> Self {
+        let devices: heapless::Vec<Box<dyn PCIDevice>, N> = heapless::Vec::new();
+        Self { devices }
+    }
+
+    pub fn try_add<T: PCIDevice + Sized + 'static>(&mut self, pci: &PCI) -> bool {
+        let created = pci.create_device::<T>();
+        if let Some(created) = created {
+            self.devices.push(Box::new(created)).unwrap();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn debug(&self) {
+        for device in &*self.devices {
+            info!("detected PCI Device: {}", device.name());
+        }
+    }
+}
+
 lazy_static! {
     pub static ref HOST_PCI: PCI = crate::arch::pci::init();
+    static ref PCI_DEVICE_MANAGER: PCIDeviceManager<1> = {
+        let mut manager = PCIDeviceManager::new();
+        manager.try_add::<XHCI>(&*HOST_PCI);
+        manager
+    };
 }
 
 /// Initializes drivers and devices that uses the PCI
 pub fn init() {
-    HOST_PCI.init_pci_devices();
+    HOST_PCI.print();
+    PCI_DEVICE_MANAGER.debug();
 }
