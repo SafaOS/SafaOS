@@ -66,6 +66,7 @@ const RAMDISK_MODULE: InternalModule = InternalModule::new()
 static MODULES_REQUEST: ModuleRequest =
     ModuleRequest::new().with_internal_modules(&[&RAMDISK_MODULE]);
 
+#[cfg(target_arch = "aarch64")]
 pub fn device_tree_addr() -> Option<*const ()> {
     DEVICE_TREE_REQUEST.get_response().map(|r| r.dtb_ptr())
 }

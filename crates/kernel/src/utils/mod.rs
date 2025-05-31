@@ -6,6 +6,7 @@ use core::ops::Deref;
 pub use safa_utils::*;
 use spin::lazy::Lazy;
 pub mod alloc;
+#[cfg(target_arch = "aarch64")]
 pub mod dtb;
 pub mod elf;
 pub mod locks;
