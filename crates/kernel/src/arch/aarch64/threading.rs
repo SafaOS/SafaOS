@@ -26,18 +26,18 @@ static CURRENT_CONTEXT: SyncUnsafeCell<CPUStatus> =
     SyncUnsafeCell::new(unsafe { core::mem::zeroed() });
 
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const STACK_START: usize = 0x00007A0000000000;
-pub const STACK_END: usize = STACK_START + STACK_SIZE;
+pub const STACK_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
+pub const STACK_END: VirtAddr = STACK_START + STACK_SIZE;
 
 pub const EL1_STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const EL1_STACK_START: usize = 0x00007A1000000000;
-pub const EL1_STACK_END: usize = EL1_STACK_START + EL1_STACK_SIZE;
+pub const EL1_STACK_START: VirtAddr = VirtAddr::from(0x00007A1000000000);
+pub const EL1_STACK_END: VirtAddr = EL1_STACK_START + EL1_STACK_SIZE;
 
-pub const ENVIRONMENT_START: usize = 0x00007E0000000000;
-pub const ARGV_START: usize = ENVIRONMENT_START + 0xA000000000;
-pub const ENVIRONMENT_VARIABLES_START: usize = ENVIRONMENT_START + 0xE000000000;
+pub const ENVIRONMENT_START: VirtAddr = VirtAddr::from(0x00007E0000000000);
+pub const ARGV_START: VirtAddr = ENVIRONMENT_START + 0xA000000000;
+pub const ENVIRONMENT_VARIABLES_START: VirtAddr = ENVIRONMENT_START + 0xE000000000;
 
-pub const ABI_STRUCTURES_START: usize = ENVIRONMENT_START + 0x1000000000;
+pub const ABI_STRUCTURES_START: VirtAddr = ENVIRONMENT_START + 0x1000000000;
 
 /// The CPU Status for each thread (registers)
 #[derive(Debug, Clone, Copy)]
@@ -111,40 +111,28 @@ impl CPUStatus {
         userspace: bool,
     ) -> Result<Self, MapToError> {
         let entry_point = entry_point.into_raw() as u64;
-
-        let stack_start = VirtAddr::from(STACK_START);
-        let stack_end = VirtAddr::from(STACK_END);
-        let el1_stack_start = VirtAddr::from(EL1_STACK_START);
-        let el1_stack_end = VirtAddr::from(EL1_STACK_END);
-
-        let argv_start = VirtAddr::from(ARGV_START);
-        let environment_variables_start = VirtAddr::from(ENVIRONMENT_VARIABLES_START);
-
-        let abi_structures_start = VirtAddr::from(ABI_STRUCTURES_START);
-        let abi_structures_end = VirtAddr::from(ABI_STRUCTURES_START + PAGE_SIZE);
-
         // allocate the stack
         page_table.alloc_map(
-            stack_start,
-            stack_end,
+            STACK_START,
+            STACK_END,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         page_table.alloc_map(
-            el1_stack_start,
-            el1_stack_end,
+            EL1_STACK_START,
+            EL1_STACK_END,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         let argc = argv.len();
         let envc = env.len();
 
-        let argv_ptr = map_str_slices(page_table, argv, argv_start)?;
+        let argv_ptr = map_str_slices(page_table, argv, ARGV_START)?;
         let argv_ptr = argv_ptr
             .map(|p| p.as_ptr())
             .unwrap_or(core::ptr::null_mut());
 
-        let env_ptr = map_byte_slices(page_table, env, environment_variables_start)?;
+        let env_ptr = map_byte_slices(page_table, env, ENVIRONMENT_VARIABLES_START)?;
         let env_ptr = env_ptr.map(|p| p.as_ptr()).unwrap_or(core::ptr::null_mut());
 
         // ABI structures are structures that are passed to tasks by the kernel
@@ -153,13 +141,13 @@ impl CPUStatus {
             &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) };
 
         page_table.alloc_map(
-            abi_structures_start,
-            abi_structures_end,
+            ABI_STRUCTURES_START,
+            ABI_STRUCTURES_START + PAGE_SIZE,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
-        copy_to_userspace(page_table, abi_structures_start, structures_bytes);
+        copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
 
-        let abi_structures_ptr = abi_structures_start.into_ptr::<AbiStructures>();
+        let abi_structures_ptr = ABI_STRUCTURES_START.into_ptr::<AbiStructures>();
 
         let mut general_registers = [Reg::default(); 29];
         general_registers[0] = Reg(argc as u64);
@@ -169,11 +157,11 @@ impl CPUStatus {
         general_registers[4] = Reg(abi_structures_ptr as u64);
 
         Ok(Self {
-            sp_el0: stack_end,
+            sp_el0: STACK_END,
             ttbr0: page_table.phys_addr(),
             frame: InterruptFrame {
                 general_registers,
-                sp: Reg(EL1_STACK_END as u64),
+                sp: Reg(EL1_STACK_END.into_raw() as u64),
                 elr: Reg(entry_point),
                 lr: Reg(entry_point),
                 spsr: if !userspace {

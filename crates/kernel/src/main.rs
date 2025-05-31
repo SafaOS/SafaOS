@@ -16,6 +16,8 @@
 #![feature(likely_unlikely)]
 #![feature(slice_as_array)]
 #![feature(iter_array_chunks)]
+#![feature(const_trait_impl)]
+#![feature(const_ops)]
 
 #[cfg(test)]
 mod test;

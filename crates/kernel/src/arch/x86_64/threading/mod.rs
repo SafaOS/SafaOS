@@ -1,15 +1,15 @@
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const STACK_START: usize = 0x00007A3000000000;
-pub const STACK_END: usize = STACK_START + STACK_SIZE;
+pub const STACK_START: VirtAddr = VirtAddr::from(0x00007A3000000000);
+pub const STACK_END: VirtAddr = STACK_START + STACK_SIZE;
 
-pub const RING0_STACK_START: usize = 0x00007A0000000000;
-pub const RING0_STACK_END: usize = RING0_STACK_START + STACK_SIZE;
+pub const RING0_STACK_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
+pub const RING0_STACK_END: VirtAddr = RING0_STACK_START + STACK_SIZE;
 
-pub const ENVIRONMENT_START: usize = 0x00007E0000000000;
-pub const ARGV_START: usize = ENVIRONMENT_START + 0xA000000000;
-pub const ENVIRONMENT_VARIABLES_START: usize = ENVIRONMENT_START + 0xE000000000;
+pub const ENVIRONMENT_START: VirtAddr = VirtAddr::from(0x00007E0000000000);
+pub const ARGV_START: VirtAddr = ENVIRONMENT_START + 0xA000000000;
+pub const ENVIRONMENT_VARIABLES_START: VirtAddr = ENVIRONMENT_START + 0xE000000000;
 
-pub const ABI_STRUCTURES_START: usize = ENVIRONMENT_START + 0x1000000000;
+pub const ABI_STRUCTURES_START: VirtAddr = ENVIRONMENT_START + 0x1000000000;
 use crate::memory::{map_byte_slices, map_str_slices};
 use core::arch::{asm, global_asm};
 
@@ -131,27 +131,27 @@ impl CPUStatus {
     ) -> Result<Self, MapToError> {
         // allocate the stack
         page_table.alloc_map(
-            STACK_START.into(),
-            STACK_END.into(),
+            STACK_START,
+            STACK_END,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         // allocate the syscall stack
         page_table.alloc_map(
-            RING0_STACK_START.into(),
-            RING0_STACK_END.into(),
+            RING0_STACK_START,
+            RING0_STACK_END,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         let argc = argv.len();
         let envc = env.len();
 
-        let argv_ptr = map_str_slices(page_table, argv, ARGV_START.into())?;
+        let argv_ptr = map_str_slices(page_table, argv, ARGV_START)?;
         let argv_ptr = argv_ptr
             .map(|p| p.as_ptr())
             .unwrap_or(core::ptr::null_mut());
 
-        let env_ptr = map_byte_slices(page_table, env, ENVIRONMENT_VARIABLES_START.into())?;
+        let env_ptr = map_byte_slices(page_table, env, ENVIRONMENT_VARIABLES_START)?;
         let env_ptr = env_ptr.map(|p| p.as_ptr()).unwrap_or(core::ptr::null_mut());
 
         // ABI structures are structures that are passed to tasks by the kernel
@@ -160,13 +160,13 @@ impl CPUStatus {
             &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) };
 
         page_table.alloc_map(
-            ABI_STRUCTURES_START.into(),
-            (ABI_STRUCTURES_START + PAGE_SIZE).into(),
+            ABI_STRUCTURES_START,
+            ABI_STRUCTURES_START + PAGE_SIZE,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
         copy_to_userspace(page_table, ABI_STRUCTURES_START.into(), structures_bytes);
 
-        let abi_structures_ptr = ABI_STRUCTURES_START as *const AbiStructures;
+        let abi_structures_ptr = ABI_STRUCTURES_START.into_ptr::<AbiStructures>();
 
         let (cs, ss, rflags) = if userspace {
             (
@@ -191,7 +191,7 @@ impl CPUStatus {
             rcx: env_ptr as u64,
             r8: abi_structures_ptr as u64,
             cr3: page_table.phys_addr().into_raw() as u64,
-            rsp: VirtAddr::from(STACK_END),
+            rsp: STACK_END,
             cs,
             ss,
             ..Default::default()

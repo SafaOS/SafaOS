@@ -71,7 +71,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl Add<usize> for $ty {
+        impl const Add<usize> for $ty {
             type Output = $ty;
             #[inline(always)]
             fn add(self, rhs: usize) -> Self::Output {
@@ -79,7 +79,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl Add<$ty> for $ty {
+        impl const Add<$ty> for $ty {
             type Output = $ty;
             #[inline(always)]
             fn add(self, rhs: $ty) -> Self::Output {
