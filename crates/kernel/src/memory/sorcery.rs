@@ -61,30 +61,29 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
         limine::get_phy_offset()
     );
     let flags = EntryFlags::WRITE;
-    let mut largest_addr: VirtAddr = VirtAddr::null();
 
     for entry in limine::mmap_request().entries() {
+        let phys_addr = PhysAddr::from(entry.base as usize);
+        let size_bytes = entry.length as usize;
+        let size = align_up(size_bytes, PAGE_SIZE);
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
-            let phys_addr = PhysAddr::from(entry.base as usize);
             let virt_addr = phys_addr.into_virt();
-
-            let size = align_up(entry.length as usize, PAGE_SIZE);
             let page_num = size / PAGE_SIZE;
 
             unsafe {
                 dest.map_contiguous_pages(virt_addr, phys_addr, page_num, flags)?;
             }
-
-            if virt_addr + size > largest_addr {
-                largest_addr = virt_addr + size;
-            }
         }
     }
+
+    // last possible virtual HHDM address
+    // FIXME: hardcoded because if I rely on the memory map there are still some stuff out of the range of the last entry
+    let largest_addr_virt = VirtAddr::from(*HHDM | 0x10000000000);
     debug!(
         PageTable,
-        "mapped HHDM from {:#x} to {:#x}", *HHDM, largest_addr
+        "mapped HHDM from {:#x} to {:?}", *HHDM, largest_addr_virt
     );
-    Ok(largest_addr + PAGE_SIZE)
+    Ok(largest_addr_virt + PAGE_SIZE)
 }
 
 unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> {
