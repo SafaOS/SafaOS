@@ -58,7 +58,7 @@ const NON_SYSTEM: u8 = 1 << 4;
 const ACCESS_DPL0: u8 = 1 << 5;
 const ACCESS_DPL1: u8 = 1 << 6;
 
-const ACCESS_VAILD: u8 = 1 << 7;
+const ACCESS_VALID: u8 = 1 << 7;
 
 const ACCESS_TYPE_TSS: u8 = 0x9;
 
@@ -108,7 +108,7 @@ lazy_static! {
 
         tss.interrupt_stack_table[0] = alloc_stack!();
         tss.interrupt_stack_table[1] = alloc_stack!();
-        tss.privilege_stack_table[0] = RING0_STACK_END as u64;
+        tss.privilege_stack_table[0] = RING0_STACK_END.into_raw() as u64;
 
         tss
     };
@@ -121,20 +121,20 @@ lazy_static! {
         GDTEntry::new(
             0,
             0xFFFFF,
-            ACCESS_VAILD | NON_SYSTEM | ACCESS_WRITE_READ | ACCESS_EXECUTABLE,
+            ACCESS_VALID | NON_SYSTEM | ACCESS_WRITE_READ | ACCESS_EXECUTABLE,
             FLAG_PAGELIMIT | FLAG_LONG
         ), // kernel code segment
         GDTEntry::new(
             0,
             0xFFFFF,
-            ACCESS_VAILD | ACCESS_WRITE_READ | NON_SYSTEM,
+            ACCESS_VALID | ACCESS_WRITE_READ | NON_SYSTEM,
             FLAG_PAGELIMIT | FLAG_LONG
         ), // kernel data segment
 
         GDTEntry::new(
             (((&*TSS) as *const TaskStateSegment as u64) & 0xFFFFFFFF) as u32,
             (size_of::<TaskStateSegment>() - 1) as u32,
-            ACCESS_VAILD | ACCESS_TYPE_TSS,
+            ACCESS_VALID | ACCESS_TYPE_TSS,
             FLAG_PAGELIMIT | FLAG_LONG
         ), // TSS segment
         GDTEntry::new_upper_64seg(
@@ -144,13 +144,13 @@ lazy_static! {
         GDTEntry::new(
             0,
             0xFFFFF,
-            ACCESS_VAILD | NON_SYSTEM | ACCESS_DPL0 | ACCESS_DPL1 | ACCESS_WRITE_READ | ACCESS_EXECUTABLE,
+            ACCESS_VALID | NON_SYSTEM | ACCESS_DPL0 | ACCESS_DPL1 | ACCESS_WRITE_READ | ACCESS_EXECUTABLE,
             FLAG_PAGELIMIT | FLAG_LONG
         ), // user code segment
         GDTEntry::new(
             0,
             0xFFFFF,
-            ACCESS_VAILD | NON_SYSTEM | ACCESS_DPL0 | ACCESS_DPL1 | ACCESS_WRITE_READ,
+            ACCESS_VALID | NON_SYSTEM | ACCESS_DPL0 | ACCESS_DPL1 | ACCESS_WRITE_READ,
             FLAG_PAGELIMIT | FLAG_LONG
         ) // user data segment
     ];
@@ -191,7 +191,7 @@ pub fn init_gdt() {
         );
 
         asm!(
-            "            
+            "
             push 0x08
             lea rax, [rip + 2f]
             push rax
