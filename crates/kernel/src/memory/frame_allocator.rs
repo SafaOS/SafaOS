@@ -35,6 +35,7 @@ impl<T> DerefMut for FramePtr<T> {
     }
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Frame(PhysAddr);
 
@@ -54,6 +55,11 @@ impl Frame {
     #[inline(always)]
     pub fn virt_addr(&self) -> VirtAddr {
         self.0.into_virt()
+    }
+
+    #[inline(always)]
+    pub fn phys_addr(&self) -> PhysAddr {
+        self.0
     }
 
     pub fn iter_frames(start: Frame, end: Frame) -> FrameIter {

@@ -146,6 +146,7 @@ impl VirtAddr {
         self.0 as *mut T
     }
 
+    /// Returns the equalivent PhysAddr for the Page containing this VirtualAddr assuming it exists in the HHDM
     /// NOTE: it is unlikely that a VirtAddr would have an equalivent PhysAddr, it is safe to assume so if the VirtAddr was gathered [`PhysAddr::into_virt`]
     #[inline(always)]
     pub fn into_phys(self) -> PhysAddr {

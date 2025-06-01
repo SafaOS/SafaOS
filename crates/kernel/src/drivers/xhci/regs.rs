@@ -1,37 +1,9 @@
+use crate::{PhysAddr, VirtAddr};
+use bitflags::bitflags;
 use core::fmt::Display;
 
-use bitflags::bitflags;
-
-use crate::{
-    arch::paging::current_higher_root_table,
-    debug,
-    drivers::pci::PCICommandReg,
-    memory::paging::{EntryFlags, PAGE_SIZE},
-    time, PhysAddr, VirtAddr,
-};
-
-use super::pci::PCIDevice;
-
-// Thanks to optimizations I have to perform voliatile reads and writes otherwise it doesn't work
-// safe because it is a reference anyways
-// used for giving commands to the controller
-
-/// Performs a safe volitate read to a structure field
-macro_rules! read_ref {
-    ($ref: expr) => {
-        unsafe { core::ptr::read_volatile(&raw const $ref) }
-    };
-}
-
-/// Performs a safe volitate write to a structure's field
-macro_rules! write_ref {
-    ($ref: expr, $value: expr) => {
-        unsafe { core::ptr::write_volatile(&raw mut $ref, $value) }
-    };
-}
-
 #[repr(C)]
-struct CapsReg {
+pub struct CapsReg {
     reg_length: u8,
     _reserved0: u8,
     version_number: u8,
@@ -45,40 +17,48 @@ struct CapsReg {
 }
 
 impl CapsReg {
-    const fn max_device_slots(&self) -> u8 {
-        self.hcsparams_1 as u8
+    pub fn operational_regs_mut(&mut self) -> &mut OperationalRegs {
+        let caps_ptr = self as *const _ as *const u8;
+        unsafe {
+            let ptr = caps_ptr.add(self.reg_length as usize);
+            &mut *(ptr as *mut OperationalRegs)
+        }
     }
-    const fn max_interrupts(&self) -> u8 {
+
+    pub const fn max_device_slots(&self) -> usize {
+        (self.hcsparams_1 & 0xFF) as usize
+    }
+    pub const fn max_interrupts(&self) -> u8 {
         (self.hcsparams_1 >> 8) as u8
     }
-    const fn max_ports(&self) -> u8 {
+    pub const fn max_ports(&self) -> u8 {
         (self.hcsparams_1 >> 24) as u8
     }
-    const fn interrupt_schd_t(&self) -> u8 {
+    pub const fn interrupt_schd_t(&self) -> u8 {
         (self.hcsparams_2 as u8) & 0xF
     }
-    const fn erst_max(&self) -> u8 {
+    pub const fn erst_max(&self) -> u8 {
         ((self.hcsparams_2 >> 4) as u8) & 0xF
     }
-    const fn max_scratchpad_buffers(&self) -> u8 {
-        ((self.hcsparams_2 >> 21) as u8) & 0x1F
+    pub const fn max_scratchpad_buffers(&self) -> usize {
+        (((self.hcsparams_2 >> 21) as u8) & 0x1F) as usize
     }
-    const fn addressing_64bits(&self) -> bool {
+    pub const fn addressing_64bits(&self) -> bool {
         (self.hccparams_1 & 0x1) != 0
     }
-    const fn bandwidth_negotiation(&self) -> bool {
+    pub const fn bandwidth_negotiation(&self) -> bool {
         ((self.hccparams_1 >> 1) & 0x1) != 0
     }
-    const fn context_sz_64bytes(&self) -> bool {
+    pub const fn context_sz_64bytes(&self) -> bool {
         ((self.hccparams_1 >> 2) & 0x1) != 0
     }
-    const fn port_power_ctrl(&self) -> bool {
+    pub const fn port_power_ctrl(&self) -> bool {
         ((self.hccparams_1 >> 3) & 0x1) != 0
     }
-    const fn port_indicator_ctrl(&self) -> bool {
+    pub const fn port_indicator_ctrl(&self) -> bool {
         ((self.hccparams_1 >> 4) & 0x1) != 0
     }
-    const fn light_reset_support(&self) -> bool {
+    pub const fn light_reset_support(&self) -> bool {
         ((self.hccparams_1 >> 5) & 0x1) != 0
     }
 }
@@ -106,7 +86,7 @@ impl Display for CapsReg {
 bitflags! {
     #[repr(C)]
     #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-    struct USBCmd: u32 {
+    pub struct USBCmd: u32 {
         /**
         # General Info
         - Run/Stop (R/S)
@@ -162,7 +142,7 @@ bitflags! {
 
     #[repr(C)]
     #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-    struct USBSts: u32 {
+    pub struct USBSts: u32 {
         /**
         # General Info
         - HCHalted (HCH)
@@ -212,16 +192,16 @@ bitflags! {
 }
 
 #[repr(C)]
-struct OperationalRegs {
-    usbcmd: USBCmd,
-    usbstatus: USBSts,
+pub struct OperationalRegs {
+    pub usbcmd: USBCmd,
+    pub usbstatus: USBSts,
     page_size: u32,
     _reserved0: [u32; 2],
-    dnctrl: u32,
-    crcr: PhysAddr,
+    pub dnctrl: u32,
+    pub crcr: usize,
     _reserved1: [u32; 4],
-    dcbaap: PhysAddr,
-    config: u32,
+    pub dcbaap: PhysAddr,
+    pub config: u32,
     _reserved2: [u32; 49],
 }
 
@@ -233,122 +213,9 @@ impl Display for OperationalRegs {
         writeln!(f, "\tusbstatus : {:?}", self.usbstatus)?;
         writeln!(f, "\tPage Size : {:#x}", self.page_size)?;
         writeln!(f, "\tdnctrl    : {:#x}", self.dnctrl)?;
-        writeln!(f, "\tcrcr      : {:?}", self.crcr)?;
+        writeln!(f, "\tcrcr      : {:#x}", self.crcr)?;
         writeln!(f, "\tdcaap     : {:?}", self.dcbaap)?;
         write!(f,   "\tconfig    : {:#x}", self.config)?;
         Ok(())
     }
 }
-
-#[derive(Debug)]
-pub struct XHCI {
-    virt_base_addr: VirtAddr,
-}
-
-impl XHCI {
-    fn captabilities<'a>(&self) -> &'a CapsReg {
-        unsafe { &*self.virt_base_addr.into_ptr::<CapsReg>() }
-    }
-
-    fn operational_regs<'a>(&mut self) -> &'a mut OperationalRegs {
-        let caps = self.captabilities();
-        let caps_ptr = caps as *const _ as *const u8;
-        unsafe {
-            let ptr = caps_ptr.add(caps.reg_length as usize);
-            &mut *(ptr as *mut OperationalRegs)
-        }
-    }
-
-    #[allow(unused_unsafe)]
-    /// Resets the XHCI controller
-    fn reset(&mut self) {
-        let regs = self.operational_regs();
-
-        write_ref!(regs.usbcmd, regs.usbcmd & !USBCmd::RUN);
-
-        let timeout = 200;
-        let time = time!();
-
-        while !read_ref!(regs.usbstatus).contains(USBSts::HCHALTED) {
-            let now = time!();
-            if now >= time + timeout {
-                panic!(
-                    "timeout after {}ms while resetting the XHCI, HCHALTED did not set: {:?}",
-                    now,
-                    read_ref!(regs.usbstatus)
-                )
-            }
-        }
-
-        // reset the controller
-        write_ref!(regs.usbcmd, read_ref!(regs.usbcmd) | USBCmd::HCRESET);
-
-        let timeout = 1000;
-        let time = time!();
-
-        while read_ref!(regs.usbcmd).contains(USBCmd::HCRESET)
-            || read_ref!(regs.usbstatus).contains(USBSts::NOT_READY)
-        {
-            let now = time!();
-            if now >= time + timeout {
-                panic!(
-                    "timeout after {}ms while resetting controller, controller was never ready: {:?}",
-                    now - time,
-                    read_ref!(regs.usbcmd),
-                )
-            }
-            core::hint::spin_loop();
-        }
-        // asserts the controller was reset
-        assert_eq!(regs.usbcmd, USBCmd::empty());
-        assert_eq!(regs.dnctrl, 0);
-        assert_eq!(regs.crcr, PhysAddr::null());
-        assert_eq!(regs.dcbaap, PhysAddr::null());
-        assert_eq!(regs.config, 0);
-        debug!(XHCI, "XHCI Reset\n{}", regs);
-    }
-}
-
-impl PCIDevice for XHCI {
-    fn class() -> (u8, u8, u8) {
-        (0xc, 0x3, 0x30)
-    }
-
-    fn create(mut header: super::pci::PCIHeader) -> Self {
-        let header = header.unwrap_general();
-        write_ref!(
-            header.common.command,
-            PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE
-        );
-
-        let (base_addr, size) = header.get_bars()[0];
-        let virt_base_addr = base_addr.into_virt();
-
-        unsafe {
-            let page_num = size.div_ceil(PAGE_SIZE);
-            current_higher_root_table()
-                .map_contiguous_pages(
-                    virt_base_addr,
-                    base_addr,
-                    page_num,
-                    EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
-                )
-                .expect("failed to map the XHCI");
-        }
-
-        let mut results = Self { virt_base_addr };
-        debug!(
-            XHCI,
-            "Mapped\n{}\n{}",
-            results.captabilities(),
-            results.operational_regs()
-        );
-        results.reset();
-        results
-    }
-
-    fn name(&self) -> &'static str {
-        "XHCI"
-    }
-}
-impl XHCI {}
