@@ -19,6 +19,9 @@ mod regs;
 mod rings;
 mod utils;
 
+/// The maximum number of TRBs a CommandRing can hold
+const MAX_TRB_COUNT: usize = 256;
+
 #[derive(Debug)]
 pub struct XHCI<'s> {
     virt_base_addr: VirtAddr,
@@ -124,7 +127,10 @@ impl<'s> XHCI<'s> {
 
         // Allocates the scratchpad buffers array if neccassary
         if caps.max_scratchpad_buffers() > 0 {
-            // The
+            // uses the same frame to store the scratchpad_buffers pointers that we used to store dcbaa entries
+            // it is safe to do so as the max number of dcbaa entries is 255,
+            // and the max numbers of scratchpad_buffers is 15, (255 + 15) * 8 is very much less then the maximum amount of bytes a frame (page) can hold (4096)
+            // DCBAA entries must be 64 byte aligned
             let (scratchpad_buffers, scratchpad_buffers_addr) = allocate_buffers_frame::<Frame>(
                 self.buffers_frame,
                 align_up((dcbaa_phys_addr + dcbaa_slice.len()).into_raw(), 64),
@@ -178,8 +184,7 @@ impl<'s> PCIDevice for XHCI<'s> {
                 .expect("XHCI: failed to allocate memory"),
             scratchpad_buffers: None,
             dcbaa: &mut [],
-            // TODO: use a constant
-            command_ring: XHCICommandRing::create(256),
+            command_ring: XHCICommandRing::create(MAX_TRB_COUNT),
         };
         debug!(
             XHCI,

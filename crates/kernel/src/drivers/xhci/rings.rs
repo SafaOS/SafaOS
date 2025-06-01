@@ -1,20 +1,19 @@
-#![allow(dead_code)]
-use modular_bitfield::prelude::*;
-
 use crate::PhysAddr;
 
 use super::utils::allocate_buffers;
 
-#[bitfield]
-#[derive(Debug, Clone, Copy)]
+use bitfield_struct::bitfield;
+
+#[bitfield(u32)]
 pub struct TRBCommand {
-    cycle_bit: B1,
-    toggle_cycle: B1,
-    #[skip]
-    reserved0: B8,
-    trb_type: B6,
-    #[skip]
-    reserved1: B16,
+    #[bits(1)]
+    cycle_bit: u8,
+    #[bits(1)]
+    toggle_cycle: bool,
+    __: u8,
+    #[bits(6)]
+    trb_type: u8,
+    __: u16,
 }
 
 impl TRBCommand {
@@ -49,7 +48,7 @@ impl<'s> XHCICommandRing<'s> {
 
         link_trb.parameter = trbs_phys_addr.into_raw() as u64;
         link_trb.cmd.set_trb_type(6);
-        link_trb.cmd.set_toggle_cycle(1);
+        link_trb.cmd.set_toggle_cycle(true);
         link_trb.cmd.set_cycle_bit(1);
 
         Self {
