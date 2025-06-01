@@ -150,11 +150,6 @@ impl<'s> XHCI<'s> {
         self.configure_dcbaa();
         self.configure_crcr();
         self.configure_runtime();
-        debug!(
-            XHCI,
-            "interrupter: {:#?}",
-            &self.runtime_regs().interrupter_registers[0]
-        );
     }
 
     fn configure_crcr(&mut self) {

@@ -50,7 +50,7 @@ impl<'s> XHCICommandRing<'s> {
         link_trb.cmd.set_cycle_bit(1);
 
         debug!(
-            XHCIEventRing,
+            XHCICommandRing,
             "created with {} TRBS at {:?}", trb_count, trbs_phys_addr
         );
         Self {
