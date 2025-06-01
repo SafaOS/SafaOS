@@ -272,25 +272,26 @@ use bitfield_struct::bitfield;
 #[bitfield(u64)]
 pub struct EventRingDequePtr {
     #[bits(3)]
-    erst_segment_index: usize,
+    pub erst_segment_index: usize,
     #[bits(1)]
-    handler_busy: bool,
+    pub handler_busy: bool,
     #[bits(60)]
-    ptr: PhysAddr,
+    pub ptr: PhysAddr,
 }
 
+#[derive(Debug)]
 #[repr(C)]
-pub struct InterruptRegs {
+pub struct InterrupterRegs {
     /// Interrupt management
     pub iman: XHCIIman,
     /// Interrupt moderation
     imod: u32,
     /// Event ring segment table size
-    erst_sz: u32,
+    pub erst_sz: u32,
     __: u32,
     /// The base address of the event ring segment table
-    erst_base: PhysAddr,
-    event_ring_deque: EventRingDequePtr,
+    pub erst_base: PhysAddr,
+    pub event_ring_deque: EventRingDequePtr,
 }
 
 #[repr(C)]
@@ -299,5 +300,5 @@ pub struct RuntimeRegs {
     mf_index: u32,
     /// reserved
     __: [u32; 7],
-    pub interrupt_registers: [InterruptRegs; 1024],
+    pub interrupter_registers: [InterrupterRegs; 1024],
 }

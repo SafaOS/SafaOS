@@ -1,5 +1,6 @@
 use regs::{CapsReg, OperationalRegs, RuntimeRegs, USBCmd, USBSts, XHCIIman};
-use rings::XHCICommandRing;
+use rings::{XHCICommandRing, XHCIEventRing};
+use spin::once::Once;
 use utils::{allocate_buffers_frame, read_ref, write_ref};
 
 use crate::{
@@ -32,6 +33,7 @@ pub struct XHCI<'s> {
     dcbaa: &'s mut [PhysAddr],
 
     command_ring: XHCICommandRing<'s>,
+    event_ring: Once<XHCIEventRing<'s>>,
 }
 
 impl<'s> XHCI<'s> {
@@ -58,7 +60,7 @@ impl<'s> XHCI<'s> {
         write_ref!(op_regs.usbstatus, USBSts::EINT);
 
         let runtime_regs = self.runtime_regs();
-        let interrupt_reg = &mut runtime_regs.interrupt_registers[interrupter as usize];
+        let interrupt_reg = &mut runtime_regs.interrupter_registers[interrupter as usize];
         // Similariy we clear the iman interrupt pending bit by writing 1 to it
         let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_PENDING;
         write_ref!(interrupt_reg.iman, iman);
@@ -123,6 +125,11 @@ impl<'s> XHCI<'s> {
         self.configure_dcbaa();
         self.configure_crcr();
         self.configure_runtime();
+        debug!(
+            XHCI,
+            "interrupter: {:#?}",
+            &self.runtime_regs().interrupter_registers[0]
+        );
     }
 
     fn configure_crcr(&mut self) {
@@ -170,10 +177,15 @@ impl<'s> XHCI<'s> {
 
     fn configure_runtime(&mut self) {
         let runtime_regs = self.runtime_regs();
-        let interrupt_reg = &mut runtime_regs.interrupt_registers[0];
+        let interrupt_reg = &mut runtime_regs.interrupter_registers[0];
         // Enable interrupts
         let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_ENABLE;
         write_ref!(interrupt_reg.iman, iman);
+
+        self.event_ring.call_once(|| {
+            XHCIEventRing::create(MAX_TRB_COUNT, &mut runtime_regs.interrupter_registers[0])
+        });
+
         // Clear any pending interrupts
         self.acknowledge_irq(0);
     }
@@ -213,6 +225,7 @@ impl<'s> PCIDevice for XHCI<'s> {
             scratchpad_buffers: None,
             dcbaa: &mut [],
             command_ring: XHCICommandRing::create(MAX_TRB_COUNT),
+            event_ring: Once::new(),
         };
         debug!(
             XHCI,
