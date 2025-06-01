@@ -267,8 +267,4 @@ impl<'s> PCIDevice for XHCI<'s> {
         );
         true
     }
-
-    fn name(&self) -> &'static str {
-        "XHCI"
-    }
 }

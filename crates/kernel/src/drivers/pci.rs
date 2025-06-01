@@ -1,13 +1,11 @@
 use super::xhci::XHCI;
-use alloc::boxed::Box;
 use bitflags::bitflags;
 use core::{fmt::Debug, u32, u64};
 use lazy_static::lazy_static;
 
-use crate::{info, PhysAddr};
+use crate::PhysAddr;
 
 pub trait PCIDevice: Send + Sync + Debug {
-    fn name(&self) -> &'static str;
     fn create(header: PCIHeader) -> Self
     where
         Self: Sized;
@@ -284,51 +282,16 @@ impl PCI {
     }
 }
 
-struct PCIDeviceManager<const N: usize> {
-    devices: heapless::Vec<Box<dyn PCIDevice>, N>,
-}
-
-impl<const N: usize> PCIDeviceManager<N> {
-    pub const fn new() -> Self {
-        let devices: heapless::Vec<Box<dyn PCIDevice>, N> = heapless::Vec::new();
-        Self { devices }
-    }
-
-    pub fn try_add<T: PCIDevice + Sized + 'static>(&mut self, pci: &PCI) -> Option<usize> {
-        let created = pci.create_device::<T>();
-        if let Some(created) = created {
-            self.devices.push(Box::new(created)).unwrap();
-            Some(self.devices.len() - 1)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut Box<dyn PCIDevice>> {
-        self.devices.get_mut(index)
-    }
-
-    fn debug(&self) {
-        for device in &*self.devices {
-            info!("detected PCI Device: {}", device.name());
-        }
-    }
-}
-
+use crate::utils::locks::Mutex;
 lazy_static! {
     pub static ref HOST_PCI: PCI = crate::arch::pci::init();
-    static ref PCI_DEVICE_MANAGER: PCIDeviceManager<1> = {
-        let mut manager = PCIDeviceManager::new();
-        // FIXME: very ugly
-        if let Some(id) = manager.try_add::<XHCI>(&*HOST_PCI) {
-            manager.get_mut(id).unwrap().start();
-        }
-        manager
-    };
+    // No complicated device management necessary for now.
+    pub static ref XHCI_DEVICE: Option<Mutex<XHCI<'static>>> =
+        HOST_PCI.create_device::<XHCI>().map(|s| Mutex::new(s));
 }
 
 /// Initializes drivers and devices that uses the PCI
 pub fn init() {
     HOST_PCI.print();
-    PCI_DEVICE_MANAGER.debug();
+    XHCI_DEVICE.as_ref().map(|device| device.lock().start());
 }
