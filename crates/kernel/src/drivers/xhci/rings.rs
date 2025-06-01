@@ -16,12 +16,6 @@ pub struct TRBCommand {
     __: u16,
 }
 
-impl TRBCommand {
-    fn as_u32(&self) -> u32 {
-        unsafe { core::mem::transmute(*self) }
-    }
-}
-
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct TRB {

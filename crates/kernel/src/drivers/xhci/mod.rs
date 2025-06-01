@@ -1,4 +1,4 @@
-use regs::{CapsReg, OperationalRegs, USBCmd, USBSts};
+use regs::{CapsReg, OperationalRegs, RuntimeRegs, USBCmd, USBSts, XHCIIman};
 use rings::XHCICommandRing;
 use utils::{allocate_buffers_frame, read_ref, write_ref};
 
@@ -45,6 +45,23 @@ impl<'s> XHCI<'s> {
 
     fn operational_regs<'a>(&mut self) -> &'a mut OperationalRegs {
         self.captabilities_mut().operational_regs_mut()
+    }
+
+    fn runtime_regs<'a>(&mut self) -> &'a mut RuntimeRegs {
+        self.captabilities_mut().runtime_regs_mut()
+    }
+
+    /// Clear any incoming interrupts for the interrupter
+    pub fn acknowledge_irq(&mut self, interrupter: u8) {
+        let op_regs = self.operational_regs();
+        // Write the USBSts::EINT bit to clear it, it is RW1C meaning write 1 to clear
+        write_ref!(op_regs.usbstatus, USBSts::EINT);
+
+        let runtime_regs = self.runtime_regs();
+        let interrupt_reg = &mut runtime_regs.interrupt_registers[interrupter as usize];
+        // Similariy we clear the iman interrupt pending bit by writing 1 to it
+        let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_PENDING;
+        write_ref!(interrupt_reg.iman, iman);
     }
 
     #[allow(unused_unsafe)]
@@ -105,6 +122,7 @@ impl<'s> XHCI<'s> {
         write_ref!(op_regs.dnctrl, 0xFFFF);
         self.configure_dcbaa();
         self.configure_crcr();
+        self.configure_runtime();
     }
 
     fn configure_crcr(&mut self) {
@@ -148,6 +166,16 @@ impl<'s> XHCI<'s> {
 
         self.dcbaa = dcbaa_slice;
         write_ref!(op_regs.dcbaap, dcbaa_phys_addr);
+    }
+
+    fn configure_runtime(&mut self) {
+        let runtime_regs = self.runtime_regs();
+        let interrupt_reg = &mut runtime_regs.interrupt_registers[0];
+        // Enable interrupts
+        let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_ENABLE;
+        write_ref!(interrupt_reg.iman, iman);
+        // Clear any pending interrupts
+        self.acknowledge_irq(0);
     }
 }
 

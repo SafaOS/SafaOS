@@ -25,6 +25,14 @@ impl CapsReg {
         }
     }
 
+    pub fn runtime_regs_mut(&mut self) -> &mut RuntimeRegs {
+        let caps_ptr = self as *const _ as *const u8;
+        unsafe {
+            let ptr = caps_ptr.add(self.runtime_off as usize);
+            &mut *(ptr as *mut RuntimeRegs)
+        }
+    }
+
     pub const fn max_device_slots(&self) -> usize {
         (self.hcsparams_1 & 0xFF) as usize
     }
@@ -163,6 +171,26 @@ bitflags! {
         const HCHALTED = 1 << 0;
         /**
         # General Info
+        - Event Interrupt (EINT)
+        - RW1C
+        - Default = ‘0’
+        # Description
+        > xHci Spec Section 5.4.2 Table 5-21: USB Status Register Bit Definitions (USBSTS) (page 362)
+
+        The xHC sets this bit to ‘1’ when the Interrupt Pending (IP) bit of any Interrupter transitions from ‘0’ to ‘1’. Refer to
+        section 7.1.2 for use.
+        Software that uses EINT shall clear it prior to clearing any IP flags. A race condition
+        may occur if software clears the IP flags then clears the EINT flag, and between the
+        operations another IP ‘0’ to '1' transition occurs. In this case the new IP transition
+        shall be lost.
+        When this register is exposed by a Virtual Function (VF), this bit is the logical 'OR' of
+        the IP bits for the Interrupters assigned to the selected VF. And it shall be cleared to
+        ‘0’ when all associated interrupter IP bits are cleared, that is, all the VF’s Interrupter
+        Event Ring(s) are empty. Refer to section 8 for more information.
+        */
+        const EINT = 1 << 3;
+        /**
+        # General Info
         - Controller Not Ready (CNR)
         - RO
         - Default = ‘1’. ‘0’ = Ready and ‘1’ = Not Ready
@@ -218,4 +246,58 @@ impl Display for OperationalRegs {
         write!(f,   "\tconfig    : {:#x}", self.config)?;
         Ok(())
     }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct XHCIIman: u32 {
+        /**
+        # General Info
+        - Interrupt Pending (IP)
+        - RW1C
+        - Default = ‘0’
+        # Description
+        > xHci Spec Section 5.5.2.1 Table 5-38: Interrupter Management Register Bit Definitions (IMAN) (page 425)
+
+        This flag represents the current state of the Interrupter. If IP = ‘1’, an interrupt is pending for this Interrupter. A ‘0’ value indicates that no
+        interrupt is pending for the Interrupter. Refer to section 4.17.3 for the conditions that modify
+        the state of this flag.
+        */
+        const INTERRUPT_PENDING = 1 << 0;
+        const INTERRUPT_ENABLE = 1 << 1;
+    }
+}
+
+use bitfield_struct::bitfield;
+#[bitfield(u64)]
+pub struct EventRingDequePtr {
+    #[bits(3)]
+    erst_segment_index: usize,
+    #[bits(1)]
+    handler_busy: bool,
+    #[bits(60)]
+    ptr: PhysAddr,
+}
+
+#[repr(C)]
+pub struct InterruptRegs {
+    /// Interrupt management
+    pub iman: XHCIIman,
+    /// Interrupt moderation
+    imod: u32,
+    /// Event ring segment table size
+    erst_sz: u32,
+    __: u32,
+    /// The base address of the event ring segment table
+    erst_base: PhysAddr,
+    event_ring_deque: EventRingDequePtr,
+}
+
+#[repr(C)]
+pub struct RuntimeRegs {
+    /// Micro Frame index
+    mf_index: u32,
+    /// reserved
+    __: [u32; 7],
+    pub interrupt_registers: [InterruptRegs; 1024],
 }

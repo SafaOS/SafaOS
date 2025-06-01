@@ -53,8 +53,18 @@ macro_rules! impl_addr_ty {
             }
 
             #[inline(always)]
+            pub const fn into_bits(self) -> usize {
+                self.0
+            }
+
+            #[inline(always)]
             pub const fn into_raw(self) -> usize {
                 self.0
+            }
+
+            #[inline(always)]
+            pub const fn from_bits(bits: usize) -> Self {
+                Self(bits)
             }
         }
 
