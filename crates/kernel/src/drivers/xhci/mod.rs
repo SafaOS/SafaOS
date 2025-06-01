@@ -66,6 +66,31 @@ impl<'s> XHCI<'s> {
         write_ref!(interrupt_reg.iman, iman);
     }
 
+    fn start(&mut self) {
+        let regs = self.operational_regs();
+        write_ref!(
+            regs.usbcmd,
+            regs.usbcmd | USBCmd::RUN | USBCmd::INTERRUPT_ENABLE
+        );
+
+        let timeout = 1000;
+        let time = time!();
+
+        while read_ref!(regs.usbstatus).contains(USBSts::HCHALTED) {
+            let now = time!();
+            if now >= time + timeout {
+                panic!(
+                    "timeout after {}ms while resetting the XHCI, HCHALTED did not clear: {:?}",
+                    now,
+                    read_ref!(regs.usbstatus)
+                )
+            }
+            core::hint::spin_loop();
+        }
+
+        assert!(!regs.usbstatus.contains(USBSts::NOT_READY));
+    }
+
     #[allow(unused_unsafe)]
     /// Resets the XHCI controller
     fn reset(&mut self) {
@@ -235,6 +260,17 @@ impl<'s> PCIDevice for XHCI<'s> {
         );
         results.reset();
         results
+    }
+
+    fn start(&mut self) -> bool {
+        let usbsts_before = self.operational_regs().usbstatus;
+        self.start();
+        let usbsts_after = self.operational_regs().usbstatus;
+        debug!(
+            XHCI,
+            "Started, before {:?} => after {:?}", usbsts_before, usbsts_after
+        );
+        true
     }
 
     fn name(&self) -> &'static str {

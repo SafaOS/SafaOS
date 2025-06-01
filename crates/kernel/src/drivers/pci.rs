@@ -11,6 +11,8 @@ pub trait PCIDevice: Send + Sync + Debug {
     fn create(header: PCIHeader) -> Self
     where
         Self: Sized;
+    /// Starts the PCI Device returning true if successful
+    fn start(&mut self) -> bool;
     /// Returns the devices class, subclass and prog_if
     fn class() -> (u8, u8, u8)
     where
@@ -292,14 +294,18 @@ impl<const N: usize> PCIDeviceManager<N> {
         Self { devices }
     }
 
-    pub fn try_add<T: PCIDevice + Sized + 'static>(&mut self, pci: &PCI) -> bool {
+    pub fn try_add<T: PCIDevice + Sized + 'static>(&mut self, pci: &PCI) -> Option<usize> {
         let created = pci.create_device::<T>();
         if let Some(created) = created {
             self.devices.push(Box::new(created)).unwrap();
-            true
+            Some(self.devices.len() - 1)
         } else {
-            false
+            None
         }
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Box<dyn PCIDevice>> {
+        self.devices.get_mut(index)
     }
 
     fn debug(&self) {
@@ -313,7 +319,10 @@ lazy_static! {
     pub static ref HOST_PCI: PCI = crate::arch::pci::init();
     static ref PCI_DEVICE_MANAGER: PCIDeviceManager<1> = {
         let mut manager = PCIDeviceManager::new();
-        manager.try_add::<XHCI>(&*HOST_PCI);
+        // FIXME: very ugly
+        if let Some(id) = manager.try_add::<XHCI>(&*HOST_PCI) {
+            manager.get_mut(id).unwrap().start();
+        }
         manager
     };
 }
