@@ -17,7 +17,7 @@ pub struct CapsReg {
 }
 
 impl CapsReg {
-    pub fn operational_regs_mut(&mut self) -> &mut OperationalRegs {
+    pub fn operational_regs_mut<'a>(&mut self) -> &'a mut OperationalRegs {
         let caps_ptr = self as *const _ as *const u8;
         unsafe {
             let ptr = caps_ptr.add(self.reg_length as usize);
@@ -25,7 +25,7 @@ impl CapsReg {
         }
     }
 
-    pub fn runtime_regs_mut(&mut self) -> &mut RuntimeRegs {
+    pub fn runtime_regs_mut<'a>(&mut self) -> &'a mut RuntimeRegs {
         let caps_ptr = self as *const _ as *const u8;
         unsafe {
             let ptr = caps_ptr.add(self.runtime_off as usize);
@@ -316,5 +316,11 @@ pub struct RuntimeRegs {
     mf_index: u32,
     /// reserved
     __: [u32; 7],
-    pub interrupter_registers: [InterrupterRegs; 1024],
+    interrupter_registers: [InterrupterRegs; 1024],
+}
+
+impl RuntimeRegs {
+    pub fn interrupter_mut(&mut self, index: usize) -> &mut InterrupterRegs {
+        &mut self.interrupter_registers[index]
+    }
 }

@@ -1,6 +1,5 @@
 use regs::{CapsReg, OperationalRegs, RuntimeRegs, USBCmd, USBSts, XHCIIman};
 use rings::{XHCICommandRing, XHCIEventRing};
-use spin::once::Once;
 use utils::{allocate_buffers_frame, read_ref, write_ref};
 
 use crate::{
@@ -12,7 +11,7 @@ use crate::{
         frame_allocator::{self, Frame},
         paging::{EntryFlags, PAGE_SIZE},
     },
-    time, PhysAddr, VirtAddr,
+    time, PhysAddr,
 };
 
 use super::pci::PCIDevice;
@@ -25,7 +24,7 @@ const MAX_TRB_COUNT: usize = 256;
 
 #[derive(Debug)]
 pub struct XHCI<'s> {
-    virt_base_addr: VirtAddr,
+    caps_regs: *mut CapsReg,
     // TODO: free the frames when this goes out of scope? except that currently it never does
     /// used to store the scratchpad_buffers pointers and the dcbaa (scratchpad_buffers, dcbaa)
     buffers_frame: Frame,
@@ -33,20 +32,21 @@ pub struct XHCI<'s> {
     dcbaa: &'s mut [PhysAddr],
 
     command_ring: XHCICommandRing<'s>,
-    event_ring: Once<XHCIEventRing<'s>>,
+    event_ring: XHCIEventRing<'s>,
 }
 
 impl<'s> XHCI<'s> {
     fn captabilities<'a>(&self) -> &'a CapsReg {
-        unsafe { &*self.virt_base_addr.into_ptr::<CapsReg>() }
+        unsafe { &*self.caps_regs }
     }
 
     fn captabilities_mut<'a>(&mut self) -> &'a mut CapsReg {
-        unsafe { &mut *self.virt_base_addr.into_ptr::<CapsReg>() }
+        unsafe { &mut *self.caps_regs }
     }
 
     fn operational_regs<'a>(&mut self) -> &'a mut OperationalRegs {
-        self.captabilities_mut().operational_regs_mut()
+        let caps = self.captabilities_mut();
+        caps.operational_regs_mut()
     }
 
     fn runtime_regs<'a>(&mut self) -> &'a mut RuntimeRegs {
@@ -60,7 +60,7 @@ impl<'s> XHCI<'s> {
         write_ref!(op_regs.usbstatus, USBSts::EINT);
 
         let runtime_regs = self.runtime_regs();
-        let interrupt_reg = &mut runtime_regs.interrupter_registers[interrupter as usize];
+        let interrupt_reg = runtime_regs.interrupter_mut(interrupter as usize);
         // Similariy we clear the iman interrupt pending bit by writing 1 to it
         let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_PENDING;
         write_ref!(interrupt_reg.iman, iman);
@@ -197,19 +197,18 @@ impl<'s> XHCI<'s> {
 
     fn configure_runtime(&mut self) {
         let runtime_regs = self.runtime_regs();
-        let interrupt_reg = &mut runtime_regs.interrupter_registers[0];
+        let interrupt_reg = runtime_regs.interrupter_mut(0);
         // Enable interrupts
         let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_ENABLE;
         write_ref!(interrupt_reg.iman, iman);
-
-        self.event_ring.call_once(|| {
-            XHCIEventRing::create(MAX_TRB_COUNT, &mut runtime_regs.interrupter_registers[0])
-        });
 
         // Clear any pending interrupts
         self.acknowledge_irq(0);
     }
 }
+
+unsafe impl<'s> Send for XHCI<'s> {}
+unsafe impl<'s> Sync for XHCI<'s> {}
 
 impl<'s> PCIDevice for XHCI<'s> {
     fn class() -> (u8, u8, u8) {
@@ -238,14 +237,23 @@ impl<'s> PCIDevice for XHCI<'s> {
                 .expect("failed to map the XHCI");
         }
 
+        let caps_ptr = virt_base_addr.into_ptr::<CapsReg>();
+        let caps_regs = unsafe { &mut *caps_ptr };
+
+        let runtime_regs = caps_regs.runtime_regs_mut();
+        let interrupter = runtime_regs.interrupter_mut(0);
+
+        let command_ring = XHCICommandRing::create(MAX_TRB_COUNT);
+        let event_ring = XHCIEventRing::create(MAX_TRB_COUNT, interrupter);
+
         let mut results = Self {
-            virt_base_addr,
             buffers_frame: frame_allocator::allocate_frame()
                 .expect("XHCI: failed to allocate memory"),
             scratchpad_buffers: None,
             dcbaa: &mut [],
-            command_ring: XHCICommandRing::create(MAX_TRB_COUNT),
-            event_ring: Once::new(),
+            command_ring,
+            event_ring,
+            caps_regs,
         };
         debug!(
             XHCI,
@@ -258,9 +266,10 @@ impl<'s> PCIDevice for XHCI<'s> {
     }
 
     fn start(&mut self) -> bool {
-        let usbsts_before = self.operational_regs().usbstatus;
+        let op_regs = self.operational_regs();
+        let usbsts_before = read_ref!(op_regs.usbstatus);
         self.start();
-        let usbsts_after = self.operational_regs().usbstatus;
+        let usbsts_after = read_ref!(op_regs.usbstatus);
         debug!(
             XHCI,
             "Started, before {:?} => after {:?}", usbsts_before, usbsts_after
