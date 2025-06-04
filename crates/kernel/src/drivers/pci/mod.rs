@@ -2,15 +2,17 @@ use super::xhci::XHCI;
 use bitflags::bitflags;
 use core::{fmt::Debug, u32, u64};
 use lazy_static::lazy_static;
+use msi::{MSIXCap, MSIXInfo};
 
 use crate::PhysAddr;
+pub mod msi;
 
 pub trait PCIDevice: Send + Sync + Debug {
     fn create(header: PCIHeader) -> Self
     where
         Self: Sized;
     /// Starts the PCI Device returning true if successful
-    fn start(&mut self) -> bool;
+    fn start(&'static self) -> bool;
     /// Returns the devices class, subclass and prog_if
     fn class() -> (u8, u8, u8)
     where
@@ -36,6 +38,74 @@ bitflags! {
         const SSER = 1 << 8;
         const INTERRUPT_MASK = 1 << 10;
     }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct PCIStatusReg: u16 {
+        const INT_STATUS = 1 << 3;
+        const CAPS_LIST = 1 << 4;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct Captability {
+    id: u8,
+    next_off: u8,
+}
+
+struct CaptabilitiesIter {
+    base_ptr: *const (),
+    current: *const Captability,
+}
+
+impl CaptabilitiesIter {
+    fn new(base_ptr: *const (), cap_off: u8) -> Self {
+        let current = unsafe { base_ptr.byte_add(cap_off as usize) as *const Captability };
+        Self { base_ptr, current }
+    }
+
+    fn empty() -> Self {
+        Self {
+            base_ptr: core::ptr::null(),
+            current: core::ptr::null(),
+        }
+    }
+
+    /// Find a captabilitiy with the id `id`
+    fn find(self, id: u8) -> Option<*const Captability> {
+        for cap_ptr in self {
+            let cap = unsafe { *cap_ptr };
+            if cap.id == id {
+                return Some(cap_ptr);
+            }
+        }
+
+        None
+    }
+    /// Find a captability with the `id` id and then casts it to a pointer of T
+    fn find_cast<T>(self, id: u8) -> Option<*const T> {
+        self.find(id).map(|ptr| ptr.cast())
+    }
+}
+
+impl Iterator for CaptabilitiesIter {
+    type Item = *const Captability;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current.is_null() {
+            return None;
+        }
+
+        let next_off = unsafe { (*self.current).next_off };
+        let results = self.current;
+
+        if next_off == 0 {
+            self.current = core::ptr::null();
+        } else {
+            self.current =
+                unsafe { self.base_ptr.byte_add(next_off as usize) as *const Captability };
+        }
+        Some(results)
+    }
 }
 
 #[derive(Debug)]
@@ -45,7 +115,7 @@ pub struct CommonPCIHeader {
     device_id: u16,
     // reg 1
     pub command: PCICommandReg,
-    status: u16,
+    status: PCIStatusReg,
     // reg 2
     revision: u8,
     prog_if: u8,
@@ -162,6 +232,20 @@ pub enum PCIHeader<'a> {
 }
 
 impl<'a> PCIHeader<'a> {
+    fn caps_list(&self) -> CaptabilitiesIter {
+        let common = self.common();
+        if common.status.contains(PCIStatusReg::CAPS_LIST) {
+            let base_ptr = common as *const CommonPCIHeader as *const ();
+            unsafe {
+                let cap_off_ptr = base_ptr.byte_add(0x34) as *const u8;
+                let cap_off = *cap_off_ptr;
+                CaptabilitiesIter::new(base_ptr, cap_off)
+            }
+        } else {
+            CaptabilitiesIter::empty()
+        }
+    }
+
     fn common(&self) -> &CommonPCIHeader {
         match self {
             Self::Other(c) => c,
@@ -178,6 +262,14 @@ impl<'a> PCIHeader<'a> {
         }
     }
 
+    /// Gets at most 6 base address registers addresses from the header and their sizes
+    pub fn get_bars(&self) -> heapless::Vec<(PhysAddr, usize), 6> {
+        match self {
+            Self::Other(_) => todo!(),
+            Self::General(g) => g.get_bars(),
+        }
+    }
+
     fn is_valid(&self) -> bool {
         let vendor_id = self.common().vendor_id;
         vendor_id != 0xFFFF
@@ -186,6 +278,15 @@ impl<'a> PCIHeader<'a> {
     fn is_multifunction(&self) -> bool {
         let header_type = self.common().header_type;
         (header_type & 0x80) != 0
+    }
+
+    pub fn get_msix_cap(&mut self) -> Option<MSIXInfo> {
+        let msix_cap_ptr = self.caps_list().find_cast::<MSIXCap>(0x11);
+        msix_cap_ptr.map(|ptr| {
+            let common = self.common();
+            let bars = self.get_bars();
+            MSIXInfo::new(ptr as *mut _, common.device_id, common.vendor_id, &bars)
+        })
     }
 }
 
@@ -277,6 +378,9 @@ impl PCI {
     fn print(&self) {
         self.enum_all(&|header| {
             crate::serial!("PCI => {header:#x?}\n");
+            for cap in header.caps_list() {
+                crate::serial!("{:#x?}\n", unsafe { *cap });
+            }
             false
         });
     }
@@ -287,11 +391,11 @@ lazy_static! {
     pub static ref HOST_PCI: PCI = crate::arch::pci::init();
     // No complicated device management necessary for now.
     pub static ref XHCI_DEVICE: Option<Mutex<XHCI<'static>>> =
-        HOST_PCI.create_device::<XHCI>().map(|s| Mutex::new(s));
+        HOST_PCI.create_device::<Mutex<XHCI>>();
 }
 
 /// Initializes drivers and devices that uses the PCI
 pub fn init() {
     HOST_PCI.print();
-    XHCI_DEVICE.as_ref().map(|device| device.lock().start());
+    XHCI_DEVICE.as_ref().map(|device| device.start());
 }

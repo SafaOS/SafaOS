@@ -1,7 +1,11 @@
-use super::acpi;
+use super::{
+    acpi,
+    interrupts::apic::{LAPIC_ID, LAPIC_PHYS_ADDR},
+};
 use crate::{
     arch::paging::{DEVICE_MAPPING_END, DEVICE_MAPPING_START},
-    drivers::pci::PCI,
+    drivers::{interrupts::IntTrigger, pci::PCI},
+    PhysAddr,
 };
 
 pub fn init() -> PCI {
@@ -16,4 +20,23 @@ pub fn init() -> PCI {
     assert!(addr <= DEVICE_MAPPING_END);
 
     PCI::new(addr, entry.pci_num0, entry.pci_num1)
+}
+
+pub fn build_msi_data(vector: u8, trigger: IntTrigger) -> u32 {
+    let (trigger, assert) = match trigger {
+        IntTrigger::Edge => (0, 0),
+        IntTrigger::LevelDeassert => (1, 0),
+        IntTrigger::LevelAssert => (1, 1),
+    };
+
+    // TODO: set vector?
+    let results = vector as u32 | /* TODO: Delivery */ 0 | assert << 14 | trigger << 15;
+    results
+}
+pub fn build_msi_addr() -> PhysAddr {
+    let lapic_base = (*LAPIC_PHYS_ADDR).into_raw();
+    let lapic_id = *LAPIC_ID;
+    let msi_addr = lapic_base | ((lapic_id as usize) << 12);
+    crate::serial!("returning {:#x}\n", msi_addr);
+    PhysAddr::from(msi_addr)
 }

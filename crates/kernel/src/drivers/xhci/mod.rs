@@ -1,17 +1,26 @@
-use regs::{CapsReg, OperationalRegs, RuntimeRegs, USBCmd, USBSts, XHCIIman};
-use rings::{XHCICommandRing, XHCIEventRing};
-use utils::{allocate_buffers_frame, read_ref, write_ref};
+use super::{
+    interrupts::IRQInfo,
+    utils::{read_ref, write_ref},
+};
+use regs::{CapsReg, OperationalRegs, RuntimeRegs, USBCmd, USBSts, XHCIDoorbellManager, XHCIIman};
+use rings::{TRBCommand, XHCICommandRing, XHCIEventRing};
+use utils::allocate_buffers_frame;
 
 use crate::{
     arch::paging::current_higher_root_table,
     debug,
-    drivers::pci::PCICommandReg,
+    drivers::{
+        interrupts::{self, IntTrigger, InterruptReceiver},
+        pci::PCICommandReg,
+    },
     memory::{
         align_up,
         frame_allocator::{self, Frame},
         paging::{EntryFlags, PAGE_SIZE},
     },
-    time, PhysAddr,
+    time,
+    utils::locks::Mutex,
+    PhysAddr,
 };
 
 use super::pci::PCIDevice;
@@ -33,6 +42,14 @@ pub struct XHCI<'s> {
 
     command_ring: XHCICommandRing<'s>,
     event_ring: XHCIEventRing<'s>,
+    doorbell_manager: XHCIDoorbellManager<'s>,
+    irq_info: IRQInfo,
+}
+
+impl<'s> InterruptReceiver for Mutex<XHCI<'s>> {
+    fn handle_interrupt(&self) {
+        todo!("{}", self.lock().operational_regs())
+    }
 }
 
 impl<'s> XHCI<'s> {
@@ -138,9 +155,15 @@ impl<'s> XHCI<'s> {
         assert_eq!(regs.crcr, 0);
         assert_eq!(regs.dcbaap, PhysAddr::null());
         assert_eq!(regs.config, 0);
+        write_ref!(regs.config, self.captabilities().max_device_slots() as u32);
         // reconfigure the controller
         self.reconfigure();
-        debug!(XHCI, "XHCI Reset\n{}", regs);
+        debug!(
+            XHCI,
+            "XHCI Reset\n{}\n{:#x?}",
+            regs,
+            self.runtime_regs().interrupter(0)
+        );
     }
 
     fn reconfigure(&mut self) {
@@ -149,6 +172,7 @@ impl<'s> XHCI<'s> {
         write_ref!(op_regs.dnctrl, 0xFFFF);
         self.configure_dcbaa();
         self.configure_crcr();
+
         self.configure_runtime();
     }
 
@@ -196,11 +220,11 @@ impl<'s> XHCI<'s> {
     }
 
     fn configure_runtime(&mut self) {
+        self.event_ring.reset();
         let runtime_regs = self.runtime_regs();
         let interrupt_reg = runtime_regs.interrupter_mut(0);
         // Enable interrupts
-        let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_ENABLE;
-        write_ref!(interrupt_reg.iman, iman);
+        write_ref!(interrupt_reg.iman, XHCIIman::INTERRUPT_ENABLE);
 
         // Clear any pending interrupts
         self.acknowledge_irq(0);
@@ -210,31 +234,34 @@ impl<'s> XHCI<'s> {
 unsafe impl<'s> Send for XHCI<'s> {}
 unsafe impl<'s> Sync for XHCI<'s> {}
 
-impl<'s> PCIDevice for XHCI<'s> {
+impl<'s> PCIDevice for Mutex<XHCI<'s>> {
     fn class() -> (u8, u8, u8) {
         (0xc, 0x3, 0x30)
     }
 
     fn create(mut header: super::pci::PCIHeader) -> Self {
-        let header = header.unwrap_general();
+        let general_header = header.unwrap_general();
         write_ref!(
-            header.common.command,
+            general_header.common.command,
             PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE
         );
 
-        let (base_addr, size) = header.get_bars()[0];
+        let bars = header.get_bars();
+        let (base_addr, _) = bars[0];
         let virt_base_addr = base_addr.into_virt();
 
         unsafe {
-            let page_num = size.div_ceil(PAGE_SIZE);
-            current_higher_root_table()
-                .map_contiguous_pages(
-                    virt_base_addr,
-                    base_addr,
-                    page_num,
-                    EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
-                )
-                .expect("failed to map the XHCI");
+            for (bar_base_addr, bar_size) in bars {
+                let page_num = bar_size.div_ceil(PAGE_SIZE);
+                current_higher_root_table()
+                    .map_contiguous_pages(
+                        bar_base_addr.into_virt(),
+                        bar_base_addr,
+                        page_num,
+                        EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
+                    )
+                    .expect("failed to map the XHCI");
+            }
         }
 
         let caps_ptr = virt_base_addr.into_ptr::<CapsReg>();
@@ -246,7 +273,16 @@ impl<'s> PCIDevice for XHCI<'s> {
         let command_ring = XHCICommandRing::create(MAX_TRB_COUNT);
         let event_ring = XHCIEventRing::create(MAX_TRB_COUNT, interrupter);
 
-        let mut results = Self {
+        let doorbell_manager =
+            XHCIDoorbellManager::new(caps_regs.doorbells_base(), caps_regs.max_device_slots());
+
+        // FIXME: switch to MSI if not available
+        let irq_info = header
+            .get_msix_cap()
+            .map(|msix| msix.into_irq_info())
+            .unwrap();
+
+        let mut results = Mutex::new(XHCI {
             buffers_frame: frame_allocator::allocate_frame()
                 .expect("XHCI: failed to allocate memory"),
             scratchpad_buffers: None,
@@ -254,26 +290,42 @@ impl<'s> PCIDevice for XHCI<'s> {
             command_ring,
             event_ring,
             caps_regs,
-        };
+            doorbell_manager,
+            irq_info,
+        });
+        let this = results.get_mut();
         debug!(
             XHCI,
             "Mapped\n{}\n{}",
-            results.captabilities(),
-            results.operational_regs()
+            this.captabilities(),
+            this.operational_regs()
         );
-        results.reset();
+        this.reset();
         results
     }
 
-    fn start(&mut self) -> bool {
-        let op_regs = self.operational_regs();
+    fn start(&'static self) -> bool {
+        let irq_info = self.lock().irq_info.clone();
+        interrupts::register_irq(irq_info, IntTrigger::Edge, self);
+
+        let op_regs = self.lock().operational_regs();
         let usbsts_before = read_ref!(op_regs.usbstatus);
-        self.start();
+        let usbcmd_before = read_ref!(op_regs.usbcmd);
+        self.lock().start();
         let usbsts_after = read_ref!(op_regs.usbstatus);
+        let usbcmd_after = read_ref!(op_regs.usbcmd);
         debug!(
             XHCI,
-            "Started, before {:?} => after {:?}", usbsts_before, usbsts_after
+            "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}", usbsts_before, usbsts_after, usbcmd_before, usbcmd_after
         );
+
+        let trb = rings::TRB::new(TRBCommand::default().with_trb_type(9), 0, 0);
+        self.lock().command_ring.enqueue(trb);
+        self.lock().doorbell_manager.ring_command_doorbell();
+        unsafe {
+            crate::arch::enable_interrupts();
+        }
+        loop {}
         true
     }
 }

@@ -64,12 +64,15 @@ pub fn get_io_apic_addr() -> VirtAddr {
 }
 
 lazy_static! {
-    static ref LAPIC_ADDR: VirtAddr = {
+    pub static ref LAPIC_PHYS_ADDR: PhysAddr = {
         let phys = read_msr(0x1B) & 0xFFFFF000;
         let phys = PhysAddr::from(phys);
         assert!(phys >= DEVICE_MAPPING_START && phys <= DEVICE_MAPPING_END);
-        phys.into_virt()
+        phys
     };
+    static ref LAPIC_ADDR: VirtAddr = LAPIC_PHYS_ADDR.into_virt();
+    pub static ref LAPIC_ID: u8 =
+        unsafe { ((*(get_local_apic_reg(*LAPIC_ADDR, 0x20).into_ptr::<u32>())) >> 24) as u8 };
     static ref IOAPIC_ADDR: VirtAddr = unsafe {
         let madt = *acpi::MADT_DESC;
         let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
@@ -210,7 +213,7 @@ pub fn enable_apic_interrupts() {
 
         let ioapic_addr = get_io_apic_addr();
 
-        let apic_id = *(get_local_apic_reg(local_apic_addr, 0x20).into_ptr::<u8>());
+        let apic_id = *LAPIC_ID;
         info!("enabled APIC, apic_id is {apic_id}, IO APIC is at {ioapic_addr:#x}, local APIC is at {local_apic_addr:#x}");
         calibrate_tsc(apic_id);
         enable_apic_timer(local_apic_addr, apic_id);

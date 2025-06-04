@@ -1,16 +1,16 @@
 mod acpi;
 mod gdt;
-pub mod interrupts;
+pub(super) mod interrupts;
 pub mod paging;
-pub mod pci;
-pub mod power;
-pub mod registers;
-pub mod serial;
+pub(super) mod pci;
+pub(super) mod power;
+pub(super) mod registers;
+pub(super) mod serial;
 mod syscalls;
 #[cfg(test)]
 mod tests;
-pub mod threading;
-pub mod utils;
+pub(super) mod threading;
+pub(super) mod utils;
 
 use core::arch::asm;
 use interrupts::{apic, init_idt};

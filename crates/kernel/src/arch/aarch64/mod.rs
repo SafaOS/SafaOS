@@ -3,6 +3,7 @@ use core::arch::{asm, global_asm};
 mod cpu;
 mod exceptions;
 mod gic;
+pub(super) mod interrupts;
 pub mod paging;
 pub(super) mod pci;
 pub(super) mod power;

@@ -11,12 +11,12 @@ use bitfield_struct::bitfield;
 #[bitfield(u32)]
 pub struct TRBCommand {
     #[bits(1)]
-    cycle_bit: u8,
+    pub cycle_bit: u8,
     #[bits(1)]
-    toggle_cycle: bool,
+    pub toggle_cycle: bool,
     __: u8,
     #[bits(6)]
-    trb_type: u8,
+    pub trb_type: u8,
     __: u16,
 }
 
@@ -26,6 +26,16 @@ pub struct TRB {
     parameter: u64,
     status: u32,
     cmd: TRBCommand,
+}
+
+impl TRB {
+    pub fn new(cmd: TRBCommand, status: u32, parameter: u64) -> Self {
+        Self {
+            parameter,
+            status,
+            cmd,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -111,6 +121,7 @@ pub struct XHCIEventRing<'a> {
     trbs_phys_base: PhysAddr,
 
     ring_segment_table: &'a mut [XHCIEventRingEntry],
+    segment_table_base: PhysAddr,
 
     dequeue_ptr: usize,
     curr_ring_cycle_bit: u8,
@@ -134,18 +145,14 @@ impl<'a> XHCIEventRing<'a> {
             trbs_phys_base,
             trbs,
             interrupter_registers,
+            segment_table_base: segment_table_base_addr,
             ring_segment_table: segment_table,
             dequeue_ptr: 0,
             curr_ring_cycle_bit: 1,
         };
 
         // Initializes the interrupter must be done in the order given here:
-        write_ref!(this.interrupter_registers.erst_sz, segment_count as u32);
-        this.update_edrp();
-        write_ref!(
-            this.interrupter_registers.erst_base,
-            segment_table_base_addr
-        );
+        this.reset();
 
         debug!(
             XHCIEventRing,
@@ -155,13 +162,26 @@ impl<'a> XHCIEventRing<'a> {
         );
         this
     }
+    pub fn reset(&mut self) {
+        write_ref!(
+            self.interrupter_registers.erst_sz,
+            self.ring_segment_table.len() as u32
+        );
+        self.update_edrp();
+        write_ref!(
+            self.interrupter_registers.erst_base,
+            self.segment_table_base
+        );
+    }
 
     /// Update edrp in the interrupter to sync with the current dequeue pointer
     pub fn update_edrp(&mut self) {
         let offset = self.dequeue_ptr * size_of::<TRB>();
         let dequeue_addr = self.trbs_phys_base + offset;
-        self.interrupter_registers.event_ring_deque =
-            EventRingDequePtr::new().with_ptr(dequeue_addr);
+        write_ref!(
+            self.interrupter_registers.event_ring_deque,
+            EventRingDequePtr::from_addr(dequeue_addr)
+        );
     }
 
     fn has_unprocessed_events(&self) -> bool {

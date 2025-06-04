@@ -11,7 +11,7 @@ pub struct CapsReg {
     hcsparams_2: u32,
     hcsparams_3: u32,
     hccparams_1: u32,
-    dorbell_off: u32,
+    doorbell_off: u32,
     runtime_off: u32,
     hccparams_2: u32,
 }
@@ -30,6 +30,15 @@ impl CapsReg {
         unsafe {
             let ptr = caps_ptr.add(self.runtime_off as usize);
             &mut *(ptr as *mut RuntimeRegs)
+        }
+    }
+
+    pub fn doorbells_base(&mut self) -> VirtAddr {
+        let caps_ptr = self as *const _ as *const u8;
+        unsafe {
+            let ptr = caps_ptr.add(self.doorbell_off as usize);
+            let addr = VirtAddr::from_ptr(ptr);
+            addr
         }
     }
 
@@ -292,7 +301,19 @@ pub struct EventRingDequePtr {
     #[bits(1)]
     pub handler_busy: bool,
     #[bits(60)]
-    pub ptr: PhysAddr,
+    pub _ptr_reset: u64,
+}
+
+impl EventRingDequePtr {
+    pub const fn from_addr(addr: PhysAddr) -> Self {
+        Self::from_bits(addr.into_raw() as u64)
+    }
+
+    pub const fn with_addr(self, addr: PhysAddr) -> Self {
+        let bits = self.into_bits();
+        let bits = bits | addr.into_raw() as u64;
+        Self::from_bits(bits)
+    }
 }
 
 #[derive(Debug)]
@@ -322,5 +343,40 @@ pub struct RuntimeRegs {
 impl RuntimeRegs {
     pub fn interrupter_mut(&mut self, index: usize) -> &mut InterrupterRegs {
         &mut self.interrupter_registers[index]
+    }
+    pub fn interrupter(&self, index: usize) -> &InterrupterRegs {
+        &self.interrupter_registers[index]
+    }
+}
+
+#[bitfield(u32)]
+pub struct DoorbellReg {
+    db_target: u8,
+    __: u8,
+    db_stream_id: u16,
+}
+
+#[derive(Debug)]
+pub struct XHCIDoorbellManager<'a> {
+    doorbells: &'a mut [DoorbellReg],
+}
+
+impl<'a> XHCIDoorbellManager<'a> {
+    pub fn new(base: VirtAddr, max_device_slots: usize) -> Self {
+        let doorbells_ptr = base.into_ptr::<DoorbellReg>();
+        let doorbells = unsafe { core::slice::from_raw_parts_mut(doorbells_ptr, max_device_slots) };
+        Self { doorbells }
+    }
+
+    pub fn ring_doorbell(&mut self, doorbell: u8, target: u8) {
+        self.doorbells[doorbell as usize].set_db_target(target);
+    }
+
+    pub fn ring_command_doorbell(&mut self) {
+        self.ring_doorbell(0, 0);
+    }
+
+    pub fn ring_control_endpoint_doorbell(&mut self, doorbell: u8) {
+        self.ring_doorbell(doorbell, 1);
     }
 }

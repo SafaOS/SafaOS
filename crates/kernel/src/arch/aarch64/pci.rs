@@ -1,10 +1,11 @@
 use crate::{
-    drivers::pci::PCI,
+    drivers::{interrupts::IntTrigger, pci::PCI},
     info,
     memory::{
         align_up,
         paging::{EntryFlags, PAGE_SIZE},
     },
+    PhysAddr,
 };
 
 use super::{cpu, paging::current_higher_root_table};
@@ -29,4 +30,11 @@ pub fn init() -> PCI {
     info!("mapped PCIe from {start_virt_addr:#x} with size {size:#x}");
     // FIXME: hardcoded bus numbers
     PCI::new(start_phys_addr, bus_start as u8, bus_end as u8)
+}
+
+pub fn build_msi_data(vector: u8, trigger: IntTrigger) -> u32 {
+    todo!()
+}
+pub fn build_msi_addr() -> PhysAddr {
+    todo!()
 }

@@ -4,6 +4,7 @@ mod idt;
 mod pit;
 
 use core::{arch::asm, fmt::Display};
+use handlers::IDT;
 use idt::IDTDesc;
 
 use crate::{VirtAddr, KERNEL_ELF};
@@ -97,4 +98,56 @@ pub fn init_idt() {
     unsafe {
         asm!("lidt [{}]", in(reg) &*IDTDesc, options(nostack));
     }
+}
+
+const fn irq_handler<const IRQ_NUM: u8>() -> fn() {
+    move || {
+        let manager = crate::drivers::interrupts::IRQ_MANAGER.lock();
+        for irq in &manager.irqs {
+            if irq.irq_num == IRQ_NUM {
+                irq.handler.handle_interrupt();
+                apic::send_eoi();
+                return;
+            }
+        }
+    }
+}
+
+/// helper macro to count how many literals
+macro_rules! count_idents {
+    () => { 0 };
+    ( $head:tt $(, $tail:tt)* ) => { 1 + count_idents!($($tail),*) };
+}
+
+/// A macro that both defines a `const IRQS` array and a `const HANDLERS` array
+/// of `fn()`, one per IRQ.
+///
+/// - `irq_list!(3, 5, 7)` expands to:
+///   ```rust
+///   pub const IRQS: [usize; 3] = [3, 5, 7];
+///   const HANDLERS: [fn(); 3] = [irq_handler::<3>(), irq_handler::<5>(), irq_handler::<7>()];
+///   ```
+macro_rules! irq_list {
+    ( $( $x:literal ),* $(,)? ) => {
+        /// A list of available System IRQ numbers (interrupt IDs) to use
+        pub const IRQS: [u8; count_idents!($($x),*)] = [ $( $x ),* ];
+        const HANDLERS: [fn(); count_idents!($($x),*)] = [ $( irq_handler::<$x>() ),* ];
+    }
+}
+
+irq_list!(0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A);
+
+/// Registers the handler function `handler` to irq `irq_num`
+/// Make sure the num is retrieved from [`AVAILABLE_RQS`]
+pub unsafe fn register_irq_handler(irq_num: u8) {
+    let table = unsafe { &mut *IDT.get() };
+    assert_eq!(table[irq_num as usize], idt::GateDescriptor::default());
+    for (i, ava_irq) in IRQS.iter().enumerate() {
+        if *ava_irq == irq_num {
+            table[irq_num as usize] =
+                idt::GateDescriptor::new(HANDLERS[i] as usize, handlers::ATTR_INT);
+            return;
+        }
+    }
+    panic!("IRQ {irq_num} not in irqs: {IRQS:?}");
 }
