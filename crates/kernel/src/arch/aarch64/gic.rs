@@ -104,6 +104,17 @@ pub fn clear_pending(interrupt: u32) {
     }
 }
 
+#[inline(always)]
+fn gicc_iar() -> *mut u32 {
+    (*GICC_BASE + 0xC).into_ptr::<u32>()
+}
+
+/// Gets the interrupt ID of the current ingoing interrupt
+#[inline(always)]
+pub fn get_int_id() -> u32 {
+    unsafe { (*gicc_iar()) & 0xFFFFFF }
+}
+
 fn gicd_ispendr0() -> *mut u32 {
     (*GICD_BASE + 0x200).into_ptr::<u32>()
 }

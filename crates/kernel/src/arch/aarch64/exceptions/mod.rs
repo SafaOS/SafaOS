@@ -1,9 +1,9 @@
+use super::gic;
+use crate::{arch::aarch64::timer::TIMER_IRQ, syscalls::syscall};
 use core::{
     arch::{asm, global_asm},
     fmt::Display,
 };
-
-use crate::syscalls::syscall;
 
 use super::registers::{Esr, ExcClass, Reg, Spsr};
 
@@ -92,8 +92,15 @@ unsafe extern "C" fn handle_irq(frame: *mut InterruptFrame) {
 }
 
 fn interrupt(frame: &mut InterruptFrame) {
-    // TODO: figure out how to figure out the kind of interrupt
-    super::timer::on_interrupt(frame);
+    let int_id = gic::get_int_id();
+    debug_assert!(
+        int_id < 1020 || int_id > 1023,
+        "FIXME: {int_id} is either an error or unimplemented and cannot be handled"
+    );
+
+    if int_id == TIMER_IRQ {
+        super::timer::on_interrupt(frame);
+    }
 }
 
 fn exception(kind: ExcClass, frame: &mut InterruptFrame) {
