@@ -88,10 +88,12 @@ macro_rules! logln {
 #[macro_export]
 macro_rules! logln_boot {
     ($($arg:tt)*) => {
-        if $crate::logging::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
-            $crate::tty_log!("{}", format_args!($($arg)*));
+        {
+            if $crate::logging::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
+                $crate::tty_log!("{}", format_args!($($arg)*));
+            }
+            $crate::serial_log!("{}", format_args!($($arg)*));
         }
-        $crate::serial_log!("{}", format_args!($($arg)*));
     };
 }
 
@@ -109,7 +111,14 @@ macro_rules! debug {
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        $crate::logln!("[ \x1B[92m info \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*));
+        $crate::logln!("[ \x1B[92m info \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! warn {
+    ($($arg:tt)*) => {
+        $crate::logln_boot!("[ \x1B[93m warn \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
     };
 }
 
