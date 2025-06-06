@@ -1,11 +1,14 @@
 use core::arch::asm;
 
-use crate::info;
+use crate::{
+    arch::aarch64::gic::{IntGroup, IntID},
+    info,
+};
 
-use super::{exceptions::InterruptFrame, gic};
+use super::exceptions::InterruptFrame;
 
 // TODO: only works on qemu virt
-pub const TIMER_IRQ: u32 = 30;
+pub const TIMER_IRQ: IntID = IntID::from_int_id(30);
 
 #[inline(always)]
 /// Resets the timer to count Nms again before tiggring interrupt
@@ -17,8 +20,10 @@ unsafe fn reset_timer(n: usize) {
 }
 
 pub fn init_generic_timer() {
-    gic::clear_pending(TIMER_IRQ);
-    gic::enable(TIMER_IRQ);
+    TIMER_IRQ
+        .clear_pending()
+        .set_group(IntGroup::NonSecure)
+        .enable();
 
     let freq: usize;
     unsafe {
@@ -45,7 +50,7 @@ pub fn init_generic_timer() {
 }
 
 pub fn on_interrupt(ctx: &mut InterruptFrame) {
-    gic::clear_pending(TIMER_IRQ);
+    TIMER_IRQ.clear_pending();
     unsafe {
         super::threading::context_switch(ctx, || reset_timer(10));
     }

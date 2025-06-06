@@ -6,7 +6,6 @@ use core::{
 use safa_utils::abi::raw::processes::AbiStructures;
 
 use crate::{
-    arch::aarch64::gic,
     memory::{
         copy_to_userspace, map_byte_slices, map_str_slices,
         paging::{EntryFlags, MapToError, PhysPageTable},
@@ -197,7 +196,7 @@ pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: i
 }
 
 pub fn invoke_context_switch() {
-    gic::set_pending(timer::TIMER_IRQ);
+    timer::TIMER_IRQ.set_pending();
     unsafe {
         // FIXME: ....
         super::enable_interrupts();

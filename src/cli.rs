@@ -210,7 +210,7 @@ pub fn run(opts: RunOpts, path: &str) {
         // FIXME: unefficent and can be written better
         ArchTarget::Arm64 => &[
             "-M",
-            "virt,acpi=off",
+            "virt,acpi=off,gic-version=3,its=on",
             "-cpu",
             "cortex-a72",
             "-device",

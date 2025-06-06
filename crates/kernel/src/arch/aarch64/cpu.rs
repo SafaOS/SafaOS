@@ -11,8 +11,9 @@ use crate::{
 };
 
 struct GICInfo {
-    gicc_base: PhysAddr,
-    gicd_base: PhysAddr,
+    gicc: Option<(PhysAddr, usize)>,
+    gicd: (PhysAddr, usize),
+    gicr: (PhysAddr, usize),
     populated: bool,
 }
 
@@ -47,16 +48,15 @@ impl DeviceInfo for GICInfo {
     }
 
     fn compatible(&self) -> &'static [&'static str] {
-        &["arm,cortex-a15-gic"]
+        &["arm,gic-v3"]
     }
 
     fn populate<'a>(&mut self, node: dtb::Node) {
         let mut reg = node.get_reg().unwrap();
-        let (gicc_base, _) = reg.next().unwrap();
-        let (gicd_base, _) = reg.next().unwrap();
+        self.gicd = reg.next().unwrap();
+        self.gicr = reg.next().unwrap();
+        self.gicc = reg.next();
 
-        self.gicc_base = gicc_base;
-        self.gicd_base = gicd_base;
         self.populated = true;
     }
 }
@@ -83,14 +83,12 @@ impl DeviceInfo for TimerInfo {
 
         let _secure = interrupts.next();
         // non-secure physical timer interrupt
-        let Some([ty, int_id, flags]) = interrupts.next() else {
+        let Some([ty, int_id, _]) = interrupts.next() else {
             unreachable!()
         };
 
         // makes sure it is PPI
         assert_eq!(ty, 0x1);
-        // makes sure it is at CPU 0
-        assert_eq!((flags >> 8) as u8, 0b00000001);
         let irq = int_id + 0x10;
 
         self.irq = irq;
@@ -232,12 +230,18 @@ lazy_static! {
         }
         r.base
     };
-    pub static ref GIC: (PhysAddr, PhysAddr) = unsafe {
+    /// The GICv3 registers
+    /// Optional (GICC base, GICC size), (GICD base, GICD size), (GICR base, GICR size)
+    pub static ref GICV3: (
+        Option<(PhysAddr, usize)>,
+        (PhysAddr, usize),
+        (PhysAddr, usize)
+    ) = unsafe {
         let r = &mut *GICRAW.get();
         if !r.populated() {
             init();
         }
-        (r.gicc_base, r.gicd_base)
+        (r.gicc, r.gicd, r.gicr)
     };
     pub static ref PCIE: (PhysAddr, usize, u32, u32) = unsafe {
         let r = &mut *PCIERAW.get();
