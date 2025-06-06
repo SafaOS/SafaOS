@@ -29,6 +29,31 @@ lazy_static! {
     static ref SGI_BASE: VirtAddr = *GICR_BASE + (/* 64 KiB */ 64 * 1024);
 }
 
+unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
+    let flags = EntryFlags::WRITE;
+    if let Some((gicc_base, size)) = *GICC {
+        dest.map_contiguous_pages(
+            gicc_base,
+            gicc_base.into_phys(),
+            size.div_ceil(PAGE_SIZE),
+            flags,
+        )?;
+    }
+    dest.map_contiguous_pages(
+        *GICD_BASE,
+        (*GICD_BASE).into_phys(),
+        (*GICD_SIZE).div_ceil(PAGE_SIZE),
+        flags,
+    )?;
+    dest.map_contiguous_pages(
+        *GICR_BASE,
+        (*GICR_BASE).into_phys(),
+        (*GICR_SIZE).div_ceil(PAGE_SIZE),
+        flags,
+    )?;
+    Ok(())
+}
+
 #[bitfield(u64)]
 struct GICRTyper {
     plpis: bool,
@@ -294,31 +319,6 @@ impl GICDCtlr {
     }
 }
 
-unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
-    let flags = EntryFlags::WRITE;
-    if let Some((gicc_base, size)) = *GICC {
-        dest.map_contiguous_pages(
-            gicc_base,
-            gicc_base.into_phys(),
-            size.div_ceil(PAGE_SIZE),
-            flags,
-        )?;
-    }
-    dest.map_contiguous_pages(
-        *GICD_BASE,
-        (*GICD_BASE).into_phys(),
-        (*GICD_SIZE).div_ceil(PAGE_SIZE),
-        flags,
-    )?;
-    dest.map_contiguous_pages(
-        *GICR_BASE,
-        (*GICR_BASE).into_phys(),
-        (*GICR_SIZE).div_ceil(PAGE_SIZE),
-        flags,
-    )?;
-    Ok(())
-}
-
 pub fn init_gic() {
     unsafe {
         map_gic(&mut *current_higher_root_table()).expect("failed to map gic");
@@ -455,9 +455,9 @@ fn gicd_igroup0() -> *mut u32 {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntGroup {
-    /// Group 0
+    /// Group 0, Typically used by FIQs
     NonSecure = 0,
-    /// Group 1
+    /// Group 1, Typically used by IRQs
     Secure = 1,
 }
 
@@ -541,5 +541,11 @@ impl IntID {
 
     pub fn id(&self) -> u32 {
         self.id
+    }
+    /// Sets the interrupt status to unactive
+    /// doesn't disable the interrupt
+    pub fn deactivate(&self, is_group0: bool) -> &Self {
+        cpu_if::deactivate_int(self.id(), is_group0);
+        self
     }
 }

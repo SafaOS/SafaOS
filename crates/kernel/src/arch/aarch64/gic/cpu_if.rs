@@ -159,6 +159,11 @@ fn gicc_iar() -> Option<*mut u32> {
     gicc_mem().map(|a| (a + 0xC).into_ptr::<u32>())
 }
 
+#[inline(always)]
+fn gicc_dir() -> Option<*mut u32> {
+    gicc_mem().map(|a| (a + 0x1000).into_ptr())
+}
+
 /// Makes it so only interrupts of higher priority then `priority` is handled.
 ///
 /// The higher the value the more interrupts that are going to be allowed, 0xff is the lowest priority and allows all interrupts
@@ -200,13 +205,17 @@ pub fn set_binary_spilt_point(point: u8) {
 
 /// Gets the interrupt ID of the current ingoing interrupt
 #[inline(always)]
-pub fn get_int_id() -> u32 {
+pub fn get_int_id(is_group0: bool) -> u32 {
     unsafe {
         if let Some(gicc_iar) = gicc_iar() {
             (*gicc_iar) & 0xFFFFFF
         } else {
             let results: u32;
-            asm!("mrs {:x}, ICC_IAR0_EL1", out(reg) results);
+            if is_group0 {
+                asm!("mrs {:x}, ICC_IAR0_EL1", out(reg) results);
+            } else {
+                asm!("mrs {:x}, ICC_IAR1_EL1", out(reg) results);
+            }
             results & 0xFFFFFF
         }
     }
@@ -226,7 +235,7 @@ pub fn init() {
         }
 
         ICCCtlr::new()
-            .with_eoi_mode(true)
+            .with_eoi_mode(false)
             .with_cbpr(true)
             .with_pmhe(true)
             .write();
@@ -241,7 +250,8 @@ pub fn init() {
         let icc_ctlr = ICCCtlr::get();
         debug!(
             ICCCtlr,
-            "Initialized, priority bits: {}, intID bits: {}, affinity 3 valid: {}, extended intID range: {}",
+            "Initialized, eoi mode: {}, priority bits: {}, intID bits: {}, affinity 3 valid: {}, extended intID range: {}",
+            icc_ctlr.eoi_mode(),
             icc_ctlr.pri_bits() + 1,
             if icc_ctlr.idbits_24() == 1 { "24" } else {"16"},
             icc_ctlr.af3v(),
@@ -251,4 +261,18 @@ pub fn init() {
 
     set_min_priority(0xff);
     set_binary_spilt_point(0);
+}
+
+pub fn deactivate_int(int_id: u32, is_group0: bool) {
+    unsafe {
+        if let Some(dr) = gicc_dir() {
+            core::ptr::write_volatile(dr, int_id);
+        } else {
+            if is_group0 {
+                asm!("msr ICC_EOIR0_EL1, {:x}", in(reg) int_id)
+            } else {
+                asm!("msr ICC_EOIR1_EL1, {:x}", in(reg) int_id)
+            }
+        }
+    }
 }

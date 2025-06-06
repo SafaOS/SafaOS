@@ -87,12 +87,19 @@ unsafe extern "C" fn handle_sync_exception(frame: *mut InterruptFrame) {
 #[no_mangle]
 unsafe extern "C" fn handle_irq(frame: *mut InterruptFrame) {
     unsafe {
-        interrupt(&mut *frame);
+        interrupt(&mut *frame, false);
     }
 }
 
-fn interrupt(frame: &mut InterruptFrame) {
-    let int_id = gic::cpu_if::get_int_id();
+#[no_mangle]
+unsafe extern "C" fn handle_fiq(frame: *mut InterruptFrame) {
+    unsafe {
+        interrupt(&mut *frame, true);
+    }
+}
+
+fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
+    let int_id = gic::cpu_if::get_int_id(is_fiq /* Group 0 interrupts are FIQs */);
     debug_assert!(
         int_id < 1020 || int_id > 1023,
         "FIXME: {int_id} is either an error or unimplemented and cannot be handled"
@@ -101,7 +108,7 @@ fn interrupt(frame: &mut InterruptFrame) {
     match int_id {
         // TODO: instead of making this a special case just use the interrupt abstraction layer to register the timer
         // but maybe this is faster?
-        i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame),
+        i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
         i => warn!("unknown intID {i}, ignoring..."),
     }
 }

@@ -49,9 +49,11 @@ pub fn init_generic_timer() {
     );
 }
 
-pub fn on_interrupt(ctx: &mut InterruptFrame) {
-    TIMER_IRQ.clear_pending();
+pub fn on_interrupt(ctx: &mut InterruptFrame, is_fiq: bool) {
     unsafe {
-        super::threading::context_switch(ctx, || reset_timer(10));
+        super::threading::context_switch(ctx, || {
+            TIMER_IRQ.clear_pending().deactivate(is_fiq);
+            reset_timer(10)
+        });
     }
 }
