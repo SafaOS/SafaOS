@@ -1,6 +1,6 @@
 //! CPU sepicific stuff
 //! uses device trees only for now
-
+// FIXME: incomplete and code is bad, i need to rework this in the future
 use core::str::FromStr;
 use core::{cell::SyncUnsafeCell, mem::zeroed};
 use lazy_static::lazy_static;
@@ -14,6 +14,12 @@ struct GICInfo {
     gicc: Option<(PhysAddr, usize)>,
     gicd: (PhysAddr, usize),
     gicr: (PhysAddr, usize),
+    populated: bool,
+}
+
+struct ITSInfo {
+    base: PhysAddr,
+    size: usize,
     populated: bool,
 }
 
@@ -39,7 +45,7 @@ trait DeviceInfo {
     fn populated(&self) -> bool;
     fn compatible(&self) -> &'static [&'static str];
     /// Populates the Device's information from a Device Tree Node which is compatible with the device (according to [`Self::compatible`])
-    fn populate<'a>(&mut self, node: dtb::Node);
+    fn populate<'a>(&mut self, node: &dtb::Node);
 }
 
 impl DeviceInfo for GICInfo {
@@ -51,7 +57,7 @@ impl DeviceInfo for GICInfo {
         &["arm,gic-v3"]
     }
 
-    fn populate<'a>(&mut self, node: dtb::Node) {
+    fn populate<'a>(&mut self, node: &dtb::Node) {
         let mut reg = node.get_reg().unwrap();
         self.gicd = reg.next().unwrap();
         self.gicr = reg.next().unwrap();
@@ -61,12 +67,31 @@ impl DeviceInfo for GICInfo {
     }
 }
 
+impl DeviceInfo for ITSInfo {
+    fn populated(&self) -> bool {
+        self.populated
+    }
+
+    fn compatible(&self) -> &'static [&'static str] {
+        &["arm,gic-v3-its"]
+    }
+
+    fn populate<'a>(&mut self, node: &dtb::Node) {
+        let mut reg = node.get_reg().unwrap();
+        let (base_addr, size) = reg.next().unwrap();
+
+        self.base = base_addr;
+        self.size = size;
+        self.populated = true;
+    }
+}
+
 impl DeviceInfo for TimerInfo {
     fn populated(&self) -> bool {
         self.populated
     }
 
-    fn populate<'a>(&mut self, node: dtb::Node) {
+    fn populate<'a>(&mut self, node: &dtb::Node) {
         let interrupts = node
             .get_prop("interrupts")
             .expect("failed to get the interrupts property for the timer's device tree node");
@@ -108,7 +133,7 @@ impl DeviceInfo for PL011Serial {
         self.populated
     }
 
-    fn populate<'a>(&mut self, node: dtb::Node) {
+    fn populate<'a>(&mut self, node: &dtb::Node) {
         let mut reg = node.get_reg().unwrap();
         let (addr, _) = reg.next().unwrap();
         self.base = addr;
@@ -123,7 +148,7 @@ impl DeviceInfo for PCIe {
     fn populated(&self) -> bool {
         self.populated
     }
-    fn populate<'a>(&mut self, node: dtb::Node) {
+    fn populate<'a>(&mut self, node: &dtb::Node) {
         let mut reg = node.get_reg_no_cells().unwrap();
         let (start, size) = reg.next().unwrap();
 
@@ -146,16 +171,18 @@ impl DeviceInfo for PCIe {
 }
 
 static GICRAW: SyncUnsafeCell<GICInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
+static ITSRAW: SyncUnsafeCell<ITSInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
 static TIMERRAW: SyncUnsafeCell<TimerInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
 static PL011RAW: SyncUnsafeCell<PL011Serial> = SyncUnsafeCell::new(unsafe { zeroed() });
 static PCIERAW: SyncUnsafeCell<PCIe> = SyncUnsafeCell::new(unsafe { zeroed() });
 
-const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 4] {
+const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 5] {
     let gic = &mut *GICRAW.get();
     let gic: &'static mut dyn DeviceInfo = gic;
     unsafe {
         [
             gic,
+            &mut *ITSRAW.get(),
             &mut *TIMERRAW.get(),
             &mut *PL011RAW.get(),
             &mut *PCIERAW.get(),
@@ -179,9 +206,8 @@ fn init_from_tree(tree: &DeviceTree) {
         for device in &mut *devices {
             if !device.populated() {
                 if node.is_compatible(device.compatible()) {
-                    device.populate(node);
-                    // TODO: for now we can just stop when a node is proven to be compatible
-                    return;
+                    device.populate(&node);
+                    break;
                 }
             }
         }
@@ -242,6 +268,13 @@ lazy_static! {
             init();
         }
         (r.gicc, r.gicd, r.gicr)
+    };
+    pub static ref GICITS: (PhysAddr, usize) = unsafe {
+        let r = &mut *ITSRAW.get();
+        if !r.populated() {
+            init();
+        }
+        (r.base, r.size)
     };
     pub static ref PCIE: (PhysAddr, usize, u32, u32) = unsafe {
         let r = &mut *PCIERAW.get();
