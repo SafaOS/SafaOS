@@ -456,9 +456,9 @@ fn gicd_igroup0() -> *mut u32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntGroup {
     /// Group 0, Typically used by FIQs
-    NonSecure = 0,
+    Secure = 0,
     /// Group 1, Typically used by IRQs
-    Secure = 1,
+    NonSecure = 1,
 }
 
 #[inline(always)]
@@ -473,7 +473,7 @@ pub fn set_group(int_id: u32, kind: IntKind, group: IntGroup) {
         let shift = 1 << value;
         core::ptr::write_volatile(
             reg,
-            if group == IntGroup::Secure {
+            if group == IntGroup::NonSecure {
                 *reg | shift
             } else {
                 *reg & !shift
