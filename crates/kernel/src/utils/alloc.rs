@@ -351,13 +351,13 @@ impl<T> LinkedList<T> {
 
     /// returns an iterator that 'continues' the list which means calling `next` on the iterator
     /// would advance then return the current element, it currently wraps around the list
-    pub fn continue_iter(&mut self) -> LinkedListContinue<T> {
+    pub fn continue_iter<'s>(&'s mut self) -> LinkedListContinue<'s, T> {
         LinkedListContinue { list: self }
     }
 
     /// returns an iterator that acts like a clone of the list
     /// iterating over the list will yield the same values as iterating over the original list
-    pub fn clone_iter(&self) -> LinkedListCloneIter<T> {
+    pub fn clone_iter<'s>(&'s self) -> LinkedListCloneIter<'s, T> {
         let list = Self {
             head: self.head,
             tail: self.tail,

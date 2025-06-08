@@ -27,7 +27,7 @@ pub struct SyscallContext {
 }
 
 #[no_mangle]
-#[naked]
+#[unsafe(naked)]
 pub extern "x86-interrupt" fn syscall_base() -> ! {
     unsafe {
         naked_asm!(

@@ -131,7 +131,7 @@ impl FrameBufferDriver {
     }
 
     #[inline]
-    pub fn buffer(&self) -> MutexGuard<FrameBuffer<'static>> {
+    pub fn buffer<'s>(&'s self) -> MutexGuard<'s, FrameBuffer<'static>> {
         self.inner.lock()
     }
 }

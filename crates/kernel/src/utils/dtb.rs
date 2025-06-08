@@ -242,7 +242,7 @@ impl<'a> Node<'a> {
     }
 
     /// Returns the value of the property named `name` in the node
-    pub fn get_prop(&self, name: &str) -> Option<NodeValue> {
+    pub fn get_prop<'s>(&'s self, name: &str) -> Option<NodeValue<'s>> {
         let property = self.parent.inner.get_property(&self.path, name)?;
 
         Some(match name {
@@ -289,7 +289,7 @@ impl<'a> Node<'a> {
     }
 
     /// Gets the `reg` property from the node if available
-    pub fn get_reg(&self) -> Option<NodeRegProp> {
+    pub fn get_reg<'s>(&'s self) -> Option<NodeRegProp<'s>> {
         let bytes = node_get_prop_unchecked!(self, "reg")?;
         let address_cells =
             node_get_prop_unchecked!(self, "#address-cells", NodeValue::U32).unwrap_or(2);
@@ -298,7 +298,7 @@ impl<'a> Node<'a> {
         Some(NodeRegProp::from_bytes(bytes, address_cells, size_cells))
     }
     /// Gets the `reg` property from the node if available without respecting address-cells and size-cells
-    pub fn get_reg_no_cells(&self) -> Option<NodeRegProp> {
+    pub fn get_reg_no_cells<'s>(&'s self) -> Option<NodeRegProp<'s>> {
         let bytes = node_get_prop_unchecked!(self, "reg")?;
         Some(NodeRegProp::from_bytes(bytes, 2, 2))
     }

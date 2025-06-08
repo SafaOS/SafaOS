@@ -321,7 +321,7 @@ impl PCI {
         }
     }
 
-    fn get_header(&self, bus: u8, slot: u8, function: u8) -> PCIHeader {
+    fn get_header<'s>(&'s self, bus: u8, slot: u8, function: u8) -> PCIHeader<'s> {
         let common = self.get_common_header(bus, slot, function);
         let ty = common.header_type & 0xF;
         unsafe {
@@ -332,7 +332,13 @@ impl PCI {
         }
     }
 
-    fn enum_device<F>(&self, bus: u8, device: u8, function: u8, f: &F) -> Option<PCIHeader>
+    fn enum_device<'s, F>(
+        &'s self,
+        bus: u8,
+        device: u8,
+        function: u8,
+        f: &F,
+    ) -> Option<PCIHeader<'s>>
     where
         F: Fn(&PCIHeader) -> bool,
     {
@@ -354,7 +360,7 @@ impl PCI {
         None
     }
 
-    fn enum_all<F>(&self, f: &F) -> Option<PCIHeader>
+    fn enum_all<'s, F>(&'s self, f: &F) -> Option<PCIHeader<'s>>
     where
         F: Fn(&PCIHeader) -> bool,
     {
@@ -368,7 +374,7 @@ impl PCI {
         None
     }
 
-    fn lookup(&self, class: u8, subclass: u8, prog_if: u8) -> Option<PCIHeader> {
+    fn lookup<'s>(&'s self, class: u8, subclass: u8, prog_if: u8) -> Option<PCIHeader<'s>> {
         self.enum_all(&|header| {
             let common = header.common();
             common.class == class && common.subclass == subclass && common.prog_if == prog_if

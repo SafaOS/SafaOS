@@ -60,7 +60,7 @@ impl AliveTask {
     pub fn resource_manager_mut(&mut self) -> &mut ResourceManager {
         &mut self.resources
     }
-    pub fn cwd(&self) -> Path {
+    pub fn cwd<'s>(&'s self) -> Path<'s> {
         self.cwd.as_path()
     }
 
@@ -187,7 +187,7 @@ impl AliveTask {
 }
 
 impl ZombieTask {
-    pub fn cwd(&self) -> Path {
+    pub fn cwd<'s>(&'s self) -> Path<'s> {
         self.cwd.as_path()
     }
 }
@@ -227,7 +227,7 @@ impl TaskState {
         self.alive_mut().map(|alive| alive.resource_manager_mut())
     }
 
-    pub fn cwd(&self) -> Path {
+    pub fn cwd<'s>(&'s self) -> Path<'s> {
         match self {
             TaskState::Alive(alive) => alive.cwd(),
             TaskState::Zombie(zombie) => zombie.cwd(),
@@ -343,11 +343,11 @@ impl Task {
         &self.name
     }
 
-    pub fn state(&self) -> Option<RwLockReadGuard<TaskState>> {
+    pub fn state<'s>(&'s self) -> Option<RwLockReadGuard<'s, TaskState>> {
         self.state.try_read()
     }
 
-    pub fn state_mut(&self) -> Option<RwLockWriteGuard<TaskState>> {
+    pub fn state_mut<'s>(&'s self) -> Option<RwLockWriteGuard<'s, TaskState>> {
         self.state.try_write()
     }
 

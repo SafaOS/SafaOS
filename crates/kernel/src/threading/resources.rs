@@ -115,7 +115,7 @@ impl ResourceManager {
 
     /// gets a reference to the resource with index `ri`
     /// returns `None` if `ri` is invalid
-    fn get(&self, ri: usize) -> Option<MutexGuard<Resource>> {
+    fn get<'s>(&'s self, ri: usize) -> Option<MutexGuard<'s, Resource>> {
         if ri >= self.resources.len() {
             return None;
         }

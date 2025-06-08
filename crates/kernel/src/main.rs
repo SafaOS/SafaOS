@@ -10,7 +10,7 @@
 #![feature(box_vec_non_null)]
 #![feature(vec_into_raw_parts)]
 #![feature(iter_collect_into)]
-#![feature(naked_functions)]
+#![feature(let_chains)]
 #![feature(sync_unsafe_cell)]
 #![feature(never_type)]
 #![feature(likely_unlikely)]
