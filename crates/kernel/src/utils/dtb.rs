@@ -293,7 +293,8 @@ impl<'a> Node<'a> {
         let bytes = node_get_prop_unchecked!(self, "reg")?;
         let address_cells =
             node_get_prop_unchecked!(self, "#address-cells", NodeValue::U32).unwrap_or(2);
-        let size_cells = node_get_prop_unchecked!(self, "#size-cells", NodeValue::U32).unwrap_or(1);
+        // FIXME: base this on the root node when there is no value
+        let size_cells = node_get_prop_unchecked!(self, "#size-cells", NodeValue::U32).unwrap_or(2);
 
         Some(NodeRegProp::from_bytes(bytes, address_cells, size_cells))
     }
