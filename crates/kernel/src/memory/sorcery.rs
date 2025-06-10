@@ -60,7 +60,7 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
         "mapping HHDM, limine's: {:#x}",
         limine::get_phy_offset()
     );
-    let flags = EntryFlags::WRITE;
+    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
 
     for entry in limine::mmap_request().entries() {
         let phys_addr = PhysAddr::from(entry.base as usize);
