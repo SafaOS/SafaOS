@@ -3,7 +3,10 @@ use lazy_static::lazy_static;
 use crate::{
     arch::{aarch64::cpu, paging::current_higher_root_table},
     debug, info,
-    memory::paging::{EntryFlags, MapToError, PAGE_SIZE},
+    memory::{
+        frame_allocator::SIZE_64K,
+        paging::{EntryFlags, MapToError, PAGE_SIZE},
+    },
     VirtAddr,
 };
 
@@ -25,26 +28,21 @@ lazy_static! {
         let (base, size) = cpu::GICV3.2;
         (base.into_virt(), size)
     };
-
     static ref GICITS: (VirtAddr, usize) = {
         let (base, size) = *cpu::GICITS;
         (base.into_virt(), size)
     };
-
-
     static ref GICD_BASE: VirtAddr = GICD.0;
     static ref GICD_SIZE: usize = GICD.1;
-
     static ref GICR_BASE: VirtAddr = GICR.0;
     static ref GICR_SIZE: usize = GICR.1;
-    static ref SGI_BASE: VirtAddr = *GICR_BASE + (/* 64 KiB */ 64 * 1024);
-
+    static ref SGI_BASE: VirtAddr = *GICR_BASE + SIZE_64K;
     static ref GICITS_BASE: VirtAddr = GICITS.0;
     static ref GICITS_SIZE: usize = GICITS.1;
 }
 
 unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
-    let flags = EntryFlags::WRITE;
+    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
     if let Some((gicc_base, size)) = *GICC {
         dest.map_contiguous_pages(
             gicc_base,
@@ -86,6 +84,7 @@ pub fn init_gic() {
     gicd::init();
     gicr::init();
     cpu_if::init();
+    its::init();
 }
 
 #[derive(Debug, Clone, Copy)]

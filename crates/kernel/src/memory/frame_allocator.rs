@@ -8,8 +8,10 @@ use lazy_static::lazy_static;
 
 use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
 
+/// 1 KiB
+pub const SIZE_1K: usize = 1024 * 1;
 /// 64 KiB
-pub const SIZE_64K: usize = 1024 * 64;
+pub const SIZE_64K: usize = SIZE_1K * 64;
 // Pages worth 64 KiB
 pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
 
@@ -18,12 +20,16 @@ pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
 pub struct FramePtr<T>(*mut T);
 impl<T> FramePtr<T> {
     pub fn phys_addr(&self) -> PhysAddr {
-        let virt_addr = VirtAddr::from_ptr(self.0);
+        let virt_addr = VirtAddr::from_ptr(self.as_ptr());
         virt_addr.into_phys()
     }
 
     pub fn frame(&self) -> Frame {
         Frame(self.phys_addr())
+    }
+
+    pub const fn as_ptr(&self) -> *mut T {
+        self.0
     }
 }
 
