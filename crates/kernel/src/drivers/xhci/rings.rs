@@ -8,6 +8,9 @@ use super::{
 use alloc::vec::Vec;
 use bitfield_struct::bitfield;
 
+pub const TRB_TYPE_LINK: u8 = 0x6;
+pub const TRB_TYPE_ENABLE_SLOT_CMD: u8 = 0x9;
+
 #[bitfield(u32)]
 pub struct TRBCommand {
     #[bits(1)]
@@ -55,7 +58,7 @@ impl<'s> XHCICommandRing<'s> {
         let link_trb = &mut trbs[trb_count - 1];
 
         link_trb.parameter = trbs_phys_addr.into_raw() as u64;
-        link_trb.cmd.set_trb_type(6);
+        link_trb.cmd.set_trb_type(TRB_TYPE_LINK);
         link_trb.cmd.set_toggle_cycle(true);
         link_trb.cmd.set_cycle_bit(1);
 

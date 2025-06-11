@@ -12,6 +12,7 @@ use crate::{
     drivers::{
         interrupts::{self, IntTrigger, InterruptReceiver},
         pci::PCICommandReg,
+        xhci::rings::TRB_TYPE_ENABLE_SLOT_CMD,
     },
     memory::{
         align_up,
@@ -48,8 +49,11 @@ pub struct XHCI<'s> {
 
 impl<'s> InterruptReceiver for Mutex<XHCI<'s>> {
     fn handle_interrupt(&self) {
-        crate::serial!("ENTERED HANDLER\n");
-        todo!("{}", self.lock().operational_regs())
+        let mut this = self.lock();
+        let events = this.event_ring.dequeue_events();
+        crate::serial!("{events:#?}\n");
+
+        this.acknowledge_irq(0);
     }
 }
 
@@ -306,9 +310,6 @@ impl<'s> PCIDevice for Mutex<XHCI<'s>> {
     }
 
     fn start(&'static self) -> bool {
-        unsafe {
-            crate::arch::disable_interrupts();
-        }
         let irq_info = self.lock().irq_info.clone();
         interrupts::register_irq(irq_info, IntTrigger::Edge, self);
 
@@ -323,12 +324,13 @@ impl<'s> PCIDevice for Mutex<XHCI<'s>> {
             "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}", usbsts_before, usbsts_after, usbcmd_before, usbcmd_after
         );
 
-        let trb = rings::TRB::new(TRBCommand::default().with_trb_type(9), 0, 0);
+        let trb = rings::TRB::new(
+            TRBCommand::default().with_trb_type(TRB_TYPE_ENABLE_SLOT_CMD),
+            0,
+            0,
+        );
         self.lock().command_ring.enqueue(trb);
         self.lock().doorbell_manager.ring_command_doorbell();
-        unsafe {
-            crate::arch::enable_interrupts();
-        }
         true
     }
 }
