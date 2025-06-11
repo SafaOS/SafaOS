@@ -3,10 +3,9 @@ use core::fmt::Debug;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::arch::interrupts::IRQS;
+use crate::{arch::interrupts::IRQS, utils::locks::RwLock};
 
 use super::pci::msi::MSIXInfo;
-use crate::utils::locks::Mutex;
 
 pub trait InterruptReceiver: Send + Sync + Debug {
     fn handle_interrupt(&self);
@@ -105,7 +104,7 @@ impl IRQManager {
 }
 
 lazy_static! {
-    pub static ref IRQ_MANAGER: Mutex<IRQManager> = Mutex::new(IRQManager::new());
+    pub static ref IRQ_MANAGER: RwLock<IRQManager> = RwLock::new(IRQManager::new());
 }
 
 /// Register an IRQ handler according to `irq_info` (eg. MSIX or MSI)
@@ -115,6 +114,6 @@ pub fn register_irq(
     handler: &'static dyn InterruptReceiver,
 ) {
     IRQ_MANAGER
-        .lock()
+        .write()
         .register_irq(irq_info, triggering, handler);
 }

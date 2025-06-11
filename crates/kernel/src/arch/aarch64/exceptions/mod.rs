@@ -116,7 +116,7 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
         i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
         // LPIs
         i if i >= 8192 => {
-            let irq_manager = IRQ_MANAGER.lock();
+            let irq_manager = IRQ_MANAGER.read();
             for irq in &*irq_manager.irqs {
                 if irq.irq_num == i {
                     irq.handler.handle_interrupt();

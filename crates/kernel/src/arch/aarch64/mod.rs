@@ -56,9 +56,6 @@ pub fn init_phase1() {
     exceptions::init_exceptions();
 
     cpu::init();
-    unsafe {
-        enable_interrupts();
-    }
 }
 
 #[inline(never)]

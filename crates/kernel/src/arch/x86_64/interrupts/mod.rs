@@ -103,7 +103,7 @@ pub fn init_idt() {
 
 const fn irq_handler<const IRQ_NUM: u32>() -> fn() {
     move || {
-        let manager = crate::drivers::interrupts::IRQ_MANAGER.lock();
+        let manager = crate::drivers::interrupts::IRQ_MANAGER.read();
         for irq in &manager.irqs {
             if irq.irq_num == IRQ_NUM {
                 irq.handler.handle_interrupt();
