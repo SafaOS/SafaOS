@@ -244,7 +244,7 @@ impl RegionListAllocator {
 
         while let Some(curr_ptr) = unsafe { &mut *curr } {
             unsafe {
-                if satisfied_frames >= num_pages {
+                if satisfied_frames >= num_pages && found_ptr.is_some() {
                     break;
                 }
 
