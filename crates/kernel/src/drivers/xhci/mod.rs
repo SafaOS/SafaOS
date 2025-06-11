@@ -48,6 +48,7 @@ pub struct XHCI<'s> {
 
 impl<'s> InterruptReceiver for Mutex<XHCI<'s>> {
     fn handle_interrupt(&self) {
+        crate::serial!("ENTERED HANDLER\n");
         todo!("{}", self.lock().operational_regs())
     }
 }
@@ -105,7 +106,7 @@ impl<'s> XHCI<'s> {
             core::hint::spin_loop();
         }
 
-        assert!(!regs.usbstatus.contains(USBSts::NOT_READY));
+        assert!(!read_ref!(regs.usbstatus).contains(USBSts::NOT_READY));
     }
 
     #[allow(unused_unsafe)]
@@ -239,14 +240,14 @@ impl<'s> PCIDevice for Mutex<XHCI<'s>> {
         (0xc, 0x3, 0x30)
     }
 
-    fn create(mut header: super::pci::PCIHeader) -> Self {
-        let general_header = header.unwrap_general();
+    fn create(mut info: super::pci::PCIDeviceInfo) -> Self {
+        let general_header = info.unwrap_general();
         write_ref!(
             general_header.common.command,
             PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE
         );
 
-        let bars = header.get_bars();
+        let bars = info.get_bars();
         let (base_addr, _) = bars[0];
         let virt_base_addr = base_addr.into_virt();
 
@@ -277,7 +278,7 @@ impl<'s> PCIDevice for Mutex<XHCI<'s>> {
             XHCIDoorbellManager::new(caps_regs.doorbells_base(), caps_regs.max_device_slots());
 
         // FIXME: switch to MSI if not available
-        let irq_info = header
+        let irq_info = info
             .get_msix_cap()
             .map(|msix| msix.into_irq_info())
             .unwrap();
@@ -305,6 +306,9 @@ impl<'s> PCIDevice for Mutex<XHCI<'s>> {
     }
 
     fn start(&'static self) -> bool {
+        unsafe {
+            crate::arch::disable_interrupts();
+        }
         let irq_info = self.lock().irq_info.clone();
         interrupts::register_irq(irq_info, IntTrigger::Edge, self);
 
@@ -325,7 +329,6 @@ impl<'s> PCIDevice for Mutex<XHCI<'s>> {
         unsafe {
             crate::arch::enable_interrupts();
         }
-        loop {}
         true
     }
 }
