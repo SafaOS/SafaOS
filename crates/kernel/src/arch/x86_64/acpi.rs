@@ -282,14 +282,14 @@ impl FADT {
 }
 
 impl MCFG {
-    pub fn nth(&self, n: usize) -> Option<&MCFGEntry> {
+    pub fn nth(&self, n: usize) -> Option<MCFGEntry> {
         let table = addr_of!(self.entries) as *const MCFGEntry;
         unsafe {
             if n >= self.count() {
                 None
             } else {
                 let ptr = table.add(n);
-                Some(&*ptr)
+                Some(core::ptr::read_unaligned(ptr))
             }
         }
     }
