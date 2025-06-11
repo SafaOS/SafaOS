@@ -12,6 +12,7 @@ use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
 pub const SIZE_1K: usize = 1024 * 1;
 /// 64 KiB
 pub const SIZE_64K: usize = SIZE_1K * 64;
+#[allow(unused)]
 // Pages worth 64 KiB
 pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
 
@@ -187,6 +188,7 @@ impl RegionListAllocator {
         }
     }
 
+    #[cfg(test)]
     /// Loops through the list counting the available frames in the list, more expensive than [`usable_frames`] -  [`mapped_frames`], because these are O(1)
     #[inline(always)]
     fn count_frames_expensive(&self) -> usize {
@@ -417,6 +419,7 @@ pub fn allocate_frame() -> Option<Frame> {
     REGION_ALLOCATOR.lock().allocate_frame()
 }
 
+#[allow(unused)]
 #[inline(always)]
 pub fn allocate_aligned(align_pages: usize) -> Option<Frame> {
     REGION_ALLOCATOR.lock().allocate_aligned(align_pages)
@@ -499,6 +502,7 @@ fn allocate_aligned_test() {
     deallocate_frame(other_frame);
 }
 
+#[allow(unused)]
 fn allocate_contiguous_test_inner<const N: usize>(align_pages: usize) -> heapless::Vec<Frame, N> {
     let used_before = mapped_frames();
     let mut results = heapless::Vec::new();

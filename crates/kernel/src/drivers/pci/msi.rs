@@ -58,6 +58,7 @@ pub struct MSIXInfo {
 }
 
 impl MSIXInfo {
+    #[allow(unused)]
     pub const fn requester_id(&self) -> u32 {
         self.requester_id
     }
