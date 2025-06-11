@@ -1,6 +1,6 @@
 use super::gic;
 use crate::{
-    arch::aarch64::{gic::LPI_MANAGER, timer::TIMER_IRQ},
+    arch::aarch64::{gic::IntID, timer::TIMER_IRQ},
     drivers::interrupts::IRQ_MANAGER,
     syscalls::syscall,
     warn,
@@ -103,6 +103,7 @@ unsafe extern "C" fn handle_fiq(frame: *mut InterruptFrame) {
     }
 }
 
+#[inline]
 fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
     let int_id = gic::cpu_if::get_int_id(is_fiq /* Group 0 interrupts are FIQs */);
     debug_assert!(
@@ -116,6 +117,8 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
         i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
         // LPIs
         i if i >= 8192 => {
+            let int = IntID::from_int_id(i);
+
             let irq_manager = IRQ_MANAGER.read();
             for irq in &*irq_manager.irqs {
                 if irq.irq_num == i {
@@ -124,7 +127,7 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
                 }
             }
 
-            LPI_MANAGER.lock().clear_pending(i);
+            int.clear_pending().deactivate(is_fiq);
         }
         i => warn!("unknown intID {i}, ignoring..."),
     }

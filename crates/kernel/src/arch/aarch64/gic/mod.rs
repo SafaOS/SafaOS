@@ -110,11 +110,17 @@ impl IntKind {
         }
     }
 
-    const fn choose_reg<T>(self, gicd_reg: *mut T, gicr_reg: *mut T) -> *mut T {
+    fn choose_reg<T, F>(self, gicd_reg: *mut T, gicr_reg: *mut T, lpi_f: F) -> Option<*mut T>
+    where
+        F: FnOnce(),
+    {
         match self {
-            Self::SGI | Self::PPI => gicr_reg,
-            Self::SPI => gicd_reg,
-            Self::LPI => todo!(),
+            Self::SGI | Self::PPI => Some(gicr_reg),
+            Self::SPI => Some(gicd_reg),
+            Self::LPI => {
+                lpi_f();
+                None
+            }
         }
     }
 }
@@ -125,7 +131,11 @@ fn enable(interrupt: u32, int_kind: IntKind) {
     let index = interrupt / 32;
 
     unsafe {
-        let reg = int_kind.choose_reg(gicd::isenabler(), gicr::isenabler());
+        let Some(reg) = int_kind.choose_reg(gicd::isenabler(), gicr::isenabler(), || {
+            LPI_MANAGER.lock().enable(interrupt)
+        }) else {
+            return;
+        };
         core::ptr::write_volatile(reg.add(index as usize), 1 << value);
     }
 }
@@ -136,7 +146,11 @@ pub fn clear_pending(interrupt: u32, kind: IntKind) {
     let value = interrupt % 32;
     let index = interrupt / 32;
     unsafe {
-        let reg = kind.choose_reg(gicd::icpendr0(), gicr::icpendr0());
+        let Some(reg) = kind.choose_reg(gicd::icpendr0(), gicr::icpendr0(), || {
+            LPI_MANAGER.lock().clear_pending(interrupt)
+        }) else {
+            return;
+        };
         core::ptr::write_volatile(reg.add(index as usize), 1 << value);
     }
 }
@@ -158,7 +172,10 @@ pub fn set_group(int_id: u32, kind: IntKind, group: IntGroup) {
     let index = int_id / 32;
 
     unsafe {
-        let reg = kind.choose_reg(gicd::igroup0(), gicr::igroup0());
+        let Some(reg) = kind.choose_reg(gicd::igroup0(), gicr::igroup0(), || unimplemented!())
+        else {
+            return;
+        };
         let reg = reg.add(index as usize);
 
         let shift = 1 << value;
@@ -176,7 +193,9 @@ pub fn set_group(int_id: u32, kind: IntKind, group: IntGroup) {
 fn set_pending(int_id: u32, kind: IntKind) {
     let value = int_id % 32;
     let index = int_id / 32;
-    let reg = kind.choose_reg(gicd::ispendr0(), gicr::ispendr0());
+    let reg = kind
+        .choose_reg(gicd::ispendr0(), gicr::ispendr0(), || unimplemented!())
+        .unwrap();
     unsafe {
         let reg = reg.add(index as usize);
         core::ptr::write_volatile(reg, 1 << value);
