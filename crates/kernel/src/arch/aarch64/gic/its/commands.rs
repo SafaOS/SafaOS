@@ -2,10 +2,10 @@ use bitfield_struct::bitfield;
 use lazy_static::lazy_static;
 
 use crate::{
-    arch::aarch64::gic::{its::GITS_TYPER, GICITS_BASE, GICR_BASE},
+    arch::aarch64::gic::{its::rdbase, GICITS_BASE},
     time,
     utils::locks::Mutex,
-    VirtAddr,
+    PhysAddr, VirtAddr,
 };
 
 #[bitfield(u64)]
@@ -74,17 +74,12 @@ impl GITSCReader {
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum ITSCommandID {
+    #[allow(unused)]
+    Unknown = 0x0,
     Sync = 0x05,
-}
-
-#[bitfield(u64)]
-pub struct ITSCommandD2 {
-    #[bits(16)]
-    __: (),
-    #[bits(35)]
-    rd_base: usize,
-    #[bits(13)]
-    __: (),
+    MapD = 0x08,
+    MapC = 0x09,
+    MapI = 0x0B,
 }
 
 #[derive(Debug)]
@@ -92,32 +87,65 @@ pub struct ITSCommandD2 {
 pub struct ITSCommand {
     // dword 0
     id: ITSCommandID,
-    _rsdv0: [u8; 7],
+    d0_par0: u8,
+    d0_par1: u8,
+    d0_par2: u8,
+    d0_par3: u32,
     // dword 1
-    _rsdv1: u64,
+    dw1: u64,
     // dword 2
-    dw_2: ITSCommandD2,
+    dw2: u64,
     // dword 3
-    _rsdv3: u64,
+    dw3: u64,
 }
 
 impl ITSCommand {
+    const RD_BASE_OFF: u8 = 16;
+    const VALID_OFF: u8 = 63;
+
+    pub const fn zeroed() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
     /// Creates a SYNC command targeting GICR for processor 0
     pub fn sync() -> Self {
-        Self::new_sync(if GITS_TYPER.pta_base_addr() {
-            GICR_BASE.into_raw()
-        } else {
-            0
-        })
+        Self::new_sync(rdbase())
     }
+
     /// Creates a SYNC command with rd_base = `rd_base`
     pub const fn new_sync(rd_base: usize) -> Self {
         Self {
             id: ITSCommandID::Sync,
-            dw_2: ITSCommandD2::new().with_rd_base(rd_base),
-            _rsdv1: 0,
-            _rsdv3: 0,
-            _rsdv0: [0; 7],
+            dw2: (rd_base << Self::RD_BASE_OFF) as u64,
+            ..Self::zeroed()
+        }
+    }
+
+    pub const fn new_mapc(icid: u16, rd_base: usize, valid: bool) -> Self {
+        Self {
+            id: ITSCommandID::MapC,
+            dw2: icid as u64
+                | (rd_base << Self::RD_BASE_OFF) as u64
+                | ((valid as u64) << Self::VALID_OFF),
+            ..Self::zeroed()
+        }
+    }
+
+    pub const fn new_mapd(size: u8, itt_addr: PhysAddr, valid: bool) -> Self {
+        Self {
+            id: ITSCommandID::MapD,
+            dw1: ((size - 1) & 0xF) as u64,
+            dw2: (itt_addr.into_raw() as u64) | ((valid as u64) << Self::VALID_OFF),
+            ..Self::zeroed()
+        }
+    }
+
+    pub const fn new_mapi(device_id: u32, event_id: u32, icid: u16) -> Self {
+        Self {
+            id: ITSCommandID::MapI,
+            d0_par3: device_id,
+            dw1: event_id as u64,
+            dw2: icid as u64,
+            ..Self::zeroed()
         }
     }
 }

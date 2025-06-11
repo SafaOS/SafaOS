@@ -3,11 +3,11 @@ use lazy_static::lazy_static;
 
 use crate::{
     arch::aarch64::gic::{
-        its::commands::{ITSCommand, GITS_COMMAND_QUEUE},
-        GICITS_BASE,
+        its::commands::GITS_COMMAND_QUEUE, GICITS_BASE, GICITS_TRANSLATION_BASE, GICR_BASE,
     },
     debug,
     memory::{
+        align_up,
         frame_allocator::{self, SIZE_1K, SIZE_64K_PAGES},
         paging::PAGE_SIZE,
     },
@@ -186,6 +186,17 @@ lazy_static! {
     static ref GITS_TYPER: GITSTyper = GITSTyper::read();
 }
 
+/// Returns `rdbase` (GICR) according to GITS_TYPER.pta
+/// if GITS_TYPER.pta == 0b1 returns the GICR base address
+/// if GITS_TYPER.pta == 0b0 returns the GICR processor number
+pub fn rdbase() -> usize {
+    if GITS_TYPER.pta_base_addr() {
+        GICR_BASE.into_raw()
+    } else {
+        0
+    }
+}
+
 #[bitfield(u64)]
 pub struct GITSBaser {
     /// The number of pages of physical memory allocated to the table, minus one.
@@ -297,17 +308,63 @@ pub struct GITSBaser {
 }
 
 impl GITSBaser {
-    fn get_ptr() -> *mut Self {
-        (*GICITS_BASE + 0x0100).into_ptr::<Self>()
+    fn get_ptr(n: usize) -> *mut Self {
+        (*GICITS_BASE + (0x0100) + (8 * n)).into_ptr::<Self>()
     }
 
-    fn read() -> Self {
-        unsafe { *Self::get_ptr() }
+    fn read(n: usize) -> Self {
+        unsafe { *Self::get_ptr(n) }
     }
 
-    unsafe fn write(self) {
+    unsafe fn write(self, n: usize) {
         unsafe {
-            core::ptr::write_volatile(Self::get_ptr(), self);
+            core::ptr::write_volatile(Self::get_ptr(n), self);
+        }
+    }
+
+    /// Maps and initializes a GITS_BASER<N> where N = `n`
+    unsafe fn setup(n: usize) -> (VirtAddr, usize) {
+        let baser = GITSBaser::read(n);
+
+        let entry_size = baser.entry_size() + 1;
+
+        let its_page_size = match baser.page_size() {
+            0b00 => 4,
+            0b01 => 16,
+            0b10 | 0b11 => 64,
+            _ => unreachable!(),
+        };
+
+        // Y its pages = X system pages (Y / 4)
+        let page_size = its_page_size / (PAGE_SIZE / SIZE_1K);
+        let (devices_start, _) = frame_allocator::allocate_contiguous(page_size, page_size)
+            .expect("failed to allocate space for the its device collection");
+
+        let devices_size = page_size * PAGE_SIZE;
+        unsafe {
+            let devices_table = core::slice::from_raw_parts_mut(
+                devices_start.into_ptr::<u8>().as_ptr(),
+                devices_size,
+            );
+            devices_table.fill(0);
+            GITSBaser::new()
+                .with_ty(0b1)
+                .with_entry_size(entry_size - 1)
+                .with_page_size(baser.page_size())
+                .with_valid(true)
+                // allocated 1 its pages sizes worth
+                .with_size(0)
+                .with_phys_addr(
+                    devices_start.start_address().into_raw() >> 12, /*
+                                                                        if the page_size is 4KiB or 16KiB then this represents bits 12:47 of the addr otherwise,
+                                                                        bits 16:47 of the register resperesents bits 16:47 of the addr, the offset of this field is 12
+                                                                    */
+                )
+                .write(n);
+
+            let addr = VirtAddr::from_ptr(devices_table.as_ptr());
+            let size = devices_size;
+            (addr, size)
         }
     }
 }
@@ -376,6 +433,23 @@ impl GITSCBaser {
     }
 }
 
+/// Allocates an ITT,
+/// returns it's base address, its size, its ITT range
+fn allocate_itt() -> (VirtAddr, usize, u8) {
+    let event_id_bits = GITS_TYPER.event_id_bits() + 1;
+    let itt_entry_size = GITS_TYPER.itt_entry_size() + 1;
+    /*
+    * An ITT must be assigned a contiguous physical address space starting at ITT Address. The size is 2^(DTE.ITT
+    Range + 1)* GITS_TYPER.ITT_entry_size
+    */
+    let size = itt_entry_size as usize * event_id_bits as usize;
+    let pages = align_up(size, PAGE_SIZE).div_ceil(PAGE_SIZE);
+    let (start_frame, _) =
+        frame_allocator::allocate_contiguous(1, pages).expect("failed to allocate an ITT");
+
+    (start_frame.virt_addr(), size, event_id_bits)
+}
+
 fn map_command_quene() -> (VirtAddr, usize) {
     let frame = frame_allocator::allocate_aligned(SIZE_64K_PAGES)
         .expect("failed to allocate a 64KiB aligned page for ITS command queue");
@@ -399,48 +473,31 @@ fn map_command_quene() -> (VirtAddr, usize) {
     }
 }
 
-fn init_devices_table() -> (VirtAddr, usize) {
-    let baser = GITSBaser::read();
-    assert_eq!(baser.ty(), 0b1);
-
-    let entry_size = baser.entry_size() + 1;
-
-    let its_page_size = match baser.page_size() {
-        0b00 => 4,
-        0b01 => 16,
-        0b10 | 0b11 => 64,
-        _ => unreachable!(),
-    };
-
-    // Y its pages = X system pages (Y / 4)
-    let page_size = its_page_size / (PAGE_SIZE / SIZE_1K);
-    let (devices_start, _) = frame_allocator::allocate_contiguous(page_size, page_size)
-        .expect("failed to allocate space for the its device collection");
-
-    let devices_size = page_size * PAGE_SIZE;
-    unsafe {
-        let devices_table =
-            core::slice::from_raw_parts_mut(devices_start.into_ptr::<u8>().as_ptr(), devices_size);
-        devices_table.fill(0);
-        GITSBaser::new()
-            .with_ty(0b1)
-            .with_entry_size(entry_size - 1)
-            .with_page_size(baser.page_size())
-            .with_valid(true)
-            // allocated 1 its pages sizes worth
-            .with_size(0)
-            .with_phys_addr(
-                devices_start.start_address().into_raw() >> 12, /*
-                                                                    if the page_size is 4KiB or 16KiB then this represents bits 12:47 of the addr otherwise,
-                                                                    bits 16:47 of the register resperesents bits 16:47 of the addr, the offset of this field is 12
-                                                                */
-            )
-            .write();
-
-        let addr = VirtAddr::from_ptr(devices_table.as_ptr());
-        let size = devices_size;
-        (addr, size)
+fn map_devices_table() -> (VirtAddr, usize) {
+    for n in 0..3 {
+        let baser = GITSBaser::read(n);
+        match baser.ty() {
+            0b1 => return unsafe { GITSBaser::setup(n) },
+            _ => continue,
+        }
     }
+
+    unreachable!("no device's table found for GITS at {:?}", *GICITS_BASE)
+}
+
+fn map_collections_table() -> (VirtAddr, usize) {
+    for n in 0..3 {
+        let baser = GITSBaser::read(n);
+        match baser.ty() {
+            0b100 => return unsafe { GITSBaser::setup(n) },
+            _ => continue,
+        }
+    }
+
+    unreachable!(
+        "no interrupt's collection table found for GITS at {:?}",
+        *GICITS_BASE
+    )
 }
 
 #[bitfield(u32)]
@@ -488,20 +545,28 @@ impl GITSCtlr {
     }
 }
 
+fn gits_translater() -> *mut u32 {
+    (*GICITS_TRANSLATION_BASE + 0x0040).into_ptr()
+}
+
 pub fn init() {
     debug!(GITSTyper, "{:#?}", *GITS_TYPER);
-    let (addr, size) = init_devices_table();
+
+    let (addr, size) = map_devices_table();
     debug!(
         GITSBaser,
         "initialized devices table at {addr:?}, with size {size:#x} bytes"
+    );
+
+    let (addr, size) = map_collections_table();
+    debug!(
+        GITSBaser,
+        "initialized collections table at {addr:?}, with size {size:#x} bytes"
     );
 
     unsafe {
         GITS_COMMAND_QUEUE.lock().init();
 
         GITSCtlr::new().with_enabled(true).write();
-
-        GITS_COMMAND_QUEUE.lock().add_command(ITSCommand::sync());
-        GITS_COMMAND_QUEUE.lock().poll();
     }
 }

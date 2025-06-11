@@ -39,6 +39,7 @@ lazy_static! {
     static ref SGI_BASE: VirtAddr = *GICR_BASE + SIZE_64K;
     static ref GICITS_BASE: VirtAddr = GICITS.0;
     static ref GICITS_SIZE: usize = GICITS.1;
+    static ref GICITS_TRANSLATION_BASE: VirtAddr = *GICITS_BASE + 0x010000;
 }
 
 unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
@@ -143,6 +144,7 @@ pub fn clear_pending(interrupt: u32, kind: IntKind) {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntGroup {
+    #[allow(unused)]
     /// Group 0, Typically used by FIQs
     Secure = 0,
     /// Group 1, Typically used by IRQs
