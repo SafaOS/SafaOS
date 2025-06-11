@@ -22,15 +22,14 @@ pub fn init() -> PCI {
     PCI::new(addr, entry.pci_num0, entry.pci_num1)
 }
 
-pub fn build_msi_data(vector: u8, trigger: IntTrigger) -> u32 {
+pub fn build_msi_data(irq_num: u32, trigger: IntTrigger) -> u32 {
     let (trigger, assert) = match trigger {
         IntTrigger::Edge => (0, 0),
         IntTrigger::LevelDeassert => (1, 0),
         IntTrigger::LevelAssert => (1, 1),
     };
 
-    // TODO: set vector?
-    let results = vector as u32 | /* TODO: Delivery */ 0 | assert << 14 | trigger << 15;
+    let results = irq_num | /* TODO: Delivery */ 0 | assert << 14 | trigger << 15;
     results
 }
 pub fn build_msi_addr() -> PhysAddr {

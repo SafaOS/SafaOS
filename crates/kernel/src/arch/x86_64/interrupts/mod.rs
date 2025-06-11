@@ -10,6 +10,7 @@ use idt::IDTDesc;
 use crate::{VirtAddr, KERNEL_ELF};
 
 use super::threading::RFLAGS;
+use crate::drivers::interrupts::IRQInfo;
 
 #[derive(Debug, Clone)]
 #[repr(C)]
@@ -100,7 +101,7 @@ pub fn init_idt() {
     }
 }
 
-const fn irq_handler<const IRQ_NUM: u8>() -> fn() {
+const fn irq_handler<const IRQ_NUM: u32>() -> fn() {
     move || {
         let manager = crate::drivers::interrupts::IRQ_MANAGER.lock();
         for irq in &manager.irqs {
@@ -130,7 +131,7 @@ macro_rules! count_idents {
 macro_rules! irq_list {
     ( $( $x:literal ),* $(,)? ) => {
         /// A list of available System IRQ numbers (interrupt IDs) to use
-        pub const IRQS: [u8; count_idents!($($x),*)] = [ $( $x ),* ];
+        pub const IRQS: [u32; count_idents!($($x),*)] = [ $( $x ),* ];
         const HANDLERS: [fn(); count_idents!($($x),*)] = [ $( irq_handler::<$x>() ),* ];
     }
 }
@@ -139,7 +140,7 @@ irq_list!(0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A);
 
 /// Registers the handler function `handler` to irq `irq_num`
 /// Make sure the num is retrieved from [`AVAILABLE_RQS`]
-pub unsafe fn register_irq_handler(irq_num: u8) {
+pub unsafe fn register_irq_handler(irq_num: u32, info: &IRQInfo) {
     let table = unsafe { &mut *IDT.get() };
     assert_eq!(table[irq_num as usize], idt::GateDescriptor::default());
     for (i, ava_irq) in IRQS.iter().enumerate() {

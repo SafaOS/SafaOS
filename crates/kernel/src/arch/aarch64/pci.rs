@@ -5,7 +5,7 @@ use crate::{
         align_up,
         paging::{EntryFlags, PAGE_SIZE},
     },
-    PhysAddr,
+    PhysAddr, VirtAddr,
 };
 
 use super::{cpu, paging::current_higher_root_table};
@@ -32,9 +32,10 @@ pub fn init() -> PCI {
     PCI::new(start_phys_addr, bus_start as u8, bus_end as u8)
 }
 
-pub fn build_msi_data(vector: u8, trigger: IntTrigger) -> u32 {
-    todo!()
+pub fn build_msi_data(vector: u32, trigger: IntTrigger) -> u32 {
+    _ = trigger;
+    vector
 }
 pub fn build_msi_addr() -> PhysAddr {
-    todo!()
+    VirtAddr::from_ptr(super::gic::its::gits_translater()).into_phys()
 }

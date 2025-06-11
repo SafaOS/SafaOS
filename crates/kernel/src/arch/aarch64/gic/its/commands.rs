@@ -80,6 +80,7 @@ pub enum ITSCommandID {
     MapD = 0x08,
     MapC = 0x09,
     MapI = 0x0B,
+    Inv = 0x0C,
 }
 
 #[derive(Debug)]
@@ -130,9 +131,10 @@ impl ITSCommand {
         }
     }
 
-    pub const fn new_mapd(size: u8, itt_addr: PhysAddr, valid: bool) -> Self {
+    pub const fn new_mapd(device_id: u32, size: u8, itt_addr: PhysAddr, valid: bool) -> Self {
         Self {
             id: ITSCommandID::MapD,
+            d0_par3: device_id,
             dw1: ((size - 1) & 0xF) as u64,
             dw2: (itt_addr.into_raw() as u64) | ((valid as u64) << Self::VALID_OFF),
             ..Self::zeroed()
@@ -145,6 +147,15 @@ impl ITSCommand {
             d0_par3: device_id,
             dw1: event_id as u64,
             dw2: icid as u64,
+            ..Self::zeroed()
+        }
+    }
+
+    pub const fn new_inv(device_id: u32, event_id: u32) -> Self {
+        Self {
+            id: ITSCommandID::Inv,
+            d0_par3: device_id,
+            dw1: event_id as u64,
             ..Self::zeroed()
         }
     }

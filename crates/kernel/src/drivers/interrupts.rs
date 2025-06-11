@@ -15,7 +15,9 @@ pub trait InterruptReceiver: Send + Sync + Debug {
 #[derive(Debug, Clone, Copy)]
 pub enum IntTrigger {
     Edge,
+    #[allow(unused)]
     LevelDeassert,
+    #[allow(unused)]
     LevelAssert,
 }
 
@@ -28,9 +30,9 @@ unsafe impl Send for IRQInfo {}
 unsafe impl Sync for IRQInfo {}
 
 impl IRQInfo {
-    fn setup(&mut self, vector: u8, trigger: IntTrigger) {
+    fn setup(&mut self, irq_num: u32, trigger: IntTrigger) {
         match self {
-            IRQInfo::MSIX(ref mut msix) => msix.setup(vector, trigger),
+            IRQInfo::MSIX(ref mut msix) => msix.setup(irq_num, trigger),
         }
     }
 }
@@ -40,19 +42,19 @@ pub struct IRQ {
     info: IRQInfo,
     trigger: IntTrigger,
     pub handler: &'static dyn InterruptReceiver,
-    pub irq_num: u8,
+    pub irq_num: u32,
 }
 
 impl IRQ {
-    fn setup(&mut self, vector: u8) {
-        self.info.setup(vector, self.trigger);
+    fn setup(&mut self, irq_num: u32) {
+        self.info.setup(irq_num, self.trigger);
     }
 
     pub const fn new(
         info: IRQInfo,
         trigger: IntTrigger,
         handler: &'static dyn InterruptReceiver,
-        irq_num: u8,
+        irq_num: u32,
     ) -> Self {
         Self {
             info,
@@ -65,7 +67,7 @@ impl IRQ {
 
 /// An abstraction layer over the architecture's IRQ mangament
 pub struct IRQManager {
-    free_irq_nums: heapless::Vec<u8, { IRQS.len() }>,
+    free_irq_nums: heapless::Vec<u32, { IRQS.len() }>,
     next_irq_num_index: usize,
     pub irqs: Vec<IRQ>,
 }
@@ -78,12 +80,13 @@ impl IRQManager {
         handler: &'static dyn InterruptReceiver,
     ) {
         let irq_num = self.free_irq_nums[self.next_irq_num_index];
-        let mut irq = IRQ::new(irq_info, triggering, handler, irq_num);
         unsafe {
-            crate::arch::interrupts::register_irq_handler(irq_num);
+            crate::arch::interrupts::register_irq_handler(irq_num, &irq_info);
+            let mut irq = IRQ::new(irq_info, triggering, handler, irq_num);
             irq.setup(irq_num);
+
+            self.irqs.push(irq);
         }
-        self.irqs.push(irq);
         self.next_irq_num_index += 1;
     }
 

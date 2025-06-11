@@ -15,6 +15,7 @@ use super::paging::PageTable;
 pub mod cpu_if;
 mod gicd;
 mod gicr;
+pub use gicr::lpis::LPI_MANAGER;
 pub mod its;
 
 lazy_static! {

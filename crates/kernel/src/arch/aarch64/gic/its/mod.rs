@@ -3,7 +3,8 @@ use lazy_static::lazy_static;
 
 use crate::{
     arch::aarch64::gic::{
-        its::commands::GITS_COMMAND_QUEUE, GICITS_BASE, GICITS_TRANSLATION_BASE, GICR_BASE,
+        its::commands::{ITSCommand, GITS_COMMAND_QUEUE},
+        GICITS_BASE, GICITS_TRANSLATION_BASE, GICR_BASE,
     },
     debug,
     memory::{
@@ -435,7 +436,7 @@ impl GITSCBaser {
 
 /// Allocates an ITT,
 /// returns it's base address, its size, its ITT range
-fn allocate_itt() -> (VirtAddr, usize, u8) {
+pub fn allocate_itt() -> (VirtAddr, usize, u8) {
     let event_id_bits = GITS_TYPER.event_id_bits() + 1;
     let itt_entry_size = GITS_TYPER.itt_entry_size() + 1;
     /*
@@ -545,7 +546,7 @@ impl GITSCtlr {
     }
 }
 
-fn gits_translater() -> *mut u32 {
+pub fn gits_translater() -> *mut u32 {
     (*GICITS_TRANSLATION_BASE + 0x0040).into_ptr()
 }
 
@@ -568,5 +569,9 @@ pub fn init() {
         GITS_COMMAND_QUEUE.lock().init();
 
         GITSCtlr::new().with_enabled(true).write();
+
+        GITS_COMMAND_QUEUE
+            .lock()
+            .add_command(ITSCommand::new_mapc(0, rdbase(), true));
     }
 }

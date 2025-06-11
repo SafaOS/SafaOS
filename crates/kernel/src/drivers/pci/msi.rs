@@ -54,13 +54,19 @@ pub struct MSIXInfo {
     next_vector: u8,
     device_id: u16,
     vendor_id: u16,
+    requester_id: u32,
 }
 
 impl MSIXInfo {
+    pub const fn requester_id(&self) -> u32 {
+        self.requester_id
+    }
+
     pub fn new(
         cap_ptr: *mut MSIXCap,
         device_id: u16,
         vendor_id: u16,
+        requester_id: u32,
         bars: &[(PhysAddr, usize)],
     ) -> Self {
         let msix_cap = unsafe { &mut *cap_ptr };
@@ -90,6 +96,7 @@ impl MSIXInfo {
             table_size,
             device_id,
             vendor_id,
+            requester_id,
             next_vector: 0,
         }
     }
@@ -123,10 +130,10 @@ impl MSIXInfo {
     }
 
     fn clear_pending_interrupts(&mut self, vector: u8) {
-        let pba_ptr = self.pab_base_addr.into_virt().into_ptr::<u8>();
+        let pba_ptr = self.pab_base_addr.into_virt().into_ptr::<u32>();
         let vector = vector as u8;
-        let byte_off = vector / 8;
-        let bit_off = vector % 8;
+        let byte_off = vector / 32;
+        let bit_off = vector % 32;
 
         let byte_ptr = unsafe { pba_ptr.add(byte_off as usize) };
         unsafe {
@@ -135,7 +142,7 @@ impl MSIXInfo {
     }
 
     /// Setups and enables MSI-X
-    pub fn setup(&mut self, irq_num: u8, trigger: IntTrigger) {
+    pub fn setup(&mut self, irq_num: u32, trigger: IntTrigger) {
         let vector = self.next_vector;
         let msix_cap = unsafe { &mut *self.cap_ptr };
 

@@ -1,5 +1,10 @@
 use super::gic;
-use crate::{arch::aarch64::timer::TIMER_IRQ, syscalls::syscall, warn};
+use crate::{
+    arch::aarch64::{gic::LPI_MANAGER, timer::TIMER_IRQ},
+    drivers::interrupts::IRQ_MANAGER,
+    syscalls::syscall,
+    warn,
+};
 use core::{
     arch::{asm, global_asm},
     fmt::Display,
@@ -109,6 +114,18 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
         // TODO: instead of making this a special case just use the interrupt abstraction layer to register the timer
         // but maybe this is faster?
         i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
+        // LPIs
+        i if i >= 8192 => {
+            let irq_manager = IRQ_MANAGER.lock();
+            for irq in &*irq_manager.irqs {
+                if irq.irq_num == i {
+                    irq.handler.handle_interrupt();
+                    break;
+                }
+            }
+
+            LPI_MANAGER.lock().clear_pending(i);
+        }
         i => warn!("unknown intID {i}, ignoring..."),
     }
 }

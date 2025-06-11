@@ -142,12 +142,6 @@ impl LPIManager {
         let pending_t_size = (2usize.pow(id_bits as u32) - 8192) / 8;
         let pending_t_len = pending_t_size;
 
-        crate::serial!(
-            "num pages: {}\n",
-            pending_t_size
-                .next_multiple_of(PAGE_SIZE)
-                .div_ceil(PAGE_SIZE)
-        );
         let (pending_t_start_frame, _) = frame_allocator::allocate_contiguous(
             SIZE_64K_PAGES,
             pending_t_size
@@ -207,11 +201,29 @@ impl LPIManager {
         }
     }
 
+    /// Enables an LPI interrupt with intID `lpi_initid`
     pub fn enable(&mut self, lpi_intid: u32) {
         assert!(lpi_intid >= 8192);
         let index = (lpi_intid - 8192) as usize;
         let conf = self.read_conf(index);
         self.write_conf(index, conf.with_enable(true));
+    }
+
+    fn clear_pending_raw(&mut self, int_id: u32) {
+        let index = (int_id / 8) as usize;
+        let bit = (int_id % 8) as u8;
+
+        unsafe {
+            let byte_ptr = (self.pending_table as *mut u8).add(index);
+            byte_ptr.write_volatile((*byte_ptr) & !bit);
+        }
+    }
+
+    pub fn clear_pending(&mut self, lpi_intid: u32) {
+        assert!(lpi_intid >= 8192);
+        let index = lpi_intid - 8192;
+        assert!((index as usize) < self.pending_table.len() * 8);
+        self.clear_pending_raw(index);
     }
 }
 

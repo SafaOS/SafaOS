@@ -8,7 +8,7 @@ use crate::PhysAddr;
 pub mod msi;
 
 pub trait PCIDevice: Send + Sync + Debug {
-    fn create(header: PCIHeader) -> Self
+    fn create(info: PCIDeviceInfo) -> Self
     where
         Self: Sized;
     /// Starts the PCI Device returning true if successful
@@ -280,13 +280,52 @@ impl<'a> PCIHeader<'a> {
         (header_type & 0x80) != 0
     }
 
-    pub fn get_msix_cap(&mut self) -> Option<MSIXInfo> {
+    fn get_msix_cap(&mut self, bus: u8, slot: u8, function: u8) -> Option<MSIXInfo> {
         let msix_cap_ptr = self.caps_list().find_cast::<MSIXCap>(0x11);
         msix_cap_ptr.map(|ptr| {
             let common = self.common();
             let bars = self.get_bars();
-            MSIXInfo::new(ptr as *mut _, common.device_id, common.vendor_id, &bars)
+            MSIXInfo::new(
+                ptr as *mut _,
+                common.device_id,
+                common.vendor_id,
+                (bus as u32 * 256) + (slot as u32 * 8) + function as u32,
+                &bars,
+            )
         })
+    }
+}
+
+pub struct PCIDeviceInfo<'a> {
+    header: PCIHeader<'a>,
+    bus: u8,
+    device: u8,
+    function: u8,
+}
+
+impl<'a> PCIDeviceInfo<'a> {
+    fn new(header: PCIHeader<'a>, bus: u8, device: u8, function: u8) -> Self {
+        Self {
+            header,
+            bus,
+            device,
+            function,
+        }
+    }
+
+    pub fn get_msix_cap(&mut self) -> Option<MSIXInfo> {
+        self.header
+            .get_msix_cap(self.bus, self.device, self.function)
+    }
+
+    /// Gets at most 6 base address registers addresses from the header and their sizes
+    pub fn get_bars(&self) -> heapless::Vec<(PhysAddr, usize), 6> {
+        self.header.get_bars()
+    }
+
+    /// Unwraps into GeneralPCIHeader, panciks if it isn't a GeneralPCIHeader
+    pub fn unwrap_general(&mut self) -> &mut GeneralPCIHeader {
+        self.header.unwrap_general()
     }
 }
 
@@ -338,18 +377,15 @@ impl PCI {
         device: u8,
         function: u8,
         f: &F,
-    ) -> Option<PCIHeader<'s>>
+    ) -> Option<PCIDeviceInfo<'s>>
     where
-        F: Fn(&PCIHeader) -> bool,
+        F: Fn(&PCIDeviceInfo) -> bool,
     {
         let header = self.get_header(bus, device, function);
         if !header.is_valid() {
             return None;
         }
 
-        if f(&header) {
-            return Some(header);
-        }
         if function == 0 && header.is_multifunction() {
             for function in 1..8 {
                 if let r @ Some(_) = self.enum_device(bus, device, function, f) {
@@ -357,12 +393,17 @@ impl PCI {
                 }
             }
         }
+
+        let info = PCIDeviceInfo::new(header, bus, device, function);
+        if f(&info) {
+            return Some(info);
+        }
         None
     }
 
-    fn enum_all<'s, F>(&'s self, f: &F) -> Option<PCIHeader<'s>>
+    fn enum_all<'s, F>(&'s self, f: &F) -> Option<PCIDeviceInfo<'s>>
     where
-        F: Fn(&PCIHeader) -> bool,
+        F: Fn(&PCIDeviceInfo) -> bool,
     {
         for bus in self.start_bus..self.end_bus {
             for device in 0..32 {
@@ -374,17 +415,24 @@ impl PCI {
         None
     }
 
-    fn lookup<'s>(&'s self, class: u8, subclass: u8, prog_if: u8) -> Option<PCIHeader<'s>> {
-        self.enum_all(&|header| {
-            let common = header.common();
+    fn lookup<'s>(&'s self, class: u8, subclass: u8, prog_if: u8) -> Option<PCIDeviceInfo<'s>> {
+        self.enum_all(&|info| {
+            let common = info.header.common();
             common.class == class && common.subclass == subclass && common.prog_if == prog_if
         })
     }
 
     fn print(&self) {
-        self.enum_all(&|header| {
-            crate::serial!("PCI => {header:#x?}\n");
-            for cap in header.caps_list() {
+        self.enum_all(&|info| {
+            crate::serial!(
+                "PCI {}:{}:{} => {:#x?}\n",
+                info.bus,
+                info.device,
+                info.function,
+                info.header
+            );
+
+            for cap in info.header.caps_list() {
                 crate::serial!("{:#x?}\n", unsafe { *cap });
             }
             false
