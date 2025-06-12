@@ -36,6 +36,5 @@ pub fn build_msi_addr() -> PhysAddr {
     let lapic_base = (*LAPIC_PHYS_ADDR).into_raw();
     let lapic_id = *LAPIC_ID;
     let msi_addr = lapic_base | ((lapic_id as usize) << 12);
-    crate::serial!("returning {:#x}\n", msi_addr);
     PhysAddr::from(msi_addr)
 }

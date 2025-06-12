@@ -3,7 +3,7 @@ use core::alloc::{GlobalAlloc, Layout};
 use crate::{
     debug,
     memory::{frame_allocator, paging::MapToError},
-    utils::{LazyLock, Locked},
+    utils::locks::{LazyLock, Mutex},
 };
 
 use super::{
@@ -303,7 +303,7 @@ impl BuddyAllocator<'_> {
     }
 }
 
-unsafe impl GlobalAlloc for LazyLock<BuddyAllocator<'static>> {
+unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         self.lock().allocmut(layout)
     }
@@ -315,8 +315,8 @@ unsafe impl GlobalAlloc for LazyLock<BuddyAllocator<'static>> {
 }
 
 #[global_allocator]
-static GLOBAL_ALLOCATOR: LazyLock<BuddyAllocator> = LazyLock::new(|| {
-    Locked::new(BuddyAllocator::create().expect("Failed to create buddy allocator"))
+static GLOBAL_ALLOCATOR: LazyLock<Mutex<BuddyAllocator>> = LazyLock::new(|| {
+    Mutex::new(BuddyAllocator::create().expect("Failed to create buddy allocator"))
 });
 
 #[test_case]

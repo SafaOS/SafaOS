@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 
-use crate::utils::Locked;
+use crate::utils::locks::Mutex;
 use core::fmt::{self, Write};
 
 use super::{inb, outb};
@@ -51,7 +51,7 @@ pub fn write_serial_string(s: &str) {
 pub struct Serial;
 lazy_static! {
     /// Global Serial writer
-    pub static ref SERIAL: Locked<Serial> = Locked::new(Serial);
+    pub static ref SERIAL: Mutex<Serial> = Mutex::new(Serial);
 }
 impl Write for Serial {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {

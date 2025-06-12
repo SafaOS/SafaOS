@@ -9,7 +9,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::{debug, utils::Locked};
+use crate::{debug, utils::locks::Mutex};
 
 use super::{
     align_up, frame_allocator,
@@ -244,7 +244,7 @@ impl PageAllocator {
     }
 }
 
-unsafe impl Allocator for Locked<PageAllocator> {
+unsafe impl Allocator for Mutex<PageAllocator> {
     fn allocate(
         &self,
         layout: core::alloc::Layout,
@@ -308,10 +308,10 @@ unsafe impl Allocator for Locked<PageAllocator> {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_PAGE_ALLOCATOR: Locked<PageAllocator> = Locked::new(PageAllocator::new());
+    pub static ref GLOBAL_PAGE_ALLOCATOR: Mutex<PageAllocator> = Mutex::new(PageAllocator::new());
 }
 
-pub type PageAlloc = &'static Locked<PageAllocator>;
+pub type PageAlloc = &'static Mutex<PageAllocator>;
 
 #[test_case]
 fn page_allocator_test() {

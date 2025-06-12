@@ -2,7 +2,7 @@ use core::fmt::{self, Write};
 use core::hint::unlikely;
 
 use crate::limine::HHDM;
-use crate::utils::Locked;
+use crate::utils::locks::Mutex;
 use crate::VirtAddr;
 use lazy_static::lazy_static;
 lazy_static! {
@@ -35,7 +35,7 @@ pub(super) fn write_str(s: &str) {
 pub struct Serial;
 lazy_static! {
     /// Global Serial writer
-    pub static ref SERIAL: Locked<Serial> = Locked::new(Serial);
+    pub static ref SERIAL: Mutex<Serial> = Mutex::new(Serial);
 }
 
 impl Write for Serial {

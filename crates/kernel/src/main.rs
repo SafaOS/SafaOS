@@ -18,6 +18,7 @@
 #![feature(iter_array_chunks)]
 #![feature(const_trait_impl)]
 #![feature(const_ops)]
+#![feature(macro_metavar_expr_concat)]
 
 #[cfg(test)]
 mod test;
