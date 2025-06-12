@@ -1,4 +1,4 @@
-use crate::{debug, write_ref, PhysAddr};
+use crate::{debug, drivers::xhci::trb::TRB, write_ref, PhysAddr};
 
 use super::{
     regs::{EventRingDequePtr, InterrupterRegs},
@@ -6,40 +6,6 @@ use super::{
 };
 
 use alloc::vec::Vec;
-use bitfield_struct::bitfield;
-
-pub const TRB_TYPE_LINK: u8 = 0x6;
-pub const TRB_TYPE_ENABLE_SLOT_CMD: u8 = 0x9;
-
-#[bitfield(u32)]
-pub struct TRBCommand {
-    #[bits(1)]
-    pub cycle_bit: u8,
-    #[bits(1)]
-    pub toggle_cycle: bool,
-    __: u8,
-    #[bits(6)]
-    pub trb_type: u8,
-    __: u16,
-}
-
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub struct TRB {
-    parameter: u64,
-    status: u32,
-    cmd: TRBCommand,
-}
-
-impl TRB {
-    pub fn new(cmd: TRBCommand, status: u32, parameter: u64) -> Self {
-        Self {
-            parameter,
-            status,
-            cmd,
-        }
-    }
-}
 
 #[derive(Debug)]
 // TODO: move to another file
@@ -58,7 +24,7 @@ impl<'s> XHCICommandRing<'s> {
         let link_trb = &mut trbs[trb_count - 1];
 
         link_trb.parameter = trbs_phys_addr.into_raw() as u64;
-        link_trb.cmd.set_trb_type(TRB_TYPE_LINK);
+        link_trb.cmd.set_trb_type(super::trb::TRB_TYPE_LINK);
         link_trb.cmd.set_toggle_cycle(true);
         link_trb.cmd.set_cycle_bit(1);
 

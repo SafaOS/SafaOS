@@ -1,29 +1,134 @@
+use core::cell::UnsafeCell;
+
 use super::{
     interrupts::IRQInfo,
     utils::{read_ref, write_ref},
 };
+use alloc::vec::Vec;
 use regs::{CapsReg, XHCIDoorbellManager};
-use rings::{TRBCommand, XHCICommandRing, XHCIEventRing};
+use rings::{XHCICommandRing, XHCIEventRing};
 
 use crate::{
-    arch::paging::current_higher_root_table,
+    arch::{disable_interrupts, enable_interrupts, paging::current_higher_root_table},
     debug,
     drivers::{
         interrupts::{self, IntTrigger, InterruptReceiver},
         pci::PCICommandReg,
-        xhci::{regs::XHCIRegisters, rings::TRB_TYPE_ENABLE_SLOT_CMD},
+        xhci::{
+            regs::XHCIRegisters,
+            trb::{CmdResponseTRB, EventResponseTRB, TRB_TYPE_ENABLE_SLOT_CMD},
+        },
     },
     memory::paging::{EntryFlags, PAGE_SIZE},
+    time,
     utils::locks::Mutex,
 };
 
 use super::pci::PCIDevice;
 mod regs;
 mod rings;
+mod trb;
 mod utils;
 
 /// The maximum number of TRBs a CommandRing can hold
 const MAX_TRB_COUNT: usize = 256;
+
+impl<'s> InterruptReceiver for XHCI<'s> {
+    fn handle_interrupt(&self) {
+        let events = self.event_ring.lock().dequeue_events();
+        crate::serial!("{events:#x?}\n");
+
+        for event in events {
+            if let Some(response_event) = event.into_event_trb() {
+                match response_event {
+                    EventResponseTRB::CommandCompletion(res) => {
+                        self.manager_queue.add_command_response(res)
+                    }
+                }
+            }
+        }
+
+        self.regs.lock().acknowledge_irq(0);
+    }
+}
+
+/// A safe communicator with XHCI Interrupts that can safely send requests and receive responses without deadlocking
+#[derive(Debug)]
+pub struct XHCIResponseQueue<'s> {
+    // Only 1 interrupter may hold the lock
+    // and Only 1 Reader may hold the lock (requester)
+    // the idea is we might have a reader and writer at the same time but not 2
+    // the reader has previously requested the writer to write so it is aware of it
+    interrupter_lock: Mutex<()>,
+    requester_lock: Mutex<()>,
+
+    commands: UnsafeCell<Vec<CmdResponseTRB>>,
+
+    doorbell_manager: Mutex<XHCIDoorbellManager<'s>>,
+    commands_ring: Mutex<XHCICommandRing<'s>>,
+}
+
+impl<'s> XHCIResponseQueue<'s> {
+    pub fn new(
+        doorbell_manager: XHCIDoorbellManager<'s>,
+        commands_ring: XHCICommandRing<'s>,
+    ) -> Self {
+        Self {
+            interrupter_lock: Mutex::new(()),
+            requester_lock: Mutex::new(()),
+            commands_ring: Mutex::new(commands_ring),
+            doorbell_manager: Mutex::new(doorbell_manager),
+            commands: UnsafeCell::new(Vec::new()),
+        }
+    }
+
+    pub fn add_command_response(&self, response: CmdResponseTRB) {
+        let interrupter = self.interrupter_lock.lock();
+        unsafe {
+            self.commands.as_mut_unchecked().push(response);
+        }
+        drop(interrupter);
+    }
+
+    unsafe fn wait_for_command_response(
+        &self,
+        cmds_len_before: usize,
+        timeout: u64,
+    ) -> CmdResponseTRB {
+        let commands = unsafe { self.commands.as_mut_unchecked() };
+
+        let start_time = time!();
+        // FIXME: could this be optimized away, maybe i should use atomics?
+        while commands.len() == cmds_len_before {
+            let now = time!();
+            // FIXME: handle timeouting instead of panicking?
+            if (now >= start_time + timeout) && commands.len() == cmds_len_before {
+                panic!(
+                    "XHCI timeout while waiting for response after {}ms",
+                    now - start_time
+                );
+            }
+
+            core::hint::spin_loop();
+        }
+
+        let response = commands.pop().unwrap();
+
+        response
+    }
+
+    pub fn send_command(&self, trb: trb::TRB) -> CmdResponseTRB {
+        let requester = self.requester_lock.lock();
+        let cmds_len_before = unsafe { self.commands.as_ref_unchecked().len() };
+
+        self.commands_ring.lock().enqueue(trb);
+        self.doorbell_manager.lock().ring_command_doorbell();
+
+        let response = unsafe { self.wait_for_command_response(cmds_len_before, 200) };
+        drop(requester);
+        response
+    }
+}
 
 // TODO: maybe stack interrupt stuff together in one struct behind a Mutex?
 /// The main XHCI driver Instance
@@ -32,21 +137,10 @@ pub struct XHCI<'s> {
     // TODO: maybe use a UnsafeCell here?
     /// be careful using the registers, should only be used while interrupts are disabled
     regs: Mutex<XHCIRegisters<'s>>,
-    /// Not accessed by interrupts
-    command_ring: Mutex<XHCICommandRing<'s>>,
     /// Only accessed by interrupts
     event_ring: Mutex<XHCIEventRing<'s>>,
-    /// Not accessed by interrupts
-    doorbell_manager: Mutex<XHCIDoorbellManager<'s>>,
+    manager_queue: XHCIResponseQueue<'s>,
     irq_info: IRQInfo,
-}
-
-impl<'s> InterruptReceiver for XHCI<'s> {
-    fn handle_interrupt(&self) {
-        let events = self.event_ring.lock().dequeue_events();
-        crate::serial!("{events:#x?}\n");
-        self.regs.lock().acknowledge_irq(0);
-    }
 }
 
 impl<'s> XHCI<'s> {}
@@ -101,6 +195,7 @@ impl<'s> PCIDevice for XHCI<'s> {
         let doorbell_manager =
             XHCIDoorbellManager::new(caps_regs.doorbells_base(), caps_regs.max_device_slots());
 
+        let xhci_queue_manager = XHCIResponseQueue::new(doorbell_manager, command_ring);
         // FIXME: switch to MSI if not available
         let irq_info = info
             .get_msix_cap()
@@ -108,9 +203,8 @@ impl<'s> PCIDevice for XHCI<'s> {
             .unwrap();
 
         let mut this = XHCI {
-            command_ring: Mutex::new(command_ring),
             event_ring: Mutex::new(event_ring),
-            doorbell_manager: Mutex::new(doorbell_manager),
+            manager_queue: xhci_queue_manager,
             regs: Mutex::new(xhci_registers),
             irq_info,
         };
@@ -124,6 +218,9 @@ impl<'s> PCIDevice for XHCI<'s> {
     }
 
     fn start(&'static self) -> bool {
+        unsafe {
+            disable_interrupts();
+        }
         let irq_info = self.irq_info.clone();
         interrupts::register_irq(irq_info, IntTrigger::Edge, self);
 
@@ -140,13 +237,16 @@ impl<'s> PCIDevice for XHCI<'s> {
             "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}", usbsts_before, usbsts_after, usbcmd_before, usbcmd_after
         );
 
-        let trb = rings::TRB::new(
-            TRBCommand::default().with_trb_type(TRB_TYPE_ENABLE_SLOT_CMD),
+        unsafe {
+            enable_interrupts();
+        }
+        let trb = trb::TRB::new(
+            trb::TRBCommand::default().with_trb_type(TRB_TYPE_ENABLE_SLOT_CMD),
             0,
             0,
         );
-        self.command_ring.lock().enqueue(trb);
-        self.doorbell_manager.lock().ring_command_doorbell();
+        let response = self.manager_queue.send_command(trb);
+        crate::serial!("XHCI responded with {response:#x?}\n");
         true
     }
 }
