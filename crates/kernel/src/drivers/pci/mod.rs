@@ -440,12 +440,11 @@ impl PCI {
     }
 }
 
-use crate::utils::locks::Mutex;
 lazy_static! {
     pub static ref HOST_PCI: PCI = crate::arch::pci::init();
     // No complicated device management necessary for now.
-    pub static ref XHCI_DEVICE: Option<Mutex<XHCI<'static>>> =
-        HOST_PCI.create_device::<Mutex<XHCI>>();
+    pub static ref XHCI_DEVICE: Option<XHCI<'static>> =
+        HOST_PCI.create_device::<XHCI>();
 }
 
 /// Initializes drivers and devices that uses the PCI

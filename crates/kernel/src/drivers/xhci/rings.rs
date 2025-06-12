@@ -153,8 +153,6 @@ impl<'a> XHCIEventRing<'a> {
             dequeue_ptr: 0,
             curr_ring_cycle_bit: 1,
         };
-
-        // Initializes the interrupter must be done in the order given here:
         this.reset();
 
         debug!(
@@ -166,6 +164,7 @@ impl<'a> XHCIEventRing<'a> {
         this
     }
     pub fn reset(&mut self) {
+        // Initializes the interrupter must be done in the order given here:
         write_ref!(
             self.interrupter_registers.erst_sz,
             self.ring_segment_table.len() as u32
@@ -185,10 +184,6 @@ impl<'a> XHCIEventRing<'a> {
             self.interrupter_registers.event_ring_deque,
             EventRingDequePtr::from_addr(dequeue_addr)
         );
-    }
-
-    fn has_unprocessed_events(&self) -> bool {
-        self.trbs[self.dequeue_ptr].cmd.cycle_bit() == self.curr_ring_cycle_bit
     }
 
     pub fn dequeue_events(&mut self) -> Vec<TRB> {

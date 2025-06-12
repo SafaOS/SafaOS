@@ -1,4 +1,19 @@
-use crate::{PhysAddr, VirtAddr};
+use crate::{
+    debug,
+    drivers::{
+        utils::{read_ref, write_ref},
+        xhci::{
+            rings::{XHCICommandRing, XHCIEventRing},
+            utils::allocate_buffers_frame,
+        },
+    },
+    memory::{
+        align_up,
+        frame_allocator::{self, Frame},
+        paging::PAGE_SIZE,
+    },
+    time, PhysAddr, VirtAddr,
+};
 use bitflags::bitflags;
 use core::fmt::Display;
 
@@ -344,9 +359,6 @@ impl RuntimeRegs {
     pub fn interrupter_mut(&mut self, index: usize) -> &mut InterrupterRegs {
         &mut self.interrupter_registers[index]
     }
-    pub fn interrupter(&self, index: usize) -> &InterrupterRegs {
-        &self.interrupter_registers[index]
-    }
 }
 
 #[bitfield(u32)]
@@ -378,5 +390,215 @@ impl<'a> XHCIDoorbellManager<'a> {
 
     pub fn ring_control_endpoint_doorbell(&mut self, doorbell: u8) {
         self.ring_doorbell(doorbell, 1);
+    }
+}
+
+#[derive(Debug)]
+/// A general wrapper around XHCI's registers such as captabilities, operationals, and runtime
+pub struct XHCIRegisters<'s> {
+    caps_regs: *mut CapsReg,
+    // TODO: free the frames when this goes out of scope? except that currently it never does
+    /// used to store the scratchpad_buffers pointers and the dcbaa (scratchpad_buffers, dcbaa)
+    buffers_frame: Frame,
+    scratchpad_buffers: Option<&'s mut [Frame]>,
+    dcbaa: &'s mut [PhysAddr],
+}
+
+impl<'s> XHCIRegisters<'s> {
+    /// Creates a new XHCI Register manager that owns the XHCI Registers area
+    /// resets the XHCI controller to zero status
+    /// unsafe because it asseums ownership of the XHCI registers
+    pub unsafe fn new(caps: *mut CapsReg) -> Self {
+        let mut this = Self {
+            caps_regs: caps,
+            buffers_frame: frame_allocator::allocate_frame()
+                .expect("failed to allocate frame for the XHCI buffers"),
+            scratchpad_buffers: None,
+            dcbaa: &mut [],
+        };
+        unsafe {
+            this.reset_zero();
+        }
+        this
+    }
+
+    pub fn captabilities<'a>(&self) -> &'a CapsReg {
+        unsafe { &*self.caps_regs }
+    }
+
+    fn captabilities_mut<'a>(&mut self) -> &'a mut CapsReg {
+        unsafe { &mut *self.caps_regs }
+    }
+
+    pub fn operational_regs<'a>(&mut self) -> &'a mut OperationalRegs {
+        let caps = self.captabilities_mut();
+        caps.operational_regs_mut()
+    }
+
+    fn runtime_regs<'a>(&mut self) -> &'a mut RuntimeRegs {
+        self.captabilities_mut().runtime_regs_mut()
+    }
+
+    /// Clear any incoming interrupts for the interrupter
+    pub fn acknowledge_irq(&mut self, interrupter: u8) {
+        let op_regs = self.operational_regs();
+        // Write the USBSts::EINT bit to clear it, it is RW1C meaning write 1 to clear
+        write_ref!(op_regs.usbstatus, USBSts::EINT);
+
+        let runtime_regs = self.runtime_regs();
+        let interrupt_reg = runtime_regs.interrupter_mut(interrupter as usize);
+        // Similariy we clear the iman interrupt pending bit by writing 1 to it
+        let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_PENDING;
+        write_ref!(interrupt_reg.iman, iman);
+    }
+
+    /// Starts the XHCI controller
+    pub unsafe fn start(&mut self) {
+        let regs = self.operational_regs();
+        write_ref!(
+            regs.usbcmd,
+            regs.usbcmd | USBCmd::RUN | USBCmd::INTERRUPT_ENABLE
+        );
+
+        let timeout = 1000;
+        let time = time!();
+
+        while read_ref!(regs.usbstatus).contains(USBSts::HCHALTED) {
+            let now = time!();
+            if now >= time + timeout {
+                panic!(
+                    "timeout after {}ms while resetting the XHCI, HCHALTED did not clear: {:?}",
+                    now,
+                    read_ref!(regs.usbstatus)
+                )
+            }
+            core::hint::spin_loop();
+        }
+
+        assert!(!read_ref!(regs.usbstatus).contains(USBSts::NOT_READY));
+    }
+
+    #[allow(unused_unsafe)]
+    /// Resets the XHCI controller to zero status
+    /// Unsafe because the controller needs to be reconfigured after this
+    pub unsafe fn reset_zero(&mut self) {
+        let regs = self.operational_regs();
+
+        write_ref!(regs.usbcmd, regs.usbcmd & !USBCmd::RUN);
+
+        let timeout = 200;
+        let time = time!();
+
+        while !read_ref!(regs.usbstatus).contains(USBSts::HCHALTED) {
+            let now = time!();
+            if now >= time + timeout {
+                panic!(
+                    "timeout after {}ms while resetting the XHCI, HCHALTED did not set: {:?}",
+                    now,
+                    read_ref!(regs.usbstatus)
+                )
+            }
+            core::hint::spin_loop();
+        }
+
+        // reset the controller
+        write_ref!(regs.usbcmd, read_ref!(regs.usbcmd) | USBCmd::HCRESET);
+
+        let timeout = 1000;
+        let time = time!();
+
+        while read_ref!(regs.usbcmd).contains(USBCmd::HCRESET)
+            || read_ref!(regs.usbstatus).contains(USBSts::NOT_READY)
+        {
+            let now = time!();
+            if now >= time + timeout {
+                panic!(
+                    "timeout after {}ms while resetting controller, controller was never ready: {:?}",
+                    now - time,
+                    read_ref!(regs.usbcmd),
+                )
+            }
+            core::hint::spin_loop();
+        }
+        // asserts the controller was reset
+        assert_eq!(regs.usbcmd, USBCmd::empty());
+        assert_eq!(regs.dnctrl, 0);
+        assert_eq!(regs.crcr, 0);
+        assert_eq!(regs.dcbaap, PhysAddr::null());
+        assert_eq!(regs.config, 0);
+        debug!(XHCIRegisters, "XHCI Reset\n{}", regs,);
+    }
+
+    /// Reconfigures the XHCI controller given an event ring and a command ring
+    pub unsafe fn reconfigure(
+        &mut self,
+        event_ring: &mut XHCIEventRing,
+        command_ring: &XHCICommandRing,
+    ) {
+        let op_regs = self.operational_regs();
+        write_ref!(
+            op_regs.config,
+            self.captabilities().max_device_slots() as u32
+        );
+        // Enable device notifications
+        write_ref!(op_regs.dnctrl, 0xFFFF);
+        self.configure_dcbaa();
+        self.configure_crcr(command_ring);
+
+        self.configure_runtime(event_ring);
+    }
+
+    fn configure_crcr(&mut self, command_ring: &XHCICommandRing) {
+        let op_regs = self.operational_regs();
+        write_ref!(
+            op_regs.crcr,
+            *command_ring.base_phys_addr() | command_ring.current_ring_cycle() as usize
+        );
+    }
+
+    fn configure_dcbaa(&mut self) {
+        let caps = self.captabilities();
+        let op_regs = self.operational_regs();
+
+        // Allocates and sets the dcbaa
+        assert!(caps.max_device_slots() * size_of::<PhysAddr>() <= PAGE_SIZE);
+
+        let (dcbaa_slice, dcbaa_phys_addr) =
+            allocate_buffers_frame::<PhysAddr>(self.buffers_frame, 0, caps.max_device_slots());
+
+        // Allocates the scratchpad buffers array if neccassary
+        if caps.max_scratchpad_buffers() > 0 {
+            // uses the same frame to store the scratchpad_buffers pointers that we used to store dcbaa entries
+            // it is safe to do so as the max number of dcbaa entries is 255,
+            // and the max numbers of scratchpad_buffers is 15, (255 + 15) * 8 is very much less then the maximum amount of bytes a frame (page) can hold (4096)
+            // DCBAA entries must be 64 byte aligned
+            let (scratchpad_buffers, scratchpad_buffers_addr) = allocate_buffers_frame::<Frame>(
+                self.buffers_frame,
+                align_up((dcbaa_phys_addr + dcbaa_slice.len()).into_raw(), 64),
+                caps.max_scratchpad_buffers(),
+            );
+
+            for phys_addr in scratchpad_buffers.iter_mut() {
+                *phys_addr = frame_allocator::allocate_frame()
+                    .expect("XHCI: failed to allocate a page for a scratchpad buffer");
+            }
+            self.scratchpad_buffers = Some(scratchpad_buffers);
+            // DCBAA[0] is used to store the address of the scratchpad_buffers
+            self.dcbaa[0] = scratchpad_buffers_addr;
+        }
+
+        self.dcbaa = dcbaa_slice;
+        write_ref!(op_regs.dcbaap, dcbaa_phys_addr);
+    }
+
+    fn configure_runtime(&mut self, event_ring: &mut XHCIEventRing) {
+        event_ring.reset();
+        let runtime_regs = self.runtime_regs();
+        let interrupt_reg = runtime_regs.interrupter_mut(0);
+        // Enable interrupts
+        write_ref!(interrupt_reg.iman, XHCIIman::INTERRUPT_ENABLE);
+
+        // Clear any pending interrupts
+        self.acknowledge_irq(0);
     }
 }
