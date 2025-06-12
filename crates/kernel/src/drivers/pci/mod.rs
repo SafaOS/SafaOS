@@ -4,7 +4,8 @@ use core::{fmt::Debug, u32, u64};
 use lazy_static::lazy_static;
 use msi::{MSIXCap, MSIXInfo};
 
-use crate::PhysAddr;
+use crate::{drivers::pci::extended_caps::CaptabilitiesIter, PhysAddr};
+pub mod extended_caps;
 pub mod msi;
 
 pub trait PCIDevice: Send + Sync + Debug {
@@ -43,68 +44,6 @@ bitflags! {
     pub struct PCIStatusReg: u16 {
         const INT_STATUS = 1 << 3;
         const CAPS_LIST = 1 << 4;
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-struct Captability {
-    id: u8,
-    next_off: u8,
-}
-
-struct CaptabilitiesIter {
-    base_ptr: *const (),
-    current: *const Captability,
-}
-
-impl CaptabilitiesIter {
-    fn new(base_ptr: *const (), cap_off: u8) -> Self {
-        let current = unsafe { base_ptr.byte_add(cap_off as usize) as *const Captability };
-        Self { base_ptr, current }
-    }
-
-    fn empty() -> Self {
-        Self {
-            base_ptr: core::ptr::null(),
-            current: core::ptr::null(),
-        }
-    }
-
-    /// Find a captabilitiy with the id `id`
-    fn find(self, id: u8) -> Option<*const Captability> {
-        for cap_ptr in self {
-            let cap = unsafe { *cap_ptr };
-            if cap.id == id {
-                return Some(cap_ptr);
-            }
-        }
-
-        None
-    }
-    /// Find a captability with the `id` id and then casts it to a pointer of T
-    fn find_cast<T>(self, id: u8) -> Option<*const T> {
-        self.find(id).map(|ptr| ptr.cast())
-    }
-}
-
-impl Iterator for CaptabilitiesIter {
-    type Item = *const Captability;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current.is_null() {
-            return None;
-        }
-
-        let next_off = unsafe { (*self.current).next_off };
-        let results = self.current;
-
-        if next_off == 0 {
-            self.current = core::ptr::null();
-        } else {
-            self.current =
-                unsafe { self.base_ptr.byte_add(next_off as usize) as *const Captability };
-        }
-        Some(results)
     }
 }
 
@@ -281,7 +220,7 @@ impl<'a> PCIHeader<'a> {
     }
 
     fn get_msix_cap(&mut self, bus: u8, slot: u8, function: u8) -> Option<MSIXInfo> {
-        let msix_cap_ptr = self.caps_list().find_cast::<MSIXCap>(0x11);
+        let msix_cap_ptr = self.caps_list().find_cast::<MSIXCap>();
         msix_cap_ptr.map(|ptr| {
             let common = self.common();
             let bars = self.get_bars();
@@ -311,6 +250,10 @@ impl<'a> PCIDeviceInfo<'a> {
             device,
             function,
         }
+    }
+
+    pub fn caps_list(&self) -> CaptabilitiesIter {
+        self.header.caps_list()
     }
 
     pub fn get_msix_cap(&mut self) -> Option<MSIXInfo> {

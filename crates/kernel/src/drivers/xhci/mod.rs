@@ -15,6 +15,7 @@ use crate::{
         interrupts::{self, IntTrigger, InterruptReceiver},
         pci::PCICommandReg,
         xhci::{
+            extended_caps::XHCIUSBSupportedProtocolCap,
             regs::XHCIRegisters,
             trb::{CmdResponseTRB, EventResponseTRB, TRB_TYPE_ENABLE_SLOT_CMD},
         },
@@ -25,11 +26,11 @@ use crate::{
 };
 
 use super::pci::PCIDevice;
+mod extended_caps;
 mod regs;
 mod rings;
 mod trb;
 mod utils;
-
 /// The maximum number of TRBs a CommandRing can hold
 const MAX_TRB_COUNT: usize = 256;
 
@@ -58,7 +59,7 @@ pub struct XHCIResponseQueue<'s> {
     // Only 1 interrupter may hold the lock
     // and Only 1 Reader may hold the lock (requester)
     // the idea is we might have a reader and writer at the same time but not 2
-    // the reader has previously requested the writer to write so it is aware of it
+    // the reader has previously requested the writer to write so it is aware of it, and the writer will never remove
     interrupter_lock: Mutex<()>,
     requester_lock: Mutex<()>,
 
@@ -140,6 +141,8 @@ pub struct XHCI<'s> {
     /// Only accessed by interrupts
     event_ring: Mutex<XHCIEventRing<'s>>,
     manager_queue: XHCIResponseQueue<'s>,
+    /// A list of USB3 ports, all other ports are USB2
+    usb3_ports: Vec<u8>,
     irq_info: IRQInfo,
 }
 
@@ -154,6 +157,23 @@ impl<'s> PCIDevice for XHCI<'s> {
     }
 
     fn create(mut info: super::pci::PCIDeviceInfo) -> Self {
+        // Collect extended captability information
+        let mut pci_caps = info.caps_list();
+        let mut usb3_ports = Vec::new();
+
+        while let Some(protocol_cap) =
+            unsafe { pci_caps.find_next_transmute::<XHCIUSBSupportedProtocolCap>() }
+        {
+            if protocol_cap.major_version() == 3 {
+                for port in
+                    protocol_cap.first_compatible_port()..=protocol_cap.last_compatible_port()
+                {
+                    usb3_ports.push(port);
+                }
+            }
+        }
+
+        // Map and enable the XHCI PCI Device
         let general_header = info.unwrap_general();
         write_ref!(
             general_header.common.command,
@@ -177,7 +197,7 @@ impl<'s> PCIDevice for XHCI<'s> {
                     .expect("failed to map the XHCI");
             }
         }
-
+        // Create the XHCI Driver
         let caps_ptr = virt_base_addr.into_ptr::<CapsReg>();
         let caps_regs = unsafe { &mut *caps_ptr };
 
@@ -206,6 +226,7 @@ impl<'s> PCIDevice for XHCI<'s> {
             event_ring: Mutex::new(event_ring),
             manager_queue: xhci_queue_manager,
             regs: Mutex::new(xhci_registers),
+            usb3_ports,
             irq_info,
         };
         debug!(

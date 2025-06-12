@@ -1,11 +1,14 @@
 use crate::{
     arch::pci::{build_msi_addr, build_msi_data},
     debug,
-    drivers::interrupts::{IRQInfo, IntTrigger},
+    drivers::{
+        interrupts::{IRQInfo, IntTrigger},
+        pci::extended_caps::ExtendedCaptability,
+    },
     write_ref, PhysAddr,
 };
 
-use super::Captability;
+use super::extended_caps::GenericCaptability;
 use bitfield_struct::bitfield;
 
 #[bitfield(u16)]
@@ -31,10 +34,19 @@ struct Reg {
 #[repr(C)]
 #[derive(Debug)]
 pub struct MSIXCap {
-    header: Captability,
+    header: GenericCaptability,
     msg_ctrl: MSIXMsgCtrl,
     table: Reg,
     pending_bit: Reg,
+}
+
+impl ExtendedCaptability for MSIXCap {
+    fn id() -> u8 {
+        0x11
+    }
+    fn header(&self) -> &GenericCaptability {
+        &self.header
+    }
 }
 
 #[derive(Debug)]
