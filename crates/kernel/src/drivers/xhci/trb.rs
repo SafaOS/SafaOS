@@ -4,7 +4,9 @@ use crate::PhysAddr;
 
 pub const TRB_TYPE_LINK: u8 = 0x6;
 pub const TRB_TYPE_ENABLE_SLOT_CMD: u8 = 0x9;
-pub const TRB_TYPE_CMD_COMPLETION: u8 = 33;
+pub const TRB_TYPE_TRANSFER_EVENT: u8 = 0x20;
+pub const TRB_TYPE_CMD_COMPLETION: u8 = 0x21;
+pub const TRB_TYPE_PORT_STATUS_CHANGE_EVENT: u8 = 0x22;
 
 #[bitfield(u32)]
 pub struct TRBCommand {
@@ -37,13 +39,26 @@ impl TRB {
 
     /// Attempts to convert self into a known Event Response TRB, returns None if failed
     pub fn into_event_trb(self) -> Option<EventResponseTRB> {
+        macro_rules! decided {
+            ($variant: ident) => {
+                Some(EventResponseTRB::$variant(unsafe {
+                    core::mem::transmute(self)
+                }))
+            };
+        }
         match self.cmd.trb_type() {
-            TRB_TYPE_CMD_COMPLETION => Some(EventResponseTRB::CommandCompletion(unsafe {
-                core::mem::transmute(self)
-            })),
+            TRB_TYPE_CMD_COMPLETION => decided!(CommandCompletion),
+            TRB_TYPE_TRANSFER_EVENT => decided!(TransferResponse),
+            TRB_TYPE_PORT_STATUS_CHANGE_EVENT => decided!(PortStatusChange),
             _ => None,
         }
     }
+}
+
+pub enum EventResponseTRB {
+    CommandCompletion(CmdResponseTRB),
+    TransferResponse(TransferResponseTRB),
+    PortStatusChange(PortStatusChangeTRB),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -122,9 +137,72 @@ pub struct CmdComplInfo {
 pub struct CmdResponseTRB {
     pub trb_pointer: PhysAddr,
     pub status: CmdCompletionStatus,
-    pub cmd: TRBCommand,
+    pub cmd: CmdComplInfo,
 }
 
-pub enum EventResponseTRB {
-    CommandCompletion(CmdResponseTRB),
+#[bitfield(u32)]
+pub struct TransferResponseInfo {
+    #[bits(1)]
+    pub cycle_bit: u8,
+    pub eval_next_trb: bool,
+    pub interrupt_on_short_pkt: bool,
+    pub no_snoop: bool,
+    pub chain_bit: bool,
+    pub interrupt_on_completion: bool,
+    pub immediate_data: bool,
+    #[bits(2)]
+    __: (),
+    pub block_event_interrupt: bool,
+    #[bits(6)]
+    pub trb_type: u8,
+    __: u16,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct TransferResponseTRB {
+    pub parameter: u64,
+    pub status: u32,
+    pub cmd: TransferResponseInfo,
+}
+
+#[bitfield(u64)]
+pub struct PortStatusChangePar {
+    #[bits(24)]
+    __: (),
+    port_id: u8,
+    __: u32,
+}
+impl PortStatusChangePar {
+    /// Returns the port_id - 1
+    pub fn port_index(&self) -> u8 {
+        self.port_id() - 1
+    }
+}
+
+#[bitfield(u32)]
+pub struct PortStatusChangeStatus {
+    #[bits(24)]
+    __: (),
+    #[bits(8)]
+    pub completion_code: CmdCompletionStatus,
+}
+
+#[bitfield(u32)]
+pub struct PortStatusChangeInfo {
+    #[bits(1)]
+    pub cycle_bit: u8,
+    #[bits(9)]
+    __: (),
+    #[bits(6)]
+    pub trb_type: u8,
+    __: u16,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct PortStatusChangeTRB {
+    pub parameter: PortStatusChangePar,
+    pub status: PortStatusChangeStatus,
+    pub cmd: PortStatusChangeInfo,
 }

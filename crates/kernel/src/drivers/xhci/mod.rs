@@ -17,7 +17,10 @@ use crate::{
         xhci::{
             extended_caps::XHCIUSBSupportedProtocolCap,
             regs::XHCIRegisters,
-            trb::{CmdResponseTRB, EventResponseTRB, TRB_TYPE_ENABLE_SLOT_CMD},
+            trb::{
+                CmdResponseTRB, EventResponseTRB, PortStatusChangeTRB, TransferResponseTRB,
+                TRB_TYPE_ENABLE_SLOT_CMD,
+            },
         },
     },
     memory::paging::{EntryFlags, PAGE_SIZE},
@@ -37,13 +40,25 @@ const MAX_TRB_COUNT: usize = 256;
 impl<'s> InterruptReceiver for XHCI<'s> {
     fn handle_interrupt(&self) {
         let events = self.event_ring.lock().dequeue_events();
-        crate::serial!("{events:#x?}\n");
 
         for event in events {
             if let Some(response_event) = event.into_event_trb() {
                 match response_event {
                     EventResponseTRB::CommandCompletion(res) => {
+                        debug!(
+                            XHCI,
+                            "command completed with code {:?} ({:#x}), slot: {}",
+                            res.status.code(),
+                            res.status.code() as u8,
+                            res.cmd.slot_id(),
+                        );
                         self.manager_queue.add_command_response(res)
+                    }
+                    EventResponseTRB::TransferResponse(res) => {
+                        self.manager_queue.add_transfer_response(res)
+                    }
+                    EventResponseTRB::PortStatusChange(event) => {
+                        self.manager_queue.add_port_status_change_event(event);
                     }
                 }
             }
@@ -64,6 +79,8 @@ pub struct XHCIResponseQueue<'s> {
     requester_lock: Mutex<()>,
 
     commands: UnsafeCell<Vec<CmdResponseTRB>>,
+    transfer_events: UnsafeCell<Vec<TransferResponseTRB>>,
+    port_queue: UnsafeCell<Vec<PortStatusChangeTRB>>,
 
     doorbell_manager: Mutex<XHCIDoorbellManager<'s>>,
     commands_ring: Mutex<XHCICommandRing<'s>>,
@@ -80,6 +97,8 @@ impl<'s> XHCIResponseQueue<'s> {
             commands_ring: Mutex::new(commands_ring),
             doorbell_manager: Mutex::new(doorbell_manager),
             commands: UnsafeCell::new(Vec::new()),
+            transfer_events: UnsafeCell::new(Vec::new()),
+            port_queue: UnsafeCell::new(Vec::new()),
         }
     }
 
@@ -87,6 +106,22 @@ impl<'s> XHCIResponseQueue<'s> {
         let interrupter = self.interrupter_lock.lock();
         unsafe {
             self.commands.as_mut_unchecked().push(response);
+        }
+        drop(interrupter);
+    }
+
+    pub fn add_transfer_response(&self, response: TransferResponseTRB) {
+        let interrupter = self.interrupter_lock.lock();
+        unsafe {
+            self.transfer_events.as_mut_unchecked().push(response);
+        }
+        drop(interrupter);
+    }
+
+    pub fn add_port_status_change_event(&self, event: PortStatusChangeTRB) {
+        let interrupter = self.interrupter_lock.lock();
+        unsafe {
+            self.port_queue.as_mut_unchecked().push(event);
         }
         drop(interrupter);
     }
@@ -141,6 +176,7 @@ pub struct XHCI<'s> {
     /// Only accessed by interrupts
     event_ring: Mutex<XHCIEventRing<'s>>,
     manager_queue: XHCIResponseQueue<'s>,
+    // TODO: fully implement
     /// A list of USB3 ports, all other ports are USB2
     usb3_ports: Vec<u8>,
     irq_info: IRQInfo,
@@ -231,9 +267,10 @@ impl<'s> PCIDevice for XHCI<'s> {
         };
         debug!(
             XHCI,
-            "Created\n{}\n{}",
+            "Created\n{}\n{}\nUSB 3 ports: {:?}",
             this.regs.get_mut().captabilities(),
-            this.regs.get_mut().operational_regs()
+            this.regs.get_mut().operational_regs(),
+            this.usb3_ports
         );
         this
     }
