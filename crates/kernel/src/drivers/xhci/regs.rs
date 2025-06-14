@@ -12,7 +12,7 @@ use crate::{
         frame_allocator::{self, Frame},
         paging::PAGE_SIZE,
     },
-    time, PhysAddr, VirtAddr,
+    sleep, sleep_until, time, warn, PhysAddr, VirtAddr,
 };
 use bitflags::bitflags;
 use core::fmt::Display;
@@ -287,6 +287,236 @@ impl Display for OperationalRegs {
         Ok(())
     }
 }
+
+impl OperationalRegs {
+    pub fn port_registers(&mut self, port_index: u8) -> &mut PortRegisters {
+        let ptr = self as *mut Self;
+        unsafe {
+            let port_reg_ptr = ptr
+                .byte_add(0x400usize + (size_of::<PortRegisters>() * port_index as usize))
+                as *mut PortRegisters;
+            &mut *port_reg_ptr
+        }
+    }
+
+    pub fn reset_port(&mut self, usb3_ports: &[u8], port_index: u8) -> bool {
+        let port_regs = self.port_registers(port_index);
+
+        let is_usb3 = usb3_ports.contains(&port_index);
+
+        let mut port_sc = read_ref!(port_regs.port_sc);
+
+        if !port_sc.pp() {
+            // Power the port up
+            write_ref!(port_regs.port_sc, port_sc.with_pp(true));
+
+            // wait 20ms for power to stabilize
+            sleep!(20 ms);
+
+            port_sc = read_ref!(port_regs.port_sc);
+            if !port_sc.pp() {
+                warn!("xHCI port {} didn't power up, stopping reset", port_index);
+                return false;
+            }
+        }
+
+        // Clear any lingering status change bits before initiating the reset
+        port_sc = read_ref!(port_regs.port_sc)
+            .with_csc(true)
+            .with_pec(true)
+            .with_prc(true);
+
+        write_ref!(port_regs.port_sc, port_sc);
+        port_sc = read_ref!(port_regs.port_sc);
+
+        if is_usb3 {
+            // warm reset for usb3
+            port_sc.set_wpr(true);
+        } else {
+            // standard port reset for usb2
+            port_sc.set_pr(true);
+        }
+
+        write_ref!(port_regs.port_sc, port_sc);
+
+        if !sleep_until!(
+            100 ms,
+            (!is_usb3 && read_ref!(port_regs.port_sc).prc()) || (is_usb3 && read_ref!(port_regs.port_sc).wrc())
+        ) {
+            warn!("xHCI port {port_index}: reset timeout after 100ms",);
+            return false;
+        }
+
+        // wait 5ms for hardware to do it's thing
+        sleep!(5 ms);
+
+        port_sc = read_ref!(port_regs.port_sc);
+        // Clear the reset completion and status change bits
+        port_sc = port_sc
+            /* clear port reset change */
+            .with_prc(true)
+            /* clear port warm reset change */
+            .with_wrc(true)
+            /* Clear connect status change */
+            .with_csc(true)
+            /* Clear port enable/disable change */
+            .with_pec(true)
+            /* leave port unenabled */
+            .with_ped(false);
+        write_ref!(port_regs.port_sc, port_sc);
+
+        // wait 5ms for hardware to do it's thing
+        sleep!(5 ms);
+
+        // read to check if the port was reset successfully
+        port_sc = read_ref!(port_regs.port_sc);
+
+        // This case could happen when the port has been reset after
+        // a device disconnect event, and no device has connected since.
+        if !port_sc.ped() {
+            warn!("xHCI attempted port {port_index} reset, port didn't enable, is_usb3 {is_usb3}");
+            false
+        } else {
+            true
+        }
+    }
+}
+
+/// Port Status & Control register
+#[bitfield(u32)]
+pub struct PortSCReg {
+    /// Current Connect Status (CCS) – ROS. Default = ‘0’. ‘1’ = A device is connected81 to the port.
+    /// ‘0’ =
+    /// A device is not connected. This value reflects the current state of the port, and may not
+    /// correspond directly to the event that caused the Connect Status Change (CSC) bit to be set to ‘1’.
+    ///
+    /// Refer to sections 4.19.3 and 4.19.4 for more details on the Connect Status Change (CSC)
+    /// assertion conditions.
+    ///
+    /// This flag is ‘0’ if PP is ‘0’.
+    pub ccs: bool,
+    /// Port Enabled/Disabled (PED) – RW1CS. Default = ‘0’. ‘1’ = Enabled. ‘0’ = Disabled.
+    /// Ports may only be enabled by the xHC. Software cannot enable a port by writing a ‘1’ to this flag.
+    /// A port may be disabled by software writing a ‘1’ to this flag.
+    /// This flag shall automatically be cleared to ‘0’ by a disconnect event or other fault condition.
+    /// Note that the bit status does not change until the port state actually changes. There may be a
+    /// delay in disabling or enabling a port due to other host controller or bus events.
+    /// When the port is disabled (PED = ‘0’) downstream propagation of data is blocked on this port,
+    /// except for reset.
+    ///
+    /// For USB2 protocol ports:
+    ///
+    /// When the port is in the Disabled state, software shall reset the port (PR = ‘1’) to transition PED to
+    /// ‘1’ and the port to the Enabled state.
+    ///
+    /// For USB3 protocol ports:
+    ///
+    /// When the port is in the Polling state (after detecting an attach), the port shall automatically
+    /// transition to the Enabled state and set PED to ‘1’ upon the completion of successful link training.
+    /// When the port is in the Disabled state, software shall write a ‘5’ (RxDetect) to the PLS field to
+    /// transition the port to the Disconnected state. Refer to section 4.19.1.2.
+    /// PED shall automatically be cleared to ‘0’ when PR is set to ‘1’, and set to ‘1’ when PR transitions
+    /// from ‘1’ to ‘0’ after a successful reset. Refer to Port Reset (PR) bit for more information on how
+    /// the PED bit is managed.
+    /// Note that when software writes this bit to a ‘1’, it shall also write a ‘0’ to the PR bit82.
+    /// This flag is ‘0’ if PP is ‘0’.
+    ped: bool,
+    #[bits(2)]
+    __: (),
+    /// Port Reset (PR) – RW1S. Default = ‘0’. ‘1’ = Port Reset signaling is asserted. ‘0’ = Port is not in
+    /// Rest. When software writes a ‘1’ to this bit generating a ‘0’ to ‘1’ transition, the bus reset
+    /// sequence is initiated83; USB2 protocol ports shall execute the bus reset sequence as defined in
+    /// the USB2 Spec. USB3 protocol ports shall execute the Hot Reset sequence as defined in the
+    // USB3 Spec. PR remains set until reset signaling is completed by the root hub.
+    /// Note that software shall write a ‘1’ to this flag to transition a USB2 port from the Polling state to
+    /// the Enabled state. Refer to sections 4.15.2.3 and 4.19.1.1.
+    /// This flag is ‘0’ if PP is ‘0’.
+    pr: bool,
+    #[bits(4)]
+    __: (),
+    /// Port Power (PP) – RWS. Default = ‘1’. This flag reflects a port's logical, power control state.
+    /// Because host controllers can implement different methods of port power switching, this flag may
+    /// or may not represent whether (VBus) power is actually applied to the port. When PP equals a '0'
+    /// the port is nonfunctional and shall not report attaches, detaches, or Port Link State (PLS)
+    /// changes. However, the port shall report over-current conditions when PP = ‘0’ if PPC = ‘0’. After
+    /// modifying PP, software shall read PP and confirm that it is reached its target state before
+    /// modifying it again91, undefined behavior may occur if this procedure is not followed.
+    ///
+    /// 0 = This port is in the Powered-off state.
+    ///
+    /// 1 = This port is not in the Powered-off state.
+    ///
+    /// If the Port Power Control (PPC) flag in the HCCPARAMS1 register is '1', then xHC has port power
+    /// control switches and this bit represents the current setting of the switch ('0' = off, '1' = on).
+    /// If the Port Power Control (PPC) flag in the HCCPARAMS1 register is '0', then xHC does not have
+    /// port power control switches and each port is hard wired to power, and not affected by this bit.
+    /// When an over-current condition is detected on a powered port, the xHC shall transition the PP
+    /// bit in each affected port from a ‘1’ to ‘0’ (removing power from the port).
+    /// Note: If this is an SSIC Port, then the DSP Disconnect process is initiated by '1' to '0' transition of
+    /// PP. After an SSIC USP disconnect process, the port may be disabled by setting PED = 1. As noted,
+    /// the SSIC spec does not define a mechanism for the USP to request DSP to be re-enabled for a
+    /// subsequent re-connect. If PED is set to 1 without a prior negotiated disconnect with the USP,
+    /// subsequent re-enabling of the port requires DSP to issue a WPR to bring USP back to Rx.Detect.
+    /// Refer to section 5.1.2 in the SSIC Spec for more information.
+    /// Refer to section 4.19.4 for more information.
+    pp: bool,
+    #[bits(7)]
+    __: (),
+    /// Connect Status Change (CSC) – RW1CS. Default = ‘0’. ‘1’ = Change in CCS. ‘0’ = No change.
+    /// This flag indicates a change has occurred in the port’s Current Connect Status (CCS) or Cold Attach
+    /// Status (CAS) bits. Note that this flag shall not be set if the CCS transition was due to software
+    /// setting PP to ‘0’, or the CAS transition was due to software setting WPR to ‘1’. The xHC sets this
+    /// bit to ‘1’ for all changes to the port device connect status92, even if system software has not
+    /// cleared an existing Connect Status Change. For example, the insertion status changes twice
+    /// before system software has cleared the changed condition, root hub hardware will be “setting”
+    /// an already-set bit (i.e., the bit will remain ‘1’). Software shall clear this bit by writing a ‘1’ to it.
+    /// Refer to section 4.19.2 for more information on change bit usage.
+    pub csc: bool,
+    /// Port Enabled/Disabled Change (PEC) – RW1CS. Default = ‘0’. ‘1’ = change in PED. ‘0’ = No
+    /// change. Note that this flag shall not be set if the PED transition was due to software setting PP to
+    /// ‘0’. Software shall clear this bit by writing a ‘1’ to it. Refer to section 4.19.2 for more information
+    /// on change bit usage.
+    /// For a USB2 protocol port, this bit shall be set to ‘1’ only when the port is disabled due to the
+    /// appropriate conditions existing at the EOF2 point (refer to section 11.8.1 of the USB2
+    /// Specification for the definition of a Port Error).
+    /// For a USB3 protocol port, this bit shall never be set to ‘1’.
+    pec: bool,
+    //// Warm Port Reset Change (WRC) – RW1CS/RsvdZ. Default = ‘0’. This bit is set when Warm Reset
+    /// processing on this port completes. ‘0’ = No change. ‘1’ = Warm Reset complete. Note that this
+    /// flag shall not be set to ‘1’ if the Warm Reset processing was forced to terminate due to software
+    /// clearing PP or PED to '0'. Software shall clear this bit by writing a '1' to it. Refer to section 4.19.5.1.
+    /// Refer to section 4.19.2 for more information on change bit usage.
+    /// This bit only applies to USB3 protocol ports. For USB2 protocol ports it shall be RsvdZ.
+    wrc: bool,
+    #[bits(1)]
+    __: (),
+    /// Port Reset Change (PRC) – RW1CS. Default = ‘0’. This flag is set to ‘1’ due to a '1' to '0' transition
+    /// of Port Reset (PR). e.g. when any reset processing (Warm or Hot) on this port is complete. Note
+    /// that this flag shall not be set to ‘1’ if the reset processing was forced to terminate due to software
+    /// clearing PP or PED to '0'. ‘0’ = No change. ‘1’ = Reset complete. Software shall clear this bit by
+    /// writing a '1' to it. Refer to section 4.19.5. Refer to section 4.19.2 for more information on change
+    /// bit usage.
+    prc: bool,
+    #[bits(9)]
+    __: (),
+    /// Warm Port Reset (WPR) – RW1S/RsvdZ. Default = ‘0’. When software writes a ‘1’ to this bit, the
+    /// Warm Reset sequence as defined in the USB3 Specification is initiated and the PR flag is set to ‘1’.
+    /// Once initiated, the PR, PRC, and WRC flags shall reflect the progress of the Warm Reset
+    /// sequence. This flag shall always return ‘0’ when read. Refer to section 4.19.5.1.
+    /// This flag only applies to USB3 protocol ports. For USB2 protocol ports it shall be RsvdZ.
+    wpr: bool,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct PortRegisters {
+    pub port_sc: PortSCReg,
+    port_pmsc: u32,
+    port_li: u32,
+    __: u32,
+}
+
+const _: () = assert!(size_of::<PortRegisters>() == 0x10);
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]

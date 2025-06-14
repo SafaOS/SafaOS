@@ -12,6 +12,7 @@ use crate::{
     arch::{disable_interrupts, enable_interrupts, paging::current_higher_root_table},
     debug,
     drivers::{
+        driver_poll::{self, PolledDriver},
         interrupts::{self, IntTrigger, InterruptReceiver},
         pci::PCICommandReg,
         xhci::{
@@ -58,6 +59,11 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                         self.manager_queue.add_transfer_response(res)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
+                        debug!(
+                            XHCI,
+                            "port status change for port: {}",
+                            event.parameter.port_index()
+                        );
                         self.manager_queue.add_port_status_change_event(event);
                     }
                 }
@@ -66,6 +72,24 @@ impl<'s> InterruptReceiver for XHCI<'s> {
 
         self.regs.lock().acknowledge_irq(0);
     }
+}
+
+impl<'s> PolledDriver for XHCI<'s> {
+    fn poll(&self) {
+        // TODO: unsafe, and the locks are unneceassary we should just use pointers here or UnsafeCell
+        let op_regs = self.regs.lock().operational_regs();
+
+        if let Some(event) = self.manager_queue.try_pop_port_connection_event() {
+            debug!(XHCIRegisters, "port {} resetting...", event.port_index);
+            op_regs.reset_port(&self.usb3_ports, event.port_index);
+        }
+    }
+}
+
+/// A port connection or disconnection event
+pub struct XHCIPortConnectionEvent {
+    pub port_index: u8,
+    pub disconnected: bool,
 }
 
 /// A safe communicator with XHCI Interrupts that can safely send requests and receive responses without deadlocking
@@ -81,6 +105,7 @@ pub struct XHCIResponseQueue<'s> {
     commands: UnsafeCell<Vec<CmdResponseTRB>>,
     transfer_events: UnsafeCell<Vec<TransferResponseTRB>>,
     port_queue: UnsafeCell<Vec<PortStatusChangeTRB>>,
+    port_connection_queue: UnsafeCell<Vec<XHCIPortConnectionEvent>>,
 
     doorbell_manager: Mutex<XHCIDoorbellManager<'s>>,
     commands_ring: Mutex<XHCICommandRing<'s>>,
@@ -99,6 +124,7 @@ impl<'s> XHCIResponseQueue<'s> {
             commands: UnsafeCell::new(Vec::new()),
             transfer_events: UnsafeCell::new(Vec::new()),
             port_queue: UnsafeCell::new(Vec::new()),
+            port_connection_queue: UnsafeCell::new(Vec::new()),
         }
     }
 
@@ -124,6 +150,26 @@ impl<'s> XHCIResponseQueue<'s> {
             self.port_queue.as_mut_unchecked().push(event);
         }
         drop(interrupter);
+    }
+
+    pub fn add_port_connection_event(&self, port_index: u8, is_disconnected: bool) {
+        let interrupter = self.interrupter_lock.lock();
+        unsafe {
+            self.port_connection_queue
+                .as_mut_unchecked()
+                .push(XHCIPortConnectionEvent {
+                    port_index,
+                    disconnected: is_disconnected,
+                });
+        }
+        drop(interrupter);
+    }
+
+    pub fn try_pop_port_connection_event(&self) -> Option<XHCIPortConnectionEvent> {
+        let lock = self.requester_lock.try_lock();
+        let results = unsafe { self.port_connection_queue.as_mut_unchecked().pop() };
+        drop(lock);
+        results
     }
 
     unsafe fn wait_for_command_response(
@@ -179,14 +225,32 @@ pub struct XHCI<'s> {
     // TODO: fully implement
     /// A list of USB3 ports, all other ports are USB2
     usb3_ports: Vec<u8>,
+
     irq_info: IRQInfo,
 }
-
-impl<'s> XHCI<'s> {}
 
 unsafe impl<'s> Send for XHCI<'s> {}
 unsafe impl<'s> Sync for XHCI<'s> {}
 
+impl<'s> XHCI<'s> {
+    /// Checks all root hub ports for connected ports and adds them to the port connection queue
+    pub fn prob(&self) {
+        let mut regs = self.regs.lock();
+        let op_regs = regs.operational_regs();
+
+        // Resettng all the root hub ports
+        // TODO: detect connections
+        for i in 0..regs.captabilities().max_ports() {
+            let port_regs = op_regs.port_registers(i);
+            let port_sc = read_ref!(port_regs.port_sc);
+
+            if port_sc.ccs() && port_sc.csc() {
+                self.manager_queue
+                    .add_port_connection_event(i, !port_sc.ccs());
+            }
+        }
+    }
+}
 impl<'s> PCIDevice for XHCI<'s> {
     fn class() -> (u8, u8, u8) {
         (0xc, 0x3, 0x30)
@@ -280,13 +344,16 @@ impl<'s> PCIDevice for XHCI<'s> {
             disable_interrupts();
         }
         let irq_info = self.irq_info.clone();
+
         interrupts::register_irq(irq_info, IntTrigger::Edge, self);
+        driver_poll::add_to_poll(self);
 
         let op_regs = self.regs.lock().operational_regs();
         let usbsts_before = read_ref!(op_regs.usbstatus);
         let usbcmd_before = read_ref!(op_regs.usbcmd);
         unsafe {
             self.regs.lock().start();
+            self.prob();
         }
         let usbsts_after = read_ref!(op_regs.usbstatus);
         let usbcmd_after = read_ref!(op_regs.usbcmd);
