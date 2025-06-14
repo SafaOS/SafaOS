@@ -77,6 +77,59 @@ macro_rules! time {
     };
 }
 
+#[macro_export]
+/// Sleeps n ms
+///
+/// vatiants:
+///
+/// sleep!(N ms)
+macro_rules! sleep {
+    ($ms: literal ms) => {{
+        let start_time = $crate::time!();
+        let timeout_time = start_time + $ms;
+
+        while $crate::time!() < timeout_time {
+            core::hint::spin_loop()
+        }
+    }};
+}
+
+#[macro_export]
+/// Sleeps until condition is true
+/// variants:
+///
+/// sleep_until!(condition)
+///
+/// sleep_until!(timeout ms, condition)
+///
+/// both returns true if condition happened to be successful, on timeout returns false
+macro_rules! sleep_until {
+    ($cond: tt) => {{
+        while !$cond {
+            core::hint::spin_loop()
+        }
+
+        true
+    }};
+
+    ($timeout_ms: literal ms, $cond: expr) => {{
+        let start_time = $crate::time!();
+        let timeout_time = start_time + $timeout_ms;
+        let mut success = true;
+
+        while !$cond {
+            if $crate::time!() >= timeout_time {
+                success = false;
+                break;
+            }
+
+            core::hint::spin_loop();
+        }
+
+        success
+    }};
+}
+
 #[unsafe(no_mangle)]
 pub fn khalt() -> ! {
     loop {
