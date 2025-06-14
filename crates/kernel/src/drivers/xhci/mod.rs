@@ -40,6 +40,7 @@ const MAX_TRB_COUNT: usize = 256;
 
 impl<'s> InterruptReceiver for XHCI<'s> {
     fn handle_interrupt(&self) {
+        let regs = unsafe { self.regs.as_mut_unchecked() };
         let events = self.event_ring.lock().dequeue_events();
 
         for event in events {
@@ -61,8 +62,10 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                     EventResponseTRB::PortStatusChange(event) => {
                         debug!(
                             XHCI,
-                            "port status change for port: {}",
-                            event.parameter.port_index()
+                            "port status change for port: {} with code {:?} ({:#x})",
+                            event.parameter.port_index(),
+                            event.status.completion_code(),
+                            event.status.completion_code() as u8,
                         );
                         self.manager_queue.add_port_status_change_event(event);
                     }
@@ -70,16 +73,18 @@ impl<'s> InterruptReceiver for XHCI<'s> {
             }
         }
 
-        self.regs.lock().acknowledge_irq(0);
+        unsafe {
+            regs.acknowledge_irq(0);
+        }
     }
 }
 
 impl<'s> PolledDriver for XHCI<'s> {
     fn poll(&self) {
-        // TODO: unsafe, and the locks are unneceassary we should just use pointers here or UnsafeCell
-        let op_regs = self.regs.lock().operational_regs();
+        let regs = unsafe { self.regs.as_mut_unchecked() };
 
         if let Some(event) = self.manager_queue.try_pop_port_connection_event() {
+            let op_regs = unsafe { regs.operational_regs() };
             debug!(XHCIRegisters, "port {} resetting...", event.port_index);
             op_regs.reset_port(&self.usb3_ports, event.port_index);
         }
@@ -216,9 +221,8 @@ impl<'s> XHCIResponseQueue<'s> {
 /// The main XHCI driver Instance
 #[derive(Debug)]
 pub struct XHCI<'s> {
-    // TODO: maybe use a UnsafeCell here?
-    /// be careful using the registers, should only be used while interrupts are disabled
-    regs: Mutex<XHCIRegisters<'s>>,
+    /// be careful using the registers everything there is unsafe
+    regs: UnsafeCell<XHCIRegisters<'s>>,
     /// Only accessed by interrupts
     event_ring: Mutex<XHCIEventRing<'s>>,
     manager_queue: XHCIResponseQueue<'s>,
@@ -235,12 +239,12 @@ unsafe impl<'s> Sync for XHCI<'s> {}
 impl<'s> XHCI<'s> {
     /// Checks all root hub ports for connected ports and adds them to the port connection queue
     pub fn prob(&self) {
-        let mut regs = self.regs.lock();
-        let op_regs = regs.operational_regs();
-
+        let regs = unsafe { self.regs.as_mut_unchecked() };
+        let caps = unsafe { regs.captabilities() };
+        let op_regs = unsafe { regs.operational_regs() };
         // Resettng all the root hub ports
         // TODO: detect connections
-        for i in 0..regs.captabilities().max_ports() {
+        for i in 0..caps.max_ports() {
             let port_regs = op_regs.port_registers(i);
             let port_sc = read_ref!(port_regs.port_sc);
 
@@ -301,8 +305,8 @@ impl<'s> PCIDevice for XHCI<'s> {
         let caps_ptr = virt_base_addr.into_ptr::<CapsReg>();
         let caps_regs = unsafe { &mut *caps_ptr };
 
-        let runtime_regs = caps_regs.runtime_regs_mut();
-        let interrupter = runtime_regs.interrupter_mut(0);
+        let runtime_regs = unsafe { &mut *caps_regs.runtime_regs_ptr() };
+        let interrupter = unsafe { &mut *runtime_regs.interrupter_ptr(0) };
 
         let command_ring = XHCICommandRing::create(MAX_TRB_COUNT);
         let mut event_ring = XHCIEventRing::create(MAX_TRB_COUNT, interrupter);
@@ -322,20 +326,22 @@ impl<'s> PCIDevice for XHCI<'s> {
             .map(|msix| msix.into_irq_info())
             .unwrap();
 
-        let mut this = XHCI {
+        let this = XHCI {
             event_ring: Mutex::new(event_ring),
             manager_queue: xhci_queue_manager,
-            regs: Mutex::new(xhci_registers),
+            regs: UnsafeCell::new(xhci_registers),
             usb3_ports,
             irq_info,
         };
-        debug!(
-            XHCI,
-            "Created\n{}\n{}\nUSB 3 ports: {:?}",
-            this.regs.get_mut().captabilities(),
-            this.regs.get_mut().operational_regs(),
-            this.usb3_ports
-        );
+        unsafe {
+            debug!(
+                XHCI,
+                "Created\n{}\n{}\nUSB 3 ports: {:?}",
+                this.regs.as_ref_unchecked().captabilities(),
+                this.regs.as_mut_unchecked().operational_regs(),
+                this.usb3_ports
+            );
+        }
         this
     }
 
@@ -348,11 +354,12 @@ impl<'s> PCIDevice for XHCI<'s> {
         interrupts::register_irq(irq_info, IntTrigger::Edge, self);
         driver_poll::add_to_poll(self);
 
-        let op_regs = self.regs.lock().operational_regs();
+        let regs = unsafe { self.regs.as_mut_unchecked() };
+        let op_regs = unsafe { regs.operational_regs() };
         let usbsts_before = read_ref!(op_regs.usbstatus);
         let usbcmd_before = read_ref!(op_regs.usbcmd);
         unsafe {
-            self.regs.lock().start();
+            regs.start();
             self.prob();
         }
         let usbsts_after = read_ref!(op_regs.usbstatus);

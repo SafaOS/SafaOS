@@ -32,19 +32,19 @@ pub struct CapsReg {
 }
 
 impl CapsReg {
-    pub fn operational_regs_mut<'a>(&mut self) -> &'a mut OperationalRegs {
+    pub fn operational_regs_ptr(&self) -> *mut OperationalRegs {
         let caps_ptr = self as *const _ as *const u8;
         unsafe {
             let ptr = caps_ptr.add(self.reg_length as usize);
-            &mut *(ptr as *mut OperationalRegs)
+            ptr as *mut OperationalRegs
         }
     }
 
-    pub fn runtime_regs_mut<'a>(&mut self) -> &'a mut RuntimeRegs {
+    pub fn runtime_regs_ptr(&self) -> *mut RuntimeRegs {
         let caps_ptr = self as *const _ as *const u8;
         unsafe {
             let ptr = caps_ptr.add(self.runtime_off as usize);
-            &mut *(ptr as *mut RuntimeRegs)
+            ptr as *mut RuntimeRegs
         }
     }
 
@@ -586,8 +586,8 @@ pub struct RuntimeRegs {
 }
 
 impl RuntimeRegs {
-    pub fn interrupter_mut(&mut self, index: usize) -> &mut InterrupterRegs {
-        &mut self.interrupter_registers[index]
+    pub fn interrupter_ptr(&mut self, index: usize) -> *mut InterrupterRegs {
+        &raw mut self.interrupter_registers[index]
     }
 }
 
@@ -627,6 +627,8 @@ impl<'a> XHCIDoorbellManager<'a> {
 /// A general wrapper around XHCI's registers such as captabilities, operationals, and runtime
 pub struct XHCIRegisters<'s> {
     caps_regs: *mut CapsReg,
+    op_regs: *mut OperationalRegs,
+    runtime_regs: *mut RuntimeRegs,
     // TODO: free the frames when this goes out of scope? except that currently it never does
     /// used to store the scratchpad_buffers pointers and the dcbaa (scratchpad_buffers, dcbaa)
     buffers_frame: Frame,
@@ -641,6 +643,8 @@ impl<'s> XHCIRegisters<'s> {
     pub unsafe fn new(caps: *mut CapsReg) -> Self {
         let mut this = Self {
             caps_regs: caps,
+            op_regs: (*caps).operational_regs_ptr(),
+            runtime_regs: (*caps).runtime_regs_ptr(),
             buffers_frame: frame_allocator::allocate_frame()
                 .expect("failed to allocate frame for the XHCI buffers"),
             scratchpad_buffers: None,
@@ -652,31 +656,30 @@ impl<'s> XHCIRegisters<'s> {
         this
     }
 
-    pub fn captabilities<'a>(&self) -> &'a CapsReg {
+    pub unsafe fn captabilities(&self) -> &'static CapsReg {
         unsafe { &*self.caps_regs }
     }
 
-    fn captabilities_mut<'a>(&mut self) -> &'a mut CapsReg {
+    unsafe fn captabilities_mut(&mut self) -> &'static mut CapsReg {
         unsafe { &mut *self.caps_regs }
     }
 
-    pub fn operational_regs<'a>(&mut self) -> &'a mut OperationalRegs {
-        let caps = self.captabilities_mut();
-        caps.operational_regs_mut()
+    pub unsafe fn operational_regs(&mut self) -> &'static mut OperationalRegs {
+        unsafe { &mut *self.op_regs }
     }
 
-    fn runtime_regs<'a>(&mut self) -> &'a mut RuntimeRegs {
-        self.captabilities_mut().runtime_regs_mut()
+    unsafe fn runtime_regs<'a>(&mut self) -> &'a mut RuntimeRegs {
+        unsafe { &mut *self.runtime_regs }
     }
 
     /// Clear any incoming interrupts for the interrupter
-    pub fn acknowledge_irq(&mut self, interrupter: u8) {
-        let op_regs = self.operational_regs();
+    pub unsafe fn acknowledge_irq(&mut self, interrupter: u8) {
+        let op_regs = unsafe { self.operational_regs() };
         // Write the USBSts::EINT bit to clear it, it is RW1C meaning write 1 to clear
         write_ref!(op_regs.usbstatus, USBSts::EINT);
 
-        let runtime_regs = self.runtime_regs();
-        let interrupt_reg = runtime_regs.interrupter_mut(interrupter as usize);
+        let runtime_regs = unsafe { self.runtime_regs() };
+        let interrupt_reg = unsafe { &mut *runtime_regs.interrupter_ptr(interrupter as usize) };
         // Similariy we clear the iman interrupt pending bit by writing 1 to it
         let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_PENDING;
         write_ref!(interrupt_reg.iman, iman);
@@ -779,7 +782,7 @@ impl<'s> XHCIRegisters<'s> {
     }
 
     fn configure_crcr(&mut self, command_ring: &XHCICommandRing) {
-        let op_regs = self.operational_regs();
+        let op_regs = unsafe { self.operational_regs() };
         write_ref!(
             op_regs.crcr,
             *command_ring.base_phys_addr() | command_ring.current_ring_cycle() as usize
@@ -787,8 +790,8 @@ impl<'s> XHCIRegisters<'s> {
     }
 
     fn configure_dcbaa(&mut self) {
-        let caps = self.captabilities();
-        let op_regs = self.operational_regs();
+        let caps = unsafe { self.captabilities() };
+        let op_regs = unsafe { self.operational_regs() };
 
         // Allocates and sets the dcbaa
         assert!(caps.max_device_slots() * size_of::<PhysAddr>() <= PAGE_SIZE);
@@ -823,12 +826,14 @@ impl<'s> XHCIRegisters<'s> {
 
     fn configure_runtime(&mut self, event_ring: &mut XHCIEventRing) {
         event_ring.reset();
-        let runtime_regs = self.runtime_regs();
-        let interrupt_reg = runtime_regs.interrupter_mut(0);
+        let runtime_regs = unsafe { self.runtime_regs() };
+        let interrupt_reg = unsafe { &mut *runtime_regs.interrupter_ptr(0) };
         // Enable interrupts
         write_ref!(interrupt_reg.iman, XHCIIman::INTERRUPT_ENABLE);
 
         // Clear any pending interrupts
-        self.acknowledge_irq(0);
+        unsafe {
+            self.acknowledge_irq(0);
+        }
     }
 }

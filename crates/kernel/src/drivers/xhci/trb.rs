@@ -63,7 +63,7 @@ pub enum EventResponseTRB {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
-pub enum CmdStatusCode {
+pub enum CompletionStatusCode {
     Invalid = 0,
     Success = 1,
     DataBufferErr = 2,
@@ -97,7 +97,7 @@ pub enum CmdStatusCode {
     Other,
 }
 
-impl CmdStatusCode {
+impl CompletionStatusCode {
     pub const fn from_bits(bits: u8) -> Self {
         if bits >= Self::Other as u8 {
             Self::Other
@@ -116,7 +116,7 @@ pub struct CmdCompletionStatus {
     #[bits(24)]
     __: (),
     #[bits(8)]
-    pub code: CmdStatusCode,
+    pub code: CompletionStatusCode,
 }
 
 #[bitfield(u32)]
@@ -185,7 +185,7 @@ pub struct PortStatusChangeStatus {
     #[bits(24)]
     __: (),
     #[bits(8)]
-    pub completion_code: CmdCompletionStatus,
+    pub completion_code: CompletionStatusCode,
 }
 
 #[bitfield(u32)]

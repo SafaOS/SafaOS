@@ -5,10 +5,11 @@ use lazy_static::lazy_static;
 use crate::utils::locks::{RwLock, RwLockReadGuard};
 
 pub trait PolledDriver: Send + Sync {
+    /// The amount of dealy until poll is called again
     fn run_every_ms(&self) -> usize {
         100
     }
-
+    /// Executed every [`Self::run_every_ms`]
     fn poll(&self);
 }
 
