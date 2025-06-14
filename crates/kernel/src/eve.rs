@@ -1,6 +1,7 @@
 //! Eve is the kernel's main loop (PID 0)
 //! it is responsible for managing a few things related to it's children
 
+use crate::drivers::driver_poll;
 use crate::utils::locks::Mutex;
 use crate::{drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield};
 use alloc::vec::Vec;
@@ -96,6 +97,10 @@ pub fn main() -> ! {
 
     loop {
         one_shot();
+        for driver in &*driver_poll::read_poll() {
+            // TODO: spawn in a thread and poll every PolledDriver::poll_every
+            driver.poll();
+        }
         core::hint::spin_loop();
     }
 }
