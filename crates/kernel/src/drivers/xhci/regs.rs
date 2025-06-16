@@ -3,7 +3,7 @@ use crate::{
     drivers::{
         utils::{read_ref, write_ref},
         xhci::{
-            rings::{XHCICommandRing, XHCIEventRing},
+            rings::{command::XHCICommandRing, event::XHCIEventRing},
             utils::allocate_buffers_frame,
         },
     },

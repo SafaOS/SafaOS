@@ -6,7 +6,7 @@ use super::{
 };
 use alloc::vec::Vec;
 use regs::{CapsReg, XHCIDoorbellManager};
-use rings::{XHCICommandRing, XHCIEventRing};
+use rings::{command::XHCICommandRing, event::XHCIEventRing};
 
 use crate::{
     arch::{disable_interrupts, enable_interrupts, paging::current_higher_root_table},
@@ -18,8 +18,8 @@ use crate::{
         xhci::{
             extended_caps::XHCIUSBSupportedProtocolCap,
             regs::XHCIRegisters,
-            trb::{
-                CmdResponseTRB, EventResponseTRB, PortStatusChangeTRB, TransferResponseTRB,
+            rings::trbs::{
+                self, CmdResponseTRB, EventResponseTRB, PortStatusChangeTRB, TransferResponseTRB,
                 TRB_TYPE_ENABLE_SLOT_CMD,
             },
         },
@@ -34,7 +34,6 @@ mod devices;
 mod extended_caps;
 mod regs;
 mod rings;
-mod trb;
 mod utils;
 
 /// The maximum number of TRBs a CommandRing can hold
@@ -209,7 +208,7 @@ impl<'s> XHCIResponseQueue<'s> {
     }
 
     /// Enqieue a TRB command in the XHCI command ring, and rings the command doorbell, then returns the response TRB
-    pub fn send_command(&self, trb: trb::TRB) -> CmdResponseTRB {
+    pub fn send_command(&self, trb: trbs::TRB) -> CmdResponseTRB {
         let requester = self.requester_lock.lock();
         let cmds_len_before = unsafe { self.commands.as_ref_unchecked().len() };
 
@@ -244,8 +243,8 @@ unsafe impl<'s> Sync for XHCI<'s> {}
 impl<'s> XHCI<'s> {
     /// A helper function to send an Enable Slot TRB Command to the XHCI controller, returns the slot id
     pub fn enable_device_slot(&self) -> u8 {
-        let trb = trb::TRB::new(
-            trb::TRBCommand::default().with_trb_type(TRB_TYPE_ENABLE_SLOT_CMD),
+        let trb = trbs::TRB::new(
+            trbs::TRBCommand::default().with_trb_type(TRB_TYPE_ENABLE_SLOT_CMD),
             0,
             0,
         );
