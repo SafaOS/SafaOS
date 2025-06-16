@@ -289,7 +289,7 @@ impl Display for OperationalRegs {
 }
 
 impl OperationalRegs {
-    pub fn port_registers(&mut self, port_index: u8) -> &mut PortRegisters {
+    pub unsafe fn port_registers(&mut self, port_index: u8) -> &'static mut PortRegisters {
         let ptr = self as *mut Self;
         unsafe {
             let port_reg_ptr = ptr
@@ -299,11 +299,9 @@ impl OperationalRegs {
         }
     }
 
-    pub fn reset_port(&mut self, usb3_ports: &[u8], port_index: u8) -> bool {
-        let port_regs = self.port_registers(port_index);
-
-        let is_usb3 = usb3_ports.contains(&port_index);
-
+    /// Reset a port at index `port_index`
+    pub unsafe fn reset_port(&mut self, is_usb3: bool, port_index: u8) -> bool {
+        let port_regs = unsafe { self.port_registers(port_index) };
         let mut port_sc = read_ref!(port_regs.port_sc);
 
         if !port_sc.pp() {
@@ -378,6 +376,46 @@ impl OperationalRegs {
             false
         } else {
             true
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum PortSpeed {
+    Undefined = 0,
+    /// 12 MB/s USB 2.0
+    Full = 1,
+    /// 1.5 Mb/s USB 2.0
+    Low = 2,
+    /// 480 Mb/s USB 2.0
+    High = 3,
+    /// 5 Gb/s (Gen1 x1) USB 3.0
+    Super = 4,
+    /// 10 Gb/s (Gen2 x1) USB 3.1
+    SuperPlus = 5,
+}
+
+impl PortSpeed {
+    pub const fn from_bits(bits: u8) -> Self {
+        if bits > Self::SuperPlus as u8 {
+            Self::Undefined
+        } else {
+            unsafe { core::mem::transmute(bits) }
+        }
+    }
+
+    pub const fn into_bits(self) -> u8 {
+        self as u8
+    }
+
+    /// Returns the max initial packet size of a control transfer that has `self` port speed
+    pub const fn max_control_transfer_initial_packet_size(&self) -> usize {
+        match self {
+            Self::Low => 8,
+            Self::Full | Self::High => 64,
+            Self::Super | Self::SuperPlus => 512,
+            Self::Undefined => 0,
         }
     }
 }
@@ -460,7 +498,12 @@ pub struct PortSCReg {
     /// Refer to section 5.1.2 in the SSIC Spec for more information.
     /// Refer to section 4.19.4 for more information.
     pp: bool,
-    #[bits(7)]
+    #[bits(4)]
+    /// Speed (Port Speed) – ROS. Default = ‘0’. This field identifies the speed of the connected
+    /// USB Device. This field is only relevant if a device is connected (CCS = ‘1’) in all other cases this
+    /// field shall indicate Undefined Speed. Refer to section 4.19.3
+    pub port_speed: PortSpeed,
+    #[bits(3)]
     __: (),
     /// Connect Status Change (CSC) – RW1CS. Default = ‘0’. ‘1’ = Change in CCS. ‘0’ = No change.
     /// This flag indicates a change has occurred in the port’s Current Connect Status (CCS) or Cold Attach

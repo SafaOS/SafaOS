@@ -25,16 +25,18 @@ use crate::{
         },
     },
     memory::paging::{EntryFlags, PAGE_SIZE},
-    time,
+    sleep_until,
     utils::locks::Mutex,
 };
 
 use super::pci::PCIDevice;
+mod devices;
 mod extended_caps;
 mod regs;
 mod rings;
 mod trb;
 mod utils;
+
 /// The maximum number of TRBs a CommandRing can hold
 const MAX_TRB_COUNT: usize = 256;
 
@@ -74,6 +76,7 @@ impl<'s> InterruptReceiver for XHCI<'s> {
         }
 
         unsafe {
+            // We only use interrupter 0 for now
             regs.acknowledge_irq(0);
         }
     }
@@ -85,8 +88,22 @@ impl<'s> PolledDriver for XHCI<'s> {
 
         if let Some(event) = self.manager_queue.try_pop_port_connection_event() {
             let op_regs = unsafe { regs.operational_regs() };
-            debug!(XHCIRegisters, "port {} resetting...", event.port_index);
-            op_regs.reset_port(&self.usb3_ports, event.port_index);
+            debug!(XHCI, "port {} resetting...", event.port_index);
+            let reset_successful = unsafe {
+                op_regs.reset_port(
+                    self.usb3_ports.contains(&event.port_index),
+                    event.port_index,
+                )
+            };
+
+            if reset_successful && !event.disconnected {
+                self.setup_device(event.port_index);
+                debug!(XHCI, "port {} connected...", event.port_index)
+            }
+
+            if event.disconnected {
+                debug!(XHCI, "port {} disconnected...", event.port_index);
+            }
         }
     }
 }
@@ -177,26 +194,13 @@ impl<'s> XHCIResponseQueue<'s> {
         results
     }
 
-    unsafe fn wait_for_command_response(
-        &self,
-        cmds_len_before: usize,
-        timeout: u64,
-    ) -> CmdResponseTRB {
+    unsafe fn wait_for_command_response(&self, cmds_len_before: usize) -> CmdResponseTRB {
         let commands = unsafe { self.commands.as_mut_unchecked() };
 
-        let start_time = time!();
         // FIXME: could this be optimized away, maybe i should use atomics?
-        while commands.len() == cmds_len_before {
-            let now = time!();
-            // FIXME: handle timeouting instead of panicking?
-            if (now >= start_time + timeout) && commands.len() == cmds_len_before {
-                panic!(
-                    "XHCI timeout while waiting for response after {}ms",
-                    now - start_time
-                );
-            }
-
-            core::hint::spin_loop();
+        // FIXME: handle timeout instead of panicking
+        if !sleep_until!(200 ms, commands.len() != cmds_len_before) {
+            panic!("XHCI timeout while waiting for response after 200ms",);
         }
 
         let response = commands.pop().unwrap();
@@ -204,6 +208,7 @@ impl<'s> XHCIResponseQueue<'s> {
         response
     }
 
+    /// Enqieue a TRB command in the XHCI command ring, and rings the command doorbell, then returns the response TRB
     pub fn send_command(&self, trb: trb::TRB) -> CmdResponseTRB {
         let requester = self.requester_lock.lock();
         let cmds_len_before = unsafe { self.commands.as_ref_unchecked().len() };
@@ -211,7 +216,7 @@ impl<'s> XHCIResponseQueue<'s> {
         self.commands_ring.lock().enqueue(trb);
         self.doorbell_manager.lock().ring_command_doorbell();
 
-        let response = unsafe { self.wait_for_command_response(cmds_len_before, 200) };
+        let response = unsafe { self.wait_for_command_response(cmds_len_before) };
         drop(requester);
         response
     }
@@ -237,6 +242,18 @@ unsafe impl<'s> Send for XHCI<'s> {}
 unsafe impl<'s> Sync for XHCI<'s> {}
 
 impl<'s> XHCI<'s> {
+    /// A helper function to send an Enable Slot TRB Command to the XHCI controller, returns the slot id
+    pub fn enable_device_slot(&self) -> u8 {
+        let trb = trb::TRB::new(
+            trb::TRBCommand::default().with_trb_type(TRB_TYPE_ENABLE_SLOT_CMD),
+            0,
+            0,
+        );
+
+        let response = self.manager_queue.send_command(trb);
+        response.cmd.slot_id()
+    }
+
     /// Checks all root hub ports for connected ports and adds them to the port connection queue
     pub fn prob(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
@@ -245,7 +262,7 @@ impl<'s> XHCI<'s> {
         // Resettng all the root hub ports
         // TODO: detect connections
         for i in 0..caps.max_ports() {
-            let port_regs = op_regs.port_registers(i);
+            let port_regs = unsafe { op_regs.port_registers(i) };
             let port_sc = read_ref!(port_regs.port_sc);
 
             if port_sc.ccs() && port_sc.csc() {
@@ -253,6 +270,26 @@ impl<'s> XHCI<'s> {
                     .add_port_connection_event(i, !port_sc.ccs());
             }
         }
+    }
+
+    pub fn setup_device(&self, port_index: u8) {
+        let regs = unsafe { self.regs.as_mut_unchecked() };
+        let cap_regs = unsafe { regs.captabilities() };
+        let op_regs = unsafe { regs.operational_regs() };
+        let port_regs = unsafe { op_regs.port_registers(port_index) };
+        let context_sz_64bytes = cap_regs.context_sz_64bytes();
+
+        let port_sc = read_ref!(port_regs.port_sc);
+        let port_speed = port_sc.port_speed();
+
+        debug!(
+            XHCI,
+            "setting up device at port: {port_index}, with speed: {port_speed:?} ({:#x}), context size 64 byte {context_sz_64bytes}",
+            port_speed as u8
+        );
+
+        let slot_id = self.enable_device_slot();
+        debug!(XHCI, "slot {slot_id} was chosen for port {port_index}");
     }
 }
 impl<'s> PCIDevice for XHCI<'s> {
@@ -372,13 +409,9 @@ impl<'s> PCIDevice for XHCI<'s> {
         unsafe {
             enable_interrupts();
         }
-        let trb = trb::TRB::new(
-            trb::TRBCommand::default().with_trb_type(TRB_TYPE_ENABLE_SLOT_CMD),
-            0,
-            0,
-        );
-        let response = self.manager_queue.send_command(trb);
-        crate::serial!("XHCI responded with {response:#x?}\n");
+
+        let test = self.enable_device_slot();
+        crate::serial!("XHCI responded with enabling slot {test}\n");
         true
     }
 }
