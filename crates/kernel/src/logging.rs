@@ -46,11 +46,11 @@ macro_rules! serial_log {
 
 #[macro_export]
 macro_rules! tty_log {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
         let log_time = $crate::time!();
         let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
-        $crate::println!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}", format_args!($($arg)*));
-    };
+        $crate::println!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}", format_args!($($arg)*))
+    }};
 }
 
 /// prints to both the serial and the terminal doesn't print to the terminal if it panicked or if
@@ -58,7 +58,7 @@ macro_rules! tty_log {
 #[macro_export]
 macro_rules! panic_println {
     ($($arg:tt)*) => {
-        panic_print!("{}\n", format_args!($($arg)*));
+        panic_print!("{}\n", format_args!($($arg)*))
     };
 }
 
@@ -66,21 +66,21 @@ macro_rules! panic_println {
 /// it is not ready...
 #[macro_export]
 macro_rules! panic_print {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
         $crate::serial!($($arg)*);
 
         if !$crate::logging::QUITE_PANIC {
             $crate::print!($($arg)*);
         }
-    };
+    }};
 }
 
 #[macro_export]
 macro_rules! logln {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
         $crate::tty_log!("{}", format_args!($($arg)*));
         $crate::serial_log!("{}", format_args!($($arg)*));
-    };
+    }};
 }
 
 /// logs line to the TTY only when the kernel is initializing
@@ -101,11 +101,11 @@ macro_rules! logln_boot {
 /// takes a $mod and an Arguments, mod must be a type
 #[macro_export]
 macro_rules! debug {
-    ($mod: path, $($arg:tt)*) => {
+    ($mod: path, $($arg:tt)*) => {{
         // makes sure $mod is a valid type
         let _ = core::marker::PhantomData::<$mod>;
         $crate::logln_boot!("\x1B[0m[ \x1B[91m debug \x1B[0m ]\x1B[90m {}:\x1B[0m {}", stringify!($mod), format_args!($($arg)*));
-    };
+    }};
 }
 
 #[macro_export]
