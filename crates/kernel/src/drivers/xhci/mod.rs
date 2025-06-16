@@ -290,6 +290,11 @@ impl<'s> XHCI<'s> {
 
         let slot_id = self.enable_device_slot();
         debug!(XHCI, "slot {slot_id} was chosen for port {port_index}");
+
+        let device_context_base = devices::allocate_device_ctx(context_sz_64bytes);
+        unsafe {
+            regs.set_dcbaa_entry(slot_id, device_context_base);
+        }
     }
 }
 impl<'s> PCIDevice for XHCI<'s> {

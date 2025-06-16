@@ -715,6 +715,17 @@ impl<'s> XHCIRegisters<'s> {
         unsafe { &mut *self.runtime_regs }
     }
 
+    pub unsafe fn set_dcbaa_entry(&mut self, slot_id: u8, entry: PhysAddr) {
+        let slot_id = slot_id as usize;
+        assert!(slot_id < self.dcbaa.len());
+        assert!(slot_id != 0);
+
+        let ptr = self.dcbaa.as_mut_ptr();
+        unsafe {
+            ptr.add(slot_id).write_volatile(entry);
+        }
+    }
+
     /// Clear any incoming interrupts for the interrupter
     pub unsafe fn acknowledge_irq(&mut self, interrupter: u8) {
         let op_regs = unsafe { self.operational_regs() };

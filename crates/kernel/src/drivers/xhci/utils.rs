@@ -6,6 +6,7 @@ use crate::{
     PhysAddr,
 };
 
+// FIXME: make a DMA allocator that doesn't waste memory like this
 /// uses the given frame as a place to store an allocated list of T with length `len`
 /// length must be less then 4096 / size_of::<T>()
 /// allocated area is zero initialized
@@ -23,6 +24,7 @@ pub fn allocate_buffers_frame<'a, T: Clone>(
     (slice, phys_addr)
 }
 
+// FIXME: make a DMA allocator that doesn't waste memory like this
 /// allocates a frame then calls [`allocate_buffers_frame`] on it
 /// returns None if frame allocation failed
 pub fn allocate_buffers<'a, T: Clone>(len: usize) -> Option<(&'a mut [T], PhysAddr)> {

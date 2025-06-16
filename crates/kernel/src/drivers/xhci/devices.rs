@@ -512,3 +512,16 @@ pub type XHCIDeviceCtx32 = XHCIDeviceCtx<{ 32 - 16 }, { 32 - 20 }>;
 
 const _: () = assert!(size_of::<XHCIDeviceCtx64>() == 2048);
 const _: () = assert!(size_of::<XHCIDeviceCtx32>() == 1024);
+
+/// Allocates an XHCI Device Context structure, depending on `is_ctx_sz_64byte` it could allocate A [`XHCIDeviceCtx64`] or A [`XHCIDeviceCtx32`]
+pub fn allocate_device_ctx(is_ctx_sz_64byte: bool) -> PhysAddr {
+    let byte_size = if is_ctx_sz_64byte {
+        size_of::<XHCIDeviceCtx64>()
+    } else {
+        size_of::<XHCIDeviceCtx32>()
+    };
+
+    let (_, addr) = super::utils::allocate_buffers::<u8>(byte_size)
+        .expect("failed to allocate a Device Context Frame for the XHCI");
+    addr
+}
