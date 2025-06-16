@@ -525,3 +525,46 @@ pub fn allocate_device_ctx(is_ctx_sz_64byte: bool) -> PhysAddr {
         .expect("failed to allocate a Device Context Frame for the XHCI");
     addr
 }
+
+/**
+// xHci Sped Section 6.2.5.1 Figure 6-6: Input Control Context (page 461)
+
+The Input Control Context data structure defines which Device Context data
+structures are affected by a command and the operations to be performed on
+those contexts
+*/
+#[repr(C)]
+pub struct XHCIInputControlCtx<const CTX_SZ_MINUS_32: usize> {
+    /// Drop Context flags (D2 - D31). These single bit fields identify which Device Context data
+    /// structures should be disabled by command. If set to ‘1’, the respective Endpoint Context shall
+    /// be disabled. If cleared to ‘0’, the Endpoint Context is ignored.
+    pub drop_flags: u32,
+    /// Add Context flags (A0 - A31). These single bit fields identify which Device Context data
+    /// structures shall be evaluated and/or enabled by a command. If set to ‘1’, the respective Context
+    /// shall be evaluated. If cleared to ‘0’, the Context is ignored.
+    pub add_ctx_flags: u32,
+    __rsdvz: [u32; 5],
+    /// Configuration Value. If CIC = ‘1’, CIE = ‘1’, and this Input Context is associated with a Configure
+    /// Endpoint Command, then this field contains the value of the Standard Configuration Descriptor
+    /// bConfigurationValue field associated with the command, otherwise the this field shall be
+    /// cleared to ‘0’.
+    pub config_value: u8,
+    /// Interface Number. If CIC = ‘1’, CIE = ‘1’, this Input Context is associated with a Configure
+    /// Endpoint Command, and the command was issued due to a SET_INTERFACE request, then this
+    /// field contains the value of the Standard Interface Descriptor bInterfaceNumber field associated
+    /// with the command, otherwise the this field shall be cleared to ‘0’.
+    pub interface_number: u8,
+    /// Alternate Setting. If CIC = ‘1’, CIE = ‘1’, this Input Context is associated with a Configure
+    /// Endpoint Command, and the command was issued due to a SET_INTERFACE request, then this
+    /// field contains the value of the Standard Interface Descriptor bAlternateSetting field associated
+    /// with the command, otherwise the this field shall be cleared to ‘0’
+    pub alternate_string: u8,
+    __rsdvz1: u8,
+    __padding: [u8; CTX_SZ_MINUS_32],
+}
+
+pub type XHCIInputControlCtx64 = XHCIInputControlCtx<{ 64 - 32 }>;
+pub type XHCIInputControlCtx32 = XHCIInputControlCtx<{ 32 - 32 }>;
+
+const _: () = assert!(size_of::<XHCIInputControlCtx64>() == 64);
+const _: () = assert!(size_of::<XHCIInputControlCtx32>() == 32);
