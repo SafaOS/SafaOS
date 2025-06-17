@@ -3,6 +3,7 @@ use crate::{
     drivers::{
         utils::{read_ref, write_ref},
         xhci::{
+            devices::XHCIDeviceCtx32,
             rings::{command::XHCICommandRing, event::XHCIEventRing},
             utils::allocate_buffers_frame,
         },
@@ -723,6 +724,14 @@ impl<'s> XHCIRegisters<'s> {
         unsafe {
             ptr.add(slot_id).write_volatile(entry);
         }
+    }
+
+    pub unsafe fn get_dcbaa_entry_as_ptr(&mut self, slot_id: u8) -> *mut XHCIDeviceCtx32 {
+        let slot_id = slot_id as usize;
+        assert!(slot_id < self.dcbaa.len());
+        assert!(slot_id != 0);
+        let ptr = self.dcbaa.as_mut_ptr();
+        unsafe { ptr.add(slot_id).read_volatile().into_virt().into_ptr() }
     }
 
     /// Clear any incoming interrupts for the interrupter

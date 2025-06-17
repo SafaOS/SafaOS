@@ -290,7 +290,7 @@ impl<'s> XHCIResponseQueue<'s> {
         packet: XHCIDeviceRequestPacket,
         output: &mut [u8],
     ) -> Result<(), XHCIError> {
-        let frame = frame_allocator::allocate_frame().unwrap();
+        let frame = frame_allocator::allocate_frame().ok_or(XHCIError::OutOfMemory)?;
 
         let (descriptor_buffer, descriptor_buffer_addr) =
             self::utils::allocate_buffers_frame::<u8>(frame, 0, 256);
@@ -466,7 +466,7 @@ impl<'s> XHCI<'s> {
             regs.set_dcbaa_entry(slot_id, device_context_base);
         }
 
-        let mut device = XHCIDevice::create(context_sz_64bytes, port_index, slot_id, port_speed);
+        let mut device = XHCIDevice::create(context_sz_64bytes, port_index, slot_id, port_speed)?;
         // Configure and enable the control endpoint, with an initial size
         device.configure_ctrl_ep_input_ctx(max_initial_packet_size);
 

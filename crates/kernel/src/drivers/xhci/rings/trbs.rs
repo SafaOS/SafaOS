@@ -10,6 +10,7 @@ pub const TRB_TYPE_STATUS_STAGE: u8 = 0x4;
 pub const TRB_TYPE_LINK: u8 = 0x6;
 pub const TRB_TYPE_ENABLE_SLOT_CMD: u8 = 0x9;
 pub const TRB_TYPE_ADDRESS_DEVICE_CMD: u8 = 0xB;
+pub const TRB_TYPE_EVALUATE_CONTEXT_CMD: u8 = 0xD;
 
 pub const TRB_TYPE_TRANSFER_EVENT: u8 = 0x20;
 pub const TRB_TYPE_CMD_COMPLETION: u8 = 0x21;
@@ -279,6 +280,40 @@ impl AddressDeviceCommandTRB {
 
     pub fn into_trb(self) -> TRB {
         unsafe { core::mem::transmute(self) }
+    }
+}
+
+#[bitfield(u32)]
+pub struct EvaluateContextTRBInfo {
+    #[bits(1)]
+    cycle_bit: u8,
+    #[bits(9)]
+    __: (),
+    #[bits(6)]
+    trb_type: u8,
+    __: u8,
+    slot_id: u8,
+}
+
+#[repr(C)]
+pub struct EvaluateContextCMDTRB {
+    input_ctx_phys_base: PhysAddr,
+    __: u32,
+    cmd: EvaluateContextTRBInfo,
+}
+
+impl EvaluateContextCMDTRB {
+    pub const fn into_trb(self) -> TRB {
+        unsafe { core::mem::transmute(self) }
+    }
+    pub const fn new(input_ctx_phys_base: PhysAddr, slot_id: u8) -> Self {
+        Self {
+            input_ctx_phys_base,
+            __: 0,
+            cmd: EvaluateContextTRBInfo::new()
+                .with_slot_id(slot_id)
+                .with_trb_type(TRB_TYPE_EVALUATE_CONTEXT_CMD),
+        }
     }
 }
 

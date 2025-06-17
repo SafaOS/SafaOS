@@ -1,5 +1,5 @@
 use crate::{
-    drivers::xhci::{self, rings::trbs::TRB},
+    drivers::xhci::{self, rings::trbs::TRB, utils::XHCIError},
     memory::frame_allocator::{self, FramePtr},
     PhysAddr, VirtAddr,
 };
@@ -28,23 +28,23 @@ impl XHCITransferRing {
         self.curr_ring_cycle_bit
     }
 
-    pub fn create(max_trb_count: usize, doorbell_id: u8) -> Self {
+    pub fn create(max_trb_count: usize, doorbell_id: u8) -> Result<Self, XHCIError> {
         let curr_ring_cycle_bit = 1;
 
-        let (trbs, trbs_phys_addr) = xhci::utils::allocate_buffers(max_trb_count)
-            .expect("failed to allocate a new Transfer Ring for the XHCI");
+        let (trbs, trbs_phys_addr) =
+            xhci::utils::allocate_buffers(max_trb_count).ok_or(XHCIError::OutOfMemory)?;
         trbs[max_trb_count - 1] = TRB::new_link(trbs_phys_addr, curr_ring_cycle_bit);
 
         let trbs_len = trbs.len();
         let trbs_ptr = unsafe { FramePtr::from_ptr(trbs) };
 
-        Self {
+        Ok(Self {
             trbs_ptr,
             trbs_len,
             enqueue_ptr: 0,
             curr_ring_cycle_bit,
             doorbell_id,
-        }
+        })
     }
     unsafe fn get_trb(&self, index: usize) -> *mut TRB {
         assert!(index < self.trbs_len);

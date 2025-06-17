@@ -1,8 +1,8 @@
 #[derive(Debug)]
 #[repr(C)]
 pub struct UsbDescriptorHeader {
-    b_length: u8,
-    b_descriptor_type: u8,
+    pub b_length: u8,
+    pub b_descriptor_type: u8,
 }
 
 #[derive(Debug)]

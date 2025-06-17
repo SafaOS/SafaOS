@@ -3,7 +3,7 @@ use crate::{
     drivers::xhci::{
         self,
         devices::{
-            DeviceEndpointState, DeviceEndpointType, XHCIEndpointDeviceCtx32,
+            DeviceEndpointState, DeviceEndpointType, XHCIDeviceCtx32, XHCIEndpointDeviceCtx32,
             XHCIInputControlCtx32, XHCIInputCtx32, XHCIInputCtx64, XHCISlotDeviceCtx32,
         },
         regs::PortSpeed,
@@ -63,6 +63,15 @@ impl XHCIDevice {
         }
     }
 
+    pub unsafe fn get_input_device_ctx(&mut self) -> *mut XHCIDeviceCtx32 {
+        unsafe {
+            match self.input_ctx_ptr {
+                InputCtxPtr::Size64(ctx) => (&raw mut (*ctx).device_context).cast(),
+                InputCtxPtr::Size32(ctx) => (&raw mut (*ctx).device_context),
+            }
+        }
+    }
+
     pub fn get_slot_ctx(&mut self) -> *mut XHCISlotDeviceCtx32 {
         unsafe {
             match self.input_ctx_ptr {
@@ -88,15 +97,15 @@ impl XHCIDevice {
         port_index: u8,
         slot_id: u8,
         port_speed: PortSpeed,
-    ) -> Self {
+    ) -> Result<Self, XHCIError> {
         let input_ctx_sz = if use_64byte_ctx {
             size_of::<XHCIInputCtx64>()
         } else {
             size_of::<XHCIInputCtx32>()
         };
 
-        let (input_ctx_bytes, input_ctx_base_addr) = xhci::utils::allocate_buffers(input_ctx_sz)
-            .expect("failed to allocate memory for an XHCI Device's input context");
+        let (input_ctx_bytes, input_ctx_base_addr) =
+            xhci::utils::allocate_buffers(input_ctx_sz).ok_or(XHCIError::OutOfMemory)?;
 
         let input_ctx_ptr_raw: *mut u8 = input_ctx_bytes.as_mut_ptr();
         let input_ctx_ptr = if use_64byte_ctx {
@@ -105,14 +114,14 @@ impl XHCIDevice {
             InputCtxPtr::Size32(input_ctx_ptr_raw.cast())
         };
 
-        Self {
+        Ok(Self {
             input_ctx_ptr,
             input_ctx_base_addr,
-            xhci_transfer_ring: XHCITransferRing::create(MAX_TRB_COUNT, slot_id),
+            xhci_transfer_ring: XHCITransferRing::create(MAX_TRB_COUNT, slot_id)?,
             port_index,
             slot_id,
             port_speed,
-        }
+        })
     }
 
     pub fn configure_ctrl_ep_input_ctx(&mut self, max_packet_size: u16) {
