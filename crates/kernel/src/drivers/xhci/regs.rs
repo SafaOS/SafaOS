@@ -410,7 +410,7 @@ impl PortSpeed {
     }
 
     /// Returns the max initial packet size of a control transfer that has `self` port speed
-    pub const fn max_control_transfer_initial_packet_size(&self) -> usize {
+    pub const fn max_control_transfer_initial_packet_size(&self) -> u16 {
         match self {
             Self::Low => 8,
             Self::Full | Self::High => 64,
@@ -654,7 +654,10 @@ impl<'a> XHCIDoorbellManager<'a> {
     }
 
     pub fn ring_doorbell(&mut self, doorbell: u8, target: u8) {
-        self.doorbells[doorbell as usize].set_db_target(target);
+        let doorbell = &mut self.doorbells[doorbell as usize];
+        unsafe {
+            (doorbell as *mut DoorbellReg).write_volatile(doorbell.with_db_target(target));
+        }
     }
 
     pub fn ring_command_doorbell(&mut self) {
@@ -701,10 +704,6 @@ impl<'s> XHCIRegisters<'s> {
 
     pub unsafe fn captabilities(&self) -> &'static CapsReg {
         unsafe { &*self.caps_regs }
-    }
-
-    unsafe fn captabilities_mut(&mut self) -> &'static mut CapsReg {
-        unsafe { &mut *self.caps_regs }
     }
 
     pub unsafe fn operational_regs(&mut self) -> &'static mut OperationalRegs {

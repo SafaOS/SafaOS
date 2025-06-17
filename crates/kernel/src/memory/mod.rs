@@ -147,8 +147,8 @@ impl_addr_ty!(PhysAddr);
 
 impl VirtAddr {
     #[inline(always)]
-    pub fn from_ptr<T>(value: *const T) -> Self {
-        Self(value as usize)
+    pub fn from_ptr<T: ?Sized>(value: *const T) -> Self {
+        Self(value.addr())
     }
 
     #[inline(always)]

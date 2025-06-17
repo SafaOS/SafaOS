@@ -2,7 +2,10 @@ use core::mem::offset_of;
 
 use bitfield_struct::bitfield;
 
-use crate::PhysAddr;
+use crate::{
+    drivers::xhci::{self, regs::PortSpeed},
+    PhysAddr,
+};
 
 /// The first dword of the Slot Device CTX
 #[bitfield(u32)]
@@ -21,7 +24,7 @@ pub struct SlotDeviceCTXDword0 {
     ///
     /// This field indicates the speed of the device. Refer to the PORTSC Port Speed field in Table 5-27
     /// for the definition of the valid values.
-    pub speed: u8,
+    pub speed: PortSpeed,
     #[bits(1)]
     __: (),
     /// Multi-TT (MTT)107. This flag is set to '1' by software if this is a High-speed hub that supports
@@ -228,6 +231,8 @@ pub type XHCISlotDeviceCtx32 = XHCISlotDeviceCtx<{ 32 - 16 }>;
 
 const _: () = assert!(size_of::<XHCISlotDeviceCtx64>() == 64);
 const _: () = assert!(size_of::<XHCISlotDeviceCtx32>() == 32);
+const _: () = assert!(offset_of!(XHCISlotDeviceCtx32, dword1) == 0x4);
+const _: () = assert!(offset_of!(XHCISlotDeviceCtx64, dword1) == 0x4);
 const _: () = assert!(offset_of!(XHCISlotDeviceCtx64, dword3) == 0xC);
 const _: () = assert!(offset_of!(XHCISlotDeviceCtx32, dword3) == 0xC);
 
@@ -435,7 +440,15 @@ pub struct EndpointDeviceCTXQword2 {
     /// The memory structure referenced by this physical memory pointer shall be aligned to a 16-byte
     /// boundary.
     #[bits(60)]
-    pub trb_dequeue_ptr: PhysAddr,
+    pub trb_dequeue_ptr_bits_reset: u64,
+}
+
+impl EndpointDeviceCTXQword2 {
+    pub fn set_trb_dequeue_ptr(&mut self, ptr: PhysAddr, cycle_bit: u8) {
+        assert!(cycle_bit == 0 || cycle_bit == 1);
+        *self = unsafe { core::mem::transmute(ptr) };
+        self.set_dequeue_cycle_state(cycle_bit);
+    }
 }
 
 #[repr(C)]
@@ -521,7 +534,7 @@ pub fn allocate_device_ctx(is_ctx_sz_64byte: bool) -> PhysAddr {
         size_of::<XHCIDeviceCtx32>()
     };
 
-    let (_, addr) = super::utils::allocate_buffers::<u8>(byte_size)
+    let (_, addr) = xhci::utils::allocate_buffers::<u8>(byte_size)
         .expect("failed to allocate a Device Context Frame for the XHCI");
     addr
 }
@@ -568,3 +581,37 @@ pub type XHCIInputControlCtx32 = XHCIInputControlCtx<{ 32 - 32 }>;
 
 const _: () = assert!(size_of::<XHCIInputControlCtx64>() == 64);
 const _: () = assert!(size_of::<XHCIInputControlCtx32>() == 32);
+
+/**
+// xHci Sped Section 6.2.5 Input Context (page 459)
+
+The Input Context data structure specifies the endpoints and the operations to
+be performed on those endpoints by the Address Device, Configure Endpoint,
+and Evaluate Context Commands. Refer to section 4.6 for more information on
+these commands.
+The Input Context is pointed to by an Input Context Pointer field of an Address
+Device, Configure Endpoint, and Evaluate Context Command TRBs. The Input
+Context is an array of up to 33 context data structure entries.
+*/
+#[repr(C)]
+pub struct XHCIInputCtx<
+    const CTX_SZ_MINUS_16: usize,
+    const CTX_SZ_MINUS_20: usize,
+    const CTX_SZ_MINUS_32: usize,
+> {
+    pub input_control_context: XHCIInputControlCtx<CTX_SZ_MINUS_32>,
+    pub device_context: XHCIDeviceCtx<CTX_SZ_MINUS_16, CTX_SZ_MINUS_20>,
+}
+
+pub type XHCIInputCtx64 = XHCIInputCtx<{ 64 - 16 }, { 64 - 20 }, { 64 - 32 }>;
+
+pub type XHCIInputCtx32 = XHCIInputCtx<{ 32 - 16 }, { 32 - 20 }, { 32 - 32 }>;
+
+const _: () = assert!(
+    size_of::<XHCIInputCtx64>()
+        == size_of::<XHCIInputControlCtx64>() + size_of::<XHCIDeviceCtx64>()
+);
+const _: () = assert!(
+    size_of::<XHCIInputCtx32>()
+        == size_of::<XHCIInputControlCtx32>() + size_of::<XHCIDeviceCtx32>()
+);

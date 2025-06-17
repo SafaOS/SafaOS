@@ -17,9 +17,14 @@ pub const SIZE_64K: usize = SIZE_1K * 64;
 pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
 
 /// A pointer to some data in a physical frame that is mapped to a virtual address in the hddm
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct FramePtr<T>(*mut T);
-impl<T> FramePtr<T> {
+pub struct FramePtr<T: ?Sized>(*mut T);
+impl<T: ?Sized> FramePtr<T> {
+    pub unsafe fn from_ptr(ptr: *mut T) -> Self {
+        Self(ptr)
+    }
+
     pub fn phys_addr(&self) -> PhysAddr {
         let virt_addr = VirtAddr::from_ptr(self.as_ptr());
         virt_addr.into_phys()

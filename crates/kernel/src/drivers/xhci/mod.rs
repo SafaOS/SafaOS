@@ -16,17 +16,28 @@ use crate::{
         interrupts::{self, IntTrigger, InterruptReceiver},
         pci::PCICommandReg,
         xhci::{
+            devices::XHCIDevice,
             extended_caps::XHCIUSBSupportedProtocolCap,
             regs::XHCIRegisters,
-            rings::trbs::{
-                self, CmdResponseTRB, EventResponseTRB, PortStatusChangeTRB, TransferResponseTRB,
-                TRB_TYPE_ENABLE_SLOT_CMD,
+            rings::{
+                transfer::XHCITransferRing,
+                trbs::{
+                    self, AddressDeviceCommandTRB, CmdResponseTRB, CompletionStatusCode,
+                    DataStageTRB, EventDataTRB, EventResponseTRB, PortStatusChangeTRB,
+                    SetupStageTRB, StatusStageTRB, TransferResponseTRB, XHCIDeviceRequestPacket,
+                    TRB_TYPE_ENABLE_SLOT_CMD,
+                },
             },
+            usb::UsbDeviceDescriptor,
         },
     },
-    memory::paging::{EntryFlags, PAGE_SIZE},
+    memory::{
+        frame_allocator,
+        paging::{EntryFlags, PAGE_SIZE},
+    },
     sleep_until,
     utils::locks::Mutex,
+    warn,
 };
 
 use super::pci::PCIDevice;
@@ -34,6 +45,7 @@ mod devices;
 mod extended_caps;
 mod regs;
 mod rings;
+mod usb;
 mod utils;
 
 /// The maximum number of TRBs a CommandRing can hold
@@ -58,6 +70,13 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                         self.manager_queue.add_command_response(res)
                     }
                     EventResponseTRB::TransferResponse(res) => {
+                        debug!(
+                            XHCI,
+                            "transfer completed with code {:?} ({:#x}), slot: {}",
+                            res.status.completion_code(),
+                            res.status.completion_code() as u8,
+                            res.cmd.slot_id(),
+                        );
                         self.manager_queue.add_transfer_response(res)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
@@ -219,6 +238,123 @@ impl<'s> XHCIResponseQueue<'s> {
         drop(requester);
         response
     }
+
+    pub fn start_ctrl_ep_transfer(
+        &self,
+        transfer_ring: &XHCITransferRing,
+    ) -> Option<TransferResponseTRB> {
+        let requester = self.requester_lock.lock();
+        let transfer_events = unsafe { self.transfer_events.as_mut_unchecked() };
+        let transfers_len_before = transfer_events.len();
+
+        self.doorbell_manager
+            .lock()
+            .ring_control_endpoint_doorbell(transfer_ring.doorbell_id());
+
+        // FIXME: could this be optimized away, maybe i should use atomics?
+        // FIXME: handle timeout instead of panicking
+        if !sleep_until!(400 ms, transfer_events.len() != transfers_len_before) {
+            warn!("XHCI: timeout while waiting for Transfer TRB response after 400ms");
+            return None;
+        }
+
+        let response = transfer_events.pop().unwrap();
+        drop(requester);
+
+        if response.status.completion_code() != CompletionStatusCode::Success {
+            warn!("XHCI: Transfer Response TRB resulted from ringing the doorbell {} unsuccessful, code: {:?}", transfer_ring.doorbell_id(), response.status.completion_code());
+            return None;
+        }
+
+        Some(response)
+    }
+
+    pub fn send_request_packet(
+        &self,
+        device: &mut XHCIDevice,
+        packet: XHCIDeviceRequestPacket,
+        output: &mut [u8],
+    ) -> bool {
+        let frame = frame_allocator::allocate_frame().unwrap();
+
+        let (descriptor_buffer, descriptor_buffer_addr) =
+            self::utils::allocate_buffers_frame::<u8>(frame, 0, 256);
+
+        let (transfer_status_buffer, transfer_status_buffer_addr) =
+            self::utils::allocate_buffers_frame::<u32>(
+                frame,
+                descriptor_buffer.len().next_multiple_of(16),
+                1,
+            );
+
+        let transfer_ring = device.transfer_ring();
+
+        // Setup Stage
+        let mut setup_stage = SetupStageTRB::new(packet, 0, 0);
+        setup_stage.status.set_trb_transfer_length(8);
+        setup_stage.info.set_ioc(false);
+        setup_stage.info.set_trt(3);
+        // Data Stage
+        let mut data_stage = DataStageTRB::new(descriptor_buffer_addr, 0);
+        data_stage.parameter.set_td_size(0);
+        data_stage
+            .parameter
+            .set_trb_transfer_len(output.len() as u32);
+        data_stage.cmd.set_idt(false);
+        data_stage.cmd.set_ioc(false);
+        data_stage.cmd.set_dir_in(true);
+        // chain the event
+        data_stage.cmd.set_chain(true);
+
+        // the event data stage (invokes an event)
+        let mut first_event_data_stage =
+            EventDataTRB::new(transfer_status_buffer_addr.into_raw() as u64, 0);
+        first_event_data_stage.cmd.set_ioc(true);
+        first_event_data_stage.cmd.set_chain(false);
+
+        // first transfer the SETUP and DATA
+        transfer_ring.enqueue(setup_stage.into_trb());
+        transfer_ring.enqueue(data_stage.into_trb());
+        transfer_ring.enqueue(first_event_data_stage.into_trb());
+        // Transfer SETUP and DATA stages
+        // FIXME: fails on qemu because it excepts a STATUS first which is a bug, so we don't return failure here
+        // there is probably an alternative to using this such as chaining an event after status
+        self.start_ctrl_ep_transfer(transfer_ring);
+
+        let mut status_stage = StatusStageTRB::new(0);
+
+        status_stage.cmd.set_ioc(false);
+        status_stage.cmd.set_dir_in(false);
+        // chain an event
+        status_stage.cmd.set_chain(true);
+
+        transfer_status_buffer[0] = 0;
+        // invokes an event
+        let mut second_event_data_stage =
+            EventDataTRB::new(transfer_status_buffer_addr.into_raw() as u64, 0);
+        second_event_data_stage.cmd.set_chain(false);
+        second_event_data_stage.cmd.with_ioc(true);
+
+        // enqueues the STATUS stage and the event stage
+        transfer_ring.enqueue(status_stage.into_trb());
+        transfer_ring.enqueue(second_event_data_stage.into_trb());
+
+        // transfers the STATUS
+        if self.start_ctrl_ep_transfer(transfer_ring).is_none() {
+            warn!(
+                "XHCI failed to transfer a request packet to device with slot {} and port {}",
+                device.slot_id(),
+                device.port_id()
+            );
+            frame_allocator::deallocate_frame(frame);
+            return false;
+        }
+
+        // copy the output
+        output.copy_from_slice(&descriptor_buffer[..output.len()]);
+        frame_allocator::deallocate_frame(frame);
+        true
+    }
 }
 
 // TODO: maybe stack interrupt stuff together in one struct behind a Mutex?
@@ -253,6 +389,14 @@ impl<'s> XHCI<'s> {
         response.cmd.slot_id()
     }
 
+    pub fn address_device(&self, device: &XHCIDevice, bsr: bool) {
+        let slot_id = device.slot_id();
+        let input_ctx_base_addr = device.input_ctx_base_addr();
+
+        let trb = AddressDeviceCommandTRB::new(input_ctx_base_addr, bsr, slot_id, 0);
+        let _ = self.manager_queue.send_command(trb.into_trb());
+    }
+
     /// Checks all root hub ports for connected ports and adds them to the port connection queue
     pub fn prob(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
@@ -280,6 +424,7 @@ impl<'s> XHCI<'s> {
 
         let port_sc = read_ref!(port_regs.port_sc);
         let port_speed = port_sc.port_speed();
+        let max_initial_packet_size = port_speed.max_control_transfer_initial_packet_size();
 
         debug!(
             XHCI,
@@ -294,6 +439,23 @@ impl<'s> XHCI<'s> {
         unsafe {
             regs.set_dcbaa_entry(slot_id, device_context_base);
         }
+
+        let mut device = XHCIDevice::create(context_sz_64bytes, port_index, slot_id, port_speed);
+        // Configure and enable the control endpoint
+        device.configure_ctrl_ep_input_ctx(max_initial_packet_size);
+
+        // First address device with BSR=1, essentially blocking the SET_ADDRESS request,
+        // but still enables the control endpoint which we can use to get the device descriptor.
+        // Some legacy devices require their descriptor to be read before sending them a SET_ADDRESS command.
+        self.address_device(&device, true);
+
+        let mut usb_descriptor: UsbDeviceDescriptor = unsafe { core::mem::zeroed() };
+        // get the actual max packet size
+        device.fill_usb_descriptor(&self.manager_queue, &mut usb_descriptor, 8);
+        debug!(
+            XHCI,
+            "filled the first 8 bytes of a usb descriptor: {:#x?}", usb_descriptor
+        );
     }
 }
 impl<'s> PCIDevice for XHCI<'s> {

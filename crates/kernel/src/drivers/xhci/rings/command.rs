@@ -1,12 +1,7 @@
 use super::super::utils::allocate_buffers;
-use crate::{
-    debug,
-    drivers::xhci::rings::trbs::{TRB, TRB_TYPE_LINK},
-    PhysAddr,
-};
+use crate::{debug, drivers::xhci::rings::trbs::TRB, PhysAddr};
 
 #[derive(Debug)]
-// TODO: move to another file
 pub struct XHCICommandRing<'s> {
     enqueue_ptr: usize,
     // TODO: free this on drop?
@@ -19,12 +14,9 @@ impl<'s> XHCICommandRing<'s> {
     pub fn create(trb_count: usize) -> Self {
         let (trbs, trbs_phys_addr) = allocate_buffers::<TRB>(trb_count)
             .expect("failed to allocated the XHCI Command Ring TRBs buffer");
-        let link_trb = &mut trbs[trb_count - 1];
 
-        link_trb.parameter = trbs_phys_addr.into_raw() as u64;
-        link_trb.cmd.set_trb_type(TRB_TYPE_LINK);
-        link_trb.cmd.set_toggle_cycle(true);
-        link_trb.cmd.set_cycle_bit(1);
+        let link_trb = &mut trbs[trb_count - 1];
+        *link_trb = TRB::new_link(trbs_phys_addr, 1);
 
         debug!(
             XHCICommandRing,
