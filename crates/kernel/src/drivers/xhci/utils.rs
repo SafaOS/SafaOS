@@ -1,7 +1,10 @@
+use core::fmt::Display;
+
 use crate::{
+    drivers::xhci::rings::trbs::CompletionStatusCode,
     memory::{
         frame_allocator::{self, Frame},
-        paging::PAGE_SIZE,
+        paging::{MapToError, PAGE_SIZE},
     },
     PhysAddr,
 };
@@ -29,4 +32,37 @@ pub fn allocate_buffers_frame<'a, T: Clone>(
 /// returns None if frame allocation failed
 pub fn allocate_buffers<'a, T: Clone>(len: usize) -> Option<(&'a mut [T], PhysAddr)> {
     frame_allocator::allocate_frame().map(|frame| allocate_buffers_frame(frame, 0, len))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum XHCIError {
+    TransferNotSuccessful(CompletionStatusCode),
+    CommandNotSuccessful(CompletionStatusCode),
+    NoCommandResponse,
+    NoTransferResponse,
+    OutOfMemory,
+}
+
+impl Display for XHCIError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::OutOfMemory => write!(f, "System Out Of Memory"),
+            Self::NoCommandResponse => write!(f, "Timeout Waiting For Command Response"),
+            Self::NoTransferResponse => write!(f, "Timeout Waiting For Transfer Event Response"),
+            Self::CommandNotSuccessful(code) => {
+                write!(f, "Command Response Not Successful, code: {code:?}")
+            }
+            Self::TransferNotSuccessful(code) => {
+                write!(f, "Transfer Response Not Successful, code: {code:?}")
+            }
+        }
+    }
+}
+
+impl From<MapToError> for XHCIError {
+    fn from(value: MapToError) -> Self {
+        match value {
+            MapToError::FrameAllocationFailed => Self::OutOfMemory,
+        }
+    }
 }

@@ -29,6 +29,7 @@ use crate::{
                 },
             },
             usb::UsbDeviceDescriptor,
+            utils::XHCIError,
         },
     },
     memory::{
@@ -115,8 +116,14 @@ impl<'s> PolledDriver for XHCI<'s> {
             };
 
             if reset_successful && !event.disconnected {
-                self.setup_device(event.port_index);
-                debug!(XHCI, "port {} connected...", event.port_index)
+                if let Err(e) = self.setup_device(event.port_index) {
+                    debug!(
+                        XHCI,
+                        "failed to connect port {}, err: {e}...", event.port_index
+                    );
+                } else {
+                    debug!(XHCI, "port {} connected...", event.port_index);
+                }
             }
 
             if event.disconnected {
@@ -212,37 +219,46 @@ impl<'s> XHCIResponseQueue<'s> {
         results
     }
 
-    unsafe fn wait_for_command_response(&self, cmds_len_before: usize) -> CmdResponseTRB {
+    unsafe fn wait_for_command_response(
+        &self,
+        cmds_len_before: usize,
+    ) -> Result<CmdResponseTRB, XHCIError> {
         let commands = unsafe { self.commands.as_mut_unchecked() };
 
         // FIXME: could this be optimized away, maybe i should use atomics?
         // FIXME: handle timeout instead of panicking
         if !sleep_until!(200 ms, commands.len() != cmds_len_before) {
-            panic!("XHCI timeout while waiting for response after 200ms",);
+            return Err(XHCIError::NoCommandResponse);
         }
 
         let response = commands.pop().unwrap();
 
-        response
+        Ok(response)
     }
 
     /// Enqieue a TRB command in the XHCI command ring, and rings the command doorbell, then returns the response TRB
-    pub fn send_command(&self, trb: trbs::TRB) -> CmdResponseTRB {
+    pub fn send_command(&self, trb: trbs::TRB) -> Result<CmdResponseTRB, XHCIError> {
         let requester = self.requester_lock.lock();
         let cmds_len_before = unsafe { self.commands.as_ref_unchecked().len() };
 
         self.commands_ring.lock().enqueue(trb);
         self.doorbell_manager.lock().ring_command_doorbell();
 
-        let response = unsafe { self.wait_for_command_response(cmds_len_before) };
+        let response = unsafe { self.wait_for_command_response(cmds_len_before) }?;
         drop(requester);
-        response
+
+        let code = response.status.code();
+        if code != CompletionStatusCode::Success {
+            return Err(XHCIError::CommandNotSuccessful(code));
+        }
+
+        Ok(response)
     }
 
     pub fn start_ctrl_ep_transfer(
         &self,
         transfer_ring: &XHCITransferRing,
-    ) -> Option<TransferResponseTRB> {
+    ) -> Result<TransferResponseTRB, XHCIError> {
         let requester = self.requester_lock.lock();
         let transfer_events = unsafe { self.transfer_events.as_mut_unchecked() };
         let transfers_len_before = transfer_events.len();
@@ -254,19 +270,18 @@ impl<'s> XHCIResponseQueue<'s> {
         // FIXME: could this be optimized away, maybe i should use atomics?
         // FIXME: handle timeout instead of panicking
         if !sleep_until!(400 ms, transfer_events.len() != transfers_len_before) {
-            warn!("XHCI: timeout while waiting for Transfer TRB response after 400ms");
-            return None;
+            return Err(XHCIError::NoTransferResponse);
         }
 
         let response = transfer_events.pop().unwrap();
         drop(requester);
+        let code = response.status.completion_code();
 
-        if response.status.completion_code() != CompletionStatusCode::Success {
-            warn!("XHCI: Transfer Response TRB resulted from ringing the doorbell {} unsuccessful, code: {:?}", transfer_ring.doorbell_id(), response.status.completion_code());
-            return None;
+        if code != CompletionStatusCode::Success {
+            return Err(XHCIError::TransferNotSuccessful(code));
         }
 
-        Some(response)
+        Ok(response)
     }
 
     pub fn send_request_packet(
@@ -274,7 +289,7 @@ impl<'s> XHCIResponseQueue<'s> {
         device: &mut XHCIDevice,
         packet: XHCIDeviceRequestPacket,
         output: &mut [u8],
-    ) -> bool {
+    ) -> Result<(), XHCIError> {
         let frame = frame_allocator::allocate_frame().unwrap();
 
         let (descriptor_buffer, descriptor_buffer_addr) =
@@ -319,7 +334,7 @@ impl<'s> XHCIResponseQueue<'s> {
         // Transfer SETUP and DATA stages
         // FIXME: fails on qemu because it excepts a STATUS first which is a bug, so we don't return failure here
         // there is probably an alternative to using this such as chaining an event after status
-        self.start_ctrl_ep_transfer(transfer_ring);
+        self.start_ctrl_ep_transfer(transfer_ring)?;
 
         let mut status_stage = StatusStageTRB::new(0);
 
@@ -340,20 +355,20 @@ impl<'s> XHCIResponseQueue<'s> {
         transfer_ring.enqueue(second_event_data_stage.into_trb());
 
         // transfers the STATUS
-        if self.start_ctrl_ep_transfer(transfer_ring).is_none() {
+        if let Err(e) = self.start_ctrl_ep_transfer(transfer_ring) {
             warn!(
-                "XHCI failed to transfer a request packet to device with slot {} and port {}",
+                "XHCI failed to transfer a request packet to device with slot {} and port {}, err: {e:?}",
                 device.slot_id(),
-                device.port_id()
+                device.port_id(),
             );
             frame_allocator::deallocate_frame(frame);
-            return false;
+            return Err(e);
         }
 
         // copy the output
         output.copy_from_slice(&descriptor_buffer[..output.len()]);
         frame_allocator::deallocate_frame(frame);
-        true
+        Ok(())
     }
 }
 
@@ -378,23 +393,24 @@ unsafe impl<'s> Sync for XHCI<'s> {}
 
 impl<'s> XHCI<'s> {
     /// A helper function to send an Enable Slot TRB Command to the XHCI controller, returns the slot id
-    pub fn enable_device_slot(&self) -> u8 {
+    pub fn enable_device_slot(&self) -> Result<u8, XHCIError> {
         let trb = trbs::TRB::new(
             trbs::TRBCommand::default().with_trb_type(TRB_TYPE_ENABLE_SLOT_CMD),
             0,
             0,
         );
 
-        let response = self.manager_queue.send_command(trb);
-        response.cmd.slot_id()
+        let response = self.manager_queue.send_command(trb)?;
+        Ok(response.cmd.slot_id())
     }
 
-    pub fn address_device(&self, device: &XHCIDevice, bsr: bool) {
+    pub fn address_device(&self, device: &XHCIDevice, bsr: bool) -> Result<(), XHCIError> {
         let slot_id = device.slot_id();
         let input_ctx_base_addr = device.input_ctx_base_addr();
 
         let trb = AddressDeviceCommandTRB::new(input_ctx_base_addr, bsr, slot_id, 0);
-        let _ = self.manager_queue.send_command(trb.into_trb());
+        self.manager_queue.send_command(trb.into_trb())?;
+        Ok(())
     }
 
     /// Checks all root hub ports for connected ports and adds them to the port connection queue
@@ -415,7 +431,7 @@ impl<'s> XHCI<'s> {
         }
     }
 
-    pub fn setup_device(&self, port_index: u8) {
+    pub fn setup_device(&self, port_index: u8) -> Result<(), XHCIError> {
         let regs = unsafe { self.regs.as_mut_unchecked() };
         let cap_regs = unsafe { regs.captabilities() };
         let op_regs = unsafe { regs.operational_regs() };
@@ -432,7 +448,7 @@ impl<'s> XHCI<'s> {
             port_speed as u8
         );
 
-        let slot_id = self.enable_device_slot();
+        let slot_id = self.enable_device_slot()?;
         debug!(XHCI, "slot {slot_id} was chosen for port {port_index}");
 
         let device_context_base = devices::allocate_device_ctx(context_sz_64bytes);
@@ -441,21 +457,31 @@ impl<'s> XHCI<'s> {
         }
 
         let mut device = XHCIDevice::create(context_sz_64bytes, port_index, slot_id, port_speed);
-        // Configure and enable the control endpoint
+        // Configure and enable the control endpoint, with an initial size
         device.configure_ctrl_ep_input_ctx(max_initial_packet_size);
 
         // First address device with BSR=1, essentially blocking the SET_ADDRESS request,
         // but still enables the control endpoint which we can use to get the device descriptor.
         // Some legacy devices require their descriptor to be read before sending them a SET_ADDRESS command.
-        self.address_device(&device, true);
+        self.address_device(&device, true)?;
 
         let mut usb_descriptor: UsbDeviceDescriptor = unsafe { core::mem::zeroed() };
         // get the actual max packet size
-        device.fill_usb_descriptor(&self.manager_queue, &mut usb_descriptor, 8);
+        if let Err(e) = device.fill_usb_descriptor(&self.manager_queue, &mut usb_descriptor, 8) {
+            warn!(
+                "XHCI failed to get device descriptor for port {}, err: {e:?}",
+                port_index + 1
+            );
+            return Err(e);
+        }
         debug!(
             XHCI,
             "filled the first 8 bytes of a usb descriptor: {:#x?}", usb_descriptor
         );
+        // configures with the actual size
+        device.configure_ctrl_ep_input_ctx(usb_descriptor.b_max_packet_size_0 as u16);
+
+        Ok(())
     }
 }
 impl<'s> PCIDevice for XHCI<'s> {
@@ -577,7 +603,7 @@ impl<'s> PCIDevice for XHCI<'s> {
         }
 
         let test = self.enable_device_slot();
-        crate::serial!("XHCI responded with enabling slot {test}\n");
+        crate::serial!("XHCI responded with enabling slot {test:#?}\n");
         true
     }
 }

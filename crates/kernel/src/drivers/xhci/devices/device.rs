@@ -12,6 +12,7 @@ use crate::{
             trbs::{PacketRecipient, PacketType, XHCIDeviceRequestPacket},
         },
         usb::UsbDeviceDescriptor,
+        utils::XHCIError,
         XHCIResponseQueue, MAX_TRB_COUNT,
     },
     PhysAddr,
@@ -158,7 +159,7 @@ impl XHCIDevice {
         xhci_queue_manager: &XHCIResponseQueue,
         descriptor: &mut UsbDeviceDescriptor,
         len: usize,
-    ) {
+    ) -> Result<(), XHCIError> {
         let packet = XHCIDeviceRequestPacket::new()
             .with_p_type(PacketType::Standard)
             .with_recipient(PacketRecipient::Device)
@@ -173,6 +174,6 @@ impl XHCIDevice {
 
         let output_bytes: &mut [u8; size_of::<UsbDeviceDescriptor>()] =
             unsafe { core::mem::transmute(descriptor) };
-        xhci_queue_manager.send_request_packet(self, packet, &mut output_bytes[..len]);
+        xhci_queue_manager.send_request_packet(self, packet, &mut output_bytes[..len])
     }
 }
