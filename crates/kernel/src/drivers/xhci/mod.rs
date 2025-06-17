@@ -32,13 +32,13 @@ use crate::{
             utils::XHCIError,
         },
     },
+    error,
     memory::{
         frame_allocator,
         paging::{EntryFlags, PAGE_SIZE},
     },
     sleep_until,
     utils::locks::Mutex,
-    warn,
 };
 
 use super::pci::PCIDevice;
@@ -117,7 +117,7 @@ impl<'s> PolledDriver for XHCI<'s> {
 
             if reset_successful && !event.disconnected {
                 if let Err(e) = self.setup_device(event.port_index) {
-                    debug!(
+                    error!(
                         XHCI,
                         "failed to connect port {}, err: {e}...", event.port_index
                     );
@@ -357,7 +357,7 @@ impl<'s> XHCIResponseQueue<'s> {
 
         // transfers the STATUS
         if let Err(e) = self.start_ctrl_ep_transfer(transfer_ring) {
-            warn!(
+            error!(
                 "XHCI failed to transfer a request packet to device with slot {} and port {}, err: {e:?}",
                 device.slot_id(),
                 device.port_id(),

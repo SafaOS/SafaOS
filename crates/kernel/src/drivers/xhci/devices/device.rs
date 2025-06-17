@@ -18,7 +18,7 @@ use crate::{
         utils::XHCIError,
         XHCIResponseQueue, MAX_TRB_COUNT,
     },
-    warn, PhysAddr,
+    error, PhysAddr,
 };
 
 pub const REQUEST_GET_DESCRIPTOR: u8 = 6;
@@ -230,8 +230,7 @@ impl XHCIDevice {
             // read the additional bytes for interface descriptors as well
             let total_len = (*ptr).w_total_len as usize;
             if total_len > size_of::<UsbConfigurationDescriptor>() - 1 {
-                // TODO: implement error!()
-                warn!("USB Configuration descriptor size {total_len} is more then the supported size {}", size_of::<UsbConfigurationDescriptor>() - 1);
+                error!(XHCIDevice, "USB Configuration descriptor size {total_len} is more then the supported size {}", size_of::<UsbConfigurationDescriptor>() - 1);
                 return Err(XHCIError::Other);
             }
 

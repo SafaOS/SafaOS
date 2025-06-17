@@ -122,6 +122,16 @@ macro_rules! warn {
     };
 }
 
+#[macro_export]
+macro_rules! error {
+    ($mod: ty, $($arg:tt)*) => {{
+        // makes sure $mod is a valid type
+        let _ = core::marker::PhantomData::<$mod>;
+        $crate::logln_boot!("[ \x1B[91m error\x1B[0m  ]\x1b[90m {}:\x1B[0m  {}", stringify!($mod), format_args!($($arg)*))
+    }};
+    ($($arg:tt)*) => ($crate::logln_boot!("[ \x1B[91m error\x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*)));
+}
+
 #[derive(Clone, Copy)]
 pub struct StackTrace<'a>(&'a StackFrame);
 
