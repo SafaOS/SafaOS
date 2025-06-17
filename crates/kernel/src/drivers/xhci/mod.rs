@@ -23,9 +23,9 @@ use crate::{
                 transfer::XHCITransferRing,
                 trbs::{
                     self, AddressDeviceCommandTRB, CmdResponseTRB, CompletionStatusCode,
-                    DataStageTRB, EventDataTRB, EventResponseTRB, PortStatusChangeTRB,
-                    SetupStageTRB, StatusStageTRB, TransferResponseTRB, XHCIDeviceRequestPacket,
-                    TRB_TYPE_ENABLE_SLOT_CMD,
+                    DataStageTRB, EvaluateContextCMDTRB, EventDataTRB, EventResponseTRB,
+                    PortStatusChangeTRB, SetupStageTRB, StatusStageTRB, TransferResponseTRB,
+                    XHCIDeviceRequestPacket, TRB_TYPE_ENABLE_SLOT_CMD,
                 },
             },
             usb::UsbDeviceDescriptor,
@@ -334,7 +334,7 @@ impl<'s> XHCIResponseQueue<'s> {
         // Transfer SETUP and DATA stages
         // FIXME: fails on qemu because it excepts a STATUS first which is a bug, so we don't return failure here
         // there is probably an alternative to using this such as chaining an event after status
-        self.start_ctrl_ep_transfer(transfer_ring)?;
+        _ = self.start_ctrl_ep_transfer(transfer_ring);
 
         let mut status_stage = StatusStageTRB::new(0);
 
@@ -413,6 +413,14 @@ impl<'s> XHCI<'s> {
         Ok(())
     }
 
+    pub fn evaluate_context(&self, device: &XHCIDevice) -> Result<(), XHCIError> {
+        let slot_id = device.slot_id();
+        let input_ctx_base_addr = device.input_ctx_base_addr();
+        let trb = EvaluateContextCMDTRB::new(input_ctx_base_addr, slot_id);
+        self.manager_queue.send_command(trb.into_trb())?;
+        Ok(())
+    }
+
     /// Checks all root hub ports for connected ports and adds them to the port connection queue
     pub fn prob(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
@@ -431,6 +439,8 @@ impl<'s> XHCI<'s> {
         }
     }
 
+    /// Setups and initializes a USB Device with the port id `port_index` + 1
+    /// you can find the steps done here at 4.3 of the XHCI Specification
     pub fn setup_device(&self, port_index: u8) -> Result<(), XHCIError> {
         let regs = unsafe { self.regs.as_mut_unchecked() };
         let cap_regs = unsafe { regs.captabilities() };
@@ -460,27 +470,45 @@ impl<'s> XHCI<'s> {
         // Configure and enable the control endpoint, with an initial size
         device.configure_ctrl_ep_input_ctx(max_initial_packet_size);
 
-        // First address device with BSR=1, essentially blocking the SET_ADDRESS request,
+        // First address device with BSR=true, essentially blocking the SET_ADDRESS request,
         // but still enables the control endpoint which we can use to get the device descriptor.
         // Some legacy devices require their descriptor to be read before sending them a SET_ADDRESS command.
         self.address_device(&device, true)?;
 
         let mut usb_descriptor: UsbDeviceDescriptor = unsafe { core::mem::zeroed() };
         // get the actual max packet size
-        if let Err(e) = device.fill_usb_descriptor(&self.manager_queue, &mut usb_descriptor, 8) {
-            warn!(
-                "XHCI failed to get device descriptor for port {}, err: {e:?}",
-                port_index + 1
-            );
-            return Err(e);
-        }
+        device.fill_usb_descriptor(&self.manager_queue, &mut usb_descriptor, 8)?;
         debug!(
             XHCI,
             "filled the first 8 bytes of a usb descriptor: {:#x?}", usb_descriptor
         );
-        // configures with the actual size
-        device.configure_ctrl_ep_input_ctx(usb_descriptor.b_max_packet_size_0 as u16);
 
+        // configures with the actual size
+        let max_packet_size = usb_descriptor.b_max_packet_size_0 as u16;
+        if max_packet_size != max_initial_packet_size {
+            device.configure_ctrl_ep_input_ctx(max_packet_size);
+            self.evaluate_context(&device)?;
+        }
+
+        // address device with bsr=false
+        self.address_device(&device, false)?;
+
+        // syncs with the DCBAA
+        unsafe {
+            let src_input_device_ctx = device.get_input_device_ctx();
+            let dest_out_device_ctx = regs.get_dcbaa_entry_as_ptr(device.slot_id());
+            dest_out_device_ctx.copy_from(src_input_device_ctx, 1);
+        }
+
+        // read the full descriptor
+        let usb_desc_header_len = usb_descriptor.header.b_length as usize;
+        device.fill_usb_descriptor(
+            &self.manager_queue,
+            &mut usb_descriptor,
+            usb_desc_header_len,
+        )?;
+
+        debug!(XHCI, "filled the usb descriptor: {:#x?}", usb_descriptor);
         Ok(())
     }
 }
