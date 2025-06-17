@@ -11,11 +11,14 @@ use crate::{
             transfer::XHCITransferRing,
             trbs::{PacketRecipient, PacketType, XHCIDeviceRequestPacket},
         },
-        usb::UsbDeviceDescriptor,
+        usb::{
+            UsbConfigurationDescriptor, UsbDescriptorHeader, UsbDeviceDescriptor,
+            USB_DESCRIPTOR_CONFIGURATION_TYPE, USB_DESCRIPTOR_DEVICE_TYPE,
+        },
         utils::XHCIError,
         XHCIResponseQueue, MAX_TRB_COUNT,
     },
-    PhysAddr,
+    warn, PhysAddr,
 };
 
 pub const REQUEST_GET_DESCRIPTOR: u8 = 6;
@@ -179,10 +182,67 @@ impl XHCIDevice {
             .with_w_index(0)
             // Low byte = 0 (Descriptor Index), High Byte = 1
             // (Descriptor type).
-            .with_w_value(0x100);
+            .with_w_value((USB_DESCRIPTOR_DEVICE_TYPE << 8) | (0));
 
         let output_bytes: &mut [u8; size_of::<UsbDeviceDescriptor>()] =
             unsafe { core::mem::transmute(descriptor) };
         xhci_queue_manager.send_request_packet(self, packet, &mut output_bytes[..len])
+    }
+
+    pub fn get_usb_configuration_descriptor(
+        &mut self,
+        xhci_queue_manager: &XHCIResponseQueue,
+    ) -> Result<UsbConfigurationDescriptor, XHCIError> {
+        let mut bytes_raw: [u8; size_of::<UsbConfigurationDescriptor>()] =
+            [0; size_of::<UsbConfigurationDescriptor>()];
+        let bytes_ptr = &raw mut bytes_raw;
+        let ptr = bytes_ptr as *mut UsbConfigurationDescriptor;
+
+        let mut packet = XHCIDeviceRequestPacket::new()
+            .with_p_type(PacketType::Standard)
+            .with_recipient(PacketRecipient::Device)
+            .with_device_to_host(true)
+            .with_w_length(size_of::<UsbDescriptorHeader>() as u16)
+            // GET_DESCRIPTOR
+            .with_b_request(REQUEST_GET_DESCRIPTOR)
+            .with_w_index(0)
+            // Low byte = 0 (Descriptor Index), High Byte = 2
+            // (Descriptor type).
+            .with_w_value((USB_DESCRIPTOR_CONFIGURATION_TYPE << 8) | 0);
+
+        unsafe {
+            // First read just the header in order to get the total descriptor size
+            xhci_queue_manager.send_request_packet(
+                self,
+                packet,
+                &mut (&mut *bytes_ptr)[..size_of::<UsbDescriptorHeader>()],
+            )?;
+            // read the entire descriptor
+            let header_len = (*ptr).header.b_length as usize;
+            packet.set_w_length(header_len as u16);
+            xhci_queue_manager.send_request_packet(
+                self,
+                packet,
+                &mut (&mut *bytes_ptr)[..header_len],
+            )?;
+
+            // Now we get the total bytes
+            // read the additional bytes for interface descriptors as well
+            let total_len = (*ptr).w_total_len as usize;
+            if total_len > size_of::<UsbConfigurationDescriptor>() - 1 {
+                // TODO: implement error!()
+                warn!("USB Configuration descriptor size {total_len} is more then the supported size {}", size_of::<UsbConfigurationDescriptor>() - 1);
+                return Err(XHCIError::Other);
+            }
+
+            packet.set_w_length(total_len as u16);
+            xhci_queue_manager.send_request_packet(
+                self,
+                packet,
+                &mut (&mut *bytes_ptr)[..total_len],
+            )?;
+
+            Ok(core::mem::transmute(bytes_raw))
+        }
     }
 }

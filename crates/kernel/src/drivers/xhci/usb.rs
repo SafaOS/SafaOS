@@ -24,3 +24,21 @@ pub struct UsbDeviceDescriptor {
 }
 
 const _: () = assert!(size_of::<UsbDeviceDescriptor>() == 18);
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct UsbConfigurationDescriptor {
+    pub header: UsbDescriptorHeader,
+    pub w_total_len: u16,
+    pub b_num_interfaces: u8,
+    pub b_configuration_value: u8,
+    pub i_configuration_value: u8,
+    pub bm_attributes: u8,
+    pub b_max_power: u8,
+    pub data: [u8; 245],
+}
+
+const _: () = assert!(size_of::<UsbConfigurationDescriptor>() == 254);
+
+pub const USB_DESCRIPTOR_CONFIGURATION_TYPE: u16 = 2;
+pub const USB_DESCRIPTOR_DEVICE_TYPE: u16 = 1;

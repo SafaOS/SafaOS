@@ -290,6 +290,7 @@ impl<'s> XHCIResponseQueue<'s> {
         packet: XHCIDeviceRequestPacket,
         output: &mut [u8],
     ) -> Result<(), XHCIError> {
+        assert!(packet.w_length() == output.len() as u16);
         let frame = frame_allocator::allocate_frame().ok_or(XHCIError::OutOfMemory)?;
 
         let (descriptor_buffer, descriptor_buffer_addr) =
@@ -509,6 +510,12 @@ impl<'s> XHCI<'s> {
         )?;
 
         debug!(XHCI, "filled the usb descriptor: {:#x?}", usb_descriptor);
+        let usb_configuration_desc =
+            device.get_usb_configuration_descriptor(&self.manager_queue)?;
+        debug!(
+            XHCI,
+            "USB Configuration Descriptor: {:#x?}", usb_configuration_desc
+        );
         Ok(())
     }
 }

@@ -41,11 +41,13 @@ pub enum XHCIError {
     NoCommandResponse,
     NoTransferResponse,
     OutOfMemory,
+    Other,
 }
 
 impl Display for XHCIError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Other => write!(f, "Unknown Error"),
             Self::OutOfMemory => write!(f, "System Out Of Memory"),
             Self::NoCommandResponse => write!(f, "Timeout Waiting For Command Response"),
             Self::NoTransferResponse => write!(f, "Timeout Waiting For Transfer Event Response"),
