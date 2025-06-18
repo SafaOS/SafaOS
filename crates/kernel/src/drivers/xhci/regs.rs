@@ -381,7 +381,7 @@ impl OperationalRegs {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PortSpeed {
     Undefined = 0,

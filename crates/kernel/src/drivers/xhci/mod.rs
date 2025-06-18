@@ -23,12 +23,12 @@ use crate::{
                 transfer::XHCITransferRing,
                 trbs::{
                     self, AddressDeviceCommandTRB, CmdResponseTRB, CompletionStatusCode,
-                    DataStageTRB, EvaluateContextCMDTRB, EventDataTRB, EventResponseTRB,
-                    PortStatusChangeTRB, SetupStageTRB, StatusStageTRB, TransferResponseTRB,
-                    XHCIDeviceRequestPacket, TRB_TYPE_ENABLE_SLOT_CMD,
+                    ConfigureEndpointCommandTRB, DataStageTRB, EvaluateContextCMDTRB, EventDataTRB,
+                    EventResponseTRB, PortStatusChangeTRB, SetupStageTRB, StatusStageTRB,
+                    TransferResponseTRB, XHCIDeviceRequestPacket, TRB_TYPE_ENABLE_SLOT_CMD,
                 },
             },
-            usb::UsbDeviceDescriptor,
+            usb::{GenericUSBDescriptor, UsbDeviceDescriptor},
             utils::XHCIError,
         },
     },
@@ -284,13 +284,39 @@ impl<'s> XHCIResponseQueue<'s> {
         Ok(response)
     }
 
+    /// performs a HOST->DEVICE no data control transfer on a `device`
+    pub fn send_no_data_request_packet(
+        &self,
+        device: &mut XHCIDevice,
+        packet: XHCIDeviceRequestPacket,
+    ) -> Result<(), XHCIError> {
+        let transfer_ring = device.transfer_ring();
+        // Setup Stage
+        let mut setup_stage = SetupStageTRB::new(packet, 0, 0);
+        setup_stage.status.set_trb_transfer_length(8);
+        setup_stage.info.set_ioc(false);
+        setup_stage.info.set_idt(true);
+        // No data stage
+        setup_stage.info.set_trt(0);
+
+        let mut status_stage = StatusStageTRB::new(0);
+        status_stage.cmd.set_ioc(true);
+        status_stage.cmd.set_dir_in(true);
+        // don't chain an event
+        status_stage.cmd.set_chain(false);
+
+        transfer_ring.enqueue(setup_stage.into_trb());
+        transfer_ring.enqueue(status_stage.into_trb());
+
+        self.start_ctrl_ep_transfer(transfer_ring)?;
+        Ok(())
+    }
     pub fn send_request_packet(
         &self,
         device: &mut XHCIDevice,
         packet: XHCIDeviceRequestPacket,
         output: &mut [u8],
     ) -> Result<(), XHCIError> {
-        assert!(packet.w_length() == output.len() as u16);
         let frame = frame_allocator::allocate_frame().ok_or(XHCIError::OutOfMemory)?;
 
         let (descriptor_buffer, descriptor_buffer_addr) =
@@ -382,9 +408,9 @@ pub struct XHCI<'s> {
     /// Only accessed by interrupts
     event_ring: Mutex<XHCIEventRing<'s>>,
     manager_queue: XHCIResponseQueue<'s>,
-    // TODO: fully implement
     /// A list of USB3 ports, all other ports are USB2
     usb3_ports: Vec<u8>,
+    connected_devices: Mutex<Vec<Option<XHCIDevice>>>,
 
     irq_info: IRQInfo,
 }
@@ -418,6 +444,14 @@ impl<'s> XHCI<'s> {
         let slot_id = device.slot_id();
         let input_ctx_base_addr = device.input_ctx_base_addr();
         let trb = EvaluateContextCMDTRB::new(input_ctx_base_addr, slot_id);
+        self.manager_queue.send_command(trb.into_trb())?;
+        Ok(())
+    }
+
+    pub fn configure_endpoint(&self, device: &XHCIDevice) -> Result<(), XHCIError> {
+        let slot_id = device.slot_id();
+        let input_ctx_base_addr = device.input_ctx_base_addr();
+        let trb = ConfigureEndpointCommandTRB::new(input_ctx_base_addr, slot_id);
         self.manager_queue.send_command(trb.into_trb())?;
         Ok(())
     }
@@ -486,20 +520,25 @@ impl<'s> XHCI<'s> {
 
         // configures with the actual size
         let max_packet_size = usb_descriptor.b_max_packet_size_0 as u16;
+        device.configure_ctrl_ep_input_ctx(max_packet_size);
+
         if max_packet_size != max_initial_packet_size {
-            device.configure_ctrl_ep_input_ctx(max_packet_size);
             self.evaluate_context(&device)?;
+        }
+
+        /// syncs from the DCBAA to the input device context
+        macro_rules! sync_inp_ctx {
+            () => {
+                unsafe {
+                    let dest_input_device_ctx = device.get_input_device_ctx();
+                    let src_out_device_ctx = regs.get_dcbaa_entry_as_ptr(device.slot_id());
+                    dest_input_device_ctx.copy_from(src_out_device_ctx, 1);
+                }
+            };
         }
 
         // address device with bsr=false
         self.address_device(&device, false)?;
-
-        // syncs with the DCBAA
-        unsafe {
-            let src_input_device_ctx = device.get_input_device_ctx();
-            let dest_out_device_ctx = regs.get_dcbaa_entry_as_ptr(device.slot_id());
-            dest_out_device_ctx.copy_from(src_input_device_ctx, 1);
-        }
 
         // read the full descriptor
         let usb_desc_header_len = usb_descriptor.header.b_length as usize;
@@ -512,10 +551,56 @@ impl<'s> XHCI<'s> {
         debug!(XHCI, "filled the usb descriptor: {:#x?}", usb_descriptor);
         let usb_configuration_desc =
             device.get_usb_configuration_descriptor(&self.manager_queue)?;
+
+        let configuration_value = usb_configuration_desc.b_configuration_value as u16;
         debug!(
             XHCI,
-            "USB Configuration Descriptor: {:#x?}", usb_configuration_desc
+            "configuring the device with value {}...", configuration_value
         );
+
+        sync_inp_ctx!();
+        device.set_configuration(&self.manager_queue, configuration_value)?;
+
+        let descriptors_iterator = usb_configuration_desc.into_iterator();
+
+        let mut interface_descriptors = Vec::new();
+        let mut endpoint_descriptors = Vec::new();
+
+        for descriptor in descriptors_iterator {
+            debug!(XHCI, "{descriptor:#x?}");
+            match descriptor {
+                GenericUSBDescriptor::Interface(int) => interface_descriptors.push(int),
+                GenericUSBDescriptor::Endpoint(endpoint) => endpoint_descriptors.push(endpoint),
+                _ => {}
+            }
+        }
+
+        // Disables the control endpoint because it wouldn't be used anymore, and the Configure Endpoint command requires it to be off
+        device.disable_ctrl_endpoint();
+        // Attaches Drivers for this interface
+        for (interface, endpoint) in interface_descriptors
+            .into_iter()
+            .zip(endpoint_descriptors.into_iter())
+        {
+            unsafe {
+                device.configure_ep_input_ctx(endpoint)?;
+            }
+            // currently only works with HID Boot protocol interfaces
+            if !(interface.b_interface_class == 0x3 && interface.b_interface_subclass == 0x1) {
+                continue;
+            }
+        }
+
+        sync_inp_ctx!();
+        self.configure_endpoint(&device)?;
+
+        let mut connected_devices = self.connected_devices.lock();
+        if slot_id as usize >= connected_devices.len() {
+            for _ in 0..((slot_id as usize + 1) - connected_devices.len()) {
+                connected_devices.push(None);
+            }
+        }
+        connected_devices[slot_id as usize] = Some(device);
         Ok(())
     }
 }
@@ -594,6 +679,7 @@ impl<'s> PCIDevice for XHCI<'s> {
             event_ring: Mutex::new(event_ring),
             manager_queue: xhci_queue_manager,
             regs: UnsafeCell::new(xhci_registers),
+            connected_devices: Mutex::new(Vec::new()),
             usb3_ports,
             irq_info,
         };

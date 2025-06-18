@@ -449,6 +449,11 @@ impl EndpointDeviceCTXQword2 {
         *self = unsafe { core::mem::transmute(ptr) };
         self.set_dequeue_cycle_state(cycle_bit);
     }
+
+    pub fn with_trb_dequeue_ptr(mut self, ptr: PhysAddr, cycle_bit: u8) -> Self {
+        self.set_trb_dequeue_ptr(ptr, cycle_bit);
+        self
+    }
 }
 
 #[repr(C)]

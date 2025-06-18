@@ -10,6 +10,7 @@ pub const TRB_TYPE_STATUS_STAGE: u8 = 0x4;
 pub const TRB_TYPE_LINK: u8 = 0x6;
 pub const TRB_TYPE_ENABLE_SLOT_CMD: u8 = 0x9;
 pub const TRB_TYPE_ADDRESS_DEVICE_CMD: u8 = 0xB;
+pub const TRB_TYPE_CONFIGURE_ENDPOINT_CMD: u8 = 0xC;
 pub const TRB_TYPE_EVALUATE_CONTEXT_CMD: u8 = 0xD;
 
 pub const TRB_TYPE_TRANSFER_EVENT: u8 = 0x20;
@@ -284,6 +285,44 @@ impl AddressDeviceCommandTRB {
 }
 
 #[bitfield(u32)]
+struct ConfigureEndpointCommandTRBCMD {
+    #[bits(1)]
+    cycle_bit: u8,
+    __: u8,
+    deconfigure: bool,
+    #[bits(6)]
+    trb_type: u8,
+    __: u8,
+    slot_id: u8,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct ConfigureEndpointCommandTRB {
+    input_ctx_base: PhysAddr,
+    __rsdvz: u32,
+    cmd: ConfigureEndpointCommandTRBCMD,
+}
+
+impl ConfigureEndpointCommandTRB {
+    pub const fn into_trb(self) -> TRB {
+        unsafe { core::mem::transmute(self) }
+    }
+    pub fn new(input_ctx_base: PhysAddr, slot_id: u8) -> Self {
+        crate::serial!("{input_ctx_base:#?}\n");
+        Self {
+            input_ctx_base,
+            __rsdvz: 0,
+            cmd: ConfigureEndpointCommandTRBCMD::new()
+                .with_deconfigure(false)
+                .with_cycle_bit(0)
+                .with_trb_type(TRB_TYPE_CONFIGURE_ENDPOINT_CMD)
+                .with_slot_id(slot_id),
+        }
+    }
+}
+
+#[bitfield(u32)]
 pub struct EvaluateContextTRBInfo {
     #[bits(1)]
     cycle_bit: u8,
@@ -413,10 +452,12 @@ pub struct SetupStageInfo {
     #[bits(6)]
     pub trb_type: u8,
     /// TODO: make it an enum
+    ///
     /// Transfer Type (TRT). This field indicates the type and direction of the control transfer.
     /// Value Definition
     ///
     /// 0 No Data Stage
+    ///
     /// 1 Reserved
     ///
     /// 2 OUT Data Stage
