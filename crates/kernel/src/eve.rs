@@ -87,24 +87,6 @@ pub fn main() -> ! {
     // TODO: make a macro or a const function to do this automatically
     serial!("Hello, world!, running tests...\n",);
 
-    #[cfg(test)]
-    {
-        fn run_tests() -> ! {
-            crate::kernel_testmain();
-            unreachable!()
-        }
-
-        function_spawn(
-            Name::try_from("TestRunner").unwrap(),
-            run_tests,
-            &[],
-            &[],
-            SpawnFlags::CLONE_RESOURCES,
-            *KERNEL_ABI_STRUCTURES,
-        )
-        .unwrap();
-    }
-
     // FIXME: use threads
     for poll_driver in unsafe { &*POLLING.get() } {
         function_spawn(
@@ -130,6 +112,24 @@ pub fn main() -> ! {
             &["sys:/bin/safa", "-i"],
             &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
             SpawnFlags::empty(),
+            *KERNEL_ABI_STRUCTURES,
+        )
+        .unwrap();
+    }
+
+    #[cfg(test)]
+    {
+        fn run_tests() -> ! {
+            crate::kernel_testmain();
+            unreachable!()
+        }
+
+        function_spawn(
+            Name::try_from("TestRunner").unwrap(),
+            run_tests,
+            &[],
+            &[],
+            SpawnFlags::CLONE_RESOURCES,
             *KERNEL_ABI_STRUCTURES,
         )
         .unwrap();

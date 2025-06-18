@@ -2,7 +2,7 @@ use core::any::type_name;
 
 use crate::{
     arch::power::shutdown,
-    info,
+    info, sleep,
     threading::expose::{pspawn, wait, SpawnFlags},
 };
 use safa_utils::{
@@ -68,6 +68,9 @@ impl<T: Fn()> Testable for T {
 }
 
 pub fn test_runner(tests: &[&dyn Testable]) -> ! {
+    log!("sleeping for 5 second(s) until kernel finishes startup...");
+    sleep!(5000 ms);
+
     let tests_iter = tests
         .iter()
         .filter(|x| x.piritory() == TestPiritory::Highest);
