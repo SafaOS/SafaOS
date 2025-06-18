@@ -1,10 +1,16 @@
 //! Eve is the kernel's main loop (PID 0)
 //! it is responsible for managing a few things related to it's children
 
-use crate::drivers::driver_poll;
+use core::cell::SyncUnsafeCell;
+
+use crate::drivers::driver_poll::{self, PolledDriver};
+use crate::threading;
+use crate::threading::expose::{function_spawn, SpawnFlags};
 use crate::utils::locks::Mutex;
 use crate::{drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield};
 use alloc::vec::Vec;
+use lazy_static::lazy_static;
+use safa_utils::types::Name;
 use safa_utils::{
     abi::raw::processes::{AbiStructures, TaskStdio},
     make_path,
@@ -49,6 +55,31 @@ pub static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructur
     stdio: *KERNEL_STDIO,
 });
 
+lazy_static! {
+    static ref POLLING: SyncUnsafeCell<Vec<&'static dyn PolledDriver>> =
+        SyncUnsafeCell::new(driver_poll::take_poll());
+}
+
+fn poll_driver_thread() -> ! {
+    let current = threading::current();
+    let thread_name = current.name();
+    let mut poll_driver = None;
+    for polled_driver in unsafe { &*POLLING.get() } {
+        if polled_driver.thread_name() == thread_name {
+            poll_driver = Some(polled_driver);
+        }
+    }
+
+    let poll_driver = poll_driver.unwrap_or_else(|| {
+        panic!(
+            "failed to find a polled driver for the thread: {}",
+            thread_name
+        )
+    });
+    drop(current);
+    poll_driver.poll_function()
+}
+
 /// the main loop of Eve
 /// it will run until doomsday
 pub fn main() -> ! {
@@ -58,9 +89,6 @@ pub fn main() -> ! {
 
     #[cfg(test)]
     {
-        use crate::threading::expose::{function_spawn, SpawnFlags};
-        use crate::utils::types::Name;
-
         fn run_tests() -> ! {
             crate::kernel_testmain();
             unreachable!()
@@ -77,10 +105,22 @@ pub fn main() -> ! {
         .unwrap();
     }
 
+    // FIXME: use threads
+    for poll_driver in unsafe { &*POLLING.get() } {
+        function_spawn(
+            Name::try_from(poll_driver.thread_name()).unwrap(),
+            poll_driver_thread,
+            &[],
+            &[],
+            SpawnFlags::CLONE_RESOURCES,
+            *KERNEL_ABI_STRUCTURES,
+        )
+        .expect("failed to spawn a fucntion for a polled driver");
+    }
+
     #[cfg(not(test))]
     {
-        use crate::threading::expose::{pspawn, SpawnFlags};
-        use crate::utils::types::Name;
+        use crate::threading::expose::pspawn;
 
         // start the shell
         pspawn(
@@ -97,10 +137,6 @@ pub fn main() -> ! {
 
     loop {
         one_shot();
-        for driver in &*driver_poll::read_poll() {
-            // TODO: spawn in a thread and poll every PolledDriver::poll_every
-            driver.poll();
-        }
         core::hint::spin_loop();
     }
 }

@@ -102,10 +102,14 @@ impl<'s> InterruptReceiver for XHCI<'s> {
 }
 
 impl<'s> PolledDriver for XHCI<'s> {
+    fn thread_name(&self) -> &'static str {
+        "XHCI_POLL"
+    }
+
     fn poll(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
 
-        if let Some(event) = self.manager_queue.try_pop_port_connection_event() {
+        while let Some(event) = self.manager_queue.try_pop_port_connection_event() {
             let op_regs = unsafe { regs.operational_regs() };
             debug!(XHCI, "port {} resetting...", event.port_index);
             let reset_successful = unsafe {

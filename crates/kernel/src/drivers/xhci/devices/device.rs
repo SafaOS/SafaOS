@@ -160,10 +160,6 @@ impl XHCIDevice {
 
         in_control_ctx.add_ctx_flags |= 1 << endpoint_num;
         in_control_ctx.drop_flags = 0;
-        crate::serial!(
-            "{endpoint_num}, {endpoint_type:#?}: {}\n",
-            slot_ctx.dword0.context_entries()
-        );
         if endpoint_num > slot_ctx.dword0.context_entries() {
             slot_ctx.dword0.set_context_entries(endpoint_num);
         }

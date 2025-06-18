@@ -83,14 +83,18 @@ macro_rules! time {
 /// vatiants:
 ///
 /// sleep!(N ms)
+/// sleep!(N) (ms)
 macro_rules! sleep {
-    ($ms: literal ms) => {{
+    ($ms: expr) => {{
         let start_time = $crate::time!();
-        let timeout_time = start_time + $ms;
+        let timeout_time = start_time + $ms as u64;
 
         while $crate::time!() < timeout_time {
             core::hint::spin_loop()
         }
+    }};
+    ($ms: literal ms) => {{
+        $crate::sleep!($ms)
     }};
 }
 

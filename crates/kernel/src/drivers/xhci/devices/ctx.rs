@@ -226,6 +226,7 @@ pub struct XHCISlotDeviceCtx<const CTX_SZ_MINUS_16: usize> {
     __: [u8; CTX_SZ_MINUS_16],
 }
 
+#[allow(unused)]
 pub type XHCISlotDeviceCtx64 = XHCISlotDeviceCtx<{ 64 - 16 }>;
 pub type XHCISlotDeviceCtx32 = XHCISlotDeviceCtx<{ 32 - 16 }>;
 
@@ -484,6 +485,7 @@ pub struct XHCIEndpointDeviceCtx<const CTX_SZ_MINUS_20: usize> {
     __: [u8; CTX_SZ_MINUS_20],
 }
 
+#[allow(unused)]
 pub type XHCIEndpointDeviceCtx64 = XHCIEndpointDeviceCtx<{ 64 - 20 }>;
 pub type XHCIEndpointDeviceCtx32 = XHCIEndpointDeviceCtx<{ 32 - 20 }>;
 
@@ -581,6 +583,7 @@ pub struct XHCIInputControlCtx<const CTX_SZ_MINUS_32: usize> {
     __padding: [u8; CTX_SZ_MINUS_32],
 }
 
+#[allow(unused)]
 pub type XHCIInputControlCtx64 = XHCIInputControlCtx<{ 64 - 32 }>;
 pub type XHCIInputControlCtx32 = XHCIInputControlCtx<{ 32 - 32 }>;
 

@@ -308,8 +308,7 @@ impl ConfigureEndpointCommandTRB {
     pub const fn into_trb(self) -> TRB {
         unsafe { core::mem::transmute(self) }
     }
-    pub fn new(input_ctx_base: PhysAddr, slot_id: u8) -> Self {
-        crate::serial!("{input_ctx_base:#?}\n");
+    pub const fn new(input_ctx_base: PhysAddr, slot_id: u8) -> Self {
         Self {
             input_ctx_base,
             __rsdvz: 0,
