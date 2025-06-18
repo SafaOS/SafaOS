@@ -2,6 +2,7 @@ use bitfield_struct::bitfield;
 
 use crate::PhysAddr;
 
+pub const TRB_TYPE_NORMAL: u8 = 0x1;
 pub const TRB_TYPE_SETUP_STAGE: u8 = 0x2;
 pub const TRB_TYPE_DATA_STAGE: u8 = 0x3;
 pub const TRB_TYPE_EVENT_DATA: u8 = 0x7;
@@ -760,6 +761,97 @@ impl StatusStageTRB {
             __rsdv: 0,
             status: StatusStageTRBStatus::new().with_interrupter_target(interrupter_target),
             cmd: StatusStageTRBCmd::new().with_trb_type(TRB_TYPE_STATUS_STAGE),
+        }
+    }
+}
+
+#[bitfield(u32)]
+pub struct NormalTRBStatus {
+    #[bits(17)]
+    pub trb_transfer_length: u32,
+    #[bits(5)]
+    pub td_size: u8,
+    #[bits(10)]
+    pub interrupter_target: u16,
+}
+
+#[bitfield(u32)]
+pub struct NormalTRBCMD {
+    #[bits(1)]
+    pub cycle_bit: u8,
+    /// Evaluate Next TRB (ENT). If this flag is ‘1’ the xHC shall fetch and evaluate the
+    /// next TRB before saving the endpoint state. Refer to section 4.12.3 for more information.
+    pub ent: bool,
+
+    /// Interrupt-on Short Packet (ISP). If this flag is ‘1’ and a Short Packet is encountered
+    /// for this TRB (i.e., less than the amount specified in TRB Transfer Length), then a
+    /// Transfer Event TRB shall be generated with its Completion Code set to Short Packet.
+    ///
+    /// The TRB Transfer Length field in the Transfer Event TRB shall reflect the residual
+    /// number of bytes not transferred into the associated data buffer. In either case, when
+    /// a Short Packet is encountered, the TRB shall be retired without error and the xHC shall
+    /// advance to the Status Stage TD.
+    ///
+    /// Note: if the ISP and IOC flags are both ‘1’ and a Short Packet is detected, then only one
+    /// Transfer Event TRB shall be queued to the Event Ring. Also refer to section 4.10.1.1.
+    pub isp: bool,
+    /// No Snoop (NS). When set to ‘1’, the xHC is permitted to set the No Snoop bit in the
+    /// Requester Attributes of the PCIe transactions it initiates if the PCIe configuration
+    /// Enable No Snoop flag is also set.
+    ///
+    /// When cleared to ‘0’, the xHC is not permitted to set PCIe packet No Snoop Requester
+    /// Attribute. Refer to section 4.18.1 for more information.
+    ///
+    /// NOTE: If software sets this bit, then it is responsible for maintaining cache consistency.
+    pub no_snoop: bool,
+    /// Chain bit (CH). Set to ‘1’ by software to associate this TRB with the next TRB on the Ring.
+    /// A Data Stage TD is defined as a Data Stage TRB followed by zero or more Normal TRBs.
+    /// The Chain bit is used to identify a multi-TRB Data Stage TD.
+    ///
+    /// The Chain bit is always ‘0’ in the last TRB of a Data Stage TD.
+    pub chain: bool,
+    /// Interrupt On Completion (IOC). If this bit is set to ‘1’, it specifies that when this TRB
+    /// completes, the Host Controller shall notify the system of the completion by placing an
+    /// Event TRB on the Event ring and sending an interrupt at the next interrupt threshold.
+    /// Refer to section 4.10.4.
+    pub ioc: bool,
+    /// Immediate Data (IDT). This bit shall be set to ‘1’ in a Setup Stage TRB.
+    /// It specifies that the Parameter component of this TRB contains Setup Data.
+    pub idt: bool,
+    #[bits(3)]
+    __: (),
+    #[bits(6)]
+    pub trb_type: u8,
+    /// Direction (DIR). This bit indicates the direction of the data transfer as defined in the
+    /// Data State TRB Direction column of Table 7. If cleared to ‘0’, the data stage transfer
+    /// direction is OUT (Write Data).
+    ///
+    /// If set to ‘1’, the data stage transfer direction is IN (Read Data).
+    ///
+    /// Refer to section 4.11.2.2 for more information on the use of DIR.
+    pub dir_in: bool,
+    #[bits(15)]
+    __: (),
+}
+
+#[repr(C)]
+pub struct NormalTRB {
+    data_buffer_base: PhysAddr,
+    pub status: NormalTRBStatus,
+    pub cmd: NormalTRBCMD,
+}
+
+impl NormalTRB {
+    pub const fn into_trb(self) -> TRB {
+        unsafe { core::mem::transmute(self) }
+    }
+    pub const fn new(data_base_addr: PhysAddr, trb_transfer_length: u32, interrupter: u16) -> Self {
+        Self {
+            data_buffer_base: data_base_addr,
+            status: NormalTRBStatus::new()
+                .with_interrupter_target(interrupter)
+                .with_trb_transfer_length(trb_transfer_length),
+            cmd: NormalTRBCMD::new().with_trb_type(TRB_TYPE_NORMAL),
         }
     }
 }

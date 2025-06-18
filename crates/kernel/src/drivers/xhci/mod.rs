@@ -14,6 +14,7 @@ use crate::{
     drivers::{
         driver_poll::{self, PolledDriver},
         interrupts::{self, IntTrigger, InterruptReceiver},
+        keyboard::usb_kbd::USBKeyboard,
         pci::PCICommandReg,
         xhci::{
             devices::XHCIDevice,
@@ -29,6 +30,8 @@ use crate::{
                 },
             },
             usb::{GenericUSBDescriptor, UsbDeviceDescriptor},
+            usb_endpoint::USBEndpoint,
+            usb_hid::USBHIDDevice,
             utils::XHCIError,
         },
     },
@@ -47,6 +50,8 @@ mod extended_caps;
 mod regs;
 mod rings;
 mod usb;
+mod usb_endpoint;
+pub mod usb_hid;
 mod utils;
 
 /// The maximum number of TRBs a CommandRing can hold
@@ -71,13 +76,15 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                         self.manager_queue.add_command_response(res)
                     }
                     EventResponseTRB::TransferResponse(res) => {
-                        debug!(
-                            XHCI,
-                            "transfer completed with code {:?} ({:#x}), slot: {}",
-                            res.status.completion_code(),
-                            res.status.completion_code() as u8,
-                            res.cmd.slot_id(),
-                        );
+                        let mut connected_devices = self.connected_devices.lock();
+                        if let Some(device_slot) =
+                            connected_devices.get_mut(res.cmd.slot_id() as usize)
+                            && let Some(device) = device_slot
+                            && let Some(ref mut driver) = device.hid_driver
+                        {
+                            driver.on_event(&self.manager_queue);
+                        }
+                        drop(connected_devices);
                         self.manager_queue.add_transfer_response(res)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
@@ -582,29 +589,43 @@ impl<'s> XHCI<'s> {
         // Disables the control endpoint because it wouldn't be used anymore, and the Configure Endpoint command requires it to be off
         device.disable_ctrl_endpoint();
         // Attaches Drivers for this interface
-        for (interface, endpoint) in interface_descriptors
+        for (interface, endpoint_desc) in interface_descriptors
             .into_iter()
             .zip(endpoint_descriptors.into_iter())
         {
-            unsafe {
-                device.configure_ep_input_ctx(endpoint)?;
-            }
             // currently only works with HID Boot protocol interfaces
             if !(interface.b_interface_class == 0x3 && interface.b_interface_subclass == 0x1) {
                 continue;
             }
-        }
 
-        sync_inp_ctx!();
-        self.configure_endpoint(&device)?;
-
-        let mut connected_devices = self.connected_devices.lock();
-        if slot_id as usize >= connected_devices.len() {
-            for _ in 0..((slot_id as usize + 1) - connected_devices.len()) {
-                connected_devices.push(None);
+            match interface.b_interface_protocol {
+                1 => {
+                    // sets the boot protocol
+                    device.set_protocol(&self.manager_queue, false)?;
+                    let endpoint = USBEndpoint::create(endpoint_desc, slot_id)?;
+                    let driver = USBHIDDevice::create::<USBKeyboard>(endpoint);
+                    device.set_unconfigured_driver(driver);
+                }
+                _ => {}
             }
         }
-        connected_devices[slot_id as usize] = Some(device);
+
+        self.configure_endpoint(&device)?;
+
+        if let Some(ref mut hid_driver) = device.hid_driver {
+            hid_driver.start(&self.manager_queue);
+            let mut connected_devices = self.connected_devices.lock();
+
+            if slot_id as usize >= connected_devices.len() {
+                // anonying but it is the only way because XHCIDevice doesn't support clone...
+                for _ in 0..(slot_id as usize - connected_devices.len() + 1) {
+                    connected_devices.push(None);
+                }
+            }
+
+            connected_devices[slot_id as usize] = Some(device);
+        }
+
         Ok(())
     }
 }

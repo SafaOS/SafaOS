@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use crate::{
     debug,
     drivers::xhci::{
@@ -15,8 +13,10 @@ use crate::{
         },
         usb::{
             UsbConfigurationDescriptor, UsbDescriptorHeader, UsbDeviceDescriptor,
-            UsbEndpointDescriptor, USB_DESCRIPTOR_CONFIGURATION_TYPE, USB_DESCRIPTOR_DEVICE_TYPE,
+            USB_DESCRIPTOR_CONFIGURATION_TYPE, USB_DESCRIPTOR_DEVICE_TYPE,
         },
+        usb_endpoint::USBEndpoint,
+        usb_hid::USBHIDDevice,
         utils::XHCIError,
         XHCIResponseQueue, MAX_TRB_COUNT,
     },
@@ -25,6 +25,7 @@ use crate::{
 
 pub const REQUEST_GET_DESCRIPTOR: u8 = 6;
 pub const REQUEST_SET_CONFIGURATION: u8 = 9;
+pub const REQUEST_SET_PROTOCOL: u8 = 0xB;
 
 #[derive(Debug, Clone, Copy)]
 enum InputCtxPtr {
@@ -38,11 +39,12 @@ pub struct XHCIDevice {
     input_ctx_base_addr: PhysAddr,
 
     xhci_transfer_ring: XHCITransferRing,
-    endpoints: Vec<(UsbEndpointDescriptor, XHCITransferRing)>,
 
     port_index: u8,
     port_speed: PortSpeed,
     slot_id: u8,
+
+    pub hid_driver: Option<USBHIDDevice>,
 }
 
 impl XHCIDevice {
@@ -138,25 +140,27 @@ impl XHCIDevice {
             input_ctx_ptr,
             input_ctx_base_addr,
             xhci_transfer_ring: XHCITransferRing::create(MAX_TRB_COUNT, slot_id)?,
-            endpoints: Vec::new(),
             port_index,
             slot_id,
             port_speed,
+            hid_driver: None,
         })
     }
 
     /// Configures the endpoint with USB Descriptor `endpoint` and the transfer ring `endpoint_transfer_ring`
-    /// Unsafe because this should only called once per endpoint
-    pub unsafe fn configure_ep_input_ctx(
-        &mut self,
-        endpoint: UsbEndpointDescriptor,
-    ) -> Result<(), XHCIError> {
+    /// Unsafe because this should only called once per endpoint and the endpoint has to live as long as the device lives
+    pub unsafe fn configure_ep_input_ctx(&mut self, endpoint: &mut USBEndpoint) {
         let in_control_ctx = unsafe { &mut *self.get_input_ctrl_ctx() };
         let slot_ctx = unsafe { &mut *self.get_slot_ctx() };
 
-        let transfer_ring = XHCITransferRing::create(MAX_TRB_COUNT, self.slot_id())?;
-        let endpoint_num = endpoint.endpoint_num();
-        let endpoint_type = endpoint.endpoint_type();
+        let endpoint_desc = endpoint.desc();
+
+        let endpoint_num = endpoint_desc.endpoint_num();
+        let endpoint_type = endpoint_desc.endpoint_type();
+        let max_packet_size = endpoint_desc.max_packet_size();
+        let interval = endpoint_desc.b_interval;
+
+        let transfer_ring = endpoint.transfer_ring();
 
         in_control_ctx.add_ctx_flags |= 1 << endpoint_num;
         in_control_ctx.drop_flags = 0;
@@ -175,13 +179,13 @@ impl XHCIDevice {
             endpoint_ctx.dword1,
             endpoint_ctx
                 .dword1
-                .with_max_packet_size(endpoint.max_packet_size())
+                .with_max_packet_size(max_packet_size)
                 .with_er_type(endpoint_type)
                 .with_max_brust_size(0)
                 .with_err_cnt(3)
         );
-        write_ref!(endpoint_ctx.average_trb_length, endpoint.max_packet_size());
-        write_ref!(endpoint_ctx.average_trb_length, endpoint.max_packet_size());
+        write_ref!(endpoint_ctx.average_trb_length, max_packet_size);
+        write_ref!(endpoint_ctx.max_esit_payload_low, max_packet_size);
         write_ref!(
             endpoint_ctx.qword2,
             endpoint_ctx.qword2.with_trb_dequeue_ptr(
@@ -191,7 +195,7 @@ impl XHCIDevice {
         );
 
         if self.port_speed == PortSpeed::High || self.port_speed == PortSpeed::Super {
-            let interval = endpoint.b_interval - 1;
+            let interval = interval - 1;
             write_ref!(
                 endpoint_ctx.dword0,
                 endpoint_ctx.dword0.with_interval(interval)
@@ -199,9 +203,6 @@ impl XHCIDevice {
         } else {
             todo!("endpoint intervals for speed {:?}", self.port_speed)
         }
-
-        self.endpoints.push((endpoint, transfer_ring));
-        Ok(())
     }
 
     pub fn configure_ctrl_ep_input_ctx(&mut self, max_packet_size: u16) {
@@ -241,6 +242,16 @@ impl XHCIDevice {
         endpoint_ctx.max_esit_payload_low = 0;
         endpoint_ctx.average_trb_length = 8;
         debug!(XHCIDevice, "configured cntrl endpoint for device with slot {} and port {}, set max packet size to {max_packet_size}", self.slot_id(), self.port_id());
+    }
+
+    // TODO: implement a more generic interface
+    /// Gives `self` a driver and configures it safely
+    /// works only with HID Drivers for now
+    pub fn set_unconfigured_driver(&mut self, mut driver: USBHIDDevice) {
+        unsafe {
+            self.configure_ep_input_ctx(&mut driver.endpoint);
+        }
+        self.hid_driver = Some(driver);
     }
 
     /// Disables the control endpoint
@@ -342,6 +353,22 @@ impl XHCIDevice {
             .with_w_index(0)
             .with_w_length(0)
             .with_w_value(configuration);
+        xhci_queue_manager.send_no_data_request_packet(self, packet)
+    }
+
+    pub fn set_protocol(
+        &mut self,
+        xhci_queue_manager: &XHCIResponseQueue,
+        report_protocol: bool,
+    ) -> Result<(), XHCIError> {
+        let packet = XHCIDeviceRequestPacket::new()
+            .with_p_type(PacketType::Class)
+            .with_recipient(PacketRecipient::Interface)
+            .with_device_to_host(false)
+            .with_b_request(REQUEST_SET_PROTOCOL)
+            .with_w_value(report_protocol as u16)
+            .with_w_index(0)
+            .with_w_length(0);
         xhci_queue_manager.send_no_data_request_packet(self, packet)
     }
 }

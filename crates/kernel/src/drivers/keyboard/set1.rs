@@ -131,8 +131,7 @@ impl ProcessUnencodedKeyByte for Set1Key {
             }
             Key::NULL_KEY
         } else {
-            this.add_pressed_keycode(encoded);
-            this.process_keycode(encoded)
+            this.add_pressed_keycode(encoded).unwrap_or(Key::NULL_KEY)
         }
     }
 }

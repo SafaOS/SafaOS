@@ -668,6 +668,10 @@ impl<'a> XHCIDoorbellManager<'a> {
     pub fn ring_control_endpoint_doorbell(&mut self, doorbell: u8) {
         self.ring_doorbell(doorbell, 1);
     }
+
+    pub fn ring_endpoint_doorbell(&mut self, doorbell: u8, endpoint_num: u8) {
+        self.ring_doorbell(doorbell, endpoint_num);
+    }
 }
 
 #[derive(Debug)]
