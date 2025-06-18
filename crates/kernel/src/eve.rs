@@ -97,12 +97,14 @@ pub fn main() -> ! {
             SpawnFlags::CLONE_RESOURCES,
             *KERNEL_ABI_STRUCTURES,
         )
-        .expect("failed to spawn a fucntion for a polled driver");
+        .expect("failed to spawn a function for a polled driver");
     }
 
     #[cfg(not(test))]
     {
-        use crate::threading::expose::pspawn;
+        use crate::{info, sleep, threading::expose::pspawn};
+        info!("kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell");
+        sleep!(2500 ms);
 
         // start the shell
         pspawn(
