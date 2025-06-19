@@ -43,7 +43,7 @@ impl<'s> XHCICommandRing<'s> {
 
             // Start a new cycle
             self.enqueue_ptr = 0;
-            self.curr_ring_cycle_bit = !self.curr_ring_cycle_bit;
+            self.curr_ring_cycle_bit = (!self.curr_ring_cycle_bit) & 0x1;
         }
     }
 

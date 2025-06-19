@@ -1,3 +1,5 @@
+use crate::error;
+
 use crate::{debug, write_ref, PhysAddr};
 
 use super::{
@@ -42,6 +44,8 @@ pub struct XHCIEventRing<'a> {
 
 impl<'a> XHCIEventRing<'a> {
     pub fn create(trb_count: usize, interrupter_registers: &'a mut InterrupterRegs) -> Self {
+        let curr_ring_cycle_bit = 1;
+
         let (trbs, trbs_phys_base) = allocate_buffers::<TRB>(trb_count)
             .expect("failed to allocate the XHCI Event Ring TRBs buffer");
 
@@ -61,7 +65,7 @@ impl<'a> XHCIEventRing<'a> {
             segment_table_base: segment_table_base_addr,
             ring_segment_table: segment_table,
             dequeue_ptr: 0,
-            curr_ring_cycle_bit: 1,
+            curr_ring_cycle_bit,
         };
         this.reset();
 
@@ -114,13 +118,19 @@ impl<'a> XHCIEventRing<'a> {
     fn dequeue_trb(&mut self) -> Option<&TRB> {
         let curr_trb = &self.trbs[self.dequeue_ptr];
         if curr_trb.cmd.cycle_bit() != self.curr_ring_cycle_bit {
+            error!(
+                XHCIEventRing,
+                "cycle bit: {} doesn't match current cycle bit: {}, ignoring...",
+                curr_trb.cmd.cycle_bit(),
+                self.curr_ring_cycle_bit
+            );
             return None;
         }
 
         self.dequeue_ptr += 1;
         if self.dequeue_ptr >= self.trbs.len() {
             self.dequeue_ptr = 0;
-            self.curr_ring_cycle_bit = !self.curr_ring_cycle_bit;
+            self.curr_ring_cycle_bit = (!self.curr_ring_cycle_bit) & 0x1;
         }
 
         Some(curr_trb)
