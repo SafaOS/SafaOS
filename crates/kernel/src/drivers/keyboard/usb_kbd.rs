@@ -141,6 +141,7 @@ const IGNORED_REPEATED_REPORTS: u8 = 2;
 pub struct USBKeyboard {
     last_report_buffer: [u8; 8],
     repeated_reports_to_ignore: u8,
+    caps_lock_toggle: bool,
 }
 
 impl USBHIDDriver for USBKeyboard {
@@ -151,6 +152,7 @@ impl USBHIDDriver for USBKeyboard {
         Self {
             last_report_buffer: [0u8; 8],
             repeated_reports_to_ignore: IGNORED_REPEATED_REPORTS,
+            caps_lock_toggle: false,
         }
     }
     fn on_event(&mut self, data: &[u8]) {
@@ -185,7 +187,7 @@ impl USBHIDDriver for USBKeyboard {
         let mut keycodes = heapless::Vec::<
             _,
             {
-                7 + (3/* modifiers length */)
+                7 + (5/* modifiers length + 2 */)
             },
         >::new();
 
@@ -201,6 +203,10 @@ impl USBHIDDriver for USBKeyboard {
             keycodes.push((KeyCode::Super, false)).unwrap();
         }
 
+        if self.caps_lock_toggle {
+            keycodes.push((KeyCode::CapsLock, false)).unwrap();
+        }
+
         for item in &report_buffer[1..7] {
             // the idea is we don't report to the kernel previously pressed keys as if they were newly pressed
             let report_key = last_report == [0; 8] || !last_report[1..7].contains(item);
@@ -212,6 +218,14 @@ impl USBHIDDriver for USBKeyboard {
 
             // also handles zero
             if usb_keycode == USBKey::NULL {
+                continue;
+            }
+
+            if usb_keycode == USBKey::CapsLock {
+                if report_key {
+                    self.caps_lock_toggle = !self.caps_lock_toggle;
+                }
+
                 continue;
             }
 
