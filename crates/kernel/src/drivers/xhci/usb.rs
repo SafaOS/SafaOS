@@ -167,6 +167,7 @@ const _: () = assert!(size_of::<UsbHIDDescriptor>() == 9);
 pub enum GenericUSBDescriptor {
     Interface(UsbInterfaceDescriptor),
     Endpoint(UsbEndpointDescriptor),
+    #[allow(unused)]
     HID(UsbHIDDescriptor),
 }
 
