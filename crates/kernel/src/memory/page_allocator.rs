@@ -32,7 +32,7 @@ pub struct PageAllocator {
 
 impl PageAllocator {
     pub fn new() -> Self {
-        let (heap_start, heap_end) = *super::sorcery::LARGE_HEAP;
+        let (heap_start, heap_end) = super::sorcery::LARGE_HEAP;
 
         debug!(PageAllocator, "initialized allocator",);
         Self {

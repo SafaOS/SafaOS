@@ -1,12 +1,9 @@
-use core::sync::atomic::AtomicUsize;
-
 use super::{
     frame_allocator::FramePtr,
     paging::{EntryFlags, PAGE_SIZE},
     VirtAddr,
 };
 use ::limine::memory_map::EntryType;
-use lazy_static::lazy_static;
 
 use crate::{
     arch::{
@@ -21,18 +18,20 @@ use crate::{
 
 use super::paging::{MapToError, Page, PageTable};
 
-static HHDM_END: AtomicUsize = AtomicUsize::new(0);
-lazy_static! {
-    pub static ref HEAP: (usize, usize) = {
-        let end = HHDM_END.load(core::sync::atomic::Ordering::Relaxed);
+pub const HEAP: (usize, usize) = {
+    // assuming HHDM starts at 0xffff000000000000
+    // this allows for 224 TiBs of HHDM
+    // assuming it starts at 0xffff800000000000
+    // this allows for 96 TiBs of HHDM meaning you don't really have to worry`
+    let end = 0xffffe00000000000;
+    // 1 TiB from end
+    (end, end + 0x100000000000)
+};
 
-        (end, end + super::buddy_allocator::INIT_HEAP_SIZE)
-    };
-    pub static ref LARGE_HEAP: (usize, usize) = {
-        let (_, end) = *HEAP;
-        (end, 0xffffffff80000000)
-    };
-}
+pub const LARGE_HEAP: (usize, usize) = {
+    let (_, end) = HEAP;
+    (end, 0xffffffff80000000)
+};
 
 fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
     let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
@@ -45,10 +44,9 @@ fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
         let current = &*current;
         let dest = &mut *table;
 
-        let hhdm_end = map_hhdm(dest)?;
+        map_hhdm(dest)?;
         arch::paging::map_devices(dest)?;
         map_top_2gb(current, dest)?;
-        HHDM_END.store(hhdm_end.into_raw(), core::sync::atomic::Ordering::Relaxed);
     }
 
     Ok(table)

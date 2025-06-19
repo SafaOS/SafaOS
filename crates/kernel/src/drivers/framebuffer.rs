@@ -110,13 +110,15 @@ pub struct FrameBufferDriver {
 
 impl FrameBufferDriver {
     pub fn create() -> Self {
-        let (video_buffer, info) = limine::get_framebuffer();
+        let (video_buffer, info) = &*limine::LIMINE_FRAMEBUFFER;
         assert_eq!(info.bytes_per_pixel, 4);
-        let framebuffer = FrameBuffer::new(video_buffer, info);
+        unsafe {
+            let framebuffer = FrameBuffer::new(*video_buffer.get(), *info);
 
-        Self {
-            info,
-            inner: Mutex::new(framebuffer),
+            Self {
+                info: *info,
+                inner: Mutex::new(framebuffer),
+            }
         }
     }
 

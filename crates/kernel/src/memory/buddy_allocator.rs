@@ -132,7 +132,7 @@ impl BuddyAllocator<'_> {
     }
 
     pub fn create() -> Result<Self, MapToError> {
-        let (possible_start, _) = *super::sorcery::HEAP;
+        let (possible_start, _) = super::sorcery::HEAP;
 
         let start = align_up(possible_start, size_of::<Block>());
         let start = align_up(start, 2);
