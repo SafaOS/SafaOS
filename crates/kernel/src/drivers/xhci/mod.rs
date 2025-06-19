@@ -19,7 +19,7 @@ use crate::{
         xhci::{
             devices::XHCIDevice,
             extended_caps::XHCIUSBSupportedProtocolCap,
-            regs::XHCIRegisters,
+            regs::{OperationalRegs, XHCIRegisters},
             rings::{
                 transfer::XHCITransferRing,
                 trbs::{
@@ -42,6 +42,7 @@ use crate::{
     },
     sleep_until,
     utils::locks::Mutex,
+    warn,
 };
 
 use super::pci::PCIDevice;
@@ -91,14 +92,20 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                         }
                     }
                     EventResponseTRB::PortStatusChange(event) => {
+                        let code = event.status.completion_code();
+                        let port_index = event.parameter.port_index();
+
                         debug!(
                             XHCI,
                             "port status change for port: {} with code {:?} ({:#x})",
-                            event.parameter.port_index(),
-                            event.status.completion_code(),
-                            event.status.completion_code() as u8,
+                            port_index,
+                            code,
+                            code as u8,
                         );
-                        self.manager_queue.add_port_status_change_event(event);
+                        self.manager_queue.add_port_status_change_event(
+                            unsafe { self.regs.as_mut_unchecked().operational_regs() },
+                            event,
+                        );
                     }
                 }
             }
@@ -205,12 +212,17 @@ impl<'s> XHCIResponseQueue<'s> {
         drop(interrupter);
     }
 
-    pub fn add_port_status_change_event(&self, event: PortStatusChangeTRB) {
-        let interrupter = self.interrupter_lock.lock();
-        unsafe {
-            self.port_queue.as_mut_unchecked().push(event);
+    pub fn add_port_status_change_event(
+        &self,
+        op_regs: &mut OperationalRegs,
+        event: PortStatusChangeTRB,
+    ) {
+        let port_index = event.parameter.port_index();
+        let port_regs = unsafe { op_regs.port_registers(port_index) };
+        let port_sc = read_ref!(port_regs.port_sc);
+        if port_sc.csc() {
+            self.add_port_connection_event(port_index, !port_sc.ccs());
         }
-        drop(interrupter);
     }
 
     pub fn add_port_connection_event(&self, port_index: u8, is_disconnected: bool) {
@@ -375,25 +387,19 @@ impl<'s> XHCIResponseQueue<'s> {
         // Transfer SETUP and DATA stages
         // FIXME: fails on qemu because it excepts a STATUS first which is a bug, so we don't return failure here
         // there is probably an alternative to using this such as chaining an event after status
-        _ = self.start_ctrl_ep_transfer(transfer_ring);
+        if let Err(e) = self.start_ctrl_ep_transfer(transfer_ring) {
+            warn!("XHCI failed to perform first transfer: {e}, if you are using qemu then this is expected");
+        }
 
         let mut status_stage = StatusStageTRB::new(0);
 
-        status_stage.cmd.set_ioc(false);
+        status_stage.cmd.set_ioc(true);
         status_stage.cmd.set_dir_in(false);
         // chain an event
-        status_stage.cmd.set_chain(true);
-
-        transfer_status_buffer[0] = 0;
-        // invokes an event
-        let mut second_event_data_stage =
-            EventDataTRB::new(transfer_status_buffer_addr.into_raw() as u64, 0);
-        second_event_data_stage.cmd.set_chain(false);
-        second_event_data_stage.cmd.with_ioc(true);
+        status_stage.cmd.set_chain(false);
 
         // enqueues the STATUS stage and the event stage
         transfer_ring.enqueue(status_stage.into_trb());
-        transfer_ring.enqueue(second_event_data_stage.into_trb());
 
         // transfers the STATUS
         if let Err(e) = self.start_ctrl_ep_transfer(transfer_ring) {
