@@ -1,17 +1,34 @@
 use super::{pit, read_msr};
 use crate::{
     arch::{
-        paging::{DEVICE_MAPPING_END, DEVICE_MAPPING_START},
+        paging::PageTable,
         x86_64::{
             acpi,
             utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
         },
     },
-    info, serial, PhysAddr, VirtAddr,
+    info,
+    memory::paging::{EntryFlags, MapToError},
+    serial, PhysAddr, VirtAddr,
 };
 use bitflags::bitflags;
 use core::arch::asm;
 use lazy_static::lazy_static;
+
+/// Maps the IOAPIC and the Local APIC to the `dest` page table
+pub unsafe fn map_apic(dest: &mut PageTable) -> Result<(), MapToError> {
+    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+    let lapic_phys = *LAPIC_PHYS_ADDR;
+    let lapic_virt = lapic_phys.into_virt();
+    let ioapic_phys = *IOAPIC_PHYS_ADDR;
+    let ioapic_virt = ioapic_phys.into_virt();
+
+    unsafe {
+        dest.map_contiguous_pages(lapic_virt, lapic_phys, 1, flags)?;
+        dest.map_contiguous_pages(ioapic_virt, ioapic_phys, 1, flags)?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct LVTEntry {
@@ -67,20 +84,19 @@ lazy_static! {
     pub static ref LAPIC_PHYS_ADDR: PhysAddr = {
         let phys = read_msr(0x1B) & 0xFFFFF000;
         let phys = PhysAddr::from(phys);
-        assert!(phys >= DEVICE_MAPPING_START && phys <= DEVICE_MAPPING_END);
         phys
     };
     static ref LAPIC_ADDR: VirtAddr = LAPIC_PHYS_ADDR.into_virt();
     pub static ref LAPIC_ID: u8 =
         unsafe { ((*(get_local_apic_reg(*LAPIC_ADDR, 0x20).into_ptr::<u32>())) >> 24) as u8 };
-    static ref IOAPIC_ADDR: VirtAddr = unsafe {
+    pub static ref IOAPIC_PHYS_ADDR: PhysAddr = unsafe {
         let madt = *acpi::MADT_DESC;
         let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
 
         let addr = PhysAddr::from((*record).ioapic_address as usize);
-        assert!(addr >= DEVICE_MAPPING_START && addr <= DEVICE_MAPPING_END);
-        addr.into_virt()
+        addr
     };
+    static ref IOAPIC_ADDR: VirtAddr = IOAPIC_PHYS_ADDR.into_virt();
 }
 #[inline(always)]
 pub fn get_local_apic_addr() -> VirtAddr {

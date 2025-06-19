@@ -1,24 +1,46 @@
+use lazy_static::lazy_static;
+
 use super::{
     acpi,
     interrupts::apic::{LAPIC_ID, LAPIC_PHYS_ADDR},
 };
 use crate::{
-    arch::paging::{DEVICE_MAPPING_END, DEVICE_MAPPING_START},
+    arch::{paging::PageTable, x86_64::acpi::MCFGEntry},
     drivers::{interrupts::IntTrigger, pci::PCI},
+    memory::paging::{EntryFlags, MapToError},
     PhysAddr,
 };
 
+lazy_static! {
+    pub static ref PCI_MCFG_ENTRY: MCFGEntry = {
+        let mcfg = *acpi::MCFG_DESC;
+        let entry = mcfg
+            .nth(0)
+            .expect("failed to get the PCIe configuration space base info");
+        entry
+    };
+}
+/// Maps PCIe to the `dest` page table
+pub unsafe fn map_pcie(dest: &mut PageTable) -> Result<(), MapToError> {
+    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+
+    let pci_entry = *PCI_MCFG_ENTRY;
+    let pci_phys = pci_entry.physical_addr;
+    // bus count * slot count * 4096 = size
+    // page num = size / 4096
+    let pci_page_num = (pci_entry.pci_num1 - pci_entry.pci_num0) as usize * 256;
+
+    unsafe {
+        dest.map_contiguous_pages(pci_phys.into_virt(), pci_phys, pci_page_num, flags)?;
+    }
+    Ok(())
+}
+
 pub fn init() -> PCI {
-    let mcfg = *acpi::MCFG_DESC;
-    let entry = mcfg
-        .nth(0)
-        .expect("failed to get the PCIe configuration space base info");
+    let entry = *PCI_MCFG_ENTRY;
     assert_eq!(entry.pci_sgn, 0);
 
     let addr = entry.physical_addr;
-    assert!(addr >= DEVICE_MAPPING_START);
-    assert!(addr <= DEVICE_MAPPING_END);
-
     PCI::new(addr, entry.pci_num0, entry.pci_num1)
 }
 

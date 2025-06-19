@@ -3,12 +3,14 @@ use core::fmt::Debug;
 use core::ops::IndexMut;
 use core::{arch::asm, ops::Index};
 
+use crate::arch::x86_64::interrupts::apic;
+use crate::arch::x86_64::pci;
 use crate::memory::paging::{EntryFlags, Page};
 use crate::VirtAddr;
 use crate::{
     memory::{
         frame_allocator::{self, Frame, FramePtr},
-        paging::{MapToError, PAGE_SIZE},
+        paging::MapToError,
     },
     PhysAddr,
 };
@@ -321,19 +323,11 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     }
 }
 
-pub(super) const DEVICE_MAPPING_START: PhysAddr = PhysAddr::from(0xC000_0000);
-pub(super) const DEVICE_MAPPING_END: PhysAddr = PhysAddr::from(0xFFFF_FFFF);
-pub(super) const DEVICE_MAPPING_SIZE: usize =
-    DEVICE_MAPPING_END.into_raw() - DEVICE_MAPPING_START.into_raw();
-
 /// Maps architecture specific devices such as the UART serial in aarch64
-/// Maps from 0xC0000000 to 0xFFFFFFFF in x86_64
 pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
-    table.map_contiguous_pages(
-        DEVICE_MAPPING_START.into_virt(),
-        DEVICE_MAPPING_START,
-        DEVICE_MAPPING_SIZE / PAGE_SIZE,
-        EntryFlags::WRITE,
-    )?;
+    unsafe {
+        pci::map_pcie(table)?;
+        apic::map_apic(table)?;
+    }
     Ok(())
 }
