@@ -1,5 +1,3 @@
-use crate::error;
-
 use crate::{debug, write_ref, PhysAddr};
 
 use super::{
@@ -118,12 +116,6 @@ impl<'a> XHCIEventRing<'a> {
     fn dequeue_trb(&mut self) -> Option<&TRB> {
         let curr_trb = &self.trbs[self.dequeue_ptr];
         if curr_trb.cmd.cycle_bit() != self.curr_ring_cycle_bit {
-            error!(
-                XHCIEventRing,
-                "cycle bit: {} doesn't match current cycle bit: {}, ignoring...",
-                curr_trb.cmd.cycle_bit(),
-                self.curr_ring_cycle_bit
-            );
             return None;
         }
 
