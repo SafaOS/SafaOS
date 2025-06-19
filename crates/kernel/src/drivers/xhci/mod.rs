@@ -77,15 +77,18 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                     }
                     EventResponseTRB::TransferResponse(res) => {
                         let mut connected_devices = self.connected_devices.lock();
+
                         if let Some(device_slot) =
                             connected_devices.get_mut(res.cmd.slot_id() as usize)
                             && let Some(device) = device_slot
                             && let Some(ref mut driver) = device.hid_driver
                         {
+                            // pass on the transfer event to the driver
                             driver.on_event(&self.manager_queue);
+                        } else {
+                            drop(connected_devices);
+                            self.manager_queue.add_transfer_response(res)
                         }
-                        drop(connected_devices);
-                        self.manager_queue.add_transfer_response(res)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
                         debug!(
