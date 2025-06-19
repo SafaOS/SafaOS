@@ -8,7 +8,7 @@ pub trait USBHIDDriver: Debug {
     fn create() -> Self
     where
         Self: Sized;
-    fn on_event(&self, data: &[u8]);
+    fn on_event(&mut self, data: &[u8]);
 }
 
 #[derive(Debug)]

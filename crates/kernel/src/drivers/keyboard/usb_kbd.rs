@@ -3,13 +3,14 @@ use crate::{
     drivers::{keyboard::KEYBOARD, xhci::usb_hid::USBHIDDriver},
     warn,
 };
+use bitflags::bitflags;
 use int_enum::IntEnum;
 use macros::EncodeKey;
 
 // you need to add the keycode as a variant below, give it the same name as the key in KeyCode enum
 // ChatGPT generated just pray it actually does work...
 #[repr(u8)]
-#[derive(IntEnum, Clone, Copy, EncodeKey, PartialEq, Eq)]
+#[derive(IntEnum, Debug, Clone, Copy, EncodeKey, PartialEq, Eq)]
 pub enum USBKey {
     NULL = 0x00, // Reserved
 
@@ -108,40 +109,122 @@ pub enum USBKey {
     End = 0x4D,      // 77
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct USBKeyModifiers: u8 {
+        const LEFT_CTRL = 1 << 0;
+        const LEFT_SHIFT = 1 << 1;
+        const LEFT_ALT = 1 << 2;
+        const LEFT_SUPER = 1 << 3;
+        const RIGHT_CTRL = 1 << 4;
+        const RIGHT_SHIFT = 1 << 5;
+        const RIGHT_ALT = 1 << 6;
+        const RIGHT_SUPER = 1 << 7;
+    }
+}
+
+impl USBKeyModifiers {
+    pub const fn ctrl_pressed(&self) -> bool {
+        self.contains(Self::LEFT_CTRL) || self.contains(Self::RIGHT_CTRL)
+    }
+    pub const fn shift_pressed(&self) -> bool {
+        self.contains(Self::LEFT_SHIFT) || self.contains(Self::RIGHT_SHIFT)
+    }
+    pub const fn super_pressed(&self) -> bool {
+        self.contains(Self::LEFT_SUPER) || self.contains(Self::RIGHT_SUPER)
+    }
+}
+
+const IGNORED_REPEATED_REPORTS: u8 = 2;
+
 #[derive(Debug)]
-pub struct USBKeyboard;
+pub struct USBKeyboard {
+    last_report_buffer: [u8; 8],
+    repeated_reports_to_ignore: u8,
+}
 
 impl USBHIDDriver for USBKeyboard {
     fn create() -> Self
     where
         Self: Sized,
     {
-        Self
+        Self {
+            last_report_buffer: [0u8; 8],
+            repeated_reports_to_ignore: IGNORED_REPEATED_REPORTS,
+        }
     }
-    fn on_event(&self, data: &[u8]) {
+    fn on_event(&mut self, data: &[u8]) {
         let mut report_buffer: [u8; 8] = [0; 8];
         report_buffer.copy_from_slice(&data[..8]);
 
+        let mut last_report = self.last_report_buffer;
         let mut keyboard = KEYBOARD.write();
+
+        // start repeating after 5 reports, for a usb keyboard that is 8*5 ms of delay (40ms), according to the endpoint interval
+        // FIXME: more accurately calculate delay
+        if report_buffer != [0; 8] && report_buffer == last_report {
+            if self.repeated_reports_to_ignore != 0 {
+                self.repeated_reports_to_ignore -= 1;
+                return;
+            } else {
+                // lie that the last report is zeroed so the reset of the code doesn't ignore this
+                last_report = [0; 8];
+            }
+        }
+
+        self.last_report_buffer = report_buffer;
+        self.repeated_reports_to_ignore = IGNORED_REPEATED_REPORTS;
+
         keyboard.clear_keys();
 
-        if report_buffer == [0u8; 8] {
+        if report_buffer == [0; 8] {
             return;
         }
 
-        for byte in report_buffer {
-            let usb_keycode = USBKey::try_from(byte).unwrap_or_else(|_| {
-                warn!("unknown key byte with code: {:#x} encotoured", byte);
+        let modifiers = USBKeyModifiers::from_bits_retain(report_buffer[0]);
+        let mut keycodes = heapless::Vec::<
+            _,
+            {
+                7 + (3/* modifiers length */)
+            },
+        >::new();
+
+        if modifiers.ctrl_pressed() {
+            keycodes.push((KeyCode::Ctrl, false)).unwrap();
+        }
+
+        if modifiers.shift_pressed() {
+            keycodes.push((KeyCode::Shift, false)).unwrap();
+        }
+
+        if modifiers.super_pressed() {
+            keycodes.push((KeyCode::Super, false)).unwrap();
+        }
+
+        for item in &report_buffer[1..7] {
+            // the idea is we don't report to the kernel previously pressed keys as if they were newly pressed
+            let report_key = last_report == [0; 8] || !last_report[1..7].contains(item);
+
+            let usb_keycode = USBKey::try_from(*item).unwrap_or_else(|_| {
+                warn!("unknown key byte with code: {:#x} encotoured", item);
                 USBKey::NULL
             });
+
             // also handles zero
             if usb_keycode == USBKey::NULL {
                 continue;
             }
 
             let keycode = usb_keycode.encode();
+            keycodes.push((keycode, report_key)).unwrap();
+        }
+
+        for (keycode, report_key) in keycodes {
             let key = keyboard.add_pressed_keycode(keycode);
-            if let Some(key) = key {
+
+            if let Some(key) = key
+                && report_key
+            {
                 crate::__navi_key_pressed(key);
             }
         }
