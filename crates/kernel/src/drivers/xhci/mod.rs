@@ -30,8 +30,7 @@ use crate::{
                 },
             },
             usb::{GenericUSBDescriptor, UsbDeviceDescriptor},
-            usb_endpoint::USBEndpoint,
-            usb_hid::USBHIDDevice,
+            usb_interface::USBInterface,
             utils::XHCIError,
         },
     },
@@ -52,6 +51,8 @@ mod regs;
 mod rings;
 mod usb;
 mod usb_endpoint;
+mod usb_interface;
+
 pub mod usb_hid;
 mod utils;
 
@@ -77,19 +78,21 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                         self.manager_queue.add_command_response(res)
                     }
                     EventResponseTRB::TransferResponse(res) => {
-                        let mut connected_devices = self.connected_devices.lock();
-
-                        if let Some(device_slot) =
-                            connected_devices.get_mut(res.cmd.slot_id() as usize)
-                            && let Some(device) = device_slot
-                            && let Some(ref mut driver) = device.hid_driver
+                        let slot_id = res.cmd.slot_id();
+                        if let Some(mut connected_interfaces) = self.connected_interfaces.try_lock()
                         {
-                            // pass on the transfer event to the driver
-                            driver.on_event(&self.manager_queue);
-                        } else {
-                            drop(connected_devices);
-                            self.manager_queue.add_transfer_response(res)
+                            let target_interface = connected_interfaces
+                                .iter_mut()
+                                .find(|interface| interface.slot_id() == slot_id);
+
+                            if let Some(target_interface) = target_interface {
+                                // pass on the transfer event to the interface
+                                target_interface.on_event(&self.manager_queue);
+                                return;
+                            }
                         }
+
+                        self.manager_queue.add_transfer_response(res)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
                         let code = event.status.completion_code();
@@ -172,7 +175,6 @@ pub struct XHCIResponseQueue<'s> {
 
     commands: UnsafeCell<Vec<CmdResponseTRB>>,
     transfer_events: UnsafeCell<Vec<TransferResponseTRB>>,
-    port_queue: UnsafeCell<Vec<PortStatusChangeTRB>>,
     port_connection_queue: UnsafeCell<Vec<XHCIPortConnectionEvent>>,
 
     doorbell_manager: Mutex<XHCIDoorbellManager<'s>>,
@@ -191,7 +193,6 @@ impl<'s> XHCIResponseQueue<'s> {
             doorbell_manager: Mutex::new(doorbell_manager),
             commands: UnsafeCell::new(Vec::new()),
             transfer_events: UnsafeCell::new(Vec::new()),
-            port_queue: UnsafeCell::new(Vec::new()),
             port_connection_queue: UnsafeCell::new(Vec::new()),
         }
     }
@@ -348,12 +349,11 @@ impl<'s> XHCIResponseQueue<'s> {
         let (descriptor_buffer, descriptor_buffer_addr) =
             self::utils::allocate_buffers_frame::<u8>(frame, 0, 256);
 
-        let (transfer_status_buffer, transfer_status_buffer_addr) =
-            self::utils::allocate_buffers_frame::<u32>(
-                frame,
-                descriptor_buffer.len().next_multiple_of(16),
-                1,
-            );
+        let (_, transfer_status_buffer_addr) = self::utils::allocate_buffers_frame::<u32>(
+            frame,
+            descriptor_buffer.len().next_multiple_of(16),
+            1,
+        );
 
         let transfer_ring = device.transfer_ring();
 
@@ -430,7 +430,8 @@ pub struct XHCI<'s> {
     manager_queue: XHCIResponseQueue<'s>,
     /// A list of USB3 ports, all other ports are USB2
     usb3_ports: Vec<u8>,
-    connected_devices: Mutex<Vec<Option<XHCIDevice>>>,
+    // TODO: maybe it'd be first if we don't loop through all interfaces to figure out which one has the slot id
+    connected_interfaces: Mutex<Vec<USBInterface>>,
 
     irq_info: IRQInfo,
 }
@@ -595,44 +596,52 @@ impl<'s> XHCI<'s> {
             }
         }
 
+        let mut endpoint_descriptors = endpoint_descriptors.into_iter();
+
         // Disables the control endpoint because it wouldn't be used anymore, and the Configure Endpoint command requires it to be off
         device.disable_ctrl_endpoint();
+
+        let mut connected_interfaces = self.connected_interfaces.lock();
+        let connected_interfaces_start_index = connected_interfaces.len();
+
         // Attaches Drivers for this interface
-        for (interface, endpoint_desc) in interface_descriptors
-            .into_iter()
-            .zip(endpoint_descriptors.into_iter())
-        {
-            // currently only works with HID Boot protocol interfaces
-            if !(interface.b_interface_class == 0x3 && interface.b_interface_subclass == 0x1) {
-                continue;
+        for interface_desc in interface_descriptors {
+            let endpoints_descriptors = endpoint_descriptors
+                .by_ref()
+                .take(interface_desc.b_num_endpoints as usize);
+
+            let endpoints = endpoints_descriptors.collect::<Vec<_>>();
+            let mut interface = USBInterface::new(interface_desc, endpoints, slot_id)?;
+
+            for endpoint in interface.endpoints() {
+                unsafe {
+                    device.configure_ep_input_ctx(endpoint);
+                }
             }
 
-            match interface.b_interface_protocol {
-                1 => {
-                    // sets the boot protocol
-                    device.set_protocol(&self.manager_queue, false)?;
-                    let endpoint = USBEndpoint::create(endpoint_desc, slot_id)?;
-                    let driver = USBHIDDevice::create::<USBKeyboard>(endpoint);
-                    device.set_unconfigured_driver(driver);
+            let interface_desc = interface.desc();
+
+            // currently only works with HID Boot protocol interfaces
+            if interface_desc.b_interface_class == 0x3 && interface_desc.b_interface_subclass == 0x1
+            {
+                match interface_desc.b_interface_protocol {
+                    1 => {
+                        // sets the boot protocol
+                        device.set_protocol(&self.manager_queue, false)?;
+                        interface.attach_driver::<USBKeyboard>();
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
+
+            connected_interfaces.push(interface);
         }
 
+        debug!(XHCI, "sending CONFIGURE_ENDPOINT command...");
         self.configure_endpoint(&device)?;
 
-        if let Some(ref mut hid_driver) = device.hid_driver {
-            hid_driver.start(&self.manager_queue);
-            let mut connected_devices = self.connected_devices.lock();
-
-            if slot_id as usize >= connected_devices.len() {
-                // anonying but it is the only way because XHCIDevice doesn't support clone...
-                for _ in 0..(slot_id as usize - connected_devices.len() + 1) {
-                    connected_devices.push(None);
-                }
-            }
-
-            connected_devices[slot_id as usize] = Some(device);
+        for interface in &mut connected_interfaces[connected_interfaces_start_index..] {
+            interface.start(&self.manager_queue);
         }
 
         Ok(())
@@ -713,7 +722,7 @@ impl<'s> PCIDevice for XHCI<'s> {
             event_ring: Mutex::new(event_ring),
             manager_queue: xhci_queue_manager,
             regs: UnsafeCell::new(xhci_registers),
-            connected_devices: Mutex::new(Vec::new()),
+            connected_interfaces: Mutex::new(Vec::new()),
             usb3_ports,
             irq_info,
         };

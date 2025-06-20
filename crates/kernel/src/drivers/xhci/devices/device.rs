@@ -16,7 +16,6 @@ use crate::{
             USB_DESCRIPTOR_CONFIGURATION_TYPE, USB_DESCRIPTOR_DEVICE_TYPE,
         },
         usb_endpoint::USBEndpoint,
-        usb_hid::USBHIDDevice,
         utils::XHCIError,
         XHCIResponseQueue, MAX_TRB_COUNT,
     },
@@ -43,8 +42,6 @@ pub struct XHCIDevice {
     port_index: u8,
     port_speed: PortSpeed,
     slot_id: u8,
-
-    pub hid_driver: Option<USBHIDDevice>,
 }
 
 impl XHCIDevice {
@@ -143,7 +140,6 @@ impl XHCIDevice {
             port_index,
             slot_id,
             port_speed,
-            hid_driver: None,
         })
     }
 
@@ -242,16 +238,6 @@ impl XHCIDevice {
         endpoint_ctx.max_esit_payload_low = 0;
         endpoint_ctx.average_trb_length = 8;
         debug!(XHCIDevice, "configured cntrl endpoint for device with slot {} and port {}, set max packet size to {max_packet_size}", self.slot_id(), self.port_id());
-    }
-
-    // TODO: implement a more generic interface
-    /// Gives `self` a driver and configures it safely
-    /// works only with HID Drivers for now
-    pub fn set_unconfigured_driver(&mut self, mut driver: USBHIDDevice) {
-        unsafe {
-            self.configure_ep_input_ctx(&mut driver.endpoint);
-        }
-        self.hid_driver = Some(driver);
     }
 
     /// Disables the control endpoint
