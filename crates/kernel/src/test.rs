@@ -96,8 +96,9 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     }
     info!("finished running tests in {}ms", crate::time!() - first_log);
 
-    // printing this to the serial makes `test.sh` know that the kernel tests were successful
-    info!("PLEASE EXIT");
+    // printing 'PLEASE EXIT' to the serial makes `safa-helper test` know that the kernel tests were successful
+    info!("PLEASE EXIT, automatically attempting exiting after 200ms, PLEASE EXIT");
+    sleep!(200 ms);
     shutdown()
 }
 
