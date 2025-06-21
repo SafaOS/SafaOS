@@ -78,9 +78,9 @@ checksum = "617b641b6bb77bea88fd0b0eec72d76297085c4d4649274ade76ff82a0972b75"
 
 [[package]]
 name = "safa-api"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a173b967d91e0e2af4b5e909da9372d8ecb90b3471f8cd047e41e59ecf950931"
+checksum = "f761f038782581046242e25d938859f953a290d0e4c51490e2aaf61d1cf3c269"
 dependencies = [
  "safa-abi",
 ]
