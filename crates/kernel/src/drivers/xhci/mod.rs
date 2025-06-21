@@ -41,7 +41,7 @@ use crate::{
         paging::{EntryFlags, PAGE_SIZE},
     },
     sleep_until,
-    utils::locks::Mutex,
+    utils::locks::{Mutex, RwLock, RwLockReadGuard},
     warn,
 };
 
@@ -51,7 +51,7 @@ mod extended_caps;
 mod regs;
 mod rings;
 mod usb;
-mod usb_device;
+pub mod usb_device;
 mod usb_endpoint;
 mod usb_interface;
 
@@ -81,7 +81,7 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                     }
                     EventResponseTRB::TransferResponse(res) => {
                         let slot_id = res.cmd.slot_id();
-                        let mut connected_devices = self.connected_devices.lock();
+                        let mut connected_devices = self.connected_devices.write();
 
                         let target_device = connected_devices
                             .iter_mut()
@@ -430,7 +430,7 @@ pub struct XHCI<'s> {
     manager_queue: XHCIResponseQueue<'s>,
     /// A list of USB3 ports, all other ports are USB2
     usb3_ports: Vec<u8>,
-    connected_devices: Mutex<Vec<USBDevice>>,
+    connected_devices: RwLock<Vec<USBDevice>>,
 
     irq_info: IRQInfo,
 }
@@ -439,6 +439,10 @@ unsafe impl<'s> Send for XHCI<'s> {}
 unsafe impl<'s> Sync for XHCI<'s> {}
 
 impl<'s> XHCI<'s> {
+    pub fn read_connected_devices(&self) -> RwLockReadGuard<'_, Vec<USBDevice>> {
+        self.connected_devices.read()
+    }
+
     /// A helper function to send an Enable Slot TRB Command to the XHCI controller, returns the slot id
     pub fn enable_device_slot(&self) -> Result<u8, XHCIError> {
         let trb = trbs::TRB::new(
@@ -656,7 +660,7 @@ impl<'s> XHCI<'s> {
             interface.start(&self.manager_queue);
         }
 
-        let mut connected_devices = self.connected_devices.lock();
+        let mut connected_devices = self.connected_devices.write();
         connected_devices.push(USBDevice::new(
             manufacturer,
             product,
@@ -743,7 +747,7 @@ impl<'s> PCIDevice for XHCI<'s> {
             event_ring: Mutex::new(event_ring),
             manager_queue: xhci_queue_manager,
             regs: UnsafeCell::new(xhci_registers),
-            connected_devices: Mutex::new(Vec::new()),
+            connected_devices: RwLock::new(Vec::new()),
             usb3_ports,
             irq_info,
         };

@@ -30,7 +30,7 @@ impl Serialize for USBInterface {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("USBInterface", 1)?;
+        let mut state = serializer.serialize_struct("USBInterface", 3)?;
         state.serialize_field("descriptor", &self.descriptor)?;
         state.serialize_field("endpoints", &self.endpoints)?;
         state.serialize_field("has_driver", &self.driver.is_some())?;

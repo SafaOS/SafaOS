@@ -28,7 +28,7 @@ serde_json = { version = "1.0", git = "https://github.com/ObserverUnit/srede-jso
 compile-time = "0.2"
 slab = { version = "0.4", default-features = false }
 thiserror = { version = "2.0.12", default-features = false }
-lock_api = "0.4.12"
+lock_api = { version = "0.4.12", features = ["serde"] }
 const-str = { version = "0.6.2", default-features = false }
 cfg-if = "1.0.0"
 compiler_builtins = "0.1.158"

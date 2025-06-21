@@ -22,6 +22,7 @@ mod init;
 mod kernelinfo;
 mod meminfo;
 mod tasks;
+mod usbinfo;
 
 pub struct ProcFSFile {
     name: &'static str,

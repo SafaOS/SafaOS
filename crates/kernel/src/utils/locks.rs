@@ -4,6 +4,7 @@ use core::{
 };
 
 use lock_api::{GuardSend, RawMutex, RawRwLock};
+use serde::Serialize;
 use spin::Lazy;
 
 use crate::threading::expose::thread_yield;
