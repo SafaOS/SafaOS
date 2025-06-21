@@ -13,7 +13,7 @@ use crate::{
         },
         usb::{
             UsbConfigurationDescriptor, UsbDescriptorHeader, UsbDeviceDescriptor,
-            USB_DESCRIPTOR_CONFIGURATION_TYPE, USB_DESCRIPTOR_DEVICE_TYPE,
+            UsbStringDescriptor, USB_DESCRIPTOR_CONFIGURATION_TYPE, USB_DESCRIPTOR_DEVICE_TYPE,
         },
         usb_endpoint::USBEndpoint,
         utils::XHCIError,
@@ -25,6 +25,7 @@ use crate::{
 pub const REQUEST_GET_DESCRIPTOR: u8 = 6;
 pub const REQUEST_SET_CONFIGURATION: u8 = 9;
 pub const REQUEST_SET_PROTOCOL: u8 = 0xB;
+pub const USB_DESCRIPTOR_STRING_TYPE: u16 = 0x3;
 
 #[derive(Debug, Clone, Copy)]
 enum InputCtxPtr {
@@ -268,6 +269,28 @@ impl XHCIDevice {
         let output_bytes: &mut [u8; size_of::<UsbDeviceDescriptor>()] =
             unsafe { core::mem::transmute(descriptor) };
         xhci_queue_manager.send_request_packet(self, packet, &mut output_bytes[..len])
+    }
+
+    pub fn get_string_descriptor(
+        &mut self,
+        descriptor_index: u8,
+        language_id: u8,
+        xhci_queue_manager: &XHCIResponseQueue,
+    ) -> Result<UsbStringDescriptor, XHCIError> {
+        let mut bytes_raw: [u8; size_of::<UsbStringDescriptor>()] =
+            [0; size_of::<UsbStringDescriptor>()];
+
+        let packet = XHCIDeviceRequestPacket::new()
+            .with_p_type(PacketType::Standard)
+            .with_recipient(PacketRecipient::Device)
+            .with_device_to_host(true)
+            .with_w_length(size_of::<UsbStringDescriptor>() as u16)
+            .with_b_request(REQUEST_GET_DESCRIPTOR)
+            .with_w_index(language_id as u16)
+            .with_w_value((USB_DESCRIPTOR_STRING_TYPE << 8) | descriptor_index as u16);
+
+        xhci_queue_manager.send_request_packet(self, packet, &mut bytes_raw)?;
+        Ok(unsafe { core::mem::transmute(bytes_raw) })
     }
 
     pub fn get_usb_configuration_descriptor(

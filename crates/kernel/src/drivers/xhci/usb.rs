@@ -1,4 +1,6 @@
+use alloc::string::String;
 use bitfield_struct::bitfield;
+use serde::Serialize;
 
 use crate::drivers::xhci::devices::DeviceEndpointType;
 
@@ -8,14 +10,14 @@ pub const USB_DESCRIPTOR_INTERFACE_TYPE: u16 = 0x04;
 pub const USB_DESCRIPTOR_ENDPOINT_TYPE: u16 = 0x05;
 pub const USB_DESCRIPTOR_HID_TYPE: u16 = 0x21;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[repr(C)]
 pub struct UsbDescriptorHeader {
     pub b_length: u8,
     pub b_descriptor_type: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[repr(C)]
 pub struct UsbDeviceDescriptor {
     pub header: UsbDescriptorHeader,
@@ -59,7 +61,7 @@ impl UsbConfigurationDescriptor {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[repr(C, packed)]
 pub struct UsbInterfaceDescriptor {
     pub header: UsbDescriptorHeader,
@@ -75,6 +77,7 @@ pub struct UsbInterfaceDescriptor {
 const _: () = assert!(size_of::<UsbInterfaceDescriptor>() == 9);
 
 #[bitfield(u8)]
+#[derive(Serialize)]
 pub struct EndpointAddr {
     #[bits(4)]
     pub endpoint_num_base: u8,
@@ -84,6 +87,7 @@ pub struct EndpointAddr {
 }
 
 #[bitfield(u8)]
+#[derive(Serialize)]
 pub struct EndpointAttrs {
     #[bits(2)]
     pub transfer_type: u8,
@@ -95,7 +99,7 @@ pub struct EndpointAttrs {
     __: (),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[repr(C, packed)]
 pub struct UsbEndpointDescriptor {
     pub header: UsbDescriptorHeader,
@@ -162,6 +166,22 @@ pub struct UsbHIDDescriptor {
 }
 
 const _: () = assert!(size_of::<UsbHIDDescriptor>() == 9);
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct UsbStringDescriptor {
+    pub header: UsbDescriptorHeader,
+    pub w_data: [u16; 126],
+}
+
+impl UsbStringDescriptor {
+    pub fn into_string(self) -> String {
+        let data_bytes_len = self.header.b_length as usize - size_of::<UsbDescriptorHeader>();
+        let data = &self.w_data[..data_bytes_len / 2];
+
+        String::from_utf16_lossy(data)
+    }
+}
 
 #[derive(Debug)]
 pub enum GenericUSBDescriptor {

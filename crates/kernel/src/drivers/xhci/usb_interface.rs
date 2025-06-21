@@ -1,6 +1,7 @@
 use core::fmt::Debug;
 
 use alloc::{boxed::Box, vec::Vec};
+use serde::{ser::SerializeStruct, Serialize};
 
 use crate::drivers::xhci::{
     usb::{UsbEndpointDescriptor, UsbInterfaceDescriptor},
@@ -19,16 +20,31 @@ pub trait USBInterfaceDriver: Debug {
 
 #[derive(Debug)]
 pub struct USBInterface {
-    slot_id: u8,
-    interface_descriptor: UsbInterfaceDescriptor,
-
+    descriptor: UsbInterfaceDescriptor,
     endpoints: Vec<USBEndpoint>,
     driver: Option<Box<dyn USBInterfaceDriver>>,
 }
 
+impl Serialize for USBInterface {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("USBInterface", 1)?;
+        state.serialize_field("descriptor", &self.descriptor)?;
+        state.serialize_field("endpoints", &self.endpoints)?;
+        state.serialize_field("has_driver", &self.driver.is_some())?;
+        state.end()
+    }
+}
+
 impl USBInterface {
-    pub fn endpoints(&mut self) -> &mut [USBEndpoint] {
+    pub fn endpoints_mut(&mut self) -> &mut [USBEndpoint] {
         &mut self.endpoints
+    }
+
+    pub fn endpoints(&self) -> &[USBEndpoint] {
+        &self.endpoints
     }
 
     pub fn new(
@@ -44,19 +60,14 @@ impl USBInterface {
         }
 
         Ok(Self {
-            slot_id,
-            interface_descriptor: descriptor,
+            descriptor,
             endpoints,
             driver: None,
         })
     }
 
     pub const fn desc(&self) -> &UsbInterfaceDescriptor {
-        &self.interface_descriptor
-    }
-
-    pub const fn slot_id(&self) -> u8 {
-        self.slot_id
+        &self.descriptor
     }
 
     pub fn start(&mut self, queue: &XHCIResponseQueue) {

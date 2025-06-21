@@ -30,6 +30,7 @@ use crate::{
                 },
             },
             usb::{GenericUSBDescriptor, UsbDeviceDescriptor},
+            usb_device::USBDevice,
             usb_interface::USBInterface,
             utils::XHCIError,
         },
@@ -50,6 +51,7 @@ mod extended_caps;
 mod regs;
 mod rings;
 mod usb;
+mod usb_device;
 mod usb_endpoint;
 mod usb_interface;
 
@@ -79,20 +81,18 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                     }
                     EventResponseTRB::TransferResponse(res) => {
                         let slot_id = res.cmd.slot_id();
-                        if let Some(mut connected_interfaces) = self.connected_interfaces.try_lock()
-                        {
-                            let target_interface = connected_interfaces
-                                .iter_mut()
-                                .find(|interface| interface.slot_id() == slot_id);
+                        let mut connected_devices = self.connected_devices.lock();
 
-                            if let Some(target_interface) = target_interface {
-                                // pass on the transfer event to the interface
-                                target_interface.on_event(&self.manager_queue);
-                                return;
-                            }
+                        let target_device = connected_devices
+                            .iter_mut()
+                            .find(|device| device.slot_id() == slot_id);
+
+                        if let Some(target_device) = target_device {
+                            // pass on the transfer event to the device
+                            target_device.on_event(&self.manager_queue, res.cmd.endpoint_id());
+                        } else {
+                            self.manager_queue.add_transfer_response(res)
                         }
-
-                        self.manager_queue.add_transfer_response(res)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
                         let code = event.status.completion_code();
@@ -430,8 +430,7 @@ pub struct XHCI<'s> {
     manager_queue: XHCIResponseQueue<'s>,
     /// A list of USB3 ports, all other ports are USB2
     usb3_ports: Vec<u8>,
-    // TODO: maybe it'd be first if we don't loop through all interfaces to figure out which one has the slot id
-    connected_interfaces: Mutex<Vec<USBInterface>>,
+    connected_devices: Mutex<Vec<USBDevice>>,
 
     irq_info: IRQInfo,
 }
@@ -582,6 +581,20 @@ impl<'s> XHCI<'s> {
         sync_inp_ctx!();
         device.set_configuration(&self.manager_queue, configuration_value)?;
 
+        let manufacturer = device
+            .get_string_descriptor(usb_descriptor.i_manufacturer, 0, &self.manager_queue)?
+            .into_string();
+        let product = device
+            .get_string_descriptor(usb_descriptor.i_product, 0, &self.manager_queue)?
+            .into_string();
+        let serial_number = device
+            .get_string_descriptor(usb_descriptor.i_serial_number, 0, &self.manager_queue)?
+            .into_string();
+
+        debug!(
+            XHCI,
+            "device {slot_id} has manufacturer: {manufacturer}, product: {product}, serial number: {serial_number}",
+        );
         let descriptors_iterator = usb_configuration_desc.into_iterator();
 
         let mut interface_descriptors = Vec::new();
@@ -601,8 +614,7 @@ impl<'s> XHCI<'s> {
         // Disables the control endpoint because it wouldn't be used anymore, and the Configure Endpoint command requires it to be off
         device.disable_ctrl_endpoint();
 
-        let mut connected_interfaces = self.connected_interfaces.lock();
-        let connected_interfaces_start_index = connected_interfaces.len();
+        let mut connected_interfaces = Vec::new();
 
         // Attaches Drivers for this interface
         for interface_desc in interface_descriptors {
@@ -613,7 +625,7 @@ impl<'s> XHCI<'s> {
             let endpoints = endpoints_descriptors.collect::<Vec<_>>();
             let mut interface = USBInterface::new(interface_desc, endpoints, slot_id)?;
 
-            for endpoint in interface.endpoints() {
+            for endpoint in interface.endpoints_mut() {
                 unsafe {
                     device.configure_ep_input_ctx(endpoint);
                 }
@@ -640,10 +652,19 @@ impl<'s> XHCI<'s> {
         debug!(XHCI, "sending CONFIGURE_ENDPOINT command...");
         self.configure_endpoint(&device)?;
 
-        for interface in &mut connected_interfaces[connected_interfaces_start_index..] {
+        for interface in &mut connected_interfaces {
             interface.start(&self.manager_queue);
         }
 
+        let mut connected_devices = self.connected_devices.lock();
+        connected_devices.push(USBDevice::new(
+            manufacturer,
+            product,
+            serial_number,
+            usb_descriptor,
+            slot_id,
+            connected_interfaces,
+        ));
         Ok(())
     }
 }
@@ -722,7 +743,7 @@ impl<'s> PCIDevice for XHCI<'s> {
             event_ring: Mutex::new(event_ring),
             manager_queue: xhci_queue_manager,
             regs: UnsafeCell::new(xhci_registers),
-            connected_interfaces: Mutex::new(Vec::new()),
+            connected_devices: Mutex::new(Vec::new()),
             usb3_ports,
             irq_info,
         };

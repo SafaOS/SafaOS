@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 use crate::{
     drivers::xhci::{
         rings::transfer::XHCITransferRing, usb::UsbEndpointDescriptor, utils::XHCIError,
@@ -12,16 +14,25 @@ use crate::{
 
 #[derive(Debug)]
 pub struct USBEndpoint {
-    desc: UsbEndpointDescriptor,
+    descriptor: UsbEndpointDescriptor,
     transfer_ring: XHCITransferRing,
     data_buffer: FramePtr<[u8; PAGE_SIZE]>,
+}
+
+impl Serialize for USBEndpoint {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.descriptor.serialize(serializer)
+    }
 }
 
 impl USBEndpoint {
     pub fn create(descriptor: UsbEndpointDescriptor, slot_id: u8) -> Result<Self, XHCIError> {
         let data_frame = frame_allocator::allocate_frame().ok_or(XHCIError::OutOfMemory)?;
         Ok(Self {
-            desc: descriptor,
+            descriptor,
             transfer_ring: XHCITransferRing::create(MAX_TRB_COUNT, slot_id)?,
             data_buffer: unsafe { data_frame.into_ptr() },
         })
@@ -40,7 +51,7 @@ impl USBEndpoint {
     }
 
     pub fn desc(&self) -> &UsbEndpointDescriptor {
-        &self.desc
+        &self.descriptor
     }
 }
 
