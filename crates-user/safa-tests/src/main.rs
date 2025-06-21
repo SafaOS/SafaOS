@@ -23,6 +23,11 @@ macro_rules! log_fail {
     };
 }
 
+#[inline(always)]
+fn time() -> u64 {
+    safa_api::syscalls::uptime()
+}
+
 use safa_api::errors::ErrorStatus;
 
 fn panic_hook(info: &PanicHookInfo) {
@@ -187,6 +192,8 @@ impl Test {
 
     fn execute(&self) {
         log!("running test \x1b[90m{}\x1b[0m...", self.name);
+        let start_time = time();
+
         match self.inner {
             TestInner::Typical {
                 path,
@@ -200,7 +207,9 @@ impl Test {
             TestInner::Special(f) => f(),
         }
 
-        println!("[ \x1B[32m OK   \x1B[0m  ]")
+        let end_time = time();
+        let delta = end_time - start_time;
+        println!("[ \x1B[92m OK   \x1B[0m  ]: delta {}ms", delta);
     }
 }
 

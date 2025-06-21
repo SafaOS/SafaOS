@@ -163,7 +163,7 @@ fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
                     child.kill()?;
                     let mut read = Vec::new();
                     stdout_pipe.read_to_end(&mut read)?;
-                    stdout().write(&read)?;
+                    stdout().write_all(&read)?;
 
                     println!("-------------- END QEMU OUTPUT --------------");
                     eprintln!("tests failed!");
@@ -218,9 +218,18 @@ pub fn run(opts: RunOpts, path: &str) {
             "-device",
             "usb-kbd",
             "-device",
+            "usb-mouse",
+            "-device",
             "ramfb",
         ],
-        ArchTarget::X86_64 => &["-machine", "q35", "-device", "qemu-xhci"],
+        ArchTarget::X86_64 => &[
+            "-machine",
+            "q35",
+            "-device",
+            "qemu-xhci",
+            "-device",
+            "usb-kbd",
+        ],
     };
 
     cmd.args(arch_args);
