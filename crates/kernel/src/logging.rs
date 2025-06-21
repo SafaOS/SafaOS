@@ -97,29 +97,57 @@ macro_rules! logln_boot {
     };
 }
 
+pub const MIN_LOG_TYPE_NAME_WIDTH: usize = 5;
+
+#[macro_export]
+macro_rules! logln_ext {
+    ($name: literal, $name_color: literal, as $kind: expr, $($arg:tt)*) => {
+        $crate::logln!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m {kind}:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, kind = $kind, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
+    };
+
+    ($name: literal, $name_color: literal, $($arg:tt)*) => {
+        $crate::logln!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
+    };
+}
+
+#[macro_export]
+macro_rules! loglnboot_ext {
+    ($name: literal, $name_color: literal, as $kind: expr, $($arg:tt)*) => {
+        $crate::logln_boot!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m {kind}:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, kind = $kind, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
+    };
+
+    ($name: literal, $name_color: literal, $($arg:tt)*) => {
+        $crate::logln_boot!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
+    };
+}
+
 /// runtime debug info that is only available though test feature
 /// takes a $mod and an Arguments, mod must be a type
 #[macro_export]
 macro_rules! debug {
-    ($mod: path, $($arg:tt)*) => {{
+    ($mod: ty, $($arg:tt)*) => {{
         // makes sure $mod is a valid type
         let _ = core::marker::PhantomData::<$mod>;
-        $crate::logln_boot!("\x1B[0m[ \x1B[91m debug \x1B[0m ]\x1B[90m {}:\x1B[0m {}", stringify!($mod), format_args!($($arg)*));
+        $crate::loglnboot_ext!("debug", 91, as stringify!($mod), $($arg)*)
+    }};
+    ($($arg:tt)*) => {{
+        $crate::loglnboot_ext!("debug", 91, $($arg)*)
     }};
 }
 
 #[macro_export]
 macro_rules! info {
-    ($($arg:tt)*) => {
-        $crate::logln!("[ \x1B[92m info \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
-    };
+    ($($arg:tt)*) => ($crate::logln_ext!("info", 92, $($arg)*));
 }
 
 #[macro_export]
 macro_rules! warn {
-    ($($arg:tt)*) => {
-        $crate::logln_boot!("[ \x1B[93m warn \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
-    };
+    ($mod: ty, $($arg:tt)*) => {{
+        // makes sure $mod is a valid type
+        let _ = core::marker::PhantomData::<$mod>;
+        $crate::loglnboot_ext!("warn", 93, as stringify!($mod), $($arg)*)
+    }};
+    ($($arg:tt)*) => ($crate::loglnboot_ext!("warn", 93, $($arg)*));
 }
 
 #[macro_export]
@@ -127,9 +155,9 @@ macro_rules! error {
     ($mod: ty, $($arg:tt)*) => {{
         // makes sure $mod is a valid type
         let _ = core::marker::PhantomData::<$mod>;
-        $crate::logln_boot!("[ \x1B[91m error\x1B[0m  ]\x1b[90m {}:\x1B[0m  {}", stringify!($mod), format_args!($($arg)*))
+        $crate::loglnboot_ext!("error", 91, as stringify!($mod), $($arg)*)
     }};
-    ($($arg:tt)*) => ($crate::logln_boot!("[ \x1B[91m error\x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*)));
+    ($($arg:tt)*) => ($crate::loglnboot_ext!("error", 91, $($arg)*));
 }
 
 #[derive(Clone, Copy)]
