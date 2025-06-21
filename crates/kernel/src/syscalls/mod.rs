@@ -4,11 +4,9 @@ use safa_utils::abi::{self, raw};
 use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
-use crate::time;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
-    debug,
     drivers::vfs::{
         expose::{DirEntry, DirIter, DirIterRef, File, FileRef},
         CtlArgs,
@@ -17,6 +15,7 @@ use crate::{
     utils::{errors::ErrorStatus, path::Path},
     VirtAddr,
 };
+use crate::{error, time};
 
 impl SyscallFFI for FileRef {
     type Args = usize;
@@ -271,7 +270,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             }),
             #[allow(unreachable_patterns)]
             syscall => {
-                debug!(
+                error!(
                     SyscallTable,
                     "defined but unimplemented syscall {}({:?}) called with arguments {} {} {} {}",
                     number,

@@ -81,18 +81,19 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                     }
                     EventResponseTRB::TransferResponse(res) => {
                         let slot_id = res.cmd.slot_id();
-                        let mut connected_devices = self.connected_devices.write();
+                        if let Some(mut connected_devices) = self.connected_devices.try_write() {
+                            let target_device = connected_devices
+                                .iter_mut()
+                                .find(|device| device.slot_id() == slot_id);
 
-                        let target_device = connected_devices
-                            .iter_mut()
-                            .find(|device| device.slot_id() == slot_id);
-
-                        if let Some(target_device) = target_device {
-                            // pass on the transfer event to the device
-                            target_device.on_event(&self.manager_queue, res.cmd.endpoint_id());
-                        } else {
-                            self.manager_queue.add_transfer_response(res)
+                            if let Some(target_device) = target_device {
+                                // pass on the transfer event to the device
+                                return target_device
+                                    .on_event(&self.manager_queue, res.cmd.endpoint_id());
+                            }
                         }
+
+                        self.manager_queue.add_transfer_response(res)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
                         let code = event.status.completion_code();
