@@ -123,7 +123,7 @@ macro_rules! sleep_until {
 
         while !$cond {
             if $crate::time!() >= timeout_time {
-                success = false;
+                success = $cond;
                 break;
             }
 
