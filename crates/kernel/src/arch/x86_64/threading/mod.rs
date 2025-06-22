@@ -1,15 +1,15 @@
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const STACK_START: usize = 0x00007A3000000000;
-pub const STACK_END: usize = STACK_START + STACK_SIZE;
+pub const STACK_START: VirtAddr = VirtAddr::from(0x00007A3000000000);
+pub const STACK_END: VirtAddr = STACK_START + STACK_SIZE;
 
-pub const RING0_STACK_START: usize = 0x00007A0000000000;
-pub const RING0_STACK_END: usize = RING0_STACK_START + STACK_SIZE;
+pub const RING0_STACK_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
+pub const RING0_STACK_END: VirtAddr = RING0_STACK_START + STACK_SIZE;
 
-pub const ENVIRONMENT_START: usize = 0x00007E0000000000;
-pub const ARGV_START: usize = ENVIRONMENT_START + 0xA000000000;
-pub const ENVIRONMENT_VARIABLES_START: usize = ENVIRONMENT_START + 0xE000000000;
+pub const ENVIRONMENT_START: VirtAddr = VirtAddr::from(0x00007E0000000000);
+pub const ARGV_START: VirtAddr = ENVIRONMENT_START + 0xA000000000;
+pub const ENVIRONMENT_VARIABLES_START: VirtAddr = ENVIRONMENT_START + 0xE000000000;
 
-pub const ABI_STRUCTURES_START: usize = ENVIRONMENT_START + 0x1000000000;
+pub const ABI_STRUCTURES_START: VirtAddr = ENVIRONMENT_START + 0x1000000000;
 use crate::memory::{map_byte_slices, map_str_slices};
 use core::arch::{asm, global_asm};
 
@@ -61,12 +61,12 @@ bitflags! {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct CPUStatus {
-    rsp: u64,
+    rsp: VirtAddr,
     rflags: RFLAGS,
     ss: u64,
     cs: u64,
 
-    rip: u64,
+    rip: VirtAddr,
 
     r15: u64,
     r14: u64,
@@ -110,11 +110,11 @@ use safa_utils::abi::raw::processes::AbiStructures;
 
 impl CPUStatus {
     pub fn at(&self) -> VirtAddr {
-        self.rip as VirtAddr
+        self.rip
     }
 
     pub fn stack_at(&self) -> VirtAddr {
-        self.rsp as VirtAddr
+        self.rsp
     }
 
     /// Initializes a new userspace `CPUStatus` instance, initializes the stack, argv, etc...
@@ -126,7 +126,7 @@ impl CPUStatus {
         argv: &[&str],
         env: &[&[u8]],
         structures: AbiStructures,
-        entry_point: usize,
+        entry_point: VirtAddr,
         userspace: bool,
     ) -> Result<Self, MapToError> {
         // allocate the stack
@@ -164,9 +164,9 @@ impl CPUStatus {
             ABI_STRUCTURES_START + PAGE_SIZE,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
-        copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
+        copy_to_userspace(page_table, ABI_STRUCTURES_START.into(), structures_bytes);
 
-        let abi_structures_ptr = ABI_STRUCTURES_START as *const AbiStructures;
+        let abi_structures_ptr = ABI_STRUCTURES_START.into_ptr::<AbiStructures>();
 
         let (cs, ss, rflags) = if userspace {
             (
@@ -184,14 +184,14 @@ impl CPUStatus {
 
         Ok(Self {
             rflags,
-            rip: entry_point as u64,
+            rip: entry_point,
             rdi: argc as u64,
             rsi: argv_ptr as u64,
             rdx: envc as u64,
             rcx: env_ptr as u64,
             r8: abi_structures_ptr as u64,
-            cr3: page_table.phys_addr() as u64,
-            rsp: STACK_END as u64,
+            cr3: page_table.phys_addr().into_raw() as u64,
+            rsp: STACK_END,
             cs,
             ss,
             ..Default::default()

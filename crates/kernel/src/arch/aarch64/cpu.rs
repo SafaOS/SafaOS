@@ -1,6 +1,6 @@
 //! CPU sepicific stuff
 //! uses device trees only for now
-
+// FIXME: incomplete and code is bad, i need to rework this in the future
 use core::str::FromStr;
 use core::{cell::SyncUnsafeCell, mem::zeroed};
 use lazy_static::lazy_static;
@@ -11,8 +11,15 @@ use crate::{
 };
 
 struct GICInfo {
-    gicc_base: PhysAddr,
-    gicd_base: PhysAddr,
+    gicc: Option<(PhysAddr, usize)>,
+    gicd: (PhysAddr, usize),
+    gicr: (PhysAddr, usize),
+    populated: bool,
+}
+
+struct ITSInfo {
+    base: PhysAddr,
+    size: usize,
     populated: bool,
 }
 
@@ -26,11 +33,19 @@ struct PL011Serial {
     populated: bool,
 }
 
+struct PCIe {
+    base: PhysAddr,
+    size: usize,
+    bus_start: u32,
+    bus_end: u32,
+    populated: bool,
+}
+
 trait DeviceInfo {
     fn populated(&self) -> bool;
     fn compatible(&self) -> &'static [&'static str];
     /// Populates the Device's information from a Device Tree Node which is compatible with the device (according to [`Self::compatible`])
-    fn populate<'a>(&mut self, node: dtb::Node);
+    fn populate<'a>(&mut self, node: &dtb::Node);
 }
 
 impl DeviceInfo for GICInfo {
@@ -39,16 +54,34 @@ impl DeviceInfo for GICInfo {
     }
 
     fn compatible(&self) -> &'static [&'static str] {
-        &["arm,cortex-a15-gic"]
+        &["arm,gic-v3"]
     }
 
-    fn populate<'a>(&mut self, node: dtb::Node) {
+    fn populate<'a>(&mut self, node: &dtb::Node) {
         let mut reg = node.get_reg().unwrap();
-        let (gicc_base, _) = reg.next().unwrap();
-        let (gicd_base, _) = reg.next().unwrap();
+        self.gicd = reg.next().unwrap();
+        self.gicr = reg.next().unwrap();
+        self.gicc = reg.next();
 
-        self.gicc_base = gicc_base;
-        self.gicd_base = gicd_base;
+        self.populated = true;
+    }
+}
+
+impl DeviceInfo for ITSInfo {
+    fn populated(&self) -> bool {
+        self.populated
+    }
+
+    fn compatible(&self) -> &'static [&'static str] {
+        &["arm,gic-v3-its"]
+    }
+
+    fn populate<'a>(&mut self, node: &dtb::Node) {
+        let mut reg = node.get_reg().unwrap();
+        let (base_addr, size) = reg.next().unwrap();
+
+        self.base = base_addr;
+        self.size = size;
         self.populated = true;
     }
 }
@@ -58,7 +91,7 @@ impl DeviceInfo for TimerInfo {
         self.populated
     }
 
-    fn populate<'a>(&mut self, node: dtb::Node) {
+    fn populate<'a>(&mut self, node: &dtb::Node) {
         let interrupts = node
             .get_prop("interrupts")
             .expect("failed to get the interrupts property for the timer's device tree node");
@@ -75,14 +108,12 @@ impl DeviceInfo for TimerInfo {
 
         let _secure = interrupts.next();
         // non-secure physical timer interrupt
-        let Some([ty, int_id, flags]) = interrupts.next() else {
+        let Some([ty, int_id, _]) = interrupts.next() else {
             unreachable!()
         };
 
         // makes sure it is PPI
         assert_eq!(ty, 0x1);
-        // makes sure it is at CPU 0
-        assert_eq!((flags >> 8) as u8, 0b00000001);
         let irq = int_id + 0x10;
 
         self.irq = irq;
@@ -102,7 +133,7 @@ impl DeviceInfo for PL011Serial {
         self.populated
     }
 
-    fn populate<'a>(&mut self, node: dtb::Node) {
+    fn populate<'a>(&mut self, node: &dtb::Node) {
         let mut reg = node.get_reg().unwrap();
         let (addr, _) = reg.next().unwrap();
         self.base = addr;
@@ -110,14 +141,53 @@ impl DeviceInfo for PL011Serial {
     }
 }
 
+impl DeviceInfo for PCIe {
+    fn compatible(&self) -> &'static [&'static str] {
+        &["pci-host-ecam-generic"]
+    }
+    fn populated(&self) -> bool {
+        self.populated
+    }
+    fn populate<'a>(&mut self, node: &dtb::Node) {
+        let mut reg = node.get_reg_no_cells().unwrap();
+        let (start, size) = reg.next().unwrap();
+
+        let Some(NodeValue::Other(bytes)) = node.get_prop("bus-range") else {
+            unreachable!()
+        };
+
+        let bus_start_bytes = bytes[..4].as_array::<4>().unwrap();
+        let bus_end_bytes = bytes[4..8].as_array::<4>().unwrap();
+        let bus_start = u32::from_be_bytes(*bus_start_bytes);
+        let bus_end = u32::from_be_bytes(*bus_end_bytes);
+
+        self.bus_start = bus_start;
+        self.bus_end = bus_end;
+
+        self.base = start;
+        self.size = size;
+        self.populated = true;
+    }
+}
+
 static GICRAW: SyncUnsafeCell<GICInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
+static ITSRAW: SyncUnsafeCell<ITSInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
 static TIMERRAW: SyncUnsafeCell<TimerInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
 static PL011RAW: SyncUnsafeCell<PL011Serial> = SyncUnsafeCell::new(unsafe { zeroed() });
+static PCIERAW: SyncUnsafeCell<PCIe> = SyncUnsafeCell::new(unsafe { zeroed() });
 
-const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 3] {
+const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 5] {
     let gic = &mut *GICRAW.get();
     let gic: &'static mut dyn DeviceInfo = gic;
-    unsafe { [gic, &mut *TIMERRAW.get(), &mut *PL011RAW.get()] }
+    unsafe {
+        [
+            gic,
+            &mut *ITSRAW.get(),
+            &mut *TIMERRAW.get(),
+            &mut *PL011RAW.get(),
+            &mut *PCIERAW.get(),
+        ]
+    }
 }
 
 fn init_from_tree(tree: &DeviceTree) {
@@ -136,9 +206,8 @@ fn init_from_tree(tree: &DeviceTree) {
         for device in &mut *devices {
             if !device.populated() {
                 if node.is_compatible(device.compatible()) {
-                    device.populate(node);
-                    // TODO: for now we can just stop when a node is proven to be compatible
-                    return;
+                    device.populate(&node);
+                    break;
                 }
             }
         }
@@ -187,11 +256,31 @@ lazy_static! {
         }
         r.base
     };
-    pub static ref GIC: (PhysAddr, PhysAddr) = unsafe {
+    /// The GICv3 registers
+    /// Optional (GICC base, GICC size), (GICD base, GICD size), (GICR base, GICR size)
+    pub static ref GICV3: (
+        Option<(PhysAddr, usize)>,
+        (PhysAddr, usize),
+        (PhysAddr, usize)
+    ) = unsafe {
         let r = &mut *GICRAW.get();
         if !r.populated() {
             init();
         }
-        (r.gicc_base, r.gicd_base)
+        (r.gicc, r.gicd, r.gicr)
+    };
+    pub static ref GICITS: (PhysAddr, usize) = unsafe {
+        let r = &mut *ITSRAW.get();
+        if !r.populated() {
+            init();
+        }
+        (r.base, r.size)
+    };
+    pub static ref PCIE: (PhysAddr, usize, u32, u32) = unsafe {
+        let r = &mut *PCIERAW.get();
+        if !r.populated() {
+            init();
+        }
+        (r.base, r.size, r.bus_start, r.bus_end)
     };
 }

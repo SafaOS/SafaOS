@@ -9,7 +9,7 @@ use crate::{
     time,
 };
 
-use lock_api::RwLock;
+use crate::utils::locks::RwLock;
 use safa_utils::{make_path, types::DriveName};
 
 pub fn add_device(vfs: &VFS, device: &'static dyn Device) {

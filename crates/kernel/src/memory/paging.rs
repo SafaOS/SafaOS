@@ -9,20 +9,26 @@ use thiserror::Error;
 
 use super::{
     align_down,
-    frame_allocator::{self, FramePtr},
+    frame_allocator::{self, Frame, FramePtr},
     VirtAddr,
 };
 
 pub use crate::arch::paging::{current_higher_root_table, current_lower_root_table, PageTable};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Page {
-    pub start_address: VirtAddr,
+    start_address: VirtAddr,
+}
+
+impl Debug for Page {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Page({:#x})", self.start_address)
+    }
 }
 
 impl LowerHex for Page {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Page({:#x})", self.start_address)
+        write!(f, "{:#x}", self.start_address)
     }
 }
 
@@ -34,14 +40,19 @@ pub struct IterPage {
 
 impl Page {
     pub const fn containing_address(address: VirtAddr) -> Self {
+        let aligned = align_down(address.into_raw(), PAGE_SIZE);
         Self {
-            start_address: align_down(address, PAGE_SIZE),
+            start_address: VirtAddr::from(aligned),
         }
+    }
+
+    pub const fn virt_addr(&self) -> VirtAddr {
+        self.start_address
     }
 
     /// creates an iterator'able struct
     /// requires that start.start_address is smaller then end.start_address
-    pub const fn iter_pages(start: Page, end: Page) -> IterPage {
+    pub fn iter_pages(start: Page, end: Page) -> IterPage {
         assert!(start.start_address <= end.start_address);
         IterPage { start, end }
     }
@@ -61,6 +72,33 @@ impl Iterator for IterPage {
     }
 }
 
+impl PageTable {
+    /// Map `page_num` pages starting at `start_virt_addr` to frames starting at `start_phys_addr`
+    pub unsafe fn map_contiguous_pages(
+        &mut self,
+        start_virt_addr: VirtAddr,
+        start_phys_addr: PhysAddr,
+        page_num: usize,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        let size = page_num * PAGE_SIZE;
+        let start_page = Page::containing_address(start_virt_addr);
+        let start_frame = Frame::containing_address(start_phys_addr);
+        let end_page = Page::containing_address(start_virt_addr + size);
+        let end_frame = Frame::containing_address(start_phys_addr + size);
+
+        let page_iter = Page::iter_pages(start_page, end_page);
+        let frame_iter = Frame::iter_frames(start_frame, end_frame);
+        let iter = page_iter.zip(frame_iter);
+        for (page, frame) in iter {
+            unsafe {
+                self.map_to(page, frame, flags)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Error)]
 pub enum MapToError {
     #[error("frame allocator: out of memory")]
@@ -73,6 +111,7 @@ bitflags! {
         const WRITE = 1;
         const USER_ACCESSIBLE = 1 << 1;
         const DISABLE_EXEC = 1 << 2;
+        const DEVICE_UNCACHEABLE = 1 << 3;
     }
 }
 
@@ -144,7 +183,7 @@ impl PhysPageTable {
             }
 
             unsafe {
-                core::ptr::write_bytes(virt_addr as *mut u8, 0, PAGE_SIZE);
+                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
             }
         }
 

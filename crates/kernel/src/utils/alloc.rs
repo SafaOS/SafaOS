@@ -12,11 +12,16 @@ use alloc::vec::Vec;
 
 use super::bstr::BStr;
 
+#[derive(Debug, Clone)]
 pub struct PageVec<T>(Vec<T, PageAlloc>);
 
 impl<T> PageVec<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity_in(capacity, &*GLOBAL_PAGE_ALLOCATOR))
+    }
+
+    pub fn new() -> Self {
+        Self(Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR))
     }
 }
 
@@ -115,11 +120,18 @@ impl core::fmt::Write for PageBString {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct PageString {
     inner: PageVec<u8>,
 }
 
 impl PageString {
+    pub fn new() -> Self {
+        Self {
+            inner: PageVec::new(),
+        }
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: PageVec::with_capacity(capacity),
@@ -351,13 +363,13 @@ impl<T> LinkedList<T> {
 
     /// returns an iterator that 'continues' the list which means calling `next` on the iterator
     /// would advance then return the current element, it currently wraps around the list
-    pub fn continue_iter(&mut self) -> LinkedListContinue<T> {
+    pub fn continue_iter<'s>(&'s mut self) -> LinkedListContinue<'s, T> {
         LinkedListContinue { list: self }
     }
 
     /// returns an iterator that acts like a clone of the list
     /// iterating over the list will yield the same values as iterating over the original list
-    pub fn clone_iter(&self) -> LinkedListCloneIter<T> {
+    pub fn clone_iter<'s>(&'s self) -> LinkedListCloneIter<'s, T> {
         let list = Self {
             head: self.head,
             tail: self.tail,
@@ -393,26 +405,6 @@ impl<'a, T> Iterator for LinkedListCloneIter<'a, T> {
         }
 
         unsafe { Some(&(*it.as_ptr()).inner) }
-    }
-}
-
-/// This `struct` is created by the [`LinkedList::clone_iter_mut`] method
-/// this does not muttate the original list it is a clone of the original list
-pub struct LinkedListCloneIterMut<'a, T: 'a> {
-    list: LinkedList<T>,
-    marker: PhantomData<&'a mut LinkedList<T>>,
-}
-
-impl<'a, T> Iterator for LinkedListCloneIterMut<'a, T> {
-    type Item = &'a mut T;
-    fn next(&mut self) -> Option<Self::Item> {
-        let it = self.list.current?;
-        // TODO: this is a hack to prevent the iterator from being used after it has been finished
-        if self.list.next().is_none() {
-            self.list.current = None;
-        }
-
-        unsafe { Some(&mut (*it.as_ptr()).inner) }
     }
 }
 /// This `struct` is created by the [`LinkedList::iter_mut`] method

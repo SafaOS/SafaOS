@@ -101,7 +101,7 @@ exc_vector_table:
     EXCEPTION_VECTOR handle_irq, 0
 # FIQ
 .balign 0x80
-    EXCEPTION_VECTOR handle_irq, 0
+    EXCEPTION_VECTOR handle_fiq, 0
 # SError
 .balign 0x80
     EXCEPTION_VECTOR handle_serror, 1
@@ -114,7 +114,7 @@ exc_vector_table:
     EXCEPTION_VECTOR handle_irq, 0
 # EL0 FIQ
 .balign 0x80
-    EXCEPTION_VECTOR handle_irq, 0
+    EXCEPTION_VECTOR handle_fiq, 0
 # EL0 SError
 .balign 0x80
     EXCEPTION_VECTOR handle_serror, 1

@@ -40,4 +40,12 @@ pub mod registers {
     pub use super::arch::registers::StackFrame;
 }
 
+pub mod pci {
+    pub use super::arch::pci::{build_msi_addr, build_msi_data, init};
+}
+
+pub mod interrupts {
+    pub use super::arch::interrupts::{register_irq_handler, IRQS};
+}
+
 pub use arch::paging;

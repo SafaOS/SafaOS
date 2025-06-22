@@ -1,9 +1,17 @@
 //! Eve is the kernel's main loop (PID 0)
 //! it is responsible for managing a few things related to it's children
 
+use core::cell::SyncUnsafeCell;
+
+use crate::drivers::driver_poll::{self, PolledDriver};
+use crate::threading::expose::{function_spawn, SpawnFlags};
+use crate::utils::alloc::PageString;
 use crate::utils::locks::Mutex;
 use crate::{drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield};
+use crate::{logging, threading};
 use alloc::vec::Vec;
+use lazy_static::lazy_static;
+use safa_utils::types::Name;
 use safa_utils::{
     abi::raw::processes::{AbiStructures, TaskStdio},
     make_path,
@@ -48,18 +56,73 @@ pub static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructur
     stdio: *KERNEL_STDIO,
 });
 
+lazy_static! {
+    static ref POLLING: SyncUnsafeCell<Vec<&'static dyn PolledDriver>> =
+        SyncUnsafeCell::new(driver_poll::take_poll());
+}
+
+fn poll_driver_thread() -> ! {
+    let current = threading::current();
+    let thread_name = current.name();
+    let mut poll_driver = None;
+    for polled_driver in unsafe { &*POLLING.get() } {
+        if polled_driver.thread_name() == thread_name {
+            poll_driver = Some(polled_driver);
+        }
+    }
+
+    let poll_driver = poll_driver.unwrap_or_else(|| {
+        panic!(
+            "failed to find a polled driver for the thread: {}",
+            thread_name
+        )
+    });
+    drop(current);
+    poll_driver.poll_function()
+}
+
 /// the main loop of Eve
 /// it will run until doomsday
 pub fn main() -> ! {
+    *logging::SERIAL_LOG.write() = Some(PageString::new());
     crate::info!("eve has been awaken ...");
     // TODO: make a macro or a const function to do this automatically
     serial!("Hello, world!, running tests...\n",);
 
+    // FIXME: use threads
+    for poll_driver in unsafe { &*POLLING.get() } {
+        function_spawn(
+            Name::try_from(poll_driver.thread_name()).unwrap(),
+            poll_driver_thread,
+            &[],
+            &[],
+            SpawnFlags::CLONE_RESOURCES,
+            *KERNEL_ABI_STRUCTURES,
+        )
+        .expect("failed to spawn a function for a polled driver");
+    }
+
+    #[cfg(not(test))]
+    {
+        use crate::{info, sleep, threading::expose::pspawn};
+        info!("kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell");
+        sleep!(2500 ms);
+
+        // start the shell
+        pspawn(
+            Name::try_from("Shell").unwrap(),
+            // Maybe we can make a const function or a macro for this
+            make_path!("sys", "bin/safa"),
+            &["sys:/bin/safa", "-i"],
+            &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
+            SpawnFlags::empty(),
+            *KERNEL_ABI_STRUCTURES,
+        )
+        .unwrap();
+    }
+
     #[cfg(test)]
     {
-        use crate::threading::expose::{function_spawn, SpawnFlags};
-        use crate::utils::types::Name;
-
         fn run_tests() -> ! {
             crate::kernel_testmain();
             unreachable!()
@@ -71,24 +134,6 @@ pub fn main() -> ! {
             &[],
             &[],
             SpawnFlags::CLONE_RESOURCES,
-            *KERNEL_ABI_STRUCTURES,
-        )
-        .unwrap();
-    }
-
-    #[cfg(not(test))]
-    {
-        use crate::threading::expose::{pspawn, SpawnFlags};
-        use crate::utils::types::Name;
-
-        // start the shell
-        pspawn(
-            Name::try_from("Shell").unwrap(),
-            // Maybe we can make a const function or a macro for this
-            make_path!("sys", "bin/safa"),
-            &["sys:/bin/safa", "-i"],
-            &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
-            SpawnFlags::empty(),
             *KERNEL_ABI_STRUCTURES,
         )
         .unwrap();

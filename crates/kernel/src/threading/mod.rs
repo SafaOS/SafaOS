@@ -11,6 +11,7 @@ use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
 use crate::utils::locks::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::utils::types::Name;
+use crate::VirtAddr;
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use slab::Slab;
 use task::{Task, TaskInfo, TaskState};
@@ -49,7 +50,7 @@ impl Scheduler {
             &[],
             &[],
             AbiStructures::default(),
-            function as usize,
+            VirtAddr::from(function as usize),
             false,
         )
         .unwrap();
@@ -62,7 +63,7 @@ impl Scheduler {
             cwd,
             page_table,
             context,
-            0,
+            VirtAddr::null(),
         );
         self::add(task);
 

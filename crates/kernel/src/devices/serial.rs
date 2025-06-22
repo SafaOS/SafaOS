@@ -4,12 +4,12 @@ use crate::{
     arch::serial::Serial,
     drivers::vfs::{FSError, FSResult},
     threading::expose::thread_yield,
-    utils::Locked,
+    utils::locks::Mutex,
 };
 
 use super::CharDevice;
 
-impl CharDevice for Locked<Serial> {
+impl CharDevice for Mutex<Serial> {
     fn name(&self) -> &'static str {
         "ss"
     }

@@ -1,6 +1,16 @@
-use core::{fmt::Display, sync::atomic::AtomicBool};
+use core::{
+    fmt::{Display, Write},
+    sync::atomic::AtomicBool,
+};
 
-use crate::{arch::registers::StackFrame, globals::KERNEL_ELF};
+use crate::{
+    arch::registers::StackFrame,
+    globals::KERNEL_ELF,
+    utils::{alloc::PageString, locks::RwLock},
+    VirtAddr,
+};
+
+pub static SERIAL_LOG: RwLock<Option<PageString>> = RwLock::new(None);
 
 pub const QUITE_PANIC: bool = true;
 pub static BOOTING: AtomicBool = AtomicBool::new(false);
@@ -34,23 +44,39 @@ pub(crate) fn log_time_from_ms(ms: u64) -> (u32, u8, u8, u16) {
 }
 
 #[macro_export]
-macro_rules! serial_log {
-    ($($arg:tt)*) => {
-        {
-            let log_time = $crate::time!();
-            let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
-            $crate::serial!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
+macro_rules! generic_log {
+    ($write_macro:ident, $($arg:tt)*) => {{
+        let log_time = $crate::time!();
+        let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
+        $crate::$write_macro!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
+    }};
+}
+
+pub fn _write_to_log_file(args: core::fmt::Arguments) {
+    if let Some(mut file) = SERIAL_LOG.try_write() {
+        if let Some(buf) = &mut *file {
+            buf.write_fmt(args)
+                .expect("failed to write to global log buffer");
         }
-    };
+    }
+}
+
+#[macro_export]
+macro_rules! print_to_global_file {
+    ($($arg:tt)*) => ($crate::logging::_write_to_log_file(format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! serial_log {
+    ($($arg:tt)*) => {{
+        $crate::generic_log!(serial, $($arg)*);
+        $crate::generic_log!(print_to_global_file, $($arg)*);
+    }};
 }
 
 #[macro_export]
 macro_rules! tty_log {
-    ($($arg:tt)*) => {
-        let log_time = $crate::time!();
-        let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
-        $crate::println!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}", format_args!($($arg)*));
-    };
+    ($($arg:tt)*) => ($crate::generic_log!(print, $($arg)*));
 }
 
 /// prints to both the serial and the terminal doesn't print to the terminal if it panicked or if
@@ -58,7 +84,7 @@ macro_rules! tty_log {
 #[macro_export]
 macro_rules! panic_println {
     ($($arg:tt)*) => {
-        panic_print!("{}\n", format_args!($($arg)*));
+        panic_print!("{}\n", format_args!($($arg)*))
     };
 }
 
@@ -66,21 +92,21 @@ macro_rules! panic_println {
 /// it is not ready...
 #[macro_export]
 macro_rules! panic_print {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
         $crate::serial!($($arg)*);
 
         if !$crate::logging::QUITE_PANIC {
             $crate::print!($($arg)*);
         }
-    };
+    }};
 }
 
 #[macro_export]
 macro_rules! logln {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
         $crate::tty_log!("{}", format_args!($($arg)*));
         $crate::serial_log!("{}", format_args!($($arg)*));
-    };
+    }};
 }
 
 /// logs line to the TTY only when the kernel is initializing
@@ -88,10 +114,36 @@ macro_rules! logln {
 #[macro_export]
 macro_rules! logln_boot {
     ($($arg:tt)*) => {
-        if $crate::logging::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
-            $crate::tty_log!("{}", format_args!($($arg)*));
+        {
+            if $crate::logging::BOOTING.load(core::sync::atomic::Ordering::Relaxed) {
+                $crate::tty_log!("{}", format_args!($($arg)*));
+            }
+            $crate::serial_log!("{}", format_args!($($arg)*));
         }
-        $crate::serial_log!("{}", format_args!($($arg)*));
+    };
+}
+
+pub const MIN_LOG_TYPE_NAME_WIDTH: usize = 5;
+
+#[macro_export]
+macro_rules! logln_ext {
+    ($name: literal, $name_color: literal, as $kind: expr, $($arg:tt)*) => {
+        $crate::logln!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m {kind}:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, kind = $kind, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
+    };
+
+    ($name: literal, $name_color: literal, $($arg:tt)*) => {
+        $crate::logln!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
+    };
+}
+
+#[macro_export]
+macro_rules! loglnboot_ext {
+    ($name: literal, $name_color: literal, as $kind: expr, $($arg:tt)*) => {
+        $crate::logln_boot!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m {kind}:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, kind = $kind, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
+    };
+
+    ($name: literal, $name_color: literal, $($arg:tt)*) => {
+        $crate::logln_boot!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
     };
 }
 
@@ -99,18 +151,39 @@ macro_rules! logln_boot {
 /// takes a $mod and an Arguments, mod must be a type
 #[macro_export]
 macro_rules! debug {
-    ($mod: path, $($arg:tt)*) => {
+    ($mod: ty, $($arg:tt)*) => {{
         // makes sure $mod is a valid type
         let _ = core::marker::PhantomData::<$mod>;
-        $crate::logln_boot!("\x1B[0m[ \x1B[91m debug \x1B[0m ]\x1B[90m {}:\x1B[0m {}", stringify!($mod), format_args!($($arg)*));
-    };
+        $crate::loglnboot_ext!("debug", 91, as stringify!($mod), $($arg)*)
+    }};
+    ($($arg:tt)*) => {{
+        $crate::loglnboot_ext!("debug", 91, $($arg)*)
+    }};
 }
 
 #[macro_export]
 macro_rules! info {
-    ($($arg:tt)*) => {
-        $crate::logln!("[ \x1B[92m info \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*));
-    };
+    ($($arg:tt)*) => ($crate::logln_ext!("info", 92, $($arg)*));
+}
+
+#[macro_export]
+macro_rules! warn {
+    ($mod: ty, $($arg:tt)*) => {{
+        // makes sure $mod is a valid type
+        let _ = core::marker::PhantomData::<$mod>;
+        $crate::loglnboot_ext!("warn", 93, as stringify!($mod), $($arg)*)
+    }};
+    ($($arg:tt)*) => ($crate::loglnboot_ext!("warn", 93, $($arg)*));
+}
+
+#[macro_export]
+macro_rules! error {
+    ($mod: ty, $($arg:tt)*) => {{
+        // makes sure $mod is a valid type
+        let _ = core::marker::PhantomData::<$mod>;
+        $crate::loglnboot_ext!("error", 91, as stringify!($mod), $($arg)*)
+    }};
+    ($($arg:tt)*) => ($crate::loglnboot_ext!("error", 91, $($arg)*));
 }
 
 #[derive(Clone, Copy)]
@@ -133,7 +206,7 @@ impl<'a> Display for StackTrace<'a> {
                 let return_address = fp.return_ptr();
 
                 let name = {
-                    let sym = KERNEL_ELF.sym_from_value_range(return_address as usize);
+                    let sym = KERNEL_ELF.sym_from_value_range(VirtAddr::from_ptr(return_address));
                     sym.and_then(|sym| KERNEL_ELF.string_table_index(sym.name_index))
                 };
                 let name = name.as_deref().unwrap_or("???");

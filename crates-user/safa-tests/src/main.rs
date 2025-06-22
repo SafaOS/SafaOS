@@ -23,6 +23,11 @@ macro_rules! log_fail {
     };
 }
 
+#[inline(always)]
+fn time() -> u64 {
+    safa_api::syscalls::uptime()
+}
+
 use safa_api::errors::ErrorStatus;
 
 fn panic_hook(info: &PanicHookInfo) {
@@ -112,30 +117,32 @@ fn execute_binary(path: &'static str, args: &[&str]) -> Output {
     }
 }
 
-fn do_test(path: &'static str, args: &[&str], expected_output: Output) {
+fn do_test(path: &'static str, args: &[&str], expected_output: Option<Output>) {
     let output = execute_binary(path, args);
 
-    let reason = match (
-        output.result == expected_output.result,
-        output.stdout() == expected_output.stdout(),
-    ) {
-        (true, true) => return,
-        (false, false) => "Unexpected result and stdout",
-        (true, false) => "Unexpected stdout",
-        (false, true) => "Unexpected result",
-    };
+    if let Some(expected_output) = expected_output {
+        let reason = match (
+            output.result == expected_output.result,
+            output.stdout() == expected_output.stdout(),
+        ) {
+            (true, true) => return,
+            (false, false) => "Unexpected result and stdout",
+            (true, false) => "Unexpected stdout",
+            (false, true) => "Unexpected result",
+        };
 
-    panic!(
-        "got: {output:#?}\nexpected: {expected_output:#?}\nREASON: {}",
-        reason
-    )
+        panic!(
+            "got: {output:#?}\nexpected: {expected_output:#?}\nREASON: {}",
+            reason
+        )
+    }
 }
 
 enum TestInner {
     Typical {
         path: &'static str,
         args: &'static [&'static str],
-        expected_stdout: &'static str,
+        expected_stdout: Option<&'static str>,
     },
     Special(fn()),
 }
@@ -157,7 +164,21 @@ impl Test {
             inner: TestInner::Typical {
                 path,
                 args,
-                expected_stdout,
+                expected_stdout: Some(expected_stdout),
+            },
+        }
+    }
+    const fn new_just_run(
+        name: &'static str,
+        path: &'static str,
+        args: &'static [&'static str],
+    ) -> Self {
+        Self {
+            name,
+            inner: TestInner::Typical {
+                path,
+                args,
+                expected_stdout: None,
             },
         }
     }
@@ -171,16 +192,24 @@ impl Test {
 
     fn execute(&self) {
         log!("running test \x1b[90m{}\x1b[0m...", self.name);
+        let start_time = time();
+
         match self.inner {
             TestInner::Typical {
                 path,
                 args,
                 expected_stdout,
-            } => do_test(path, args, Output::create_static(expected_stdout)),
+            } => do_test(
+                path,
+                args,
+                expected_stdout.map(|expected| Output::create_static(expected)),
+            ),
             TestInner::Special(f) => f(),
         }
 
-        println!("[ \x1B[32m OK   \x1B[0m  ]")
+        let end_time = time();
+        let delta = end_time - start_time;
+        println!("[ \x1B[92m OK   \x1B[0m  ]: delta {}ms", delta);
     }
 }
 
@@ -191,6 +220,7 @@ const TEST_LIST: &[Test] = &[
         MEMORY_INFO_CAPTURE.put(output);
         // Don't assert for success because if it fails the reason why it failed might be more visible from later tests
     }),
+    Test::new_just_run("Stress-Test Scheduler", "sys:/bin/test-scheduler", &["100"]),
     Test::new("Creating Directories", "sys:/bin/mkdir", &["test"], ""),
     Test::new("Creating Files", "sys:/bin/touch", &["test/test_file"], ""),
     Test::new(

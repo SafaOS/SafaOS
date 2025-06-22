@@ -138,4 +138,26 @@ impl SyscallFFI for Path<'_> {
     }
 }
 
+macro_rules! impl_ffi_int {
+    ($ty:ty) => {
+        impl SyscallFFI for $ty {
+            type Args = usize;
+            fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+                Ok(args as $ty)
+            }
+        }
+    };
+}
+
+impl_ffi_int!(usize);
+impl_ffi_int!(isize);
+impl_ffi_int!(u8);
+impl_ffi_int!(i8);
+impl_ffi_int!(u16);
+impl_ffi_int!(i16);
+impl_ffi_int!(u32);
+impl_ffi_int!(i32);
+impl_ffi_int!(u64);
+impl_ffi_int!(i64);
+
 pub use safa_abi::syscalls::*;

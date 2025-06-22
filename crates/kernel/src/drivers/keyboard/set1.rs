@@ -120,7 +120,7 @@ impl ProcessUnencodedKeyByte for Set1Key {
             this.current_unencoded_key[this.latest_unencoded_byte] -= 0x80;
         }
 
-        let key: u64 = unsafe { core::mem::transmute(this.current_unencoded_key) };
+        let key: u64 = u64::from_ne_bytes(this.current_unencoded_key);
         let key = Set1Key::try_from(key).unwrap_or(Set1Key::NULL);
         let encoded = key.encode();
 
@@ -131,8 +131,7 @@ impl ProcessUnencodedKeyByte for Set1Key {
             }
             Key::NULL_KEY
         } else {
-            this.add_pressed_keycode(encoded);
-            this.process_keycode(encoded)
+            this.add_pressed_keycode(encoded).unwrap_or(Key::NULL_KEY)
         }
     }
 }

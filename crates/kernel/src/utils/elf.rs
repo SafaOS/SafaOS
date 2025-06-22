@@ -474,7 +474,7 @@ impl<'a, T: Readable> Elf<'a, T> {
             return Err(ElfError::NotAnExecutable);
         }
 
-        let mut program_break = 0;
+        let mut program_break = VirtAddr::null();
         let mut buf = [0u8; PAGE_SIZE];
 
         for header in self.get_programs() {
@@ -496,8 +496,11 @@ impl<'a, T: Readable> Elf<'a, T> {
                 entry_flags |= EntryFlags::WRITE;
             }
 
-            let start_page = Page::containing_address(header.vaddr);
-            let end_page = Page::containing_address(header.vaddr + header.memz + PAGE_SIZE);
+            let start_addr = VirtAddr::from(header.vaddr);
+            let end_addr = start_addr + header.memz + PAGE_SIZE;
+
+            let start_page = Page::containing_address(start_addr);
+            let end_page = Page::containing_address(end_addr);
 
             unsafe {
                 for page in Page::iter_pages(start_page, end_page) {
@@ -508,7 +511,7 @@ impl<'a, T: Readable> Elf<'a, T> {
                         page_table.map_to(page, frame, entry_flags)?;
 
                         let slice = slice::from_raw_parts_mut(
-                            frame.virt_addr() as *mut usize,
+                            frame.virt_addr().into_ptr::<usize>(),
                             PAGE_SIZE / size_of::<usize>(),
                         );
 
@@ -527,11 +530,7 @@ impl<'a, T: Readable> Elf<'a, T> {
                     let count = amount.min(size);
                     let buf = &buf[..count];
 
-                    copy_to_userspace(
-                        page_table,
-                        header.vaddr + (file_offset - header.offset),
-                        &buf,
-                    );
+                    copy_to_userspace(page_table, start_addr + (file_offset - header.offset), &buf);
 
                     size -= count;
                     if size == 0 {
@@ -541,7 +540,7 @@ impl<'a, T: Readable> Elf<'a, T> {
                     file_offset += count;
                 }
             }
-            program_break = header.vaddr + header.memz + PAGE_SIZE;
+            program_break = end_addr;
         }
         Ok(program_break)
     }

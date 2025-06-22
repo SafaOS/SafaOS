@@ -6,7 +6,6 @@ use core::{
 use safa_utils::abi::raw::processes::AbiStructures;
 
 use crate::{
-    arch::aarch64::gic,
     memory::{
         copy_to_userspace, map_byte_slices, map_str_slices,
         paging::{EntryFlags, MapToError, PhysPageTable},
@@ -26,18 +25,18 @@ static CURRENT_CONTEXT: SyncUnsafeCell<CPUStatus> =
     SyncUnsafeCell::new(unsafe { core::mem::zeroed() });
 
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const STACK_START: usize = 0x00007A0000000000;
-pub const STACK_END: usize = STACK_START + STACK_SIZE;
+pub const STACK_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
+pub const STACK_END: VirtAddr = STACK_START + STACK_SIZE;
 
 pub const EL1_STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const EL1_STACK_START: usize = 0x00007A1000000000;
-pub const EL1_STACK_END: usize = EL1_STACK_START + EL1_STACK_SIZE;
+pub const EL1_STACK_START: VirtAddr = VirtAddr::from(0x00007A1000000000);
+pub const EL1_STACK_END: VirtAddr = EL1_STACK_START + EL1_STACK_SIZE;
 
-pub const ENVIRONMENT_START: usize = 0x00007E0000000000;
-pub const ARGV_START: usize = ENVIRONMENT_START + 0xA000000000;
-pub const ENVIRONMENT_VARIABLES_START: usize = ENVIRONMENT_START + 0xE000000000;
+pub const ENVIRONMENT_START: VirtAddr = VirtAddr::from(0x00007E0000000000);
+pub const ARGV_START: VirtAddr = ENVIRONMENT_START + 0xA000000000;
+pub const ENVIRONMENT_VARIABLES_START: VirtAddr = ENVIRONMENT_START + 0xE000000000;
 
-pub const ABI_STRUCTURES_START: usize = ENVIRONMENT_START + 0x1000000000;
+pub const ABI_STRUCTURES_START: VirtAddr = ENVIRONMENT_START + 0x1000000000;
 
 /// The CPU Status for each thread (registers)
 #[derive(Debug, Clone, Copy)]
@@ -59,14 +58,14 @@ impl CPUStatus {
 
     /// SHOULD ONLY BE CALLED FROM EL1
     unsafe fn from_current(frame: &mut InterruptFrame) -> Self {
-        let ttbr0: PhysAddr;
-        let sp_el0: VirtAddr;
+        let ttbr0: usize;
+        let sp_el0: usize;
 
         unsafe {
             asm!("mrs {}, sp_el0; mrs {}, ttbr0_el1", out(reg) sp_el0, out(reg) ttbr0);
         }
 
-        Self::new(frame, ttbr0, sp_el0)
+        Self::new(frame, PhysAddr::from(ttbr0), VirtAddr::from(sp_el0))
     }
 }
 
@@ -107,10 +106,10 @@ impl CPUStatus {
         argv: &[&str],
         env: &[&[u8]],
         structures: AbiStructures,
-        entry_point: usize,
+        entry_point: VirtAddr,
         userspace: bool,
     ) -> Result<Self, MapToError> {
-        let entry_point = entry_point as u64;
+        let entry_point = entry_point.into_raw() as u64;
         // allocate the stack
         page_table.alloc_map(
             STACK_START,
@@ -147,7 +146,7 @@ impl CPUStatus {
         )?;
         copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
 
-        let abi_structures_ptr = ABI_STRUCTURES_START as *const AbiStructures;
+        let abi_structures_ptr = ABI_STRUCTURES_START.into_ptr::<AbiStructures>();
 
         let mut general_registers = [Reg::default(); 29];
         general_registers[0] = Reg(argc as u64);
@@ -161,7 +160,7 @@ impl CPUStatus {
             ttbr0: page_table.phys_addr(),
             frame: InterruptFrame {
                 general_registers,
-                sp: Reg(EL1_STACK_END as u64),
+                sp: Reg(EL1_STACK_END.into_raw() as u64),
                 elr: Reg(entry_point),
                 lr: Reg(entry_point),
                 spsr: if !userspace {
@@ -175,7 +174,7 @@ impl CPUStatus {
     }
 
     pub fn at(&self) -> VirtAddr {
-        *self.frame.elr as VirtAddr
+        VirtAddr::from(*self.frame.elr as usize)
     }
 
     pub fn stack_at(&self) -> VirtAddr {
@@ -197,7 +196,7 @@ pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: i
 }
 
 pub fn invoke_context_switch() {
-    gic::set_pending(timer::TIMER_IRQ);
+    timer::TIMER_IRQ.set_pending();
     unsafe {
         // FIXME: ....
         super::enable_interrupts();

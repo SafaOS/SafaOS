@@ -1,9 +1,14 @@
+use super::gic;
+use crate::{
+    arch::aarch64::{gic::IntID, timer::TIMER_IRQ},
+    drivers::interrupts::IRQ_MANAGER,
+    syscalls::syscall,
+    warn,
+};
 use core::{
     arch::{asm, global_asm},
     fmt::Display,
 };
-
-use crate::{syscalls::syscall, VirtAddr};
 
 use super::registers::{Esr, ExcClass, Reg, Spsr};
 
@@ -87,13 +92,45 @@ unsafe extern "C" fn handle_sync_exception(frame: *mut InterruptFrame) {
 #[no_mangle]
 unsafe extern "C" fn handle_irq(frame: *mut InterruptFrame) {
     unsafe {
-        interrupt(&mut *frame);
+        interrupt(&mut *frame, false);
     }
 }
 
-fn interrupt(frame: &mut InterruptFrame) {
-    // TODO: figure out how to figure out the kind of interrupt
-    super::timer::on_interrupt(frame);
+#[no_mangle]
+unsafe extern "C" fn handle_fiq(frame: *mut InterruptFrame) {
+    unsafe {
+        interrupt(&mut *frame, true);
+    }
+}
+
+#[inline]
+fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
+    let int_id = gic::cpu_if::get_int_id(is_fiq /* Group 0 interrupts are FIQs */);
+    debug_assert!(
+        int_id < 1020 || int_id > 1023,
+        "FIXME: {int_id} is either an error or unimplemented and cannot be handled"
+    );
+
+    match int_id {
+        // TODO: instead of making this a special case just use the interrupt abstraction layer to register the timer
+        // but maybe this is faster?
+        i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
+        // LPIs
+        i if i >= 8192 => {
+            let int = IntID::from_int_id(i);
+
+            let irq_manager = IRQ_MANAGER.read();
+            for irq in &*irq_manager.irqs {
+                if irq.irq_num == i {
+                    irq.handler.handle_interrupt();
+                    break;
+                }
+            }
+
+            int.clear_pending().deactivate(is_fiq);
+        }
+        i => warn!("unknown intID {i}, ignoring..."),
+    }
 }
 
 fn exception(kind: ExcClass, frame: &mut InterruptFrame) {
@@ -118,7 +155,7 @@ fn exception(kind: ExcClass, frame: &mut InterruptFrame) {
 
 #[inline(always)]
 pub(super) fn init_exceptions() {
-    let exc_vector_table: VirtAddr;
+    let exc_vector_table: usize;
     unsafe {
         asm!("adr {0}, exc_vector_table", out(reg) exc_vector_table);
         asm!("msr VBAR_EL1, {0}", in(reg) exc_vector_table);

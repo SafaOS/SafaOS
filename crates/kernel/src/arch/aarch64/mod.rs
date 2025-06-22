@@ -3,7 +3,9 @@ use core::arch::{asm, global_asm};
 mod cpu;
 mod exceptions;
 mod gic;
+pub(super) mod interrupts;
 pub mod paging;
+pub(super) mod pci;
 pub(super) mod power;
 pub(super) mod registers;
 pub(super) mod serial;
@@ -54,9 +56,6 @@ pub fn init_phase1() {
     exceptions::init_exceptions();
 
     cpu::init();
-    unsafe {
-        enable_interrupts();
-    }
 }
 
 #[inline(never)]

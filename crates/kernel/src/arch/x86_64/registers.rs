@@ -26,7 +26,7 @@ impl StackFrame {
     pub unsafe fn prev(&self) -> Option<&Self> {
         let prev = self.prev;
 
-        if prev.is_null() || !prev.is_aligned() {
+        if prev.is_null() || !prev.is_aligned() || (prev as usize) < 0x1000 {
             return None;
         }
         unsafe { Some(&*prev) }

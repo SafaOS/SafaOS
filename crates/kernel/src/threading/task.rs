@@ -60,7 +60,7 @@ impl AliveTask {
     pub fn resource_manager_mut(&mut self) -> &mut ResourceManager {
         &mut self.resources
     }
-    pub fn cwd(&self) -> Path {
+    pub fn cwd<'s>(&'s self) -> Path<'s> {
         self.cwd.as_path()
     }
 
@@ -114,7 +114,7 @@ impl AliveTask {
         }
 
         let addr = frame.virt_addr();
-        let ptr = addr as *mut u8;
+        let ptr = addr.into_ptr::<u8>();
         let slice = unsafe { core::slice::from_raw_parts_mut(ptr, PAGE_SIZE) };
 
         slice.fill(0xBB);
@@ -128,14 +128,15 @@ impl AliveTask {
         }
 
         let page_end = self.data_start + PAGE_SIZE * self.data_pages;
+        let page_addr = page_end - PAGE_SIZE;
+        let page = Page::containing_address(page_addr);
 
-        let page = Page::containing_address(page_end - PAGE_SIZE);
         unsafe {
             self.root_page_table.unmap(page);
         }
 
         self.data_pages -= 1;
-        Some(page_end - PAGE_SIZE)
+        Some(page_addr)
     }
 
     pub fn extend_data_by(&mut self, amount: isize) -> Option<*mut u8> {
@@ -147,6 +148,7 @@ impl AliveTask {
         if (usable_bytes < amount) || (is_negative) {
             let pages = crate::memory::align_up(amount - usable_bytes, PAGE_SIZE) / PAGE_SIZE;
 
+            // FIXME: not tested
             let func = if is_negative {
                 Self::page_unextend_data
             } else {
@@ -164,7 +166,7 @@ impl AliveTask {
             self.data_break += amount;
         }
 
-        Some(self.data_break as *mut u8)
+        Some(self.data_break.into_ptr::<u8>())
     }
 
     /// Makes `self` a zombie
@@ -185,7 +187,7 @@ impl AliveTask {
 }
 
 impl ZombieTask {
-    pub fn cwd(&self) -> Path {
+    pub fn cwd<'s>(&'s self) -> Path<'s> {
         self.cwd.as_path()
     }
 }
@@ -225,7 +227,7 @@ impl TaskState {
         self.alive_mut().map(|alive| alive.resource_manager_mut())
     }
 
-    pub fn cwd(&self) -> Path {
+    pub fn cwd<'s>(&'s self) -> Path<'s> {
         match self {
             TaskState::Alive(alive) => alive.cwd(),
             TaskState::Zombie(zombie) => zombie.cwd(),
@@ -295,7 +297,7 @@ impl Task {
         context: CPUStatus,
         data_break: VirtAddr,
     ) -> Self {
-        let data_break = align_up(data_break, PAGE_SIZE);
+        let data_break = VirtAddr::from(align_up(data_break.into_raw(), PAGE_SIZE));
 
         Self {
             name,
@@ -341,11 +343,11 @@ impl Task {
         &self.name
     }
 
-    pub fn state(&self) -> Option<RwLockReadGuard<TaskState>> {
+    pub fn state<'s>(&'s self) -> Option<RwLockReadGuard<'s, TaskState>> {
         self.state.try_read()
     }
 
-    pub fn state_mut(&self) -> Option<RwLockWriteGuard<TaskState>> {
+    pub fn state_mut<'s>(&'s self) -> Option<RwLockWriteGuard<'s, TaskState>> {
         self.state.try_write()
     }
 

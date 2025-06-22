@@ -88,27 +88,27 @@ impl From<RGB> for (u8, u8, u8) {
 }
 
 impl RGB {
-    pub const BLACK: RGB = RGB::from_hex(0x141a21);
-    pub const BRIGHT_BLACK: RGB = RGB::from_hex(0x665c54);
+    pub const BLACK: RGB = RGB::from_hex(0x282828);
+    pub const BRIGHT_BLACK: RGB = RGB::from_hex(0x928374);
 
-    pub const WHITE: RGB = RGB::from_hex(0xc5c8c6);
-    pub const BRIGHT_WHITE: RGB = RGB::from_hex(0xe2e6e3);
+    pub const WHITE: RGB = RGB::from_hex(0xebdbb2);
+    pub const BRIGHT_WHITE: RGB = RGB::from_hex(0xfbf1c7);
 
-    pub const RED: RGB = RGB::from_hex(0xa02424);
-    pub const BRIGHT_RED: RGB = RGB::from_hex(0xcf2f2f);
+    pub const RED: RGB = RGB::from_hex(0xcc241d);
+    pub const BRIGHT_RED: RGB = RGB::from_hex(0xfb4934);
 
-    pub const GREEN: RGB = RGB::from_hex(0x485e34);
-    pub const BRIGHT_GREEN: RGB = RGB::from_hex(0x719351);
+    pub const GREEN: RGB = RGB::from_hex(0x98971a);
+    pub const BRIGHT_GREEN: RGB = RGB::from_hex(0xb8bb26);
 
-    pub const BLUE: RGB = RGB::from_hex(0x3d3dd4);
-    pub const BRIGHT_BLUE: RGB = RGB::from_hex(0x3d66d4);
+    pub const BLUE: RGB = RGB::from_hex(0x458588);
+    pub const BRIGHT_BLUE: RGB = RGB::from_hex(0x83a598);
 
-    pub const YELLOW: RGB = RGB::from_hex(0xc4aa37);
-    pub const BRIGHT_YELLOW: RGB = RGB::from_hex(0xc4b15f);
+    pub const YELLOW: RGB = RGB::from_hex(0xd79921);
+    pub const BRIGHT_YELLOW: RGB = RGB::from_hex(0xfabd2f);
 
-    pub const CYAN: RGB = RGB::from_hex(0x3090a8);
-    pub const BRIGHT_CYAN: RGB = RGB::from_hex(0x36a2bd);
+    pub const CYAN: RGB = RGB::from_hex(0x689d6a);
+    pub const BRIGHT_CYAN: RGB = RGB::from_hex(0x8ec07c);
 
-    pub const MAGENTA: RGB = RGB::from_hex(0x973e7f);
-    pub const BRIGHT_MAGENTA: RGB = RGB::from_hex(0xb54a98);
+    pub const MAGENTA: RGB = RGB::from_hex(0xb16286);
+    pub const BRIGHT_MAGENTA: RGB = RGB::from_hex(0xd3869b);
 }

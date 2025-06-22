@@ -1,5 +1,6 @@
 pub mod keys;
 pub mod set1;
+pub mod usb_kbd;
 
 use heapless::Vec;
 
@@ -25,21 +26,28 @@ impl Keyboard {
         }
     }
 
+    #[allow(unused)]
+    pub fn clear_keys(&mut self) {
+        self.current_keys.clear();
+    }
+
+    #[allow(unused)]
     #[inline]
     fn reset_unencoded_buffer(&mut self) {
         self.latest_unencoded_byte = 0;
         self.current_unencoded_key = [0; 8];
     }
 
-    fn add_pressed_keycode(&mut self, code: KeyCode) {
+    #[must_use]
+    fn add_pressed_keycode(&mut self, code: KeyCode) -> Option<Key> {
         if code == KeyCode::NULL {
-            return;
+            return None;
         }
 
         // the 'lock' in capslock
         if code == KeyCode::CapsLock && self.code_is_pressed(code) {
             self.remove_pressed_keycode(code);
-            return;
+            return None;
         }
 
         let key = self.process_keycode(code);
@@ -47,6 +55,7 @@ impl Keyboard {
         if attempt.is_err() {
             *self.current_keys.last_mut().unwrap() = attempt.unwrap_err();
         }
+        Some(key)
     }
 
     fn remove_pressed_keycode(&mut self, code: KeyCode) {
@@ -106,6 +115,7 @@ impl Keyboard {
         false
     }
 
+    #[allow(unused)]
     pub fn process_byte<T: ProcessUnencodedKeyByte>(&mut self, byte: u8) -> Key {
         T::process_byte(self, byte)
     }

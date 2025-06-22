@@ -1,7 +1,7 @@
+use super::super::syscalls::syscall_base;
 use super::pit;
 use core::arch::asm;
-
-use super::super::syscalls::syscall_base;
+use core::cell::SyncUnsafeCell;
 use lazy_static::lazy_static;
 
 use super::idt::{GateDescriptor, IDTT};
@@ -11,8 +11,8 @@ use crate::arch::x86_64::interrupts::apic::send_eoi;
 use crate::arch::x86_64::{inb, threading};
 use crate::{drivers, serial};
 
-const ATTR_TRAP: u8 = 0xF;
-const ATTR_INT: u8 = 0xE;
+pub const ATTR_TRAP: u8 = 0xF;
+pub const ATTR_INT: u8 = 0xE;
 const ATTR_RING3: u8 = 3 << 5;
 
 const EMPTY_TABLE: IDTT = [GateDescriptor::default(); 256]; // making sure it is made at compile-time
@@ -34,13 +34,13 @@ macro_rules! create_idt {
                 table[index] = GateDescriptor::new(handler, attributes);
                 table[index].ist = ist;
             )*
-            table
+            SyncUnsafeCell::new(table)
         }
     };
 }
 
 lazy_static! {
-    pub static ref IDT: IDTT = create_idt!(
+    pub static ref IDT: SyncUnsafeCell<IDTT> = create_idt!(
         (0, divide_by_zero_handler, ATTR_INT),
         (3, breakpoint_handler, ATTR_INT | ATTR_RING3),
         (6, invaild_opcode, ATTR_INT),

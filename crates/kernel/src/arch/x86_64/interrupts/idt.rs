@@ -10,7 +10,7 @@ pub struct IDTDescriptor {
     base: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct GateDescriptor {
     offset0: u16,
@@ -52,6 +52,6 @@ impl GateDescriptor {
 lazy_static! {
     pub static ref IDTDesc: IDTDescriptor = IDTDescriptor {
         limit: (size_of::<IDTT>() - 1) as u16,
-        base: IDT.as_ptr() as usize
+        base: IDT.get() as usize
     };
 }

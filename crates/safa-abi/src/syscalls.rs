@@ -41,7 +41,7 @@ pub enum SyscallTable {
 
 impl SyscallTable {
     // update when a new Syscall Num is added
-    const MAX: u16 = Self::SysDup as u16;
+    const MAX: u16 = Self::SysUptime as u16;
 }
 
 impl TryFrom<u16> for SyscallTable {

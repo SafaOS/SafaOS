@@ -3,6 +3,8 @@ use core::fmt::Debug;
 use core::ops::IndexMut;
 use core::{arch::asm, ops::Index};
 
+use crate::arch::x86_64::interrupts::apic;
+use crate::arch::x86_64::pci;
 use crate::memory::paging::{EntryFlags, Page};
 use crate::VirtAddr;
 use crate::{
@@ -16,20 +18,21 @@ use crate::{
 const ENTRY_COUNT: usize = 512;
 const HIGHER_HALF_ENTRY: usize = 256;
 
-const fn p4_index(addr: VirtAddr) -> usize {
+const fn p4_index(addr: usize) -> usize {
     (addr >> 39) & 0x1FF
 }
-const fn p3_index(addr: VirtAddr) -> usize {
+const fn p3_index(addr: usize) -> usize {
     (addr >> 30) & 0x1FF
 }
-const fn p2_index(addr: VirtAddr) -> usize {
+const fn p2_index(addr: usize) -> usize {
     (addr >> 21) & 0x1FF
 }
-const fn p1_index(addr: VirtAddr) -> usize {
+const fn p1_index(addr: usize) -> usize {
     (addr >> 12) & 0x1FF
 }
 
-fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
+const fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
+    let addr = addr.into_raw();
     (
         p1_index(addr),
         p2_index(addr),
@@ -40,7 +43,7 @@ fn translate(addr: VirtAddr) -> (usize, usize, usize, usize) {
 
 #[derive(Clone)]
 /// A page table's entry
-pub struct Entry(PhysAddr);
+pub struct Entry(usize);
 impl Debug for Entry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Entry")
@@ -55,7 +58,9 @@ impl Entry {
         if self.flags().contains(ArchEntryFlags::PRESENT) {
             // FIXME: real hardware problem here
             // TODO: figure out more info about the max physical address width
-            return Some(Frame::containing_address(self.0 & 0x000F_FFFF_FFFF_F000));
+            return Some(Frame::containing_address(PhysAddr::from(
+                self.0 & 0x000F_FFFF_FFFF_F000,
+            )));
         }
         None
     }
@@ -65,7 +70,7 @@ impl Entry {
     }
 
     const fn new(flags: ArchEntryFlags, addr: PhysAddr) -> Self {
-        Self(addr | flags.bits() as usize)
+        Self(addr.into_raw() | flags.bits() as usize)
     }
 
     const fn set(&mut self, flags: ArchEntryFlags, addr: PhysAddr) {
@@ -80,7 +85,7 @@ impl Entry {
         let frame = self.frame().unwrap();
 
         if level != 0 {
-            let table = &mut *(frame.virt_addr() as *mut PageTable);
+            let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
             table.free(level);
         }
         self.deallocate();
@@ -92,7 +97,7 @@ impl Entry {
     unsafe fn deallocate(&mut self) {
         if let Some(frame) = self.frame() {
             frame_allocator::deallocate_frame(frame);
-            self.set(ArchEntryFlags::empty(), 0);
+            self.set(ArchEntryFlags::empty(), PhysAddr::null());
         }
     }
 
@@ -106,7 +111,7 @@ impl Entry {
 
             self.set(flags, addr);
             let virt_addr = frame.virt_addr();
-            let entry_ptr = virt_addr as *mut PageTable;
+            let entry_ptr = virt_addr.into_ptr::<PageTable>();
 
             Ok(unsafe { &mut *(entry_ptr) })
         } else {
@@ -117,7 +122,7 @@ impl Entry {
             self.set(flags, addr);
 
             let virt_addr = frame.virt_addr();
-            let table_ptr = virt_addr as *mut PageTable;
+            let table_ptr = virt_addr.into_ptr::<PageTable>();
 
             Ok(unsafe {
                 (*table_ptr).zeroize();
@@ -130,7 +135,7 @@ impl Entry {
     fn mapped_to(&self) -> Option<&'static mut PageTable> {
         if let Some(frame) = self.frame() {
             let virt_addr = frame.virt_addr();
-            let entry_ptr = virt_addr as *mut PageTable;
+            let entry_ptr = virt_addr.into_ptr::<PageTable>();
 
             return Some(unsafe { &mut *entry_ptr });
         }
@@ -160,6 +165,10 @@ impl From<EntryFlags> for ArchEntryFlags {
         let mut this = ArchEntryFlags::PRESENT;
         if value.contains(EntryFlags::WRITE) {
             this |= ArchEntryFlags::WRITABLE;
+        }
+
+        if value.contains(EntryFlags::DEVICE_UNCACHEABLE) {
+            this |= ArchEntryFlags::NO_CACHE;
         }
 
         if value.contains(EntryFlags::USER_ACCESSIBLE) {
@@ -218,7 +227,7 @@ impl PageTable {
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.start_address);
+            translate(page.virt_addr());
         let flags: ArchEntryFlags = flags.into();
         let level_3_table = self[level_4_index].map(flags)?;
 
@@ -230,11 +239,10 @@ impl PageTable {
         // TODO: stress test this
         debug_assert!(
                 entry.frame().is_none(),
-                "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {:#x}",
+                "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {page:?}",
                 entry,
                 entry.frame(),
                 frame,
-                page.start_address
             );
 
         *entry = Entry::new(flags, frame.start_address());
@@ -244,7 +252,7 @@ impl PageTable {
     /// gets the frame page points to
     pub fn get_frame(&self, page: Page) -> Option<Frame> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.start_address);
+            translate(page.virt_addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
         let level_1_table = level_2_table[level_2_index].mapped_to()?;
@@ -257,7 +265,7 @@ impl PageTable {
     /// get a mutable reference to the entry for a given page
     fn get_entry(&self, page: Page) -> Option<&mut Entry> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.start_address);
+            translate(page.virt_addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
         let level_1_table = level_2_table[level_2_index].mapped_to()?;
@@ -290,11 +298,12 @@ impl IndexMut<usize> for PageTable {
 
 /// returns the current pml4 from cr3
 pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
-    let phys_addr: PhysAddr;
+    let phys_addr: usize;
     unsafe {
         asm!("mov {}, cr3", out(reg) phys_addr);
     }
 
+    let phys_addr = PhysAddr::from(phys_addr);
     let frame = Frame::containing_address(phys_addr);
     let ptr = frame.into_ptr();
     ptr
@@ -310,12 +319,15 @@ pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
 pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let phys_addr = page_table.phys_addr();
     unsafe {
-        asm!("mov cr3, rax", in("rax") phys_addr);
+        asm!("mov cr3, rax", in("rax") phys_addr.into_raw());
     }
 }
 
 /// Maps architecture specific devices such as the UART serial in aarch64
 pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
-    _ = table;
+    unsafe {
+        pci::map_pcie(table)?;
+        apic::map_apic(table)?;
+    }
     Ok(())
 }

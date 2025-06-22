@@ -4,14 +4,190 @@ pub mod page_allocator;
 pub mod paging;
 pub mod sorcery;
 
-// types for better code reability
-pub type VirtAddr = usize;
-pub type PhysAddr = usize;
-
-use core::ptr::NonNull;
+use core::{
+    fmt::{Debug, LowerHex},
+    ops::{Add, AddAssign, Deref, DerefMut, Sub, SubAssign},
+    ptr::NonNull,
+};
 
 use paging::{EntryFlags, MapToError, Page, PageTable, PhysPageTable, PAGE_SIZE};
 use safa_utils::abi::raw::RawSlice;
+use serde::Serialize;
+
+use crate::limine::HHDM;
+
+// FIXME: Implementition of serialize should serialize as hex string because memory addresses don't fit in json's int
+/// A virtual memory address
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Default)]
+#[repr(transparent)]
+pub struct VirtAddr(usize);
+
+/// A physical memory address
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Default)]
+#[repr(transparent)]
+pub struct PhysAddr(usize);
+
+impl Debug for VirtAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "VirtAddr({self:#x})")
+    }
+}
+
+impl Debug for PhysAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "PhysAddr({self:#x})")
+    }
+}
+
+macro_rules! impl_addr_ty {
+    ($ty: ty) => {
+        impl $ty {
+            #[inline(always)]
+            pub const fn null() -> Self {
+                Self(0)
+            }
+
+            #[inline(always)]
+            pub const fn from(value: usize) -> Self {
+                Self(value)
+            }
+
+            #[inline(always)]
+            pub const fn into_bits(self) -> usize {
+                self.0
+            }
+
+            #[inline(always)]
+            pub const fn into_raw(self) -> usize {
+                self.0
+            }
+
+            #[inline(always)]
+            pub const fn from_bits(bits: usize) -> Self {
+                Self(bits)
+            }
+        }
+
+        impl LowerHex for $ty {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                LowerHex::fmt(&self.0, f)
+            }
+        }
+
+        impl From<usize> for $ty {
+            #[inline(always)]
+            fn from(value: usize) -> Self {
+                Self::from(value)
+            }
+        }
+
+        impl const Add<usize> for $ty {
+            type Output = $ty;
+            #[inline(always)]
+            fn add(self, rhs: usize) -> Self::Output {
+                Self(self.0 + rhs)
+            }
+        }
+
+        impl const Add<$ty> for $ty {
+            type Output = $ty;
+            #[inline(always)]
+            fn add(self, rhs: $ty) -> Self::Output {
+                self + rhs.0
+            }
+        }
+
+        impl AddAssign<usize> for $ty {
+            #[inline(always)]
+            fn add_assign(&mut self, rhs: usize) {
+                *self = *self + rhs
+            }
+        }
+
+        impl Sub<$ty> for $ty {
+            type Output = usize;
+            #[inline(always)]
+            fn sub(self, rhs: $ty) -> Self::Output {
+                self.0 - rhs.0
+            }
+        }
+
+        impl Sub<usize> for $ty {
+            type Output = Self;
+            #[inline(always)]
+            fn sub(self, rhs: usize) -> Self::Output {
+                Self(self.0 - rhs)
+            }
+        }
+
+        impl SubAssign<usize> for $ty {
+            #[inline(always)]
+            fn sub_assign(&mut self, rhs: usize) {
+                *self = *self - rhs
+            }
+        }
+
+        impl Deref for $ty {
+            type Target = usize;
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl DerefMut for $ty {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
+    };
+}
+
+impl_addr_ty!(VirtAddr);
+impl_addr_ty!(PhysAddr);
+
+impl VirtAddr {
+    #[inline(always)]
+    pub fn from_ptr<T: ?Sized>(value: *const T) -> Self {
+        Self(value.addr())
+    }
+
+    #[inline(always)]
+    pub fn into_ptr<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
+
+    /// Returns the equalivent PhysAddr for the Page containing this VirtualAddr assuming it exists in the HHDM
+    /// NOTE: it is unlikely that a VirtAddr would have an equalivent PhysAddr, it is safe to assume so if the VirtAddr was gathered [`PhysAddr::into_virt`]
+    #[inline(always)]
+    pub fn into_phys(self) -> PhysAddr {
+        PhysAddr(self.0 - *HHDM)
+    }
+
+    #[inline(always)]
+    pub fn from_phys(value: usize) -> VirtAddr {
+        PhysAddr::from(value).into_virt()
+    }
+}
+
+impl PhysAddr {
+    #[inline(always)]
+    pub fn into_virt(self) -> VirtAddr {
+        VirtAddr(self.0 | *HHDM)
+    }
+}
+impl<T> From<*const T> for VirtAddr {
+    #[inline(always)]
+    fn from(value: *const T) -> Self {
+        Self::from_ptr(value)
+    }
+}
+
+impl<T> From<*mut T> for VirtAddr {
+    #[inline(always)]
+    fn from(value: *mut T) -> Self {
+        Self::from_ptr(value)
+    }
+}
 
 #[inline(always)]
 pub const fn align_up(address: usize, alignment: usize) -> usize {
@@ -31,7 +207,7 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
 
     for i in 0..pages_required {
         let page = Page::containing_address(addr + copied);
-        let diff = if i == 0 { addr - page.start_address } else { 0 };
+        let diff = if i == 0 { addr - page.virt_addr() } else { 0 };
         let will_copy = if (to_copy + diff) >= PAGE_SIZE {
             PAGE_SIZE - diff
         } else {
@@ -44,7 +220,7 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
         unsafe {
             core::ptr::copy_nonoverlapping(
                 obj.as_ptr().byte_add(copied),
-                virt_addr as *mut u8,
+                virt_addr.into_ptr(),
                 will_copy,
             );
         }
@@ -68,7 +244,7 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
 pub fn map_byte_slices(
     page_table: &mut PhysPageTable,
     slices: &[&[u8]],
-    map_start_addr: usize,
+    map_start_addr: VirtAddr,
 ) -> Result<Option<NonNull<RawSlice<u8>>>, MapToError> {
     if slices.is_empty() {
         return Ok(None);
@@ -130,7 +306,7 @@ pub fn map_byte_slices(
         start_addr += slice.len() + 1;
     }
 
-    let mut start_addr = start_addr.next_multiple_of(USIZE_BYTES);
+    let mut start_addr: VirtAddr = start_addr.next_multiple_of(USIZE_BYTES).into();
     let slices_addr = start_addr;
     let mut current_slice_ptr = map_start_addr + USIZE_BYTES /* after argc */;
 
@@ -138,7 +314,7 @@ pub fn map_byte_slices(
         map_if_not_enough!(size_of::<RawSlice<u8>>());
 
         let raw_slice =
-            unsafe { RawSlice::from_raw_parts(current_slice_ptr as *const u8, slice.len()) };
+            unsafe { RawSlice::from_raw_parts(current_slice_ptr.into_ptr::<u8>(), slice.len()) };
         let bytes: [u8; size_of::<RawSlice<u8>>()] = unsafe { core::mem::transmute(raw_slice) };
 
         copy_to_userspace(page_table, start_addr, &bytes);
@@ -148,7 +324,7 @@ pub fn map_byte_slices(
     }
 
     Ok(Some(unsafe {
-        NonNull::new_unchecked(slices_addr as *mut RawSlice<u8>)
+        NonNull::new_unchecked(slices_addr.into_ptr::<RawSlice<u8>>())
     }))
 }
 

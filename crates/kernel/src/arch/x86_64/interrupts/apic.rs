@@ -1,24 +1,34 @@
-use core::arch::asm;
-
 use super::{pit, read_msr};
 use crate::{
     arch::{
-        paging::current_higher_root_table,
+        paging::PageTable,
         x86_64::{
-            acpi::{self, MADT},
+            acpi,
             utils::{APIC_TIMER_TICKS_PER_MS, TICKS_PER_MS},
         },
     },
     info,
-    limine::HHDM,
-    memory::{
-        frame_allocator::Frame,
-        paging::{EntryFlags, Page},
-    },
+    memory::paging::{EntryFlags, MapToError},
     serial, PhysAddr, VirtAddr,
 };
 use bitflags::bitflags;
+use core::arch::asm;
 use lazy_static::lazy_static;
+
+/// Maps the IOAPIC and the Local APIC to the `dest` page table
+pub unsafe fn map_apic(dest: &mut PageTable) -> Result<(), MapToError> {
+    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+    let lapic_phys = *LAPIC_PHYS_ADDR;
+    let lapic_virt = lapic_phys.into_virt();
+    let ioapic_phys = *IOAPIC_PHYS_ADDR;
+    let ioapic_virt = ioapic_phys.into_virt();
+
+    unsafe {
+        dest.map_contiguous_pages(lapic_virt, lapic_phys, 1, flags)?;
+        dest.map_contiguous_pages(ioapic_virt, ioapic_phys, 1, flags)?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct LVTEntry {
@@ -50,7 +60,7 @@ pub fn send_eoi() {
     unsafe {
         let address = get_local_apic_addr();
         let eoi_reg = get_local_apic_reg(address, 0xB0);
-        let eoi_reg = eoi_reg as *mut u32;
+        let eoi_reg = eoi_reg.into_ptr::<u32>();
         core::ptr::write_volatile(eoi_reg, 0)
     }
 }
@@ -71,31 +81,22 @@ pub fn get_io_apic_addr() -> VirtAddr {
 }
 
 lazy_static! {
-    static ref LAPIC_ADDR: VirtAddr = {
+    pub static ref LAPIC_PHYS_ADDR: PhysAddr = {
         let phys = read_msr(0x1B) & 0xFFFFF000;
-        let frame = Frame::containing_address(phys);
-        let virt_addr = phys | *HHDM;
-        let page = Page::containing_address(virt_addr);
-
-        unsafe {
-            current_higher_root_table()
-                .map_to(page, frame, EntryFlags::WRITE)
-                .expect("failed to map the local apic")
-        };
-        virt_addr
+        let phys = PhysAddr::from(phys);
+        phys
     };
-    static ref IOAPIC_ADDR: VirtAddr = unsafe {
-        let madt = MADT::get(acpi::get_sdt());
+    static ref LAPIC_ADDR: VirtAddr = LAPIC_PHYS_ADDR.into_virt();
+    pub static ref LAPIC_ID: u8 =
+        unsafe { ((*(get_local_apic_reg(*LAPIC_ADDR, 0x20).into_ptr::<u32>())) >> 24) as u8 };
+    pub static ref IOAPIC_PHYS_ADDR: PhysAddr = unsafe {
+        let madt = *acpi::MADT_DESC;
         let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
-        let addr = (*record).ioapic_address as PhysAddr;
-        let frame = Frame::containing_address(addr);
-        let virt_addr = addr | *HHDM;
-        let page = Page::containing_address(virt_addr);
-        current_higher_root_table()
-            .map_to(page, frame, EntryFlags::WRITE)
-            .expect("failed to map the local apic");
-        virt_addr
+
+        let addr = PhysAddr::from((*record).ioapic_address as usize);
+        addr
     };
+    static ref IOAPIC_ADDR: VirtAddr = IOAPIC_PHYS_ADDR.into_virt();
 }
 #[inline(always)]
 pub fn get_local_apic_addr() -> VirtAddr {
@@ -111,8 +112,11 @@ pub fn get_local_apic_reg(local_apic_addr: VirtAddr, local_apic_reg: u16) -> Vir
 // when we write the offset of the reg we want to access to ioregsel, iowin should have that reg
 // no it is not the addr of that reg it is the reg itself each reg is 32bits long
 pub unsafe fn write_ioapic_val_to_reg(ioapic_addr: VirtAddr, reg: u8, val: u32) {
-    core::ptr::write_volatile(ioapic_addr as *mut u32, reg as u32);
-    core::ptr::write_volatile((ioapic_addr + 0x10) as *mut u32, val);
+    let reg_addr = ioapic_addr.into_ptr::<u32>();
+    let val_addr = (ioapic_addr + 0x10).into_ptr::<u32>();
+
+    core::ptr::write_volatile(reg_addr, reg as u32);
+    core::ptr::write_volatile(val_addr, val);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -159,10 +163,10 @@ fn enable_apic_timer(local_apic_addr: VirtAddr, apic_id: u8) {
         (ms * ticks_per_ms) as u32
     }
 
-    let addr = get_local_apic_reg(local_apic_addr, 0x320) as *mut u32;
-    let init = get_local_apic_reg(local_apic_addr, 0x380) as *mut u32;
-    let divide = get_local_apic_reg(local_apic_addr, 0x3E0) as *mut u8;
-    let current_counter = get_local_apic_reg(local_apic_addr, 0x390) as *mut u32;
+    let addr = get_local_apic_reg(local_apic_addr, 0x320).into_ptr::<u32>();
+    let init = get_local_apic_reg(local_apic_addr, 0x380).into_ptr::<u32>();
+    let divide = get_local_apic_reg(local_apic_addr, 0x3E0).into_ptr::<u8>();
+    let current_counter = get_local_apic_reg(local_apic_addr, 0x390).into_ptr::<u32>();
 
     // calibrate the timer
     unsafe {
@@ -218,14 +222,14 @@ pub fn calibrate_tsc(apic_id: u8) {
 
 pub fn enable_apic_interrupts() {
     let local_apic_addr = get_local_apic_addr();
-    let sivr = get_local_apic_reg(local_apic_addr, 0xF0) as *mut u32;
+    let sivr = get_local_apic_reg(local_apic_addr, 0xF0).into_ptr::<u32>();
 
     unsafe {
         core::ptr::write_volatile(sivr, 0x1ff);
 
         let ioapic_addr = get_io_apic_addr();
 
-        let apic_id = *(get_local_apic_reg(local_apic_addr, 0x20) as *const u8);
+        let apic_id = *LAPIC_ID;
         info!("enabled APIC, apic_id is {apic_id}, IO APIC is at {ioapic_addr:#x}, local APIC is at {local_apic_addr:#x}");
         calibrate_tsc(apic_id);
         enable_apic_timer(local_apic_addr, apic_id);

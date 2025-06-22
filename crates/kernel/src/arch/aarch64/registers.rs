@@ -141,7 +141,7 @@ impl StackFrame {
     pub unsafe fn prev(&self) -> Option<&Self> {
         let prev = self.prev.0;
 
-        if prev.is_null() || !prev.is_aligned() {
+        if prev.is_null() || !prev.is_aligned() || (prev as usize) < 0x1000 {
             return None;
         }
         unsafe { Some(&*prev) }
@@ -293,6 +293,7 @@ pub const SYS_MAIR: MAIR = {
     let mut this = MAIR::new();
     // TODO: configure caching better, especially for devices
     this.set(0, MAIRAttr::Normal(MAIRNormal::all()));
+    this.set(1, MAIRAttr::Device(MAIRDeviceAttr::empty()));
     this
 };
 

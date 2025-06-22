@@ -18,10 +18,12 @@ use crate::{
 use super::{DirIterInodeItem, FSError, FSResult, FileName, Inode, InodeOps};
 
 mod cpuinfo;
+mod eve_journal;
 mod init;
 mod kernelinfo;
 mod meminfo;
 mod tasks;
+mod usbinfo;
 
 pub struct ProcFSFile {
     name: &'static str,

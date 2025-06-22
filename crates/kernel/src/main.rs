@@ -10,12 +10,16 @@
 #![feature(box_vec_non_null)]
 #![feature(vec_into_raw_parts)]
 #![feature(iter_collect_into)]
-#![feature(naked_functions)]
+#![feature(let_chains)]
 #![feature(sync_unsafe_cell)]
 #![feature(never_type)]
 #![feature(likely_unlikely)]
 #![feature(slice_as_array)]
 #![feature(iter_array_chunks)]
+#![feature(const_trait_impl)]
+#![feature(const_ops)]
+#![feature(unsafe_cell_access)]
+#![feature(macro_metavar_expr_concat)]
 
 #[cfg(test)]
 mod test;
@@ -73,6 +77,63 @@ macro_rules! time {
     };
 }
 
+#[macro_export]
+/// Sleeps n ms
+///
+/// vatiants:
+///
+/// sleep!(N ms)
+/// sleep!(N) (ms)
+macro_rules! sleep {
+    ($ms: expr) => {{
+        let start_time = $crate::time!();
+        let timeout_time = start_time + $ms as u64;
+
+        while $crate::time!() < timeout_time {
+            core::hint::spin_loop()
+        }
+    }};
+    ($ms: literal ms) => {{
+        $crate::sleep!($ms)
+    }};
+}
+
+#[macro_export]
+/// Sleeps until condition is true
+/// variants:
+///
+/// sleep_until!(condition)
+///
+/// sleep_until!(timeout ms, condition)
+///
+/// both returns true if condition happened to be successful, on timeout returns false
+macro_rules! sleep_until {
+    ($cond: tt) => {{
+        while !$cond {
+            core::hint::spin_loop()
+        }
+
+        true
+    }};
+
+    ($timeout_ms: literal ms, $cond: expr) => {{
+        let start_time = $crate::time!();
+        let timeout_time = start_time + $timeout_ms;
+        let mut success = true;
+
+        while !$cond {
+            if $crate::time!() >= timeout_time {
+                success = $cond;
+                break;
+            }
+
+            core::hint::spin_loop();
+        }
+
+        success
+    }};
+}
+
 #[unsafe(no_mangle)]
 pub fn khalt() -> ! {
     loop {
@@ -118,6 +179,7 @@ extern "C" fn kstart() -> ! {
     logging::BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
     arch::init_phase2();
+    drivers::pci::init();
 
     unsafe {
         debug!(Scheduler, "Eve starting...");

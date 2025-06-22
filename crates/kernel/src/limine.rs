@@ -1,3 +1,5 @@
+use core::cell::SyncUnsafeCell;
+
 use alloc::slice;
 use lazy_static::lazy_static;
 use limine::file::File;
@@ -66,6 +68,7 @@ const RAMDISK_MODULE: InternalModule = InternalModule::new()
 static MODULES_REQUEST: ModuleRequest =
     ModuleRequest::new().with_internal_modules(&[&RAMDISK_MODULE]);
 
+#[cfg(target_arch = "aarch64")]
 pub fn device_tree_addr() -> Option<*const ()> {
     DEVICE_TREE_REQUEST.get_response().map(|r| r.dtb_ptr())
 }
@@ -95,7 +98,7 @@ pub fn mmap_request() -> &'static MemoryMapResponse {
     MMAP_REQUEST.get_response().unwrap()
 }
 
-pub fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
+fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
     let mut buffers = FRAMEBUFFER_REQUEST.get_response().unwrap().framebuffers();
     let first = buffers.next().unwrap();
 
@@ -121,6 +124,13 @@ pub fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
     let buffer = unsafe { slice::from_raw_parts_mut(first.addr() as *mut u32, size) };
 
     (buffer, info)
+}
+
+lazy_static! {
+    pub static ref LIMINE_FRAMEBUFFER: (SyncUnsafeCell<&'static mut [u32]>, FrameBufferInfo) = {
+        let (video_buffer, info) = get_framebuffer();
+        (SyncUnsafeCell::new(video_buffer), info)
+    };
 }
 
 pub fn get_ramdisk_file() -> &'static File {
