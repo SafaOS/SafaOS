@@ -14,6 +14,7 @@ macro_rules! print_field {
         println!("{:<width$}: {}", $name.bright_cyan(), format_args!($($args)*), width = $min_width);
     };
 }
+
 pub fn usbinfo() -> io::Result<()> {
     let usbinfo = USBInfo::fetch()?;
     for device in usbinfo.connected_devices() {
@@ -23,47 +24,51 @@ pub fn usbinfo() -> io::Result<()> {
         let descriptor = device.descriptor();
 
         print_field!(0, 6, "Device", "{}", slot_id.yellow());
-        print_field!(
-            1,
-            13,
+
+        macro_rules! dprint_field {
+            ($name: literal, $($args:tt)*) => (print_field!(1, 14, $name, $($args)*));
+        }
+        macro_rules! iprint_field {
+            ($name: literal, $($args:tt)*) => (print_field!(2, 10, $name, $($args)*));
+        }
+
+        dprint_field!(
             "ID",
             "{:>04x}:{:>04x}",
             descriptor.id_vendor().yellow(),
             descriptor.id_product().yellow()
         );
-        print_field!(
-            1,
-            13,
+        dprint_field!(
             "Class",
             "{:>04x}:{:>04x}:{:>04x}",
             descriptor.class().yellow(),
             descriptor.subclass().yellow(),
             descriptor.protocol().yellow()
         );
-        print_field!(1, 13, "Manufacturer", "{}", manufacturer.bright_white());
-        print_field!(1, 13, "Product", "{}", product.bright_white());
-        print_field!(1, 13, "Serial Number", "{}", device.serial_number().red());
+
+        dprint_field!("Manufacturer", "{}", manufacturer.bright_white());
+        dprint_field!("Product", "{}", product.bright_white());
+        dprint_field!("Serial Number", "{}", device.serial_number().red());
 
         for interface in device.interfaces() {
             let descriptor = interface.descriptor();
-            print_field!(1, 10, "Interface", "");
+            dprint_field!("Interface", "");
 
-            print_field!(
-                2,
-                10,
+            iprint_field!(
                 "Class",
                 "{:>04x}:{:>04x}",
                 descriptor.class().yellow(),
                 descriptor.subclass().yellow()
             );
-            print_field!(2, 10, "Protocol", "{:>04x}", descriptor.protocol().yellow());
+            iprint_field!("Protocol", "{:>04x}", descriptor.protocol().yellow());
 
             let has_driver: &dyn std::fmt::Display = if interface.has_driver() {
                 &"yes".bright_green()
             } else {
                 &"no".bright_red()
             };
-            print_field!(2, 10, "Has Driver", "{}", has_driver);
+
+            iprint_field!("Has Driver", "{}", has_driver);
         }
     }
     Ok(())
