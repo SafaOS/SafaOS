@@ -1,12 +1,16 @@
+use super::SyscallFFI;
 use crate::{
     drivers::vfs::{
         self,
-        expose::{DirIterRef, FileRef},
+        expose::{DirEntry, DirIterRef, FileAttr, FileRef},
+        CtlArgs, FSResult,
     },
     utils::{errors::ErrorStatus, path::Path},
 };
+use macros::syscall_handler;
 
-pub fn sysopen(path: Path, dest_fd: Option<&mut usize>) -> Result<(), ErrorStatus> {
+#[syscall_handler]
+fn sysopen(path: Path, dest_fd: Option<&mut usize>) -> FSResult<()> {
     let file_ref = FileRef::open(path)?;
     if let Some(dest_fd) = dest_fd {
         *dest_fd = file_ref.ri();
@@ -15,7 +19,8 @@ pub fn sysopen(path: Path, dest_fd: Option<&mut usize>) -> Result<(), ErrorStatu
     Ok(())
 }
 
-pub fn syswrite(
+#[syscall_handler]
+fn syswrite(
     fd: FileRef,
     offset: isize,
     buf: &[u8],
@@ -29,7 +34,8 @@ pub fn syswrite(
     Ok(())
 }
 
-pub fn sysread(
+#[syscall_handler]
+fn sysread(
     fd: FileRef,
     offset: isize,
     buf: &mut [u8],
@@ -43,18 +49,18 @@ pub fn sysread(
     Ok(())
 }
 
-pub fn syscreate(path: Path) -> Result<(), ErrorStatus> {
-    vfs::expose::create(path).map_err(|err| err.into())
+#[syscall_handler]
+fn syscreate(path: Path) -> FSResult<()> {
+    vfs::expose::create(path)
 }
 
-pub fn syscreatedir(path: Path) -> Result<(), ErrorStatus> {
-    vfs::expose::createdir(path).map_err(|err| err.into())
+#[syscall_handler]
+fn syscreatedir(path: Path) -> FSResult<()> {
+    vfs::expose::createdir(path)
 }
 
-pub fn sysdiriter_open(
-    dir_rd: FileRef,
-    dest_diriter: Option<&mut usize>,
-) -> Result<(), ErrorStatus> {
+#[syscall_handler]
+fn sysdiriter_open(dir_rd: FileRef, dest_diriter: Option<&mut usize>) -> FSResult<()> {
     let diriter = dir_rd.diriter_open()?;
     if let Some(dest_diriter) = dest_diriter {
         *dest_diriter = diriter.ri();
@@ -62,7 +68,8 @@ pub fn sysdiriter_open(
     Ok(())
 }
 
-pub fn sysdiriter_next(
+#[syscall_handler]
+fn sysdiriter_next(
     diriter_rd: DirIterRef,
     direntry: &mut vfs::expose::DirEntry,
 ) -> Result<(), ErrorStatus> {
@@ -76,10 +83,47 @@ pub fn sysdiriter_next(
     }
 }
 
-pub fn syssync(fd: FileRef) -> Result<(), ErrorStatus> {
-    fd.sync().map_err(|e| e.into())
+#[syscall_handler]
+fn syssync(fd: FileRef) -> FSResult<()> {
+    fd.sync()
 }
 
-pub fn systruncate(fd: FileRef, len: usize) -> Result<(), ErrorStatus> {
-    fd.truncate(len).map_err(|e| e.into())
+#[syscall_handler]
+fn systruncate(fd: FileRef, len: usize) -> FSResult<()> {
+    fd.truncate(len)
+}
+
+// TODO: add always successful syscall handlers support
+#[syscall_handler]
+fn sysfsize(fd: FileRef, dest_fd: Option<&mut usize>) -> FSResult<()> {
+    if let Some(dest_fd) = dest_fd {
+        *dest_fd = fd.size();
+    }
+    Ok(())
+}
+
+#[syscall_handler]
+fn sysattrs(fd: FileRef, dest_attrs: Option<&mut FileAttr>) -> FSResult<()> {
+    if let Some(dest_attrs) = dest_attrs {
+        *dest_attrs = fd.attrs();
+    }
+    Ok(())
+}
+
+#[syscall_handler]
+fn sysdup(fd: FileRef, dest_fd: &mut FileRef) -> FSResult<()> {
+    *dest_fd = fd.dup();
+    Ok(())
+}
+
+#[syscall_handler]
+fn sysget_direntry(path: Path, dest_direntry: &mut DirEntry) -> FSResult<()> {
+    *dest_direntry = DirEntry::get_from_path(path)?;
+    Ok(())
+}
+
+#[syscall_handler]
+fn sysctl(fd: FileRef, cmd: u16, args: &[usize]) -> FSResult<()> {
+    let ctl_args = CtlArgs::new(args);
+    fd.ctl(cmd, ctl_args)
 }
