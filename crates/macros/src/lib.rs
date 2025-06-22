@@ -2,7 +2,45 @@ use core::panic;
 
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, DeriveInput, ImplItem, ItemImpl};
+use syn::{parse_macro_input, DeriveInput, ImplItem, ItemFn, ItemImpl};
+mod syscalls;
+
+#[proc_macro_attribute]
+/// Given a function definition, generate a syscall handler function, that calls the original function.
+/// a syscall handler is a function that only takes SyscallFFI::Args arguments, converts them to the appropriate types, and calls the original function.
+///
+/// the original function must return a Result<(), E> where E implements Into<ErrorStatus>.
+///
+/// the original function's arguments must implement SyscallFFI, and SyscallFFI must be in scope.
+///
+/// the generated function will have the same name as the original function, but with `_raw` appended to it.
+///
+/// for example given this function:
+/// ```
+/// #[syscall_handler]
+/// fn example_syscall(str: &str, ref: &mut i32) -> Result<(), ErrorStatus> {}
+/// ```
+///
+/// it will generate:
+/// ```
+/// pub fn example_syscall_raw(str: <&str as SyscallFFI>::Args, ref: <&mut i32 as SyscallFFI>::Args) -> Result<(), ErrorStatus> {
+///     let str = <&str as SyscallFFI>::make(str);
+///     let ref = <&mut i32 as SyscallFFI>::make(ref);
+///     example_syscall(str, ref).map_err(|e| e.into())
+/// }
+/// ```
+///
+/// which is equivalent to
+/// ```
+/// /// returns ErrorStatus::InvalidStr if the string is not valid UTF-8 for example
+/// pub fn example_syscall_raw(str: (*const u8, usize), ref: *mut i32) -> Result<(), ErrorStatus> {
+/// ...
+/// }
+/// ```
+pub fn syscall_handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let func = parse_macro_input!(item as ItemFn);
+    syscalls::syscall_handler(func)
+}
 
 /// used by the kernel [keyboard driver](file://kernel/src/drivers/keyboard.rs)
 /// impl EncodeKey for key set enum
