@@ -325,9 +325,9 @@ pub struct EndpointDeviceCTXDword0 {
     pub lsa: bool,
 
     /// Interval. The period between consecutive requests to a USB endpoint to send or receive data.
-    /// Expressed in 125 μs. increments. The period is calculated as 125 μs. * 2Interval; e.g., an Interval
-    /// value of 0 means a period of 125 μs. (20 = 1 * 125 μs.), a value of 1 means a period of 250 μs. (21
-    /// = 2 * 125 μs.), a value of 4 means a period of 2 ms. (24 = 16 * 125 μs.), etc. Refer to Table 6-12
+    /// Expressed in 125 μs. increments. The period is calculated as 125 μs. * 2^Interval; e.g., an Interval
+    /// value of 0 means a period of 125 μs. (2^0 = 1 * 125 μs.), a value of 1 means a period of 250 μs. (2^1
+    /// = 2 * 125 μs.), a value of 4 means a period of 2 ms. (2^4 = 16 * 125 μs.), etc. Refer to Table 6-12
     /// for legal Interval field values. See further discussion of this field below. Refer to section 6.2.3.6
     ///
     /// for more information.
@@ -339,7 +339,7 @@ pub struct EndpointDeviceCTXDword0 {
     pub max_esit_payload_hi: u8,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum DeviceEndpointType {
     /// Not Valid N/A

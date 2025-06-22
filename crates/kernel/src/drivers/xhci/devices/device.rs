@@ -191,15 +191,46 @@ impl XHCIDevice {
             )
         );
 
-        if self.port_speed == PortSpeed::High || self.port_speed == PortSpeed::Super {
-            let interval = interval - 1;
-            write_ref!(
-                endpoint_ctx.dword0,
-                endpoint_ctx.dword0.with_interval(interval)
-            );
-        } else {
-            todo!("endpoint intervals for speed {:?}", self.port_speed)
-        }
+        // For high-speed bulk and high-speed control OUT endpoints:
+        // - The Interval shall specify the maximum NAK rate of the endpoint.
+        // -A value of 0 indicates the endpoint never NAKs.
+        // - Other values indicate at most 1 NAK each Interval number of
+        // microframes.
+        // For SuperSpeedPlus and SuperSpeed bulk and control endpoints, the Interval
+        // field shall not be used by the xHC
+        //
+        // for other speends, I attempted to translate this table:
+        /*
+        +------------------------------+------------------+------------------+----------------------------+-------------------------------+
+        |          Endpoint            |  bInterval Range |    Time Range    |      Time Computation      | Endpoint Context Valid Range  |
+        +------------------------------+------------------+------------------+----------------------------+-------------------------------+
+        | FS/LS Interrupt              |       1 - 255    |   1 - 255 ms     | bInterval * 1 ms           |              3 - 10           |
+        +------------------------------+------------------+------------------+----------------------------+-------------------------------+
+        | FS Isoch                     |       1 - 16     |   1 - 32,768 ms  | 2^(bInterval - 1) * 1 ms   |              3 - 18           |
+        +------------------------------+------------------+------------------+----------------------------+-------------------------------+
+        | SSP, SS or HS Interrupt or   |                  |                  |                            |                               |
+        | Isoch                        |       1 - 16     | 125 µs - 4,096 ms| 2^(bInterval - 1) * 125 µs |              0 - 15           |
+        +------------------------------+------------------+------------------+----------------------------+-------------------------------+
+        */
+        let interval = match self.port_speed {
+            PortSpeed::High | PortSpeed::Super | PortSpeed::SuperPlus => interval - 1,
+            PortSpeed::Low | PortSpeed::Full
+                if endpoint_type == DeviceEndpointType::IntIn
+                    || endpoint_type == DeviceEndpointType::IntOut =>
+            {
+                interval.clamp(3, 10)
+            }
+            PortSpeed::Full
+                if endpoint_type == DeviceEndpointType::IsochIn
+                    || endpoint_type == DeviceEndpointType::IsochOut =>
+            {
+                interval.clamp(3, 18)
+            }
+
+            _ => interval,
+        };
+
+        endpoint_ctx.dword0.set_interval(interval);
     }
 
     pub fn configure_ctrl_ep_input_ctx(&mut self, max_packet_size: u16) {
