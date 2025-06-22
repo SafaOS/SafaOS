@@ -1,5 +1,7 @@
 #[path = "extra/json.rs"]
 pub mod json;
+#[path = "extra/usb_json.rs"]
+mod usb_json;
 
 use std::ffi::OsString;
 

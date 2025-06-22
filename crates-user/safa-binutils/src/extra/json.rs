@@ -10,6 +10,7 @@ pub struct MemInfo {
 }
 use std::io;
 
+pub use super::usb_json::*;
 use crate::ostring_to_string;
 
 impl MemInfo {
