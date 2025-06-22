@@ -12,11 +12,16 @@ use alloc::vec::Vec;
 
 use super::bstr::BStr;
 
+#[derive(Debug, Clone)]
 pub struct PageVec<T>(Vec<T, PageAlloc>);
 
 impl<T> PageVec<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity_in(capacity, &*GLOBAL_PAGE_ALLOCATOR))
+    }
+
+    pub fn new() -> Self {
+        Self(Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR))
     }
 }
 
@@ -115,11 +120,18 @@ impl core::fmt::Write for PageBString {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct PageString {
     inner: PageVec<u8>,
 }
 
 impl PageString {
+    pub fn new() -> Self {
+        Self {
+            inner: PageVec::new(),
+        }
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: PageVec::with_capacity(capacity),

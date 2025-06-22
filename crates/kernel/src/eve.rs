@@ -4,10 +4,11 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
-use crate::threading;
 use crate::threading::expose::{function_spawn, SpawnFlags};
+use crate::utils::alloc::PageString;
 use crate::utils::locks::Mutex;
 use crate::{drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield};
+use crate::{logging, threading};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use safa_utils::types::Name;
@@ -83,6 +84,7 @@ fn poll_driver_thread() -> ! {
 /// the main loop of Eve
 /// it will run until doomsday
 pub fn main() -> ! {
+    *logging::SERIAL_LOG.write() = Some(PageString::new());
     crate::info!("eve has been awaken ...");
     // TODO: make a macro or a const function to do this automatically
     serial!("Hello, world!, running tests...\n",);

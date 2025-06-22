@@ -1,6 +1,16 @@
-use core::{fmt::Display, sync::atomic::AtomicBool};
+use core::{
+    fmt::{Display, Write},
+    sync::atomic::AtomicBool,
+};
 
-use crate::{arch::registers::StackFrame, globals::KERNEL_ELF, VirtAddr};
+use crate::{
+    arch::registers::StackFrame,
+    globals::KERNEL_ELF,
+    utils::{alloc::PageString, locks::RwLock},
+    VirtAddr,
+};
+
+pub static SERIAL_LOG: RwLock<Option<PageString>> = RwLock::new(None);
 
 pub const QUITE_PANIC: bool = true;
 pub static BOOTING: AtomicBool = AtomicBool::new(false);
@@ -34,23 +44,39 @@ pub(crate) fn log_time_from_ms(ms: u64) -> (u32, u8, u8, u16) {
 }
 
 #[macro_export]
-macro_rules! serial_log {
-    ($($arg:tt)*) => {
-        {
-            let log_time = $crate::time!();
-            let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
-            $crate::serial!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
+macro_rules! generic_log {
+    ($write_macro:ident, $($arg:tt)*) => {{
+        let log_time = $crate::time!();
+        let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
+        $crate::$write_macro!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
+    }};
+}
+
+pub fn _write_to_log_file(args: core::fmt::Arguments) {
+    if let Some(mut file) = SERIAL_LOG.try_write() {
+        if let Some(buf) = &mut *file {
+            buf.write_fmt(args)
+                .expect("failed to write to global log buffer");
         }
-    };
+    }
+}
+
+#[macro_export]
+macro_rules! print_to_global_file {
+    ($($arg:tt)*) => ($crate::logging::_write_to_log_file(format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! serial_log {
+    ($($arg:tt)*) => {{
+        $crate::generic_log!(serial, $($arg)*);
+        $crate::generic_log!(print_to_global_file, $($arg)*);
+    }};
 }
 
 #[macro_export]
 macro_rules! tty_log {
-    ($($arg:tt)*) => {{
-        let log_time = $crate::time!();
-        let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
-        $crate::println!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}", format_args!($($arg)*))
-    }};
+    ($($arg:tt)*) => ($crate::generic_log!(print, $($arg)*));
 }
 
 /// prints to both the serial and the terminal doesn't print to the terminal if it panicked or if
