@@ -89,10 +89,16 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     let first_log = crate::time!();
 
     for test in tests_iter {
+        unsafe {
+            crate::arch::disable_interrupts();
+        }
         log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
         let last_log = crate::time!();
         test.run();
         ok!(last_log);
+        unsafe {
+            crate::arch::enable_interrupts();
+        }
     }
     info!("finished running tests in {}ms", crate::time!() - first_log);
 
@@ -106,9 +112,6 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
 // always runs last because it is given the lowest priority (`[TestPiritory::Lowest`] because it is in this module)
 #[test_case]
 fn userspace_test_script() {
-    unsafe {
-        crate::arch::disable_interrupts();
-    }
     use crate::drivers::vfs::expose::File;
 
     let stdio = File::open(make_path!("dev", "/ss")).unwrap();
@@ -123,10 +126,8 @@ fn userspace_test_script() {
         AbiStructures { stdio },
     )
     .unwrap();
+    // thread yields, so works even when interrupts are disabled
     let ret = wait(pid);
 
     assert_eq!(ret, 0);
-    unsafe {
-        crate::arch::enable_interrupts();
-    }
 }
