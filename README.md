@@ -131,5 +131,6 @@ check out [CONTRIBUTING.md](/CONTRIBUTING.md)
 
 ## Credits
 currently uses the [limine](https://limine-bootloader.org/) bootloader.
-
-special thanks to the developers of [MinOS](https://github.com/Dcraftbg/MinOS/), [TacOS](https://github.com/UnmappedStack/TacOS), and [BananaOS](https://github.com/Bananymous/banan-os) for helping develop this (this is my first ever OSDev project)
+Thanks to the developers of:
+- [MinOS](https://github.com/Dcraftbg/MinOS/), [TacOS](https://github.com/UnmappedStack/TacOS), and [BananaOS](https://github.com/Bananymous/banan-os) for helping develop this.
+- [StelluxOS](github.com/FlareCoding/StelluxOS) for their awesome OS and [XHCI tutorial](https://youtube.com/playlist?list=PLATP7rOKo3E82tBnMp90B4zejpWeAKlxn&si=jaSRzg3dK3L4D3Dt), which helped me implemented USB support.
