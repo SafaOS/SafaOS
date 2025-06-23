@@ -38,7 +38,9 @@ Overview of what the VFS can currently do & ported file systems:
 - [X] unix-like devices FS `dev:/` (TmpFS under the hood)
 
 # Devices & Drivers
-- [X] PS2 Keyboard Driver
+- [X] XHCI Driver
+- [X] PS2 Keyboard Driver (x86_64 only)
+- [X] USB Keyboard Driver
 - [X] Serial Device: `dev:/ss`
 - [X] TTY Emulator: `dev:/tty` (to be removed)
 - [ ] Framebuffer Device: `dev:/fb`
@@ -46,3 +48,4 @@ Overview of what the VFS can currently do & ported file systems:
 # Bootloaders
 - [X] UEFI Limine
 - [ ] BIOS Limine
+- [ ] Generic abstraction interface over bootloaders
