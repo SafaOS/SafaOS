@@ -121,7 +121,7 @@ fn d_create_benchmarks() {
         let path = path_to_test_file!(i);
         let create_start_time = time!(us);
         // === actually create ====
-        core::hint::black_box(vfs.createfile(path).expect("failed to create file"));
+        vfs.createfile(path).expect("failed to create file");
         let create_end_time = time!(us);
 
         // cleanup
