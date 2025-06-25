@@ -95,7 +95,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysReboot => power::reboot(),
             SyscallTable::SysUptime => Ok({
                 let dest_uptime = <&mut u64>::make(a as *mut u64)?;
-                *dest_uptime = time!();
+                *dest_uptime = time!(ms);
             }),
             #[allow(unreachable_patterns)]
             syscall => {

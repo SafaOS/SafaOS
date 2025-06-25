@@ -72,8 +72,11 @@ macro_rules! serial {
 /// Returns the number of milliseconds since the CPU was started
 #[macro_export]
 macro_rules! time {
-    () => {
-        $crate::arch::utils::time()
+    (ms) => {
+        $crate::arch::utils::time_ms()
+    };
+    (us) => {
+        $crate::arch::utils::time_us()
     };
 }
 
@@ -86,10 +89,10 @@ macro_rules! time {
 /// sleep!(N) (ms)
 macro_rules! sleep {
     ($ms: expr) => {{
-        let start_time = $crate::time!();
+        let start_time = $crate::time!(ms);
         let timeout_time = start_time + $ms as u64;
 
-        while $crate::time!() < timeout_time {
+        while $crate::time!(ms) < timeout_time {
             core::hint::spin_loop()
         }
     }};
@@ -117,12 +120,12 @@ macro_rules! sleep_until {
     }};
 
     ($timeout_ms: literal ms, $cond: expr) => {{
-        let start_time = $crate::time!();
+        let start_time = $crate::time!(ms);
         let timeout_time = start_time + $timeout_ms;
         let mut success = true;
 
         while !$cond {
-            if $crate::time!() >= timeout_time {
+            if $crate::time!(ms) >= timeout_time {
                 success = $cond;
                 break;
             }

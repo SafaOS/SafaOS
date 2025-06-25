@@ -46,7 +46,7 @@ pub(crate) fn log_time_from_ms(ms: u64) -> (u32, u8, u8, u16) {
 #[macro_export]
 macro_rules! generic_log {
     ($write_macro:ident, $($arg:tt)*) => {{
-        let log_time = $crate::time!();
+        let log_time = $crate::time!(ms);
         let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
         $crate::$write_macro!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
     }};

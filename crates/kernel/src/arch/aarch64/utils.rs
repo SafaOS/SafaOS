@@ -41,7 +41,24 @@ pub static CPU_INFO: Lazy<CpuInfo> = Lazy::new(CpuInfo::fetch);
 
 #[inline(always)]
 /// Returns the number of milliseconds since the CPU was started
-pub fn time() -> u64 {
+pub fn time_ms() -> u64 {
+    let count: u64;
+    let freq: u64;
+    unsafe {
+        core::arch::asm!(
+            "isb",
+            "mrs {cnt}, cntpct_el0",
+            "mrs {frq}, cntfrq_el0",
+            cnt = out(reg) count,
+            frq = out(reg) freq,
+        );
+    }
+    count / (freq / 1000)
+}
+
+#[inline(always)]
+/// Returns the number of microseconds since the CPU was started
+pub fn time_us() -> u64 {
     let count: u64;
     let freq: u64;
     unsafe {

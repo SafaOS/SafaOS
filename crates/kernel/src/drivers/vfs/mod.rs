@@ -16,8 +16,11 @@ use crate::{
         ustar::{self, TarArchiveIter},
     },
 };
+
 pub mod procfs;
 pub mod ramfs;
+#[cfg(test)]
+pub mod tests;
 
 use crate::utils::locks::{Mutex, RwLock};
 use crate::utils::path::Path;
@@ -109,7 +112,7 @@ impl Drop for FileDescriptor {
     }
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FSError {
     InvalidResource,
@@ -427,7 +430,7 @@ impl VFS {
         );
 
         let moment_memory_usage = frame_allocator::mapped_frames();
-        let the_now = time!();
+        let the_now = time!(ms);
         // temporary directory
         let tempfs = RwLock::new(ramfs::RamFS::new());
         this.mount(DriveName::new_const("tmp"), tempfs).unwrap();
@@ -453,7 +456,7 @@ impl VFS {
         this.mount(DriveName::new_const("sys"), ramfs)
             .expect("failed mounting");
 
-        let elapsed = time!() - the_now;
+        let elapsed = time!(ms) - the_now;
         let used_memory = frame_allocator::mapped_frames() - moment_memory_usage;
         let total_memory_used = frame_allocator::mapped_frames();
 

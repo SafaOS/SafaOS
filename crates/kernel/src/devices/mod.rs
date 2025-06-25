@@ -20,7 +20,7 @@ pub fn add_device(vfs: &VFS, device: &'static dyn Device) {
 /// Mounts devices to the `dev:/` file system in the VFS
 pub fn init(vfs: &mut VFS) {
     debug!(VFS, "Initializing devices ...");
-    let now = time!();
+    let now = time!(ms);
     vfs.mount(
         DriveName::new_const("dev"),
         RwLock::new(vfs::ramfs::RamFS::new()),
@@ -28,7 +28,7 @@ pub fn init(vfs: &mut VFS) {
     .expect("failed to mount `dev:/`");
     add_device(vfs, &*FRAMEBUFFER_TERMINAL);
     add_device(vfs, &*SERIAL);
-    let elapsed = time!() - now;
+    let elapsed = time!(ms) - now;
     debug!(VFS, "Initialized devices in ({}ms) ...", elapsed);
 }
 

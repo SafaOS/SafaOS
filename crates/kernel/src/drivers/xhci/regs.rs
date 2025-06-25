@@ -13,7 +13,7 @@ use crate::{
         frame_allocator::{self, Frame},
         paging::PAGE_SIZE,
     },
-    sleep, sleep_until, time, warn, PhysAddr, VirtAddr,
+    sleep, sleep_until, warn, PhysAddr, VirtAddr,
 };
 use bitflags::bitflags;
 use core::fmt::Display;
@@ -759,19 +759,11 @@ impl<'s> XHCIRegisters<'s> {
             regs.usbcmd | USBCmd::RUN | USBCmd::INTERRUPT_ENABLE
         );
 
-        let timeout = 1000;
-        let time = time!();
-
-        while read_ref!(regs.usbstatus).contains(USBSts::HCHALTED) {
-            let now = time!();
-            if now >= time + timeout {
-                panic!(
-                    "timeout after {}ms while resetting the XHCI, HCHALTED did not clear: {:?}",
-                    now,
-                    read_ref!(regs.usbstatus)
-                )
-            }
-            core::hint::spin_loop();
+        if !sleep_until!(1000 ms, !read_ref!(regs.usbstatus).contains(USBSts::HCHALTED)) {
+            panic!(
+                "timeout after 1 second while resetting the XHCI, HCHALTED did not clear: {:?}",
+                read_ref!(regs.usbstatus)
+            )
         }
 
         assert!(!read_ref!(regs.usbstatus).contains(USBSts::NOT_READY));
@@ -785,39 +777,24 @@ impl<'s> XHCIRegisters<'s> {
 
         write_ref!(regs.usbcmd, regs.usbcmd & !USBCmd::RUN);
 
-        let timeout = 200;
-        let time = time!();
-
-        while !read_ref!(regs.usbstatus).contains(USBSts::HCHALTED) {
-            let now = time!();
-            if now >= time + timeout {
-                panic!(
-                    "timeout after {}ms while resetting the XHCI, HCHALTED did not set: {:?}",
-                    now,
-                    read_ref!(regs.usbstatus)
-                )
-            }
-            core::hint::spin_loop();
+        if !sleep_until!(200 ms, read_ref!(regs.usbstatus).contains(USBSts::HCHALTED)) {
+            panic!(
+                "timeout after 200ms while resetting the XHCI, HCHALTED did not set: {:?}",
+                read_ref!(regs.usbstatus)
+            )
         }
 
         // reset the controller
         write_ref!(regs.usbcmd, read_ref!(regs.usbcmd) | USBCmd::HCRESET);
 
-        let timeout = 1000;
-        let time = time!();
-
-        while read_ref!(regs.usbcmd).contains(USBCmd::HCRESET)
-            || read_ref!(regs.usbstatus).contains(USBSts::NOT_READY)
-        {
-            let now = time!();
-            if now >= time + timeout {
-                panic!(
-                    "timeout after {}ms while resetting controller, controller was never ready: {:?}",
-                    now - time,
-                    read_ref!(regs.usbcmd),
-                )
-            }
-            core::hint::spin_loop();
+        if !sleep_until!(1000 ms,
+            !read_ref!(regs.usbcmd).contains(USBCmd::HCRESET)
+                            && !read_ref!(regs.usbstatus).contains(USBSts::NOT_READY)
+        ) {
+            panic!(
+                "timeout after 1000ms while resetting controller, controller was never ready: {:?}",
+                read_ref!(regs.usbcmd),
+            )
         }
         // asserts the controller was reset
         assert_eq!(regs.usbcmd, USBCmd::empty());

@@ -25,7 +25,7 @@ impl KernelInfo {
             version: KERNEL_CODE_VERSION,
             compile_date: COMPILE_DATE,
             compile_time: COMPILE_TIME,
-            uptime: crate::time!(),
+            uptime: crate::time!(ms),
         }
     }
 }
