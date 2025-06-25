@@ -1,7 +1,7 @@
 use safa_utils::{make_path, path::Path, types::DriveName};
 
 use crate::{
-    drivers::vfs::{ramfs::RamFS, FSError, FileSystem, VFS},
+    drivers::vfs::{ramfs::RamFS, FSError, FileDescriptor, FileSystem, VFS},
     time,
     utils::locks::RwLock,
 };
@@ -96,4 +96,142 @@ fn c_create_stuff() {
     );
     // ==== Creating an existing file in directory =======
     assert_eq!(vfs.createfile(test_file_path), Err(FSError::AlreadyExists));
+}
+
+#[test_case]
+fn d_create_benchmarks() {
+    let mut fmt_buffer = heapless::String::<20>::new();
+    use core::fmt::Write;
+    macro_rules! path_to_test_file {
+        ($n: expr) => {{
+            write!(&mut fmt_buffer, "test_file_{}", $n).expect("failed to generate test file name");
+            let path = make_path!("test", &*fmt_buffer);
+            path
+        }};
+    }
+
+    let mut vfs = VFS::new();
+
+    // ======= Mounting Filesystem =======
+    mount_test_filesystem(&mut vfs);
+    // ======= Creating Files =======
+    const CREATE_AMOUNT: usize = 100;
+    let mut results = heapless::Vec::<u64, CREATE_AMOUNT>::new();
+    for i in 0..CREATE_AMOUNT {
+        let path = path_to_test_file!(i);
+        let create_start_time = time!(us);
+        // === actually create ====
+        core::hint::black_box(vfs.createfile(path).expect("failed to create file"));
+        let create_end_time = time!(us);
+
+        // cleanup
+        fmt_buffer.clear();
+
+        let delta_time = create_end_time - create_start_time;
+        results.push(delta_time).unwrap();
+    }
+
+    fn calculate_results_time(results: &[u64]) -> (u64, u64, u64, u64) {
+        let mut total_time = 0;
+        let mut peak_time = 0;
+        let mut min_time = u64::MAX;
+
+        for time in results.iter() {
+            total_time += time;
+            if *time > peak_time {
+                peak_time = *time;
+            }
+            if *time < min_time {
+                min_time = *time;
+            }
+        }
+
+        let average_time = total_time / CREATE_AMOUNT as u64;
+        (total_time, peak_time, min_time, average_time)
+    }
+
+    macro_rules! log_results_time {
+        ($results:expr, $results_of: literal) => {{
+            let (total_time, peak_time, min_time, average_time) = calculate_results_time(&*$results);
+            test_log!(
+                  "'{}' {} files in {}us ({}ms), peak {}us ({}ms), min {}us ({}ms), average {}us ({}ms)",
+                  $results_of,
+                  CREATE_AMOUNT,
+                  total_time,
+                  total_time / 1000,
+                  peak_time,
+                  peak_time / 1000,
+                  min_time,
+                  min_time / 1000,
+                  average_time,
+                  average_time / 1000
+              );
+        }};
+    }
+
+    log_results_time!(results, "created");
+
+    // ====== Opening Files =======
+    let mut results = heapless::Vec::<u64, CREATE_AMOUNT>::new();
+    let mut result_descriptors = heapless::Vec::<FileDescriptor, CREATE_AMOUNT>::new();
+
+    for i in 0..CREATE_AMOUNT {
+        let path = path_to_test_file!(i);
+        let open_start_time = time!(us);
+        // === actually open ====
+        let descriptor = vfs.open(path).expect("failed to open file");
+        let open_end_time = time!(us);
+
+        //clean up
+        fmt_buffer.clear();
+
+        let delta_time = open_end_time - open_start_time;
+
+        results.push(delta_time).unwrap();
+        _ = result_descriptors.push(descriptor);
+    }
+
+    log_results_time!(results, "opened");
+
+    // ===== Write to Files =====
+    let mut results = heapless::Vec::<u64, CREATE_AMOUNT>::new();
+    const WRITE_MESSAGE: &[u8] = b"Hello, World!";
+
+    for i in 0..CREATE_AMOUNT {
+        let fd = &mut result_descriptors[i];
+        let write_start_time = time!(us);
+        // actually write to files
+        fd.write(0, WRITE_MESSAGE).expect("failed to write to file");
+        let write_end_time = time!(us);
+        let delta_time = write_end_time - write_start_time;
+
+        results.push(delta_time).unwrap();
+    }
+
+    log_results_time!(results, "wrote");
+
+    // ===== Read from Files =====
+    let mut results = heapless::Vec::<u64, CREATE_AMOUNT>::new();
+
+    for i in 0..CREATE_AMOUNT {
+        let fd = &mut result_descriptors[i];
+        let mut buf = [0; (WRITE_MESSAGE).len()];
+
+        let read_start_time = time!(us);
+        // actually read from files
+        fd.read(0, &mut buf).expect("failed to write to file");
+        let read_end_time = time!(us);
+
+        // verify results
+        assert_eq!(
+            &buf, WRITE_MESSAGE,
+            "file {i} yielded invalid data after read"
+        );
+
+        let delta_time = read_end_time - read_start_time;
+
+        results.push(delta_time).unwrap();
+    }
+
+    log_results_time!(results, "read");
 }
