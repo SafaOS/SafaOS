@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::drivers::vfs::expose::{DirEntry, FileAttr};
-use crate::drivers::vfs::{FSObjectID, FSObjectType, SeekOffset};
+use crate::drivers::vfs::{CtlArgs, FSObjectID, FSObjectType, SeekOffset};
 use crate::utils::alloc::PageVec;
 use crate::utils::locks::RwLock;
 use alloc::boxed::Box;
@@ -111,6 +111,13 @@ impl RamFSObject {
         match self.state {
             RamFSObjectState::Data(_) => Ok(()),
             RamFSObjectState::StaticDevice(device) => device.sync(),
+            _ => Err(FSError::NotAFile),
+        }
+    }
+
+    fn ctl<'a>(&'a self, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
+        match self.state {
+            RamFSObjectState::StaticDevice(device) => device.ctl(cmd, args),
             _ => Err(FSError::NotAFile),
         }
     }
@@ -414,6 +421,12 @@ impl FileSystem for RwLock<RamFS> {
 
     fn sync(&self, id: FSObjectID) -> FSResult<()> {
         self.write().sync(id)
+    }
+
+    fn ctl<'a>(&'a self, id: FSObjectID, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
+        let read_guard = self.read();
+        let obj = read_guard.fget(id)?;
+        obj.ctl(cmd, args)
     }
 
     fn truncate(&self, id: FSObjectID, size: usize) -> FSResult<()> {

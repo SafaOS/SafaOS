@@ -35,6 +35,15 @@ use safa_utils::{
     types::{DriveName, FileName},
 };
 
+lazy_static! {
+    pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
+}
+
+pub enum SeekOffset {
+    Start(usize),
+    End(usize),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum FSError {
     NotFound,
@@ -205,12 +214,7 @@ impl VFSObjectID {
 
 impl Drop for VFSObjectID {
     fn drop(&mut self) {
-        self.sync().unwrap_or_else(|e| {
-            error!(
-                VFS,
-                "failed to sync a file before closing it which should never happen: {:?}", e
-            )
-        });
+        _ = self.sync();
 
         self.fs.on_close(self.fs_obj_id).unwrap_or_else(|e| {
             error!(
@@ -218,6 +222,65 @@ impl Drop for VFSObjectID {
                 "failed to close a file which should never happen: {:?}", e
             )
         });
+    }
+}
+
+/// A descriptor of the items of an open FS Object Collection (Directory)
+#[derive(Debug, Clone)]
+pub struct CollectionIterDescriptor {
+    entries: Box<[DirEntry]>,
+    index: usize,
+}
+
+impl CollectionIterDescriptor {
+    const fn new(entries: Box<[DirEntry]>) -> Self {
+        Self { entries, index: 0 }
+    }
+
+    pub fn next(&mut self) -> Option<DirEntry> {
+        let index = self.index;
+        self.index += 1;
+        self.entries.get(index).cloned()
+    }
+}
+
+#[derive(Debug)]
+pub struct CtlArgs<'a> {
+    index: usize,
+    args: &'a [usize],
+}
+
+pub trait CtlArg: Sized {
+    fn try_from(value: usize) -> Option<Self>;
+}
+
+impl<T: TryFrom<usize>> CtlArg for T {
+    fn try_from(value: usize) -> Option<Self> {
+        TryFrom::try_from(value).ok()
+    }
+}
+
+impl<'a> CtlArgs<'a> {
+    pub fn new(args: &'a [usize]) -> Self {
+        Self { index: 0, args }
+    }
+
+    pub fn get_ref_to<'b, T>(&mut self) -> FSResult<&'b mut T> {
+        let it = self.get_ty::<usize>()? as *mut T;
+
+        if it.is_null() || !it.is_aligned() {
+            return Err(FSError::InvalidCtlArg);
+        }
+        Ok(unsafe { &mut *it })
+    }
+
+    pub fn get_ty<T: CtlArg>(&mut self) -> FSResult<T> {
+        let it = self
+            .args
+            .get(self.index)
+            .ok_or(FSError::NotEnoughArguments)?;
+        self.index += 1;
+        T::try_from(*it).ok_or(FSError::InvalidCtlArg)
     }
 }
 
@@ -251,11 +314,6 @@ where
     }
 
     Ok(current_object_id)
-}
-
-pub enum SeekOffset {
-    Start(usize),
-    End(usize),
 }
 
 pub trait FileSystem: Send + Sync {
@@ -337,15 +395,9 @@ pub trait FileSystem: Send + Sync {
 
     fn resolve_path_rel(&self, parent_id: FSObjectID, path: PathParts) -> FSResult<FSObjectID>;
 
-    fn on_open(&self, id: FSObjectID) -> FSResult<()> {
-        _ = id;
-        Err(FSError::OperationNotSupported)
-    }
+    fn on_open(&self, id: FSObjectID) -> FSResult<()>;
 
-    fn on_close(&self, id: FSObjectID) -> FSResult<()> {
-        _ = id;
-        Err(FSError::OperationNotSupported)
-    }
+    fn on_close(&self, id: FSObjectID) -> FSResult<()>;
 
     fn sync(&self, id: FSObjectID) -> FSResult<()> {
         _ = id;
@@ -382,344 +434,13 @@ impl dyn FileSystem + '_ {
     fn resolve_path_abs(&self, path: PathParts) -> FSResult<FSObjectID> {
         self.resolve_path_rel(self.root_object_id(), path)
     }
-
-    fn resolve_path_rel2(&self, relative_to: PathParts, path: PathParts) -> FSResult<FSObjectID> {
-        let root_id = self.root_object_id();
-        let first_id = self.resolve_path_rel(root_id, relative_to)?;
-        self.resolve_path_rel(first_id, path)
-    }
-
-    fn open_abs(&self, path: PathParts) -> FSResult<FSObjectID> {
-        let obj = self.resolve_path_abs(path)?;
-        self.on_open(obj)?;
-        Ok(obj)
-    }
-
-    fn open_rel(&self, relative_to: PathParts, path: PathParts) -> FSResult<FSObjectID> {
-        let obj = self.resolve_path_rel2(relative_to, path)?;
-        self.on_open(obj)?;
-        Ok(obj)
-    }
 }
-
-lazy_static! {
-    pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
-}
-
-#[derive(Debug)]
-pub struct CtlArgs<'a> {
-    index: usize,
-    args: &'a [usize],
-}
-
-pub trait CtlArg: Sized {
-    fn try_from(value: usize) -> Option<Self>;
-}
-
-impl<T: TryFrom<usize>> CtlArg for T {
-    fn try_from(value: usize) -> Option<Self> {
-        TryFrom::try_from(value).ok()
-    }
-}
-
-impl<'a> CtlArgs<'a> {
-    pub fn new(args: &'a [usize]) -> Self {
-        Self { index: 0, args }
-    }
-
-    pub fn get_ref_to<'b, T>(&mut self) -> FSResult<&'b mut T> {
-        let it = self.get_ty::<usize>()? as *mut T;
-
-        if it.is_null() || !it.is_aligned() {
-            return Err(FSError::InvalidCtlArg);
-        }
-        Ok(unsafe { &mut *it })
-    }
-
-    pub fn get_ty<T: CtlArg>(&mut self) -> FSResult<T> {
-        let it = self
-            .args
-            .get(self.index)
-            .ok_or(FSError::NotEnoughArguments)?;
-        self.index += 1;
-        T::try_from(*it).ok_or(FSError::InvalidCtlArg)
-    }
-}
-
-// /// Defines a file descriptor resource
-// #[derive(Clone)]
-// pub struct FileDescriptor {
-//     mountpoint: Arc<dyn FileSystem>,
-//     node: Inode,
-// }
-
-// impl FileDescriptor {
-//     fn new(mountpoint: Arc<dyn FileSystem>, node: Inode) -> Self {
-//         Self { mountpoint, node }
-//     }
-
-//     pub fn close(&mut self) {
-//         _ = self.node.sync();
-//         self.node.close();
-//     }
-
-//     #[inline(always)]
-//     pub fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
-//         self.node.read(offset, buffer)
-//     }
-
-//     #[inline(always)]
-//     pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
-//         self.node.write(offset, buffer)
-//     }
-
-//     #[inline(always)]
-//     pub fn truncate(&self, len: usize) -> FSResult<()> {
-//         self.node.truncate(len)
-//     }
-
-//     #[inline(always)]
-//     pub fn sync(&self) -> FSResult<()> {
-//         self.node.sync()
-//     }
-
-//     #[inline(always)]
-//     pub fn open_diriter(&self) -> FSResult<DirIterDescriptor> {
-//         let inodes = self.node.open_diriter()?;
-//         let fs = self.mountpoint.clone();
-//         Ok(DirIterDescriptor::new(fs, inodes))
-//     }
-
-//     #[inline(always)]
-//     pub fn kind(&self) -> InodeType {
-//         self.node.kind()
-//     }
-
-//     #[inline(always)]
-//     pub fn ctl<'a>(&'a self, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
-//         self.node.ctl(cmd, args)
-//     }
-
-//     #[inline(always)]
-//     pub fn size(&self) -> usize {
-//         self.node.size().unwrap_or(0)
-//     }
-
-//     #[inline(always)]
-//     pub fn attrs(&self) -> FileAttr {
-//         FileAttr::from_inode(&self.node)
-//     }
-// }
-
-// impl Drop for FileDescriptor {
-//     fn drop(&mut self) {
-//         self.close();
-//     }
-// }
-
-// #[derive(Debug, Clone, Error, PartialEq, Eq)]
-// #[repr(u8)]
-// pub enum FSError {
-//     InvalidResource,
-//     OperationNotSupported,
-//     NotAFile,
-//     NotADirectory,
-//     NoSuchAFileOrDirectory,
-//     InvalidDrive,
-//     InvalidPath,
-//     PathTooLong,
-//     AlreadyExists,
-//     NotExecutable,
-//     InvalidOffset,
-//     InvalidName,
-//     /// Ctl
-//     InvalidCtlCmd,
-//     InvalidCtlArg,
-//     NotEnoughArguments,
-// }
-
-// InodeType implementition
-// pub use safa_utils::abi::raw::io::InodeType;
-
-// pub trait InodeOps: Send + Sync {
-//     /// gets an Inode from self
-//     fn get(&self, name: &str) -> FSResult<usize> {
-//         _ = name;
-//         FSResult::Err(FSError::OperationNotSupported)
-//     }
-//     /// returns the size of node
-//     /// different nodes may use this differently but in case it is a normal file it will always give the
-//     /// file size in bytes
-//     fn size(&self) -> FSResult<usize> {
-//         Err(FSError::OperationNotSupported)
-//     }
-//     /// attempts to read `buffer.len` bytes of node data if it is a file
-//     /// returns the amount of bytes read
-//     /// offset in negative values acts the same as reading from at the end of the file + offset + 1
-//     fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
-//         _ = buffer;
-//         _ = offset;
-//         Err(FSError::OperationNotSupported)
-//     }
-//     /// attempts to write `buffer.len` bytes from `buffer` into node data if it is a file starting
-//     /// from offset
-//     /// extends the nodes data and node size if `buffer.len` + `offset` is greater then node size
-//     /// returns the amount of bytes written
-//     /// offset in negative values acts the same as writing to at the end of the file + offset + 1
-//     fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
-//         _ = buffer;
-//         _ = offset;
-//         Err(FSError::OperationNotSupported)
-//     }
-
-//     /// attempts to insert a node to self
-//     /// returns an FSError::NotADirectory if not a directory
-//     fn insert(&self, name: Name, node: usize) -> FSResult<()> {
-//         _ = name;
-//         _ = node;
-//         Err(FSError::OperationNotSupported)
-//     }
-
-//     fn truncate(&self, size: usize) -> FSResult<()> {
-//         _ = size;
-//         Err(FSError::OperationNotSupported)
-//     }
-
-//     fn inodeid(&self) -> usize;
-//     fn kind(&self) -> InodeType;
-
-//     #[inline(always)]
-//     fn is_dir(&self) -> bool {
-//         self.kind() == InodeType::Directory
-//     }
-
-//     fn open_diriter(&self) -> FSResult<Box<[DirIterInodeItem]>> {
-//         Err(FSError::OperationNotSupported)
-//     }
-
-//     /// executes when the inode is opened
-//     /// will be always called when the inode is opened, regardless of the file system
-//     fn opened(&self) {
-//         _ = self;
-//     }
-//     /// executes when the inode is closed
-//     /// will be always called when the inode is closed, regardless of the file system
-//     fn close(&self) {
-//         _ = self;
-//     }
-
-//     /// syncs the inode reads and writes
-//     fn sync(&self) -> FSResult<()> {
-//         Ok(())
-//     }
-
-//     fn ctl<'a>(&'a self, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
-//         _ = cmd;
-//         _ = args;
-//         Err(FSError::OperationNotSupported)
-//     }
-// }
-
-/// unknown inode type
-// pub type Inode = Arc<dyn InodeOps>;
-
-/// inode type with a known type
-// pub type InodeOf<T> = Arc<T>;
-// pub type DirIterInodeItem = (FileName, usize);
-
-/// A descriptor of the items of an open FS Object Collection (Directory)
-#[derive(Debug, Clone)]
-pub struct CollectionIterDescriptor {
-    entries: Box<[DirEntry]>,
-    index: usize,
-}
-
-impl CollectionIterDescriptor {
-    const fn new(entries: Box<[DirEntry]>) -> Self {
-        Self { entries, index: 0 }
-    }
-
-    pub fn next(&mut self) -> Option<DirEntry> {
-        let index = self.index;
-        self.index += 1;
-        self.entries.get(index).cloned()
-    }
-}
-
-// pub trait FileSystem: Send + Sync {
-//     fn name(&self) -> &'static str;
-
-//     fn get_inode(&self, inode_id: usize) -> Option<Inode>;
-//     #[inline(always)]
-//     fn root_inode(&self) -> Inode {
-//         self.get_inode(0).unwrap()
-//     }
-
-//     /// called when a file is opened
-//     /// will be always called before the inode is opened, regardless of the file system
-//     fn on_open(&self, path: Path) -> FSResult<()> {
-//         _ = path;
-//         Ok(())
-//     }
-
-//     /// goes trough path to get the inode it refers to
-//     /// will err if there is no such a file or directory or path is straight up invalid
-//     fn resolve_pathparts(&self, path: PathParts, root_node: Inode) -> FSResult<Inode> {
-//         let mut current_inode = root_node;
-//         if path.is_empty() {
-//             return Ok(current_inode);
-//         }
-
-//         for depth in path.iter() {
-//             if depth == "." {
-//                 continue;
-//             }
-
-//             if !current_inode.is_dir() {
-//                 return Err(FSError::NotADirectory);
-//             }
-
-//             let inodeid = current_inode.get(depth)?;
-//             current_inode = self.get_inode(inodeid).unwrap();
-//         }
-
-//         Ok(current_inode)
-//     }
-
-//     /// creates an empty file named `name` relative to Inode
-//     fn create(&self, node: Inode, name: &str) -> FSResult<()> {
-//         _ = node;
-//         _ = name;
-//         Err(FSError::OperationNotSupported)
-//     }
-
-//     /// creates an empty dir named `name` relative to Inode
-//     fn createdir(&self, node: Inode, name: &str) -> FSResult<()> {
-//         _ = node;
-//         _ = name;
-//         Err(FSError::OperationNotSupported)
-//     }
-
-//     /// mounts a device as `name` relative to `node`
-//     fn mount_device(&self, node: Inode, name: &str, device: &'static dyn Device) -> FSResult<()> {
-//         _ = device;
-//         _ = node;
-//         _ = name;
-//         Err(FSError::OperationNotSupported)
-//     }
-// }
 
 impl Debug for dyn FileSystem {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.name())
     }
 }
-
-// impl Debug for dyn InodeOps {
-//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-//         f.debug_tuple("Inode").field(&self.inodeid()).finish()
-//     }
-// }
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct VFS {
