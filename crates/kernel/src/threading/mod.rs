@@ -4,7 +4,7 @@ pub mod task;
 #[cfg(test)]
 mod tests;
 
-pub type Pid = usize;
+pub type Pid = u32;
 
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
@@ -12,7 +12,7 @@ use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 use crate::utils::locks::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::utils::types::Name;
 use crate::VirtAddr;
-use alloc::{boxed::Box, rc::Rc, vec::Vec};
+use alloc::{boxed::Box, rc::Rc};
 use slab::Slab;
 use task::{Task, TaskInfo, TaskState};
 
@@ -98,8 +98,8 @@ impl Scheduler {
 
     /// appends a task to the end of the scheduler taskes list
     /// returns the pid of the added task
-    fn add_task(&mut self, mut task: Task) -> usize {
-        let pid = self.pids.insert(());
+    fn add_task(&mut self, mut task: Task) -> Pid {
+        let pid = self.pids.insert(()) as Pid;
         task.pid = pid;
         self.tasks.push(Rc::new(task));
 
@@ -128,9 +128,9 @@ impl Scheduler {
 
     /// iterates through all taskes and executes `then` on each of them
     /// executed on all taskes
-    fn for_each<T>(&self, then: T)
+    pub fn for_each<T>(&self, mut then: T)
     where
-        T: Fn(&Task),
+        T: FnMut(&Task),
     {
         for task in self.tasks.clone_iter() {
             then(task);
@@ -145,7 +145,7 @@ impl Scheduler {
             .map(|task| TaskInfo::from(&*task));
 
         if let Some(ref info) = result {
-            self.pids.remove(info.pid);
+            self.pids.remove(info.pid as usize);
         }
         result
     }
@@ -156,14 +156,8 @@ impl Scheduler {
         self.tasks.len() > 0
     }
 
-    #[inline(always)]
-    pub fn pids(&self) -> Vec<Pid> {
-        let mut vec = Vec::with_capacity(self.pids.len());
-        for task in self.tasks.clone_iter() {
-            vec.push(task.pid);
-        }
-
-        vec
+    pub fn pids_len(&self) -> usize {
+        self.pids.len()
     }
 }
 
@@ -200,7 +194,7 @@ pub fn this() -> &'static Task {
 }
 
 /// acquires lock on scheduler and finds a task where executing `condition` on returns true
-fn find<C>(condition: C) -> Option<Rc<Task>>
+pub fn find<C>(condition: C) -> Option<Rc<Task>>
 where
     C: Fn(&Task) -> bool,
 {
@@ -217,7 +211,7 @@ where
 }
 
 /// acquires lock on scheduler and adds a task to it
-fn add(task: Task) -> usize {
+fn add(task: Task) -> Pid {
     SCHEDULER.write().add_task(task)
 }
 

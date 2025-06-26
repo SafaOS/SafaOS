@@ -1,6 +1,7 @@
 use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
+use crate::threading::Pid;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
@@ -87,7 +88,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysCtl => io::sysctl_raw(a, b, (c as *const usize, d)),
             // processes
             SyscallTable::SysPSpawn => {
-                processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut usize)
+                processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut Pid)
             }
             SyscallTable::SysWait => processes::syswait_raw(a, b as *mut usize),
             // power

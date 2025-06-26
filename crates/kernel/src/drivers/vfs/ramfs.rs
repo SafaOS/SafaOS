@@ -1,308 +1,492 @@
-use core::str::FromStr;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::utils::locks::{Mutex, RwLock};
-use crate::utils::types::Name;
+use crate::drivers::vfs::expose::{DirEntry, FileAttr};
+use crate::drivers::vfs::{FSObjectID, FSObjectType, SeekOffset};
+use crate::utils::alloc::PageVec;
+use crate::utils::locks::RwLock;
 use alloc::boxed::Box;
-use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
+use safa_utils::path::PathParts;
 
 use crate::devices::Device;
-use crate::memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR};
 
-use super::{DirIterInodeItem, FileName, InodeOf};
-use super::{FSError, FSResult, FileSystem, Inode, InodeOps, InodeType};
+use super::FileName;
+use super::{FSError, FSResult, FileSystem};
 
-/// The data of a RamInode
-// you cannot just lock the whole enum because Devices' manage their own locks
-pub enum RamInodeData {
-    Data(Mutex<Vec<u8, PageAlloc>>),
-    Children(Mutex<HashMap<FileName, usize>>),
-    HardLink(Inode),
-    Device(&'static dyn Device),
+pub enum RamFSObjectState {
+    Data(PageVec<u8>),
+    Collection(HashMap<FileName, FSObjectID>),
+    StaticDevice(&'static dyn Device),
 }
 
-pub struct RamInode {
-    data: RamInodeData,
-    inodeid: usize,
-}
-impl RamInode {
-    fn new(data: RamInodeData, inodeid: usize) -> Self {
-        Self { data, inodeid }
-    }
-
-    fn new_file(inodeid: usize) -> InodeOf<Self> {
-        Arc::new(RamInode::new(
-            RamInodeData::Data(Mutex::new(Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR))),
-            inodeid,
-        ))
-    }
-
-    fn new_dir(inodeid: usize) -> InodeOf<Self> {
-        Arc::new(RamInode::new(
-            RamInodeData::Children(Mutex::new(HashMap::new())),
-            inodeid,
-        ))
-    }
-
-    fn new_device(device: &'static dyn Device, inodeid: usize) -> InodeOf<Self> {
-        Arc::new(RamInode::new(RamInodeData::Device(device), inodeid))
-    }
-
-    fn new_hardlink(inode: Inode, inodeid: usize) -> InodeOf<Self> {
-        Arc::new(RamInode::new(RamInodeData::HardLink(inode), inodeid))
-    }
+pub struct RamFSObject {
+    state: RamFSObjectState,
+    /// the amount of times this object is referenced by another object (a collection)
+    reference_count: AtomicUsize,
+    /// the amount of handles (resources) opened on this object
+    opened_handles: AtomicUsize,
 }
 
-impl InodeOps for RamInode {
-    fn size(&self) -> FSResult<usize> {
-        match self.data {
-            RamInodeData::Data(ref data) => Ok(data.lock().len()),
-            RamInodeData::Device(ref device) => device.size(),
+impl RamFSObject {
+    const fn kind(&self) -> FSObjectType {
+        match self.state {
+            RamFSObjectState::Data(_) => FSObjectType::File,
+            RamFSObjectState::Collection(_) => FSObjectType::Directory,
+            RamFSObjectState::StaticDevice(_) => FSObjectType::Device,
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self.state {
+            RamFSObjectState::Data(ref data) => data.len(),
+            RamFSObjectState::Collection(ref collection) => collection.len(),
+            RamFSObjectState::StaticDevice(_) => 0,
+        }
+    }
+
+    fn direntry(&self, name: &str) -> DirEntry {
+        let size = self.size();
+        let kind = self.kind();
+        DirEntry::new(name, FileAttr::new(kind, size))
+    }
+
+    fn attrs(&self) -> FileAttr {
+        let size = self.size();
+        let kind = self.kind();
+        FileAttr::new(kind, size)
+    }
+
+    pub fn new(state: RamFSObjectState) -> Self {
+        Self {
+            state,
+            opened_handles: AtomicUsize::new(0),
+            reference_count: AtomicUsize::new(1),
+        }
+    }
+
+    pub fn write(&mut self, offset: SeekOffset, buf: &[u8]) -> FSResult<usize> {
+        fn write_data(data: &mut PageVec<u8>, offset: SeekOffset, buf: &[u8]) -> FSResult<usize> {
+            let start = match offset {
+                SeekOffset::Start(from_start) => from_start,
+                SeekOffset::End(from_end) => data.len().saturating_sub(from_end),
+            };
+
+            if start > data.len() {
+                return Err(FSError::InvalidOffset);
+            }
+
+            let data_len = data.len();
+            let len = data_len - start;
+            let buf_len = buf.len();
+
+            if buf_len > len {
+                data.resize((buf_len - len) + data_len, 0);
+            }
+
+            let write_len = buf_len;
+            data[start..start + write_len].copy_from_slice(&buf[..write_len]);
+
+            Ok(write_len)
+        }
+
+        match self.state {
+            RamFSObjectState::Data(ref mut data) => write_data(data, offset, buf),
+            RamFSObjectState::StaticDevice(device) => device.write(buf),
             _ => Err(FSError::NotAFile),
         }
     }
-    fn get(&self, name: &str) -> FSResult<usize> {
-        match self.data {
-            RamInodeData::Children(ref tree) => tree
-                .lock()
-                .get(name)
-                .copied()
-                .ok_or(FSError::NoSuchAFileOrDirectory),
-            RamInodeData::HardLink(ref inode) => inode.get(name),
-            RamInodeData::Device(ref device) => device.get(name),
-            _ => Err(FSError::NotADirectory),
-        }
-    }
 
-    fn truncate(&self, size: usize) -> FSResult<()> {
-        match self.data {
-            RamInodeData::Data(ref data) => {
-                data.lock().truncate(size);
+    pub fn truncate(&mut self, size: usize) -> FSResult<()> {
+        match self.state {
+            RamFSObjectState::Data(ref mut data) => {
+                data.truncate(size);
                 Ok(())
             }
-            RamInodeData::HardLink(ref inode) => inode.truncate(size),
-            RamInodeData::Device(ref device) => device.truncate(size),
             _ => Err(FSError::NotAFile),
         }
     }
 
-    fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
-        match self.data {
-            RamInodeData::Data(ref data) => {
-                let data = data.lock();
-                if offset >= data.len() as isize {
+    pub fn sync(&mut self) -> FSResult<()> {
+        match self.state {
+            RamFSObjectState::Data(_) => Ok(()),
+            RamFSObjectState::StaticDevice(device) => device.sync(),
+            _ => Err(FSError::NotAFile),
+        }
+    }
+
+    pub fn read(&self, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
+        match self.state {
+            RamFSObjectState::Data(ref data) => {
+                let start = match offset {
+                    SeekOffset::Start(from_start) => from_start,
+                    SeekOffset::End(from_end) => data.len().saturating_sub(from_end),
+                };
+
+                if start > data.len() {
                     return Err(FSError::InvalidOffset);
                 }
 
-                if offset >= 0 {
-                    let offset = offset as usize;
+                let len = buf.len().min(data.len() - start);
+                buf[..len].copy_from_slice(&data[start..start + len]);
 
-                    let count = buffer.len().min(data.len() - offset);
-                    buffer[..count].copy_from_slice(&data[offset..offset + count]);
-                    Ok(count)
-                } else {
-                    let rev_offset = (-offset) as usize;
-                    let len = data.len();
-                    if rev_offset > len + 1 {
-                        return Err(FSError::InvalidOffset);
-                    }
-
-                    drop(data);
-                    // TODO: this is slower then inlining the code ourselves
-                    self.read(((len + 1) - rev_offset) as isize, buffer)
-                }
+                Ok(len)
             }
-            RamInodeData::HardLink(ref inode) => inode.read(offset, buffer),
-            RamInodeData::Device(ref device) => device.read(offset, buffer),
+            RamFSObjectState::StaticDevice(device) => device.read(buf),
             _ => Err(FSError::NotAFile),
         }
     }
 
-    fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
-        match self.data {
-            RamInodeData::Data(ref data) => {
-                let mut data = data.lock();
-
-                if offset >= 0 {
-                    let offset = offset as usize;
-                    if data.len() < buffer.len() + offset {
-                        data.resize(buffer.len() + offset, 0);
-                    }
-
-                    data[offset..(offset + buffer.len())].copy_from_slice(buffer);
-                    Ok(buffer.len())
-                } else {
-                    let rev_offset = (-offset) as usize;
-                    let len = data.len();
-
-                    if rev_offset > len + 1 {
-                        return Err(FSError::InvalidOffset);
-                    }
-
-                    drop(data);
-                    self.write(((len + 1) - rev_offset) as isize, buffer)
-                }
-            }
-            RamInodeData::HardLink(ref inode) => inode.write(offset, buffer),
-            RamInodeData::Device(ref device) => device.write(offset, buffer),
-            _ => Err(FSError::NotAFile),
+    pub fn add_child(&mut self, object_id: FSObjectID, name: FileName) -> FSResult<()> {
+        match self.state {
+            RamFSObjectState::Collection(ref mut collection) => collection
+                .try_insert(name, object_id)
+                .map(|_| ())
+                .map_err(|_| FSError::AlreadyExists),
+            _ => Err(FSError::NotADirectory),
         }
     }
 
-    fn insert(&self, name: Name, node: usize) -> FSResult<()> {
-        match self.data {
-            RamInodeData::Children(ref tree) => {
-                let mut tree = tree.lock();
-                let name = name.into();
+    pub fn get_child(&self, name: &str) -> FSResult<FSObjectID> {
+        match self.state {
+            RamFSObjectState::Collection(ref collection) => {
+                collection.get(name).copied().ok_or(FSError::NotFound)
+            }
+            _ => Err(FSError::NotADirectory),
+        }
+    }
 
-                if tree.contains_key(&name) {
-                    return Err(FSError::AlreadyExists);
-                }
-
-                tree.insert(name, node);
+    pub fn remove_child(&mut self, name: &str) -> FSResult<()> {
+        match self.state {
+            RamFSObjectState::Collection(ref mut collection) => {
+                collection.remove(name);
                 Ok(())
             }
-            RamInodeData::HardLink(ref inode) => inode.insert(name, node),
-            RamInodeData::Device(ref device) => device.insert(name, node),
             _ => Err(FSError::NotADirectory),
         }
     }
 
-    fn kind(&self) -> InodeType {
-        match self.data {
-            RamInodeData::Children(_) => InodeType::Directory,
-            RamInodeData::Data(_) => InodeType::File,
-            RamInodeData::Device(_) => InodeType::Device,
-            RamInodeData::HardLink(ref inode) => inode.kind(),
-        }
-    }
-
-    fn inodeid(&self) -> usize {
-        self.inodeid
-    }
-    fn open_diriter(&self) -> FSResult<Box<[DirIterInodeItem]>> {
-        match self.data {
-            RamInodeData::Children(ref data) => {
-                let data = data.lock();
-                Ok(data
-                    .iter()
-                    .map(|(name, inodeid)| (name.clone(), *inodeid))
-                    .collect())
+    pub fn get_children(&self) -> FSResult<(impl Iterator<Item = (&FileName, FSObjectID)>, usize)> {
+        match self.state {
+            RamFSObjectState::Collection(ref collection) => {
+                let len = collection.len();
+                Ok((collection.iter().map(|(key, value)| (key, *value)), len))
             }
-            RamInodeData::HardLink(ref inode) => inode.open_diriter(),
-            RamInodeData::Device(ref device) => device.open_diriter(),
             _ => Err(FSError::NotADirectory),
         }
     }
 
-    fn sync(&self) -> FSResult<()> {
-        match self.data {
-            RamInodeData::HardLink(ref inode) => inode.sync(),
-            RamInodeData::Device(ref device) => device.sync(),
-            _ => Ok(()),
+    pub fn is_empty_collection(&self) -> bool {
+        match self.state {
+            RamFSObjectState::Collection(ref items) => {
+                if items.is_empty() {
+                    return true;
+                }
+                // check if the collection contains only two items that is the pointer to the previous collection and the pointer to the current collection
+                if items.len() == 2 {
+                    items.get("..").is_some() && items.get(".").is_some()
+                } else {
+                    false
+                }
+            }
+            _ => false,
         }
     }
 
-    fn ctl<'a>(&'a self, cmd: u16, args: super::CtlArgs<'a>) -> FSResult<()> {
-        match self.data {
-            RamInodeData::HardLink(ref inode) => inode.ctl(cmd, args),
-            RamInodeData::Device(ref device) => device.ctl(cmd, args),
-            _ => Err(FSError::OperationNotSupported),
+    pub const fn is_collection(&self) -> bool {
+        match self.state {
+            RamFSObjectState::Collection(_) => true,
+            _ => false,
         }
     }
 }
 
 pub struct RamFS {
-    inodes: Vec<Arc<RamInode>>,
+    objects: HashMap<FSObjectID, RamFSObject>,
+    next_id: FSObjectID,
 }
 
 impl RamFS {
-    pub fn new() -> Self {
+    fn get(&self, id: FSObjectID) -> Option<&RamFSObject> {
+        let obj = self.objects.get(&id);
+        obj
+    }
+
+    fn get_mut(&mut self, id: FSObjectID) -> Option<&mut RamFSObject> {
+        self.objects.get_mut(&id)
+    }
+
+    fn add_file(&mut self) -> FSResult<FSObjectID> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.objects
+            .insert(id, RamFSObject::new(RamFSObjectState::Data(PageVec::new())));
+        Ok(id)
+    }
+
+    /// Create a new directory object (object collection) and returns its ID
+    fn add_directory(&mut self) -> FSResult<FSObjectID> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let mut collection = HashMap::new();
+        // don't increase the reference count because these are going to be deleted when the directory is deleted, and the directory will be treated as empty
+        let previous_dir_name = FileName::new_const("..");
+        let current_dir_name = FileName::new_const(".");
+        collection.insert(previous_dir_name, id);
+        collection.insert(current_dir_name, id);
+
+        let object = RamFSObject::new(RamFSObjectState::Collection(collection));
+
+        self.objects.insert(id, object);
+        Ok(id)
+    }
+
+    /// Create a new device object and returns its ID
+    fn add_device(&mut self, device: &'static dyn Device) -> FSResult<FSObjectID> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let object = RamFSObject::new(RamFSObjectState::StaticDevice(device));
+
+        self.objects.insert(id, object);
+        Ok(id)
+    }
+
+    /// Get a reference to a file object, returns an error if the object does not exist, unlike `get` which returns None
+    fn fget(&self, id: FSObjectID) -> FSResult<&RamFSObject> {
+        self.get(id).ok_or(FSError::NotFound)
+    }
+
+    /// Get a mutable reference to a file object, returns an error if the object does not exist, unlike `get_mut` which returns None
+    fn fget_mut(&mut self, id: FSObjectID) -> FSResult<&mut RamFSObject> {
+        self.get_mut(id).ok_or(FSError::NotFound)
+    }
+}
+
+impl RamFS {
+    pub fn create() -> Self {
+        let root_collection = HashMap::new();
+        let root_obj = RamFSObject::new(RamFSObjectState::Collection(root_collection));
+        let mut objects = HashMap::new();
+        objects.insert(0, root_obj);
+
         Self {
-            inodes: vec![RamInode::new_dir(0)],
+            next_id: 1,
+            objects,
         }
     }
 
-    fn make_hardlink(&mut self, pointer_inodeid: usize) -> usize {
-        let inodeid = self.inodes.len();
-
-        let pointer_inode = self.inodes.get_mut(pointer_inodeid).unwrap();
-        let pointer_inode = pointer_inode.clone();
-
-        self.inodes
-            .push(RamInode::new_hardlink(pointer_inode, inodeid));
-        inodeid
+    fn read(&self, id: FSObjectID, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
+        let obj = self.fget(id)?;
+        let results = obj.read(offset, buf);
+        // FIXME: if the object is a pointer and the pointed object is deleted it could be a problem...
+        results
     }
 
-    fn make_file(&mut self) -> usize {
-        let inodeid = self.inodes.len();
-        let node = RamInode::new_file(inodeid);
-        self.inodes.push(node.clone());
-        inodeid
+    fn write(&mut self, id: FSObjectID, offset: SeekOffset, data: &[u8]) -> FSResult<usize> {
+        let obj = self.fget_mut(id)?;
+        let results = obj.write(offset, data);
+        // FIXME: if the object is a pointer and the pointed object is deleted it could be a problem...
+        results
     }
 
-    fn make_device(&mut self, device: &'static dyn Device) -> usize {
-        let inodeid = self.inodes.len();
-        let node = RamInode::new_device(device, inodeid);
-        self.inodes.push(node.clone());
-        inodeid
+    fn truncate(&mut self, id: FSObjectID, size: usize) -> FSResult<()> {
+        let obj = self.fget_mut(id)?;
+        let results = obj.truncate(size);
+        // FIXME: if the object is a pointer and the pointed object is deleted it could be a problem...
+        results
     }
 
-    fn make_directory(&mut self) -> Inode {
-        let inodeid = self.inodes.len();
-        let node = RamInode::new_dir(inodeid);
-        self.inodes.push(node.clone());
-        node
+    fn sync(&mut self, id: FSObjectID) -> FSResult<()> {
+        let obj = self.fget_mut(id)?;
+        let results = obj.sync();
+        // FIXME: if the object is a pointer and the pointed object is deleted it could be a problem...
+        results
+    }
+
+    fn create_file(&mut self, parent_id: FSObjectID, name: &str) -> FSResult<FSObjectID> {
+        let name = FileName::try_from(name).map_err(|_| FSError::InvalidName)?;
+
+        // ensures that the parent exists and is a collection (directory)
+        let parent = self.fget(parent_id)?;
+        if !parent.is_collection() {
+            return Err(FSError::NotADirectory);
+        }
+
+        // actually create the file
+        let created_id = self.add_file()?;
+        let parent = self.fget_mut(parent_id)?;
+
+        // append the child to the parent's children collection
+        parent.add_child(created_id, name)?;
+
+        Ok(created_id)
+    }
+
+    fn create_directory(&mut self, parent_id: FSObjectID, name: &str) -> FSResult<FSObjectID> {
+        let name = FileName::try_from(name).map_err(|_| FSError::InvalidName)?;
+
+        // ensures that the parent exists and is a collection (directory)
+        let parent = self.fget(parent_id)?;
+        if !parent.is_collection() {
+            return Err(FSError::NotADirectory);
+        }
+
+        // actually create the directory
+        let created_id = self.add_directory()?;
+        let parent = self.fget_mut(parent_id)?;
+
+        // append the child to the parent's children collection
+        parent.add_child(created_id, name)?;
+
+        Ok(created_id)
+    }
+
+    fn create_device(
+        &mut self,
+        parent_id: FSObjectID,
+        name: &str,
+        device: &'static dyn Device,
+    ) -> FSResult<FSObjectID> {
+        let name = FileName::try_from(name).map_err(|_| FSError::InvalidName)?;
+
+        // ensures that the parent exists and is a collection (directory)
+        let parent = self.fget(parent_id)?;
+        if !parent.is_collection() {
+            return Err(FSError::NotADirectory);
+        }
+
+        // actually create the directory
+        let created_id = self.add_device(device)?;
+        let parent = self.fget_mut(parent_id)?;
+
+        // append the child to the parent's children collection
+        parent.add_child(created_id, name)?;
+
+        Ok(created_id)
+    }
+
+    fn remove(
+        &mut self,
+        child_name: &str,
+        parent_id: FSObjectID,
+        child_id: FSObjectID,
+    ) -> FSResult<()> {
+        let obj = self.fget(child_id)?;
+        // makes sure the object is a non-empty collection, this is for
+        // to prevent accidental deletion of non-empty directories and to make sure the directory is deleted recursively by the software (to delete hardlinks and such)
+        if !obj.is_empty_collection() {
+            return if obj.is_collection() {
+                Err(FSError::DirectoryNotEmpty)
+            } else {
+                Err(FSError::NotADirectory)
+            };
+        }
+
+        let parent = self.fget_mut(parent_id)?;
+        parent.remove_child(child_name)?;
+
+        let obj = self.fget_mut(child_id)?;
+        *obj.reference_count.get_mut() -= 1;
+
+        Ok(())
+    }
+
+    // closes the object returns whether or not there is any more open handles and if there is any more references to it
+    fn close(&self, id: FSObjectID) -> (bool, bool) {
+        let obj = self.get(id).expect("attempt to close a non-existent ID");
+        (
+            obj.opened_handles.fetch_sub(1, Ordering::Relaxed) == 0,
+            obj.reference_count.load(Ordering::Relaxed) == 0,
+        )
     }
 }
 
 impl FileSystem for RwLock<RamFS> {
-    fn name(&self) -> &'static str {
-        "ramfs"
+    fn read(&self, id: FSObjectID, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
+        self.read().read(id, offset, buf)
     }
 
-    #[inline]
-    fn get_inode(&self, inode_id: usize) -> Option<Inode> {
-        self.read()
-            .inodes
-            .get(inode_id)
-            .cloned()
-            .map(|x| x as Inode)
+    fn write(&self, id: FSObjectID, offset: SeekOffset, data: &[u8]) -> FSResult<usize> {
+        self.write().write(id, offset, data)
     }
 
-    fn create(&self, parent: Inode, name: &str) -> FSResult<()> {
-        let name = Name::try_from(name).map_err(|()| FSError::InvalidName)?;
-        let mut write = self.write();
-        let new_node = write.make_file();
-        parent.insert(name, new_node)?;
+    fn sync(&self, id: FSObjectID) -> FSResult<()> {
+        self.write().sync(id)
+    }
+
+    fn truncate(&self, id: FSObjectID, size: usize) -> FSResult<()> {
+        self.write().truncate(id, size)
+    }
+
+    fn create_file(&self, parent_id: FSObjectID, name: &str) -> FSResult<FSObjectID> {
+        self.write().create_file(parent_id, name)
+    }
+
+    fn create_directory(&self, parent_id: FSObjectID, name: &str) -> FSResult<FSObjectID> {
+        self.write().create_directory(parent_id, name)
+    }
+
+    fn mount_device(
+        &self,
+        parent_id: FSObjectID,
+        name: &str,
+        device: &'static dyn Device,
+    ) -> FSResult<FSObjectID> {
+        self.write().create_device(parent_id, name, device)
+    }
+
+    fn resolve_path_rel(&self, parent_id: FSObjectID, path: PathParts) -> FSResult<FSObjectID> {
+        super::resolve_path_parts(parent_id, path, |_, parent_id, obj_name| {
+            let read_guard = self.read();
+            let parent = read_guard.fget(parent_id)?;
+            parent.get_child(obj_name)
+        })
+    }
+
+    fn on_open(&self, id: FSObjectID) -> FSResult<()> {
+        let read_guard = self.read();
+        let obj = read_guard.fget(id)?;
+        obj.opened_handles.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
-    fn createdir(&self, parent: Inode, name: &str) -> FSResult<()> {
-        let name = Name::from_str(name).map_err(|()| FSError::InvalidName)?;
+    fn remove(&self, child_name: &str, parent_id: FSObjectID, id: FSObjectID) -> FSResult<()> {
+        self.write().remove(child_name, parent_id, id)
+    }
 
-        let mut write = self.write();
-        let new_node = write.make_directory();
+    fn on_close(&self, id: FSObjectID) -> FSResult<()> {
+        let read_guard = self.read();
+        let (is_last_opened, no_references) = read_guard.close(id);
+        if is_last_opened && no_references {
+            drop(read_guard);
+            let mut write_guard = self.write();
+            write_guard.objects.remove(&id);
+        }
 
-        // inserting the new dir in the parent dir
-        parent.insert(name, new_node.inodeid())?;
-        // making the previous dir inode a hardlink
-        let parent_hardlink_inodeid = write.make_hardlink(parent.inodeid());
-        // inserting the previous dir
-        let hardlink_name = unsafe { Name::from_str("..").unwrap_unchecked() };
-        new_node.insert(hardlink_name, parent_hardlink_inodeid)?;
         Ok(())
     }
 
-    fn mount_device(&self, parent: Inode, name: &str, device: &'static dyn Device) -> FSResult<()> {
-        let name = Name::from_str(name).map_err(|()| FSError::InvalidName)?;
+    fn get_children(&self, id: FSObjectID) -> FSResult<Box<[DirEntry]>> {
+        let read_guard = self.read();
+        let obj = read_guard.fget(id)?;
 
-        let mut write = self.write();
-        let new_node = write.make_device(device);
+        let (children_iter, children_count) = obj.get_children()?;
+        let mut children = Vec::with_capacity(children_count);
 
-        parent.insert(name, new_node)?;
-        Ok(())
+        for (name, child_id) in children_iter {
+            // fget should dereference the pointer to get the object
+            let child_obj = read_guard.fget(child_id)?;
+            children.push(child_obj.direntry(name));
+        }
+
+        Ok(children.into_boxed_slice())
+    }
+
+    fn attrs_of(&self, id: FSObjectID) -> super::expose::FileAttr {
+        let read_guard = self.read();
+        let obj = read_guard.fget(id).expect("Object not found in the ramfs");
+        obj.attrs()
     }
 }

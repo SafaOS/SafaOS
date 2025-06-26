@@ -1,7 +1,7 @@
 use safa_utils::{make_path, path::Path, types::DriveName};
 
 use crate::{
-    drivers::vfs::{ramfs::RamFS, FSError, FileDescriptor, FileSystem, VFS},
+    drivers::vfs::{ramfs::RamFS, FSError, FSObjectDescriptor, FileSystem, SeekOffset, VFS},
     time,
     utils::locks::RwLock,
 };
@@ -9,7 +9,7 @@ use crate::{
 use crate::test_log;
 
 fn test_filesystem() -> impl FileSystem {
-    RwLock::new(RamFS::new())
+    RwLock::new(RamFS::create())
 }
 
 fn mount_test_filesystem(vfs: &mut VFS) {
@@ -57,7 +57,7 @@ fn b_invalid_path_tests() {
     // ==== Invalid Drive =======
     assert_eq!(
         vfs.createdir(make_path!("fake", "smthsmth")),
-        Err(FSError::InvalidDrive)
+        Err(FSError::FSLabelNotFound)
     );
     // ==== Invalid Path =======
     assert_eq!(
@@ -68,7 +68,7 @@ fn b_invalid_path_tests() {
     mount_test_filesystem(&mut vfs);
     assert_eq!(
         vfs.createdir(make_path!("test", "fake/smthsmth")),
-        Err(FSError::NoSuchAFileOrDirectory)
+        Err(FSError::NotFound)
     );
 }
 
@@ -173,7 +173,7 @@ fn d_create_benchmarks() {
 
     // ====== Opening Files =======
     let mut results = heapless::Vec::<u64, CREATE_AMOUNT>::new();
-    let mut result_descriptors = heapless::Vec::<FileDescriptor, CREATE_AMOUNT>::new();
+    let mut result_descriptors = heapless::Vec::<FSObjectDescriptor, CREATE_AMOUNT>::new();
 
     for i in 0..CREATE_AMOUNT {
         let path = path_to_test_file!(i);
@@ -201,7 +201,8 @@ fn d_create_benchmarks() {
         let fd = &mut result_descriptors[i];
         let write_start_time = time!(us);
         // actually write to files
-        fd.write(0, WRITE_MESSAGE).expect("failed to write to file");
+        fd.write(SeekOffset::Start(0), WRITE_MESSAGE)
+            .expect("failed to write to file");
         let write_end_time = time!(us);
         let delta_time = write_end_time - write_start_time;
 
@@ -219,7 +220,8 @@ fn d_create_benchmarks() {
 
         let read_start_time = time!(us);
         // actually read from files
-        fd.read(0, &mut buf).expect("failed to write to file");
+        fd.read(SeekOffset::Start(0), &mut buf)
+            .expect("failed to write to file");
         let read_end_time = time!(us);
 
         // verify results

@@ -4,7 +4,7 @@ pub mod tty;
 use crate::{
     arch::serial::SERIAL,
     debug,
-    drivers::vfs::{self, CtlArgs, FSError, FSResult, InodeOps, VFS},
+    drivers::vfs::{self, CtlArgs, FSError, FSResult, VFS},
     terminal::FRAMEBUFFER_TERMINAL,
     time,
 };
@@ -23,7 +23,7 @@ pub fn init(vfs: &mut VFS) {
     let now = time!(ms);
     vfs.mount(
         DriveName::new_const("dev"),
-        RwLock::new(vfs::ramfs::RamFS::new()),
+        RwLock::new(vfs::ramfs::RamFS::create()),
     )
     .expect("failed to mount `dev:/`");
     add_device(vfs, &*FRAMEBUFFER_TERMINAL);
@@ -32,8 +32,18 @@ pub fn init(vfs: &mut VFS) {
     debug!(VFS, "Initialized devices in ({}ms) ...", elapsed);
 }
 
-pub trait Device: Send + Sync + InodeOps {
+pub trait Device: Send + Sync {
     fn name(&self) -> &'static str;
+    fn read(&self, buffer: &mut [u8]) -> FSResult<usize>;
+    fn write(&self, buffer: &[u8]) -> FSResult<usize>;
+    fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
+        _ = cmd;
+        _ = args;
+        Err(FSError::OperationNotSupported)
+    }
+    fn sync(&self) -> FSResult<()> {
+        Ok(())
+    }
 }
 
 pub trait CharDevice: Send + Sync {
@@ -50,34 +60,20 @@ pub trait CharDevice: Send + Sync {
     }
 }
 
-impl<T: CharDevice> InodeOps for T {
-    fn kind(&self) -> crate::drivers::vfs::InodeType {
-        crate::drivers::vfs::InodeType::Device
-    }
-
-    fn read(&self, _offset: isize, buffer: &mut [u8]) -> crate::drivers::vfs::FSResult<usize> {
-        self.read(buffer)
-    }
-
-    fn write(&self, _offset: isize, buffer: &[u8]) -> crate::drivers::vfs::FSResult<usize> {
-        CharDevice::write(self, buffer)
-    }
-
-    fn inodeid(&self) -> usize {
-        0
-    }
-
-    fn sync(&self) -> crate::drivers::vfs::FSResult<()> {
-        CharDevice::sync(self)
-    }
-
-    fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
-        CharDevice::ctl(self, cmd, args)
-    }
-}
-
 impl<T: CharDevice> Device for T {
     fn name(&self) -> &'static str {
         self.name()
+    }
+    fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
+        self.read(buffer)
+    }
+    fn write(&self, buffer: &[u8]) -> FSResult<usize> {
+        self.write(buffer)
+    }
+    fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
+        self.ctl(cmd, args)
+    }
+    fn sync(&self) -> FSResult<()> {
+        self.sync()
     }
 }

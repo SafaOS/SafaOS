@@ -16,7 +16,7 @@ use safa_utils::{
 use thiserror::Error;
 
 use crate::{
-    drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
+    drivers::vfs::{expose::File, FSError, FSObjectType, FSResult, VFS_STRUCT},
     khalt,
     utils::{
         elf::{Elf, ElfError},
@@ -50,7 +50,7 @@ pub fn thread_yield() {
 #[no_mangle]
 /// waits for `pid` to exit
 /// returns it's exit code after cleaning it up
-pub fn wait(pid: usize) -> usize {
+pub fn wait(pid: Pid) -> usize {
     // loops through the processes until it finds the process with `pid` as a zombie
     loop {
         // cycles through the processes one by one until it finds the process with `pid`
@@ -110,8 +110,8 @@ fn spawn_inner(
     name: Name,
     flags: SpawnFlags,
     structures: AbiStructures,
-    create_task: impl FnOnce(Name, usize, Box<PathBuf>) -> Result<Task, SpawnError>,
-) -> Result<usize, SpawnError> {
+    create_task: impl FnOnce(Name, Pid, Box<PathBuf>) -> Result<Task, SpawnError>,
+) -> Result<Pid, SpawnError> {
     let this = this_state();
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
         this.cwd()
@@ -176,7 +176,7 @@ pub fn function_spawn(
     env: &[&[u8]],
     flags: SpawnFlags,
     structures: AbiStructures,
-) -> Result<usize, SpawnError> {
+) -> Result<Pid, SpawnError> {
     spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let mut page_table = PhysPageTable::create()?;
         let context = unsafe {
@@ -202,7 +202,7 @@ pub fn spawn<T: Readable>(
     env: &[&[u8]],
     flags: SpawnFlags,
     structures: AbiStructures,
-) -> Result<usize, SpawnError> {
+) -> Result<Pid, SpawnError> {
     spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let elf = Elf::new(reader)?;
         let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, structures)?;
@@ -218,10 +218,10 @@ pub fn pspawn(
     env: &[&[u8]],
     flags: SpawnFlags,
     structures: AbiStructures,
-) -> Result<usize, FSError> {
+) -> Result<Pid, FSError> {
     let file = File::open(path)?;
 
-    if file.kind() != InodeType::File {
+    if file.kind() != FSObjectType::File {
         return Err(FSError::NotAFile);
     }
 
@@ -246,7 +246,7 @@ pub fn chdir(new_dir: Path) -> FSResult<()> {
     Ok(())
 }
 
-fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: usize) -> bool {
+fn can_terminate(mut process_ppid: Pid, process_pid: Pid, terminator_pid: Pid) -> bool {
     if process_ppid == terminator_pid || process_pid == terminator_pid {
         return true;
     }

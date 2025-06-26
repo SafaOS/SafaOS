@@ -1,10 +1,10 @@
 use crate::{arch::utils::CPU_INFO, utils::alloc::PageString};
 
-use super::ProcFSFile;
+use super::GenericProcFSFile as ProcFSFile;
 
 pub struct CpuInfoFile;
 impl CpuInfoFile {
-    pub fn new() -> ProcFSFile {
+    pub const fn new() -> ProcFSFile {
         ProcFSFile::new_static("cpuinfo", 0, Self::fetch)
     }
 

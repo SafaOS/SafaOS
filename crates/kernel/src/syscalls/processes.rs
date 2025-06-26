@@ -6,7 +6,7 @@ use safa_utils::abi::{
     },
 };
 
-use crate::utils::types::Name;
+use crate::{threading::Pid, utils::types::Name};
 use core::fmt::Write;
 
 use crate::{
@@ -18,7 +18,7 @@ use super::SyscallFFI;
 use macros::syscall_handler;
 
 #[syscall_handler]
-fn syswait(pid: usize, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
+fn syswait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
     let code = threading::expose::wait(pid);
     if let Some(dest_code) = dest_code {
         *dest_code = code;
@@ -33,7 +33,7 @@ fn syspspawn_inner(
     env: &[&[u8]],
     flags: SpawnFlags,
     stdio: Option<TaskStdio>,
-) -> Result<usize, ErrorStatus> {
+) -> Result<Pid, ErrorStatus> {
     let name = match name {
         Some(raw) => Name::try_from(raw).map_err(|()| ErrorStatus::StrTooLong)?,
         None => {
@@ -100,7 +100,7 @@ fn into_args_slice<'a>(args_raw: &RawSliceMut<RawSlice<u8>>) -> Result<&'a [&'a 
 fn syspspawn(
     path: Path,
     config: &abi::raw::processes::SpawnConfig,
-    dest_pid: Option<&mut usize>,
+    dest_pid: Option<&mut Pid>,
 ) -> Result<(), ErrorStatus> {
     fn as_rust(
         this: &abi::raw::processes::SpawnConfig,

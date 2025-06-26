@@ -1,15 +1,13 @@
 use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
 use crate::{
+    drivers::vfs::SeekOffset,
     threading::resources::{self, Resource},
-    utils::{
-        self,
-        io::{IoError, Readable},
-    },
+    utils::io::{IoError, Readable},
 };
 
 use super::{
-    CtlArgs, DirIterDescriptor, FSError, FSResult, FileDescriptor, Inode, InodeType, Path,
+    CollectionIterDescriptor, CtlArgs, FSError, FSObjectDescriptor, FSObjectType, FSResult, Path,
     VFS_STRUCT,
 };
 
@@ -25,7 +23,7 @@ impl File {
 
     fn with_fd<T, R>(&self, then: T) -> R
     where
-        T: FnOnce(&mut FileDescriptor) -> R,
+        T: FnOnce(&mut FSObjectDescriptor) -> R,
     {
         unsafe {
             resources::get_resource(self.0, |mut resource| {
@@ -47,10 +45,20 @@ impl File {
     }
 
     pub fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
+        let offset = if offset.is_negative() {
+            SeekOffset::End((-offset) as usize)
+        } else {
+            SeekOffset::Start(offset as usize)
+        };
         self.with_fd(|fd| fd.read(offset, buffer))
     }
 
     pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
+        let offset = if offset.is_negative() {
+            SeekOffset::End((-offset) as usize)
+        } else {
+            SeekOffset::Start(offset as usize)
+        };
         self.with_fd(|fd| fd.write(offset, buffer))
     }
 
@@ -70,7 +78,7 @@ impl File {
     }
 
     pub fn diriter_open(&self) -> FSResult<DirIter> {
-        let diriter = self.with_fd(|fd| fd.open_diriter())?;
+        let diriter = self.with_fd(|fd| fd.open_collection_iter())?;
 
         Ok(DirIter(resources::add_resource(Resource::DirIter(diriter))))
     }
@@ -79,7 +87,7 @@ impl File {
         self.with_fd(|fd| fd.sync())
     }
 
-    pub fn kind(&self) -> InodeType {
+    pub fn kind(&self) -> FSObjectType {
         self.with_fd(|fd| fd.kind())
     }
 
@@ -102,7 +110,6 @@ impl File {
 
 impl Drop for File {
     fn drop(&mut self) {
-        self.with_fd(|fd| fd.close());
         resources::remove_resource(self.0).unwrap();
     }
 }
@@ -164,56 +171,10 @@ pub fn createdir(path: Path) -> FSResult<()> {
     VFS_STRUCT.read().createdir(path)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[repr(C)]
-pub struct FileAttr {
-    pub kind: InodeType,
-    pub size: usize,
-}
+pub use crate::utils::abi::raw::io::{DirEntry, FileAttr};
 
-impl FileAttr {
-    pub fn from_inode(inode: &Inode) -> Self {
-        Self {
-            kind: inode.kind(),
-            size: inode.size().unwrap_or(0),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[repr(C)]
-pub struct DirEntry {
-    pub attrs: FileAttr,
-    pub name_length: usize,
-    pub name: [u8; Self::MAX_NAME_LEN],
-}
-
-impl DirEntry {
-    pub const MAX_NAME_LEN: usize = utils::consts::MAX_NAME_LENGTH;
-    pub fn get_from_inode(inode: Inode, name: &str) -> Self {
-        let attrs = FileAttr::from_inode(&inode);
-
-        let name_slice = name.as_bytes();
-        let name_length = name_slice.len();
-        let mut name = [0u8; Self::MAX_NAME_LEN];
-
-        name[..name_length].copy_from_slice(name_slice);
-
-        Self {
-            attrs,
-            name_length,
-            name,
-        }
-    }
-
-    #[inline(always)]
-    pub fn get_from_path(path: Path) -> FSResult<Self> {
-        VFS_STRUCT.read().get_direntry(path)
-    }
-
-    pub const unsafe fn zeroed() -> Self {
-        core::mem::zeroed()
-    }
+pub fn get_direntry(path: Path) -> FSResult<DirEntry> {
+    VFS_STRUCT.read().get_direntry(path)
 }
 
 /// a wrapper around a DirIterDescriptor resource which closes the diriter when dropped
@@ -233,7 +194,7 @@ impl DirIter {
 
     fn with_diriter<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut DirIterDescriptor) -> R,
+        F: FnOnce(&mut CollectionIterDescriptor) -> R,
     {
         unsafe {
             resources::get_resource(self.0, |mut resource| {

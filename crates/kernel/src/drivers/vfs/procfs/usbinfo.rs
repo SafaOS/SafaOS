@@ -1,8 +1,10 @@
 use alloc::vec::Vec;
 use serde::{ser::SerializeStruct, Serialize};
 
+use super::GenericProcFSFile as ProcFSFile;
+
 use crate::{
-    drivers::{pci::XHCI_DEVICE, vfs::procfs::ProcFSFile, xhci::usb_device::USBDevice},
+    drivers::{pci::XHCI_DEVICE, xhci::usb_device::USBDevice},
     utils::{alloc::PageString, locks::RwLockReadGuard},
 };
 
@@ -31,7 +33,7 @@ impl<'a> USBInfo<'a> {
 pub struct USBInfoFile;
 
 impl USBInfoFile {
-    pub fn new() -> ProcFSFile {
+    pub const fn new() -> ProcFSFile {
         ProcFSFile::new("usbinfo", 0, Self::fetch)
     }
 

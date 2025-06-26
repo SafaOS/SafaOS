@@ -1,9 +1,10 @@
-use crate::{drivers::vfs::procfs::ProcFSFile, utils::alloc::PageString};
+use super::GenericProcFSFile as ProcFSFile;
+use crate::utils::alloc::PageString;
 
 pub struct EVEJournal;
 
 impl EVEJournal {
-    pub fn new() -> ProcFSFile {
+    pub const fn new() -> ProcFSFile {
         ProcFSFile::new("eve-journal", 0, Self::fetch)
     }
 

@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::{utils::alloc::PageString, KERNEL_CODE_NAME, KERNEL_CODE_VERSION};
 
-use super::ProcFSFile;
+use super::GenericProcFSFile as ProcFSFile;
 
 const COMPILE_TIME: &str = compile_time::time_str!();
 const COMPILE_DATE: &str = compile_time::date_str!();
@@ -32,7 +32,7 @@ impl KernelInfo {
 pub struct KernelInfoFile;
 
 impl KernelInfoFile {
-    pub fn new() -> ProcFSFile {
+    pub const fn new() -> ProcFSFile {
         ProcFSFile::new("kernelinfo", 0, Self::fetch)
     }
 

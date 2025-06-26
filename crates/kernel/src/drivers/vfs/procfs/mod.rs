@@ -1,369 +1,498 @@
-use core::{
-    fmt::Write,
-    str::{self, FromStr},
-};
-
-use crate::utils::locks::Mutex;
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use hashbrown::HashMap;
-use init::InitStateItem;
-use safa_utils::types::Name;
-use tasks::TaskInfoFile;
-
-use crate::{
-    threading::{self, Pid},
-    utils::alloc::PageString,
-};
-
-use super::{DirIterInodeItem, FSError, FSResult, FileName, Inode, InodeOps};
-
 mod cpuinfo;
 mod eve_journal;
-mod init;
+mod generic_file;
+mod init_system;
 mod kernelinfo;
 mod meminfo;
 mod tasks;
 mod usbinfo;
 
-pub struct ProcFSFile {
-    name: &'static str,
-    id: usize,
-    data: Option<PageString>,
-    /// if true the data won't be de-allocated when the file is closed
-    is_static: bool,
-    fetch: fn(&mut Self) -> Option<PageString>,
+use alloc::{boxed::Box, vec::Vec};
+use hashbrown::HashMap;
+use safa_utils::abi::raw::io::{DirEntry, FSObjectType, FileAttr};
+
+use crate::{
+    drivers::vfs::{
+        procfs::{generic_file::GenericProcFSFile, init_system::InitStateItem},
+        FSError, FSObjectID, FSResult, FileSystem, SeekOffset,
+    },
+    threading::{self, schd, Pid},
+    utils::locks::RwLock,
+};
+
+type OpaqueProcFSObjID = u32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+struct TaskObjID {
+    inner_obj_id: OpaqueProcFSObjID,
+    task_pid: Pid,
 }
 
-impl ProcFSFile {
-    pub fn name(&self) -> &'static str {
-        self.name
-    }
-
-    pub fn new(name: &'static str, id: usize, fetch: fn(&mut Self) -> Option<PageString>) -> Self {
-        Self {
-            name,
-            id,
-            data: None,
-            is_static: false,
-            fetch,
+impl TaskObjID {
+    pub const fn new(inner_obj_id: OpaqueProcFSObjID, task_pid: Pid) -> Self {
+        TaskObjID {
+            inner_obj_id,
+            task_pid,
         }
     }
 
-    pub fn new_static(
+    pub const fn task_pid(&self) -> Pid {
+        self.task_pid
+    }
+
+    pub const fn opaque_id(&self) -> OpaqueProcFSObjID {
+        self.inner_obj_id
+    }
+
+    pub const fn from_obj_id(id: FSObjectID) -> Self {
+        let bit_offset = size_of::<FSObjectID>() * 8 - 1;
+        let task_mask = 1 << bit_offset;
+        let id = id & !(task_mask);
+
+        unsafe { core::mem::transmute(id) }
+    }
+
+    pub const fn to_obj_id(&self) -> FSObjectID {
+        let bit_offset = size_of::<FSObjectID>() * 8 - 1;
+        let task_mask = 1 << bit_offset;
+
+        unsafe { core::mem::transmute::<TaskObjID, FSObjectID>(*self) | task_mask }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Represents the identifier of a proc file system object.
+/// either a task directory or any other object.
+enum ProcFSObjID {
+    TaskID(TaskObjID),
+    OtherID(OpaqueProcFSObjID),
+}
+
+impl ProcFSObjID {
+    pub const fn from_obj_id(id: FSObjectID) -> Self {
+        let bit_offset = size_of::<FSObjectID>() * 8 - 1;
+        let task_mask = 1 << bit_offset;
+        if id & task_mask != 0 {
+            let task_id = TaskObjID::from_obj_id(id);
+            ProcFSObjID::TaskID(task_id)
+        } else {
+            ProcFSObjID::OtherID(id as u32)
+        }
+    }
+
+    pub const fn to_obj_id(&self) -> FSObjectID {
+        match self {
+            ProcFSObjID::TaskID(id) => id.to_obj_id(),
+            ProcFSObjID::OtherID(id) => *id as usize,
+        }
+    }
+
+    pub const fn opaque_id(&self) -> OpaqueProcFSObjID {
+        match self {
+            ProcFSObjID::TaskID(id) => id.opaque_id(),
+            ProcFSObjID::OtherID(id) => *id,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ProcFSObject {
+    Collection {
         name: &'static str,
-        id: usize,
-        fetch: fn(&mut Self) -> Option<PageString>,
-    ) -> Self {
-        Self {
-            name,
-            id,
-            data: None,
-            is_static: true,
-            fetch,
-        }
-    }
-
-    fn get_data(&mut self) -> &str {
-        if self.data.is_none() {
-            self.refresh();
-        }
-
-        self.data.as_ref().unwrap().as_str()
-    }
-
-    fn close(&mut self) {
-        if !self.is_static {
-            self.data = None;
-        }
-    }
-
-    fn refresh(&mut self) {
-        let fetch = self.fetch;
-        self.data = fetch(self);
-    }
+        /// Number of children including children of children
+        size: u32,
+    },
+    File {
+        inner: GenericProcFSFile,
+        opened_handles: usize,
+    },
 }
 
-pub struct ProcInode {
-    inodeid: usize,
-    data: ProcInodeData,
-}
+impl ProcFSObject {
+    pub const fn new_collection(name: &'static str, size: u32) -> Self {
+        ProcFSObject::Collection { name, size }
+    }
 
-enum ProcInodeData {
-    Dir(HashMap<FileName, usize>),
-    File(ProcFSFile),
-}
-
-impl ProcInode {
-    fn new_dir(inodeid: usize, data: HashMap<FileName, usize>) -> Self {
-        Self {
-            inodeid,
-            data: ProcInodeData::Dir(data),
+    pub const fn new_file(inner: GenericProcFSFile) -> Self {
+        ProcFSObject::File {
+            inner,
+            opened_handles: 0,
         }
     }
 
-    fn new_file(inodeid: usize, data: ProcFSFile) -> Self {
-        Self {
-            inodeid,
-            data: ProcInodeData::File(data),
-        }
-    }
-}
-
-impl super::InodeOps for Mutex<ProcInode> {
-    fn inodeid(&self) -> usize {
-        self.lock().inodeid
-    }
-
-    fn kind(&self) -> super::InodeType {
-        match &self.lock().data {
-            ProcInodeData::Dir(_) => super::InodeType::Directory,
-            ProcInodeData::File(_) => super::InodeType::File,
+    pub const fn kind(&self) -> FSObjectType {
+        match self {
+            ProcFSObject::Collection { .. } => FSObjectType::Directory,
+            ProcFSObject::File { .. } => FSObjectType::File,
         }
     }
 
-    fn size(&self) -> FSResult<usize> {
-        match &mut self.lock().data {
-            ProcInodeData::Dir(dir) => Ok(dir.len()),
-            ProcInodeData::File(file) => Ok(file.get_data().len()),
+    pub const fn is_collection(&self) -> bool {
+        match self {
+            ProcFSObject::Collection { .. } => true,
+            ProcFSObject::File { .. } => false,
         }
     }
 
-    fn get(&self, name: &str) -> FSResult<usize> {
-        match &self.lock().data {
-            ProcInodeData::Dir(dir) => dir
-                .get(name)
-                .copied()
-                .ok_or(FSError::NoSuchAFileOrDirectory),
-            ProcInodeData::File(_) => Err(FSError::NotADirectory),
+    pub const fn size(&self) -> u32 {
+        match self {
+            ProcFSObject::Collection { size, .. } => *size,
+            ProcFSObject::File { .. } => 1,
         }
     }
 
-    fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
-        match &mut self.lock().data {
-            ProcInodeData::File(file) => {
-                let file_data = file.get_data();
-                if offset >= file_data.len() as isize {
-                    return Err(FSError::InvalidOffset);
-                }
+    pub const fn attrs(&self) -> FileAttr {
+        FileAttr::new(self.kind(), 0)
+    }
 
-                if offset >= 0 {
-                    let offset = offset as usize;
-                    let count = buffer.len().min(file_data.len() - offset);
+    pub fn name(&self) -> &'static str {
+        match self {
+            ProcFSObject::Collection { name, .. } => name,
+            ProcFSObject::File { inner: file, .. } => file.name(),
+        }
+    }
 
-                    buffer[..count].copy_from_slice(file_data[offset..offset + count].as_bytes());
-                    Ok(count)
-                } else {
-                    let rev_offset = (-offset) as usize;
-                    if rev_offset > file_data.len() {
-                        return Err(FSError::InvalidOffset);
-                    }
-                    // TODO: this is slower then inlining the code ourselves
-                    self.read((file_data.len() - rev_offset) as isize + 1, buffer)
+    pub fn read(&mut self, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
+        match self {
+            ProcFSObject::File { inner, .. } => {
+                let data = inner.get_data();
+                let data_len = data.len();
+                let offset = match offset {
+                    SeekOffset::Start(pos) => pos,
+                    SeekOffset::End(pos) => data_len - pos,
+                };
+
+                let len = data_len - offset;
+                let len = len.min(buf.len());
+
+                buf[..len].copy_from_slice(&data.as_bytes()[offset..offset + len]);
+                Ok(len)
+            }
+            _ => Err(FSError::NotAFile),
+        }
+    }
+
+    pub fn on_open(&mut self) {
+        match self {
+            ProcFSObject::File { opened_handles, .. } => *opened_handles += 1,
+            _ => {}
+        }
+    }
+
+    pub fn close(&mut self) {
+        match self {
+            ProcFSObject::File {
+                inner,
+                opened_handles,
+            } => {
+                *opened_handles -= 1;
+                if *opened_handles == 0 {
+                    inner.close();
                 }
             }
-            _ => FSResult::Err(FSError::NotAFile),
-        }
-    }
-
-    fn open_diriter(&self) -> FSResult<Box<[DirIterInodeItem]>> {
-        match &self.lock().data {
-            ProcInodeData::Dir(dir) => {
-                let mut inodeids = Vec::with_capacity(dir.len());
-                for (name, inodeid) in dir {
-                    inodeids.push((Name::from_str(name).unwrap().into(), *inodeid));
-                }
-
-                Ok(inodeids.into_boxed_slice())
-            }
-            _ => FSResult::Err(FSError::NotADirectory),
-        }
-    }
-
-    fn insert(&self, name: Name, node: usize) -> FSResult<()> {
-        match &mut self.lock().data {
-            ProcInodeData::Dir(dir) => {
-                let name = name.into();
-                if dir.contains_key(&name) {
-                    return FSResult::Err(FSError::AlreadyExists);
-                }
-
-                dir.insert(name, node);
-                Ok(())
-            }
-            ProcInodeData::File(_) => FSResult::Err(FSError::NotADirectory),
-        }
-    }
-
-    fn close(&self) {
-        match &mut self.lock().data {
-            ProcInodeData::Dir(_) => {}
-            ProcInodeData::File(file) => file.close(),
-        }
-    }
-
-    fn opened(&self) {
-        match &mut self.lock().data {
-            ProcInodeData::Dir(_) => {}
-            ProcInodeData::File(file) => file.refresh(),
+            _ => {}
         }
     }
 }
+
+#[derive(Debug)]
+/// The procfs is flat, an identifier is used as an index into the internal subsystem.
+/// then using the index we search for a child using the length of the parent collection
+/// which means doing things like creating a new file in an existing directory is impossible
+pub struct InternalStructure {
+    inner: Vec<ProcFSObject>,
+}
+
+impl InternalStructure {
+    pub fn new() -> Self {
+        InternalStructure {
+            inner: alloc::vec![ProcFSObject::new_collection("", 0)],
+        }
+    }
+
+    fn get_root_node_mut(&mut self) -> &mut ProcFSObject {
+        self.inner.first_mut().expect("procfs root node not found")
+    }
+
+    fn append_child(&mut self, child: ProcFSObject) {
+        let size = child.size();
+        match self.get_root_node_mut() {
+            ProcFSObject::Collection {
+                size: root_size, ..
+            } => {
+                *root_size += size;
+            }
+            _ => unreachable!("procfs root node is not a collection"),
+        }
+        self.inner.push(child);
+    }
+
+    fn generate_from_init_state<const N: usize>(init_state: [InitStateItem; N]) -> Self {
+        let mut structure = Self::new();
+        for item in init_state {
+            match item {
+                InitStateItem::File(generic_file) => {
+                    structure.append_child(ProcFSObject::new_file(generic_file))
+                }
+            }
+        }
+
+        structure
+    }
+
+    fn generate_from_kernel() -> Self {
+        let init_state = const { init_system::get_init_state() };
+        Self::generate_from_init_state(init_state)
+    }
+
+    fn generate_from_task(task_pid: Pid) -> Self {
+        let init_state = init_system::task_init_system(task_pid);
+        Self::generate_from_init_state(init_state)
+    }
+
+    fn try_generate_from_task(task_pid: Pid) -> Option<Self> {
+        if let Some(_) = threading::find(|task| task.pid == task_pid) {
+            Some(Self::generate_from_task(task_pid))
+        } else {
+            None
+        }
+    }
+
+    fn get_mut(&mut self, idx: OpaqueProcFSObjID) -> Option<&mut ProcFSObject> {
+        self.inner.get_mut(idx as usize)
+    }
+
+    fn get_children(&mut self, idx: OpaqueProcFSObjID) -> FSResult<&mut [ProcFSObject]> {
+        let root_obj = self
+            .inner
+            .get(idx as usize)
+            .expect("ProcFS object ID invalid");
+
+        if !root_obj.is_collection() {
+            return Err(FSError::NotADirectory);
+        }
+        let size = root_obj.size();
+
+        Ok(&mut self.inner[idx as usize + 1..idx as usize + size as usize + 1])
+    }
+
+    pub fn search_indx(
+        &self,
+        start_id: OpaqueProcFSObjID,
+        name: &str,
+    ) -> FSResult<OpaqueProcFSObjID> {
+        let mut obj_iter = self.inner.iter().skip(start_id as usize);
+        let collection_obj = obj_iter
+            .next()
+            .expect("ProcFS: InternalStructure invalid index passed to `search_indx`");
+
+        let ProcFSObject::Collection {
+            size: collection_size,
+            ..
+        } = collection_obj
+        else {
+            return Err(FSError::NotADirectory);
+        };
+
+        let mut index = start_id + 1;
+
+        while let Some(obj) = obj_iter.next()
+            && index <= (collection_size + start_id)
+        {
+            match obj {
+                // if found
+                _ if obj.name() == name => return Ok(index),
+                // if it is a collection, add its size + 1 (its header)
+                ProcFSObject::Collection { size, .. } => {
+                    let _ = obj_iter.by_ref().take(*size as usize);
+                    index += size + 1;
+                }
+                ProcFSObject::File { .. } => index += 1,
+            }
+        }
+
+        Err(FSError::NotFound)
+    }
+}
+
 pub struct ProcFS {
-    /// inodeid -> inode
-    inodes: HashMap<usize, Arc<Mutex<ProcInode>>>,
-    /// pid -> task inodeid
-    tasks: HashMap<usize, usize>,
-
-    next_inodeid: usize,
+    internal_structure: InternalStructure,
+    /// tasks however are given special treatment as they are not part of the internal system, same search mechanism is used for tasks as well
+    tasks_cache: HashMap<u32, InternalStructure>,
 }
 
 impl ProcFS {
-    pub fn new() -> Self {
-        Self {
-            inodes: HashMap::from([(
-                0,
-                Arc::new(Mutex::new(ProcInode::new_dir(0, HashMap::new()))),
-            )]),
-            tasks: HashMap::new(),
-            next_inodeid: 1,
-        }
-    }
-
-    fn append_init_state(&mut self, state: InitStateItem) -> (&'static str, usize) {
-        match state {
-            InitStateItem::File(file) => self.append_file(file),
-        }
-    }
-
-    /// Creates a new procfs with the init state defined in [`self::init`]
     pub fn create() -> Self {
-        let mut fs = Self::new();
-        let root_inode = fs.inodes.get(&0).unwrap().clone();
-
-        for item in init::get_init_state() {
-            let (name, inodeid) = fs.append_init_state(item);
-            let name = Name::from_str(name).unwrap();
-
-            root_inode.insert(name, inodeid).unwrap();
+        ProcFS {
+            internal_structure: InternalStructure::generate_from_kernel(),
+            tasks_cache: HashMap::new(),
         }
-        fs
     }
 
-    fn append_file(&mut self, file: ProcFSFile) -> (&'static str, usize) {
-        let name = file.name();
-
-        let inodeid = self.next_inodeid;
-        self.next_inodeid += 1;
-
-        self.inodes.insert(
-            inodeid,
-            Arc::new(Mutex::new(ProcInode::new_file(inodeid, file))),
-        );
-
-        (name, inodeid)
-    }
-
-    fn append_dir(&mut self, name: Name, items: &[(&str, usize)]) -> usize {
-        let inodeid = self.next_inodeid;
-        self.next_inodeid += 1;
-
-        let data = HashMap::from_iter(
-            items
-                .iter()
-                .map(|(name, inodeid)| (Name::from_str(name).unwrap().into(), *inodeid)),
-        );
-
-        self.inodes.insert(
-            inodeid,
-            Arc::new(Mutex::new(ProcInode::new_dir(inodeid, data))),
-        );
-
-        let root_inode = self.inodes.get(&0).unwrap();
-        root_inode.insert(name, inodeid).unwrap();
-        inodeid
-    }
-
-    fn append_process(&mut self, pid: Pid) -> usize {
-        let info_file = TaskInfoFile::new(pid);
-        let (info_file_name, info_file_inode) = self.append_file(info_file);
-
-        let mut pid_str = Name::new();
-        pid_str.write_fmt(format_args!("{}", pid)).unwrap();
-
-        let inodeid = self.append_dir(pid_str, &[(info_file_name, info_file_inode)]);
-        self.tasks.insert(pid, inodeid);
-        inodeid
-    }
-
-    fn remove_inode(&mut self, inodeid: usize) {
-        let inode = self.inodes.remove(&inodeid).unwrap();
-        match &inode.lock().data {
-            ProcInodeData::Dir(dir) => {
-                for (_, inodeid) in dir {
-                    self.remove_inode(*inodeid);
+    fn get_internal(&mut self, obj_id: ProcFSObjID) -> Option<&mut InternalStructure> {
+        match obj_id {
+            ProcFSObjID::OtherID(_) => Some(&mut self.internal_structure),
+            ProcFSObjID::TaskID(task_obj_id) => {
+                let task_pid = task_obj_id.task_pid();
+                // TODO: there is a better solution but the borrow checker is not happy with it, even tho it looks working to me
+                // i might be sleepy or something, check after bumping nightly
+                if self.tasks_cache.contains_key(&task_pid) {
+                    return self.tasks_cache.get_mut(&task_pid);
                 }
-            }
-            ProcInodeData::File(_) => {}
-        }
 
-        drop(inode);
-
-        for (pid, p_inodeid) in self.tasks.iter() {
-            if inodeid == *p_inodeid {
-                let pid = *pid;
-                self.tasks.remove(&pid);
-                break;
+                self.tasks_cache.insert(
+                    task_pid,
+                    InternalStructure::try_generate_from_task(task_pid)?,
+                );
+                self.tasks_cache.get_mut(&task_pid)
             }
         }
     }
 
-    pub fn update_processes(&mut self) {
-        let schd = threading::schd();
-        let getpids = schd.pids();
-        // O(N)
-        for pid in &getpids {
-            if !self.tasks.contains_key(pid) {
-                self.append_process(*pid);
+    fn get(&mut self, obj_id: ProcFSObjID) -> Option<&mut ProcFSObject> {
+        self.get_internal(obj_id)
+            .and_then(|structure| structure.get_mut(obj_id.opaque_id()))
+    }
+
+    fn get_children(&mut self, obj_id: ProcFSObjID) -> FSResult<&mut [ProcFSObject]> {
+        self.get_internal(obj_id)
+            .map(|structure| structure.get_children(obj_id.opaque_id()))
+            .expect("invalid obj_id")
+    }
+
+    fn search_indx(&mut self, parent_id: ProcFSObjID, name: &str) -> FSResult<ProcFSObjID> {
+        if parent_id == ProcFSObjID::OtherID(0) {
+            if name == "self" {
+                let pid = threading::current().pid;
+                let task_obj_id = TaskObjID::new(0, pid);
+                return Ok(ProcFSObjID::TaskID(task_obj_id));
+            }
+
+            if let Ok(pid) = name.parse::<u32>() {
+                let task_obj_id = TaskObjID::new(0, pid);
+                return Ok(ProcFSObjID::TaskID(task_obj_id));
             }
         }
 
-        // O(NlogN)
-        let useless_inodes: Vec<_> = self
-            .tasks
-            .extract_if(|pid, _| getpids.binary_search(pid).is_err())
-            .collect();
+        let structure = self.get_internal(parent_id).ok_or(FSError::NotFound)?;
 
-        for (pid, inodeid) in useless_inodes {
-            self.remove_inode(inodeid);
-            match &mut self.inodes.get(&0).unwrap().lock().data {
-                ProcInodeData::Dir(dir) => {
-                    let mut pid_str = Name::new();
-                    pid_str.write_fmt(format_args!("{}", pid)).unwrap();
+        let parent_opaque_id = parent_id.opaque_id();
+        let opaque_id = structure.search_indx(parent_opaque_id, name)?;
 
-                    let pid_str: FileName = pid_str.into();
-                    dir.remove(&pid_str);
+        match parent_id {
+            ProcFSObjID::OtherID(_) => Ok(ProcFSObjID::OtherID(opaque_id)),
+            ProcFSObjID::TaskID(task_obj_id) => {
+                let task_pid = task_obj_id.task_pid();
+                Ok(ProcFSObjID::TaskID(TaskObjID::new(opaque_id, task_pid)))
+            }
+        }
+    }
+
+    fn cleanup(&mut self, obj_id: ProcFSObjID) {
+        match obj_id {
+            ProcFSObjID::OtherID(_) => {}
+            ProcFSObjID::TaskID(task_obj_id) => {
+                let task_pid = task_obj_id.task_pid();
+                // if the task is not found, it means the task has been terminated
+                // remove the task from the cache
+                if threading::find(|task| task.pid == task_pid).is_none() {
+                    self.tasks_cache.remove(&task_pid);
                 }
-                ProcInodeData::File(_) => unreachable!(),
             }
         }
     }
 }
 
-impl super::FileSystem for Mutex<ProcFS> {
-    fn on_open(&self, _: super::Path) -> FSResult<()> {
-        self.lock().update_processes();
+impl FileSystem for RwLock<ProcFS> {
+    fn on_open(&self, id: FSObjectID) -> FSResult<()> {
+        let mut write_guard = self.write();
+        let obj_id = ProcFSObjID::from_obj_id(id);
+        let obj = write_guard.get(obj_id).expect("invalid ProcFS Object ID");
+        obj.on_open();
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
-        "proc"
+    fn on_close(&self, id: FSObjectID) -> FSResult<()> {
+        let mut write_guard = self.write();
+
+        let obj_id = ProcFSObjID::from_obj_id(id);
+        let obj = write_guard.get(obj_id).expect("invalid ProcFS Object ID");
+
+        obj.close();
+        write_guard.cleanup(obj_id);
+        Ok(())
     }
 
-    fn get_inode(&self, inode_id: usize) -> Option<Inode> {
-        self.lock()
-            .inodes
-            .get(&inode_id)
-            .cloned()
-            .map(|x| x as Inode)
+    fn read(&self, id: FSObjectID, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
+        let mut write_guard = self.write();
+        let obj_id = ProcFSObjID::from_obj_id(id);
+
+        let obj = write_guard.get(obj_id).expect("invalid ProcFS Object ID");
+        obj.read(offset, buf)
+    }
+
+    fn attrs_of(&self, id: FSObjectID) -> FileAttr {
+        let obj_id = ProcFSObjID::from_obj_id(id);
+        let mut write_guard = self.write();
+        let obj = write_guard.get(obj_id).expect("invalid ProcFS Object ID");
+        obj.attrs()
+    }
+
+    fn resolve_path_rel(
+        &self,
+        parent_id: FSObjectID,
+        path: safa_utils::path::PathParts,
+    ) -> FSResult<FSObjectID> {
+        super::resolve_path_parts(parent_id, path, |_, parent_id, name| {
+            let parent_obj_id = ProcFSObjID::from_obj_id(parent_id);
+            self.write()
+                .search_indx(parent_obj_id, name)
+                .map(|obj_id| obj_id.to_obj_id())
+        })
+    }
+
+    fn get_children(&self, id: FSObjectID) -> FSResult<Box<[DirEntry]>> {
+        let mut write_guard = self.write();
+        let obj_id = ProcFSObjID::from_obj_id(id);
+
+        let children_raw = write_guard.get_children(obj_id)?;
+
+        let len = if id == 0 {
+            children_raw.len() + schd().pids_len() + 1
+        } else {
+            children_raw.len()
+        };
+
+        let mut children = Vec::with_capacity(len);
+
+        for child_raw in children_raw {
+            let attrs = child_raw.attrs();
+            let name = child_raw.name();
+            let direntry = DirEntry::new(name, attrs);
+
+            children.push(direntry);
+        }
+
+        if id == 0 {
+            let scheduler = schd();
+            use core::fmt::Write;
+
+            let mut pid_fmt_buf = heapless::String::<20>::new();
+            scheduler.for_each(|task| {
+                _ = write!(pid_fmt_buf, "{}", task.pid);
+                let attrs = FileAttr::new(FSObjectType::Directory, 0);
+
+                let direntry = DirEntry::new(&pid_fmt_buf, attrs);
+                children.push(direntry);
+
+                pid_fmt_buf.clear();
+            });
+
+            let attrs = FileAttr::new(FSObjectType::Directory, 0);
+            let direntry = DirEntry::new("self", attrs);
+            children.push(direntry);
+        }
+        Ok(children.into_boxed_slice())
     }
 }

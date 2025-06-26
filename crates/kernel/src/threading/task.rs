@@ -1,7 +1,7 @@
 use core::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
-    sync::atomic::{AtomicBool, AtomicUsize},
+    sync::atomic::{AtomicBool, AtomicU32},
 };
 
 use crate::utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -276,7 +276,7 @@ pub struct Task {
     /// constant
     pub pid: Pid,
     /// Task may change it's parent pid
-    pub ppid: AtomicUsize,
+    pub ppid: AtomicU32,
     state: RwLock<TaskState>,
     name: Name,
     /// context must only be changed by the scheduler, so it is not protected by a lock
@@ -302,7 +302,7 @@ impl Task {
         Self {
             name,
             pid,
-            ppid: AtomicUsize::new(ppid),
+            ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
             context: UnsafeCell::new(context),
             state: RwLock::new(TaskState::Alive(AliveTask {

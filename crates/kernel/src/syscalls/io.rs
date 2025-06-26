@@ -78,7 +78,7 @@ fn sysdiriter_next(
         *direntry = next;
         Ok(())
     } else {
-        *direntry = unsafe { vfs::expose::DirEntry::zeroed() };
+        *direntry = unsafe { core::mem::zeroed() };
         Err(ErrorStatus::Generic)
     }
 }
@@ -118,7 +118,7 @@ fn sysdup(fd: FileRef, dest_fd: &mut FileRef) -> FSResult<()> {
 
 #[syscall_handler]
 fn sysget_direntry(path: Path, dest_direntry: &mut DirEntry) -> FSResult<()> {
-    *dest_direntry = DirEntry::get_from_path(path)?;
+    *dest_direntry = vfs::expose::get_direntry(path)?;
     Ok(())
 }
 
