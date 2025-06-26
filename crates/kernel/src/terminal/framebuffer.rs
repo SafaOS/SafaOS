@@ -19,8 +19,6 @@ use noto_sans_mono_bitmap::{
 use super::TTYInterface;
 use crate::{drivers::framebuffer::FRAMEBUFFER_DRIVER, utils::display::RGB};
 
-const DEFAULT_FG_COLOR: RGB = RGB::WHITE;
-const DEFAULT_BG_COLOR: RGB = RGB::BLACK;
 pub const DEFAULT_CURSOR_X: usize = 1;
 pub const DEFAULT_CURSOR_Y: usize = 1;
 
@@ -38,14 +36,14 @@ pub struct FrameBufferTTY<'a> {
 impl FrameBufferTTY<'_> {
     pub fn new() -> Self {
         let framebuffer = &FRAMEBUFFER_DRIVER;
-        framebuffer.buffer().fill(DEFAULT_BG_COLOR);
+        framebuffer.buffer().fill(RGB::BG_COLOR);
 
         Self {
             framebuffer,
             cursor_x: DEFAULT_CURSOR_X,
             cursor_y: DEFAULT_CURSOR_Y,
-            fg_color: DEFAULT_FG_COLOR,
-            bg_color: DEFAULT_BG_COLOR,
+            fg_color: RGB::FG_COLOR,
+            bg_color: RGB::BG_COLOR,
             show_cursor: true,
         }
     }
@@ -165,8 +163,8 @@ impl FrameBufferTTY<'_> {
 
     fn handle_set_graphics_mode(&mut self, params: &[u8]) {
         if params.is_empty() {
-            self.fg_color = DEFAULT_FG_COLOR;
-            self.bg_color = DEFAULT_BG_COLOR;
+            self.fg_color = RGB::FG_COLOR;
+            self.bg_color = RGB::BG_COLOR;
             return;
         }
         let mut params = params.iter().copied();
@@ -174,12 +172,12 @@ impl FrameBufferTTY<'_> {
         while let Some(param) = params.next() {
             match param {
                 0 => {
-                    self.fg_color = DEFAULT_FG_COLOR;
-                    self.bg_color = DEFAULT_BG_COLOR;
+                    self.fg_color = RGB::FG_COLOR;
+                    self.bg_color = RGB::BG_COLOR;
                 }
 
-                39 => self.fg_color = DEFAULT_FG_COLOR,
-                49 => self.bg_color = DEFAULT_BG_COLOR,
+                39 => self.fg_color = RGB::FG_COLOR,
+                49 => self.bg_color = RGB::BG_COLOR,
 
                 // 30-37 foreground colors
                 30 => self.fg_color = RGB::BLACK,
