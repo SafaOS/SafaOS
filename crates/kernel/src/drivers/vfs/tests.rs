@@ -179,7 +179,7 @@ fn d_create_benchmarks() {
         let path = path_to_test_file!(i);
         let open_start_time = time!(us);
         // === actually open ====
-        let descriptor = vfs.open(path).expect("failed to open file");
+        let descriptor = vfs.open_all(path).expect("failed to open file");
         let open_end_time = time!(us);
 
         //clean up

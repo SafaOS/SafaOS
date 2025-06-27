@@ -16,7 +16,6 @@ use crate::{
         ustar::{self, TarArchiveIter},
     },
 };
-use bitflags::bitflags;
 use hashbrown::HashMap;
 use thiserror::Error;
 
@@ -31,6 +30,7 @@ use alloc::{boxed::Box, sync::Arc};
 use expose::{DirEntry, FileAttr};
 use lazy_static::lazy_static;
 use safa_utils::{
+    abi::raw::io::OpenOptions,
     path::PathError,
     types::{DriveName, FileName},
 };
@@ -109,24 +109,16 @@ pub type FSResult<T> = Result<T, FSError>;
 /// Represents the unique identifier for a file system object, that is a unique identifier for each file returned by the path resolution.
 pub type FSObjectID = usize;
 
-bitflags! {
-    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-    struct OpenMode: u8 {
-        const WRITE = 1 << 0;
-        const READ = 1 << 1;
-    }
-}
-
 #[derive(Debug, Clone)]
-/// A descriptor for a currently open file system object, that is a combination of a [`VFSObjectID`] and the open mode.
+/// A descriptor for a currently open file system object, that is a combination of a [`VFSObjectID`] and the open options.
 pub struct FSObjectDescriptor {
     id: VFSObjectID,
-    mode: OpenMode,
+    options: OpenOptions,
 }
 
 impl FSObjectDescriptor {
     pub fn write(&self, offset: SeekOffset, data: &[u8]) -> FSResult<usize> {
-        if !self.mode.contains(OpenMode::WRITE) {
+        if !self.options.is_write() {
             return Err(FSError::MissingPermission);
         }
 
@@ -134,7 +126,7 @@ impl FSObjectDescriptor {
     }
 
     pub fn truncate(&self, size: usize) -> FSResult<()> {
-        if !self.mode.contains(OpenMode::WRITE) {
+        if !self.options.is_write() {
             return Err(FSError::MissingPermission);
         }
 
@@ -142,7 +134,7 @@ impl FSObjectDescriptor {
     }
 
     pub fn read(&self, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
-        if !self.mode.contains(OpenMode::READ) {
+        if !self.options.is_read() {
             return Err(FSError::MissingPermission);
         }
 
@@ -602,17 +594,6 @@ impl VFS {
                 debug!(VFS, "Unpacking ({}) {path} ...", inode.kind);
             }
 
-            fn resolve_uncreated_path<'a>(
-                path: PathParts<'a>,
-                fs: &mut dyn FileSystem,
-            ) -> FSResult<(FSObjectID, &'a str)> {
-                let root_obj_id = fs.root_object_id();
-                let (name, parent_path) = path.spilt_into_name();
-
-                let parent_obj_id = fs.resolve_path_rel(root_obj_id, parent_path)?;
-                Ok((parent_obj_id, name.unwrap_or_default()))
-            }
-
             match inode.kind {
                 ustar::Type::NORMAL => {
                     let id = fs.create_file_path(path)?;
@@ -627,8 +608,21 @@ impl VFS {
         Ok(())
     }
 
-    fn open_raw(&self, path: Path) -> FSResult<VFSObjectID> {
-        let (mountpoint, obj_id) = self.resolve_path(path)?;
+    fn open_raw(&self, path: Path, create_file: bool, create_dir: bool) -> FSResult<VFSObjectID> {
+        let (mountpoint, obj_id) = match self.resolve_path(path) {
+            Ok((mountpoint, obj_id)) => (mountpoint, obj_id),
+            Err(FSError::NotFound) if create_file => {
+                let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
+                let obj_id = mountpoint.create_file(parent_obj_id, name)?;
+                (mountpoint, obj_id)
+            }
+            Err(FSError::NotFound) if create_dir => {
+                let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
+                let obj_id = mountpoint.create_directory(parent_obj_id, name)?;
+                (mountpoint, obj_id)
+            }
+            Err(err) => return Err(err),
+        };
 
         mountpoint.on_open(obj_id)?;
         Ok(VFSObjectID {
@@ -636,13 +630,29 @@ impl VFS {
             fs: mountpoint.clone(),
         })
     }
-    fn open(&self, path: Path) -> FSResult<FSObjectDescriptor> {
-        let raw_id = self.open_raw(path)?;
 
-        Ok(FSObjectDescriptor {
+    fn open_all(&self, path: Path) -> FSResult<FSObjectDescriptor> {
+        self.open(path, OpenOptions::READ | OpenOptions::WRITE)
+    }
+
+    fn open(&self, path: Path, options: OpenOptions) -> FSResult<FSObjectDescriptor> {
+        let raw_id = self.open_raw(path, options.create_file(), options.create_dir())?;
+        let descriptor = FSObjectDescriptor {
             id: raw_id,
-            mode: OpenMode::WRITE | OpenMode::READ,
-        })
+            options,
+        };
+
+        if options.is_write_truncate() {
+            _ = descriptor.truncate(0);
+        }
+
+        Ok(descriptor)
+    }
+
+    fn remove_path(&self, path: Path) -> FSResult<()> {
+        let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
+        let obj_id = mountpoint.resolve_path_rel(parent_obj_id, PathParts::new(name))?;
+        mountpoint.remove(name, parent_obj_id, obj_id)
     }
 
     fn createfile(&self, path: Path) -> FSResult<()> {

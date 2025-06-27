@@ -1,5 +1,7 @@
 use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
+use safa_utils::abi::raw::io::OpenOptions;
+
 use crate::{
     drivers::vfs::SeekOffset,
     threading::resources::{self, Resource},
@@ -38,7 +40,14 @@ impl File {
     }
 
     pub fn open(path: Path) -> FSResult<Self> {
-        let fd = VFS_STRUCT.read().open(path)?;
+        let fd = VFS_STRUCT.read().open_all(path)?;
+
+        let fd_ri = resources::add_resource(Resource::File(fd));
+        Ok(Self(fd_ri))
+    }
+
+    pub fn open_with_options(path: Path, options: OpenOptions) -> FSResult<Self> {
+        let fd = VFS_STRUCT.read().open(path, options)?;
 
         let fd_ri = resources::add_resource(Resource::File(fd));
         Ok(Self(fd_ri))
@@ -138,6 +147,11 @@ impl FileRef {
         Ok(Self(ManuallyDrop::new(file)))
     }
 
+    pub fn open_with_options(path: Path, options: OpenOptions) -> FSResult<Self> {
+        let file = File::open_with_options(path, options)?;
+        Ok(Self(ManuallyDrop::new(file)))
+    }
+
     pub fn diriter_open(&self) -> FSResult<DirIterRef> {
         self.0
             .diriter_open()
@@ -164,6 +178,11 @@ impl Deref for FileRef {
 #[no_mangle]
 pub fn create(path: Path) -> FSResult<()> {
     VFS_STRUCT.read().createfile(path)
+}
+
+#[no_mangle]
+pub fn remove(path: Path) -> FSResult<()> {
+    VFS_STRUCT.read().remove_path(path)
 }
 
 #[no_mangle]
