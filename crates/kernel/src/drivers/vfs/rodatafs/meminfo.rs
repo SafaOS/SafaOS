@@ -5,7 +5,7 @@ use crate::{
     utils::alloc::PageString,
 };
 
-use super::GenericProcFSFile as ProcFSFile;
+use super::GenericRodFSFile as ProcFSFile;
 
 #[derive(Clone, Serialize)]
 pub struct MemInfo {

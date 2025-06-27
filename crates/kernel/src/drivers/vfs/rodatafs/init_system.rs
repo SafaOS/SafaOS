@@ -1,16 +1,14 @@
 //! This module contains the boot-time implementiation of the initialization of the procfs.
 
-use crate::{
-    drivers::vfs::procfs::{eve_journal::EVEJournal, usbinfo::USBInfoFile},
-    threading::Pid,
-};
+use super::{eve_journal::EVEJournal, usbinfo::USBInfoFile};
+use crate::threading::Pid;
 
 use super::{
-    cpuinfo::CpuInfoFile, kernelinfo::KernelInfoFile, meminfo::MemInfoFile, GenericProcFSFile,
+    cpuinfo::CpuInfoFile, kernelinfo::KernelInfoFile, meminfo::MemInfoFile, GenericRodFSFile,
 };
 
 pub enum InitStateItem {
-    File(GenericProcFSFile),
+    File(GenericRodFSFile),
 }
 
 pub const fn get_init_state() -> [InitStateItem; 5] {

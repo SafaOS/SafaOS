@@ -7,30 +7,27 @@ mod meminfo;
 mod tasks;
 mod usbinfo;
 
+use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
+use crate::{
+    drivers::vfs::{FSError, FSObjectID, FSResult, FileSystem, SeekOffset},
+    threading::{self, schd, Pid},
+    utils::locks::RwLock,
+};
 use alloc::{boxed::Box, vec::Vec};
 use hashbrown::HashMap;
 use safa_utils::abi::raw::io::{DirEntry, FSObjectType, FileAttr};
 
-use crate::{
-    drivers::vfs::{
-        procfs::{generic_file::GenericProcFSFile, init_system::InitStateItem},
-        FSError, FSObjectID, FSResult, FileSystem, SeekOffset,
-    },
-    threading::{self, schd, Pid},
-    utils::locks::RwLock,
-};
-
-type OpaqueProcFSObjID = u32;
+type OpaqueRodFSObjID = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 struct TaskObjID {
-    inner_obj_id: OpaqueProcFSObjID,
+    inner_obj_id: OpaqueRodFSObjID,
     task_pid: Pid,
 }
 
 impl TaskObjID {
-    pub const fn new(inner_obj_id: OpaqueProcFSObjID, task_pid: Pid) -> Self {
+    pub const fn new(inner_obj_id: OpaqueRodFSObjID, task_pid: Pid) -> Self {
         TaskObjID {
             inner_obj_id,
             task_pid,
@@ -41,7 +38,7 @@ impl TaskObjID {
         self.task_pid
     }
 
-    pub const fn opaque_id(&self) -> OpaqueProcFSObjID {
+    pub const fn opaque_id(&self) -> OpaqueRodFSObjID {
         self.inner_obj_id
     }
 
@@ -64,58 +61,58 @@ impl TaskObjID {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Represents the identifier of a proc file system object.
 /// either a task directory or any other object.
-enum ProcFSObjID {
+enum RodFSObjID {
     TaskID(TaskObjID),
-    OtherID(OpaqueProcFSObjID),
+    OtherID(OpaqueRodFSObjID),
 }
 
-impl ProcFSObjID {
+impl RodFSObjID {
     pub const fn from_obj_id(id: FSObjectID) -> Self {
         let bit_offset = size_of::<FSObjectID>() * 8 - 1;
         let task_mask = 1 << bit_offset;
         if id & task_mask != 0 {
             let task_id = TaskObjID::from_obj_id(id);
-            ProcFSObjID::TaskID(task_id)
+            RodFSObjID::TaskID(task_id)
         } else {
-            ProcFSObjID::OtherID(id as u32)
+            RodFSObjID::OtherID(id as u32)
         }
     }
 
     pub const fn to_obj_id(&self) -> FSObjectID {
         match self {
-            ProcFSObjID::TaskID(id) => id.to_obj_id(),
-            ProcFSObjID::OtherID(id) => *id as usize,
+            RodFSObjID::TaskID(id) => id.to_obj_id(),
+            RodFSObjID::OtherID(id) => *id as usize,
         }
     }
 
-    pub const fn opaque_id(&self) -> OpaqueProcFSObjID {
+    pub const fn opaque_id(&self) -> OpaqueRodFSObjID {
         match self {
-            ProcFSObjID::TaskID(id) => id.opaque_id(),
-            ProcFSObjID::OtherID(id) => *id,
+            RodFSObjID::TaskID(id) => id.opaque_id(),
+            RodFSObjID::OtherID(id) => *id,
         }
     }
 }
 
 #[derive(Debug)]
-enum ProcFSObject {
+enum RodFSObject {
     Collection {
         name: &'static str,
         /// Number of children including children of children
         size: u32,
     },
     File {
-        inner: GenericProcFSFile,
+        inner: GenericRodFSFile,
         opened_handles: usize,
     },
 }
 
-impl ProcFSObject {
+impl RodFSObject {
     pub const fn new_collection(name: &'static str, size: u32) -> Self {
-        ProcFSObject::Collection { name, size }
+        RodFSObject::Collection { name, size }
     }
 
-    pub const fn new_file(inner: GenericProcFSFile) -> Self {
-        ProcFSObject::File {
+    pub const fn new_file(inner: GenericRodFSFile) -> Self {
+        RodFSObject::File {
             inner,
             opened_handles: 0,
         }
@@ -123,22 +120,22 @@ impl ProcFSObject {
 
     pub const fn kind(&self) -> FSObjectType {
         match self {
-            ProcFSObject::Collection { .. } => FSObjectType::Directory,
-            ProcFSObject::File { .. } => FSObjectType::File,
+            RodFSObject::Collection { .. } => FSObjectType::Directory,
+            RodFSObject::File { .. } => FSObjectType::File,
         }
     }
 
     pub const fn is_collection(&self) -> bool {
         match self {
-            ProcFSObject::Collection { .. } => true,
-            ProcFSObject::File { .. } => false,
+            RodFSObject::Collection { .. } => true,
+            RodFSObject::File { .. } => false,
         }
     }
 
     pub const fn size(&self) -> u32 {
         match self {
-            ProcFSObject::Collection { size, .. } => *size,
-            ProcFSObject::File { .. } => 1,
+            RodFSObject::Collection { size, .. } => *size + 1,
+            RodFSObject::File { .. } => 1,
         }
     }
 
@@ -148,14 +145,14 @@ impl ProcFSObject {
 
     pub fn name(&self) -> &'static str {
         match self {
-            ProcFSObject::Collection { name, .. } => name,
-            ProcFSObject::File { inner: file, .. } => file.name(),
+            RodFSObject::Collection { name, .. } => name,
+            RodFSObject::File { inner: file, .. } => file.name(),
         }
     }
 
     pub fn read(&mut self, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
         match self {
-            ProcFSObject::File { inner, .. } => {
+            RodFSObject::File { inner, .. } => {
                 let data = inner.get_data();
                 let data_len = data.len();
                 let offset = match offset {
@@ -175,14 +172,14 @@ impl ProcFSObject {
 
     pub fn on_open(&mut self) {
         match self {
-            ProcFSObject::File { opened_handles, .. } => *opened_handles += 1,
+            RodFSObject::File { opened_handles, .. } => *opened_handles += 1,
             _ => {}
         }
     }
 
     pub fn close(&mut self) {
         match self {
-            ProcFSObject::File {
+            RodFSObject::File {
                 inner,
                 opened_handles,
             } => {
@@ -201,24 +198,24 @@ impl ProcFSObject {
 /// then using the index we search for a child using the length of the parent collection
 /// which means doing things like creating a new file in an existing directory is impossible
 pub struct InternalStructure {
-    inner: Vec<ProcFSObject>,
+    inner: Vec<RodFSObject>,
 }
 
 impl InternalStructure {
     pub fn new() -> Self {
         InternalStructure {
-            inner: alloc::vec![ProcFSObject::new_collection("", 0)],
+            inner: alloc::vec![RodFSObject::new_collection("", 0)],
         }
     }
 
-    fn get_root_node_mut(&mut self) -> &mut ProcFSObject {
+    fn get_root_node_mut(&mut self) -> &mut RodFSObject {
         self.inner.first_mut().expect("procfs root node not found")
     }
 
-    fn append_child(&mut self, child: ProcFSObject) {
+    fn append_child(&mut self, child: RodFSObject) -> OpaqueRodFSObjID {
         let size = child.size();
         match self.get_root_node_mut() {
-            ProcFSObject::Collection {
+            RodFSObject::Collection {
                 size: root_size, ..
             } => {
                 *root_size += size;
@@ -226,6 +223,7 @@ impl InternalStructure {
             _ => unreachable!("procfs root node is not a collection"),
         }
         self.inner.push(child);
+        self.inner.len() as OpaqueRodFSObjID - 1
     }
 
     fn generate_from_init_state<const N: usize>(init_state: [InitStateItem; N]) -> Self {
@@ -233,7 +231,7 @@ impl InternalStructure {
         for item in init_state {
             match item {
                 InitStateItem::File(generic_file) => {
-                    structure.append_child(ProcFSObject::new_file(generic_file))
+                    structure.append_child(RodFSObject::new_file(generic_file));
                 }
             }
         }
@@ -241,9 +239,14 @@ impl InternalStructure {
         structure
     }
 
-    fn generate_from_kernel() -> Self {
+    fn generate_from_kernel() -> (Self, OpaqueRodFSObjID) {
         let init_state = const { init_system::get_init_state() };
-        Self::generate_from_init_state(init_state)
+        let mut results = Self::generate_from_init_state(init_state);
+        let tasks_collection_id = results.append_child(RodFSObject::Collection {
+            name: "tasks",
+            size: 0,
+        });
+        (results, tasks_collection_id)
     }
 
     fn generate_from_task(task_pid: Pid) -> Self {
@@ -259,35 +262,35 @@ impl InternalStructure {
         }
     }
 
-    fn get_mut(&mut self, idx: OpaqueProcFSObjID) -> Option<&mut ProcFSObject> {
+    fn get_mut(&mut self, idx: OpaqueRodFSObjID) -> Option<&mut RodFSObject> {
         self.inner.get_mut(idx as usize)
     }
 
-    fn get_children(&mut self, idx: OpaqueProcFSObjID) -> FSResult<&mut [ProcFSObject]> {
+    fn get_children(&mut self, idx: OpaqueRodFSObjID) -> FSResult<&mut [RodFSObject]> {
         let root_obj = self
             .inner
             .get(idx as usize)
-            .expect("ProcFS object ID invalid");
+            .expect("RodFS object ID invalid");
 
         if !root_obj.is_collection() {
             return Err(FSError::NotADirectory);
         }
         let size = root_obj.size();
 
-        Ok(&mut self.inner[idx as usize + 1..idx as usize + size as usize + 1])
+        Ok(&mut self.inner[idx as usize + 1..idx as usize + size as usize])
     }
 
     pub fn search_indx(
         &self,
-        start_id: OpaqueProcFSObjID,
+        start_id: OpaqueRodFSObjID,
         name: &str,
-    ) -> FSResult<OpaqueProcFSObjID> {
+    ) -> FSResult<OpaqueRodFSObjID> {
         let mut obj_iter = self.inner.iter().skip(start_id as usize);
         let collection_obj = obj_iter
             .next()
-            .expect("ProcFS: InternalStructure invalid index passed to `search_indx`");
+            .expect("RodFS: InternalStructure invalid index passed to `search_indx`");
 
-        let ProcFSObject::Collection {
+        let RodFSObject::Collection {
             size: collection_size,
             ..
         } = collection_obj
@@ -304,11 +307,11 @@ impl InternalStructure {
                 // if found
                 _ if obj.name() == name => return Ok(index),
                 // if it is a collection, add its size + 1 (its header)
-                ProcFSObject::Collection { size, .. } => {
+                RodFSObject::Collection { size, .. } => {
                     let _ = obj_iter.by_ref().take(*size as usize);
                     index += size + 1;
                 }
-                ProcFSObject::File { .. } => index += 1,
+                RodFSObject::File { .. } => index += 1,
             }
         }
 
@@ -316,24 +319,31 @@ impl InternalStructure {
     }
 }
 
-pub struct ProcFS {
+pub struct RodFS {
     internal_structure: InternalStructure,
     /// tasks however are given special treatment as they are not part of the internal system, same search mechanism is used for tasks as well
     tasks_cache: HashMap<u32, InternalStructure>,
+    tasks_collection_id: OpaqueRodFSObjID,
 }
 
-impl ProcFS {
+impl RodFS {
     pub fn create() -> Self {
-        ProcFS {
-            internal_structure: InternalStructure::generate_from_kernel(),
+        let (internal_structure, tasks_collection_id) = InternalStructure::generate_from_kernel();
+        RodFS {
+            internal_structure,
             tasks_cache: HashMap::new(),
+            tasks_collection_id,
         }
     }
 
-    fn get_internal(&mut self, obj_id: ProcFSObjID) -> Option<&mut InternalStructure> {
+    const fn tasks_collection_id(&self) -> RodFSObjID {
+        RodFSObjID::OtherID(self.tasks_collection_id)
+    }
+
+    fn get_internal(&mut self, obj_id: RodFSObjID) -> Option<&mut InternalStructure> {
         match obj_id {
-            ProcFSObjID::OtherID(_) => Some(&mut self.internal_structure),
-            ProcFSObjID::TaskID(task_obj_id) => {
+            RodFSObjID::OtherID(_) => Some(&mut self.internal_structure),
+            RodFSObjID::TaskID(task_obj_id) => {
                 let task_pid = task_obj_id.task_pid();
                 // TODO: there is a better solution but the borrow checker is not happy with it, even tho it looks working to me
                 // i might be sleepy or something, check after bumping nightly
@@ -350,28 +360,28 @@ impl ProcFS {
         }
     }
 
-    fn get(&mut self, obj_id: ProcFSObjID) -> Option<&mut ProcFSObject> {
+    fn get(&mut self, obj_id: RodFSObjID) -> Option<&mut RodFSObject> {
         self.get_internal(obj_id)
             .and_then(|structure| structure.get_mut(obj_id.opaque_id()))
     }
 
-    fn get_children(&mut self, obj_id: ProcFSObjID) -> FSResult<&mut [ProcFSObject]> {
+    fn get_children(&mut self, obj_id: RodFSObjID) -> FSResult<&mut [RodFSObject]> {
         self.get_internal(obj_id)
             .map(|structure| structure.get_children(obj_id.opaque_id()))
             .expect("invalid obj_id")
     }
 
-    fn search_indx(&mut self, parent_id: ProcFSObjID, name: &str) -> FSResult<ProcFSObjID> {
-        if parent_id == ProcFSObjID::OtherID(0) {
+    fn search_indx(&mut self, parent_id: RodFSObjID, name: &str) -> FSResult<RodFSObjID> {
+        if parent_id == self.tasks_collection_id() {
             if name == "self" {
                 let pid = threading::current().pid;
                 let task_obj_id = TaskObjID::new(0, pid);
-                return Ok(ProcFSObjID::TaskID(task_obj_id));
+                return Ok(RodFSObjID::TaskID(task_obj_id));
             }
 
             if let Ok(pid) = name.parse::<u32>() {
                 let task_obj_id = TaskObjID::new(0, pid);
-                return Ok(ProcFSObjID::TaskID(task_obj_id));
+                return Ok(RodFSObjID::TaskID(task_obj_id));
             }
         }
 
@@ -381,18 +391,18 @@ impl ProcFS {
         let opaque_id = structure.search_indx(parent_opaque_id, name)?;
 
         match parent_id {
-            ProcFSObjID::OtherID(_) => Ok(ProcFSObjID::OtherID(opaque_id)),
-            ProcFSObjID::TaskID(task_obj_id) => {
+            RodFSObjID::OtherID(_) => Ok(RodFSObjID::OtherID(opaque_id)),
+            RodFSObjID::TaskID(task_obj_id) => {
                 let task_pid = task_obj_id.task_pid();
-                Ok(ProcFSObjID::TaskID(TaskObjID::new(opaque_id, task_pid)))
+                Ok(RodFSObjID::TaskID(TaskObjID::new(opaque_id, task_pid)))
             }
         }
     }
 
-    fn cleanup(&mut self, obj_id: ProcFSObjID) {
+    fn cleanup(&mut self, obj_id: RodFSObjID) {
         match obj_id {
-            ProcFSObjID::OtherID(_) => {}
-            ProcFSObjID::TaskID(task_obj_id) => {
+            RodFSObjID::OtherID(_) => {}
+            RodFSObjID::TaskID(task_obj_id) => {
                 let task_pid = task_obj_id.task_pid();
                 // if the task is not found, it means the task has been terminated
                 // remove the task from the cache
@@ -404,11 +414,15 @@ impl ProcFS {
     }
 }
 
-impl FileSystem for RwLock<ProcFS> {
+impl FileSystem for RwLock<RodFS> {
+    fn name(&self) -> &'static str {
+        "RodFS"
+    }
+
     fn on_open(&self, id: FSObjectID) -> FSResult<()> {
         let mut write_guard = self.write();
-        let obj_id = ProcFSObjID::from_obj_id(id);
-        let obj = write_guard.get(obj_id).expect("invalid ProcFS Object ID");
+        let obj_id = RodFSObjID::from_obj_id(id);
+        let obj = write_guard.get(obj_id).expect("invalid RodFS Object ID");
         obj.on_open();
         Ok(())
     }
@@ -416,8 +430,8 @@ impl FileSystem for RwLock<ProcFS> {
     fn on_close(&self, id: FSObjectID) -> FSResult<()> {
         let mut write_guard = self.write();
 
-        let obj_id = ProcFSObjID::from_obj_id(id);
-        let obj = write_guard.get(obj_id).expect("invalid ProcFS Object ID");
+        let obj_id = RodFSObjID::from_obj_id(id);
+        let obj = write_guard.get(obj_id).expect("invalid RodFS Object ID");
 
         obj.close();
         write_guard.cleanup(obj_id);
@@ -426,16 +440,16 @@ impl FileSystem for RwLock<ProcFS> {
 
     fn read(&self, id: FSObjectID, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
         let mut write_guard = self.write();
-        let obj_id = ProcFSObjID::from_obj_id(id);
+        let obj_id = RodFSObjID::from_obj_id(id);
 
-        let obj = write_guard.get(obj_id).expect("invalid ProcFS Object ID");
+        let obj = write_guard.get(obj_id).expect("invalid RodFS Object ID");
         obj.read(offset, buf)
     }
 
     fn attrs_of(&self, id: FSObjectID) -> FileAttr {
-        let obj_id = ProcFSObjID::from_obj_id(id);
+        let obj_id = RodFSObjID::from_obj_id(id);
         let mut write_guard = self.write();
-        let obj = write_guard.get(obj_id).expect("invalid ProcFS Object ID");
+        let obj = write_guard.get(obj_id).expect("invalid RodFS Object ID");
         obj.attrs()
     }
 
@@ -445,7 +459,7 @@ impl FileSystem for RwLock<ProcFS> {
         path: safa_utils::path::PathParts,
     ) -> FSResult<FSObjectID> {
         super::resolve_path_parts(parent_id, path, |_, parent_id, name| {
-            let parent_obj_id = ProcFSObjID::from_obj_id(parent_id);
+            let parent_obj_id = RodFSObjID::from_obj_id(parent_id);
             self.write()
                 .search_indx(parent_obj_id, name)
                 .map(|obj_id| obj_id.to_obj_id())
@@ -454,15 +468,10 @@ impl FileSystem for RwLock<ProcFS> {
 
     fn get_children(&self, id: FSObjectID) -> FSResult<Box<[DirEntry]>> {
         let mut write_guard = self.write();
-        let obj_id = ProcFSObjID::from_obj_id(id);
-
+        let obj_id = RodFSObjID::from_obj_id(id);
         let children_raw = write_guard.get_children(obj_id)?;
 
-        let len = if id == 0 {
-            children_raw.len() + schd().pids_len() + 1
-        } else {
-            children_raw.len()
-        };
+        let len = children_raw.len();
 
         let mut children = Vec::with_capacity(len);
 
@@ -474,8 +483,10 @@ impl FileSystem for RwLock<ProcFS> {
             children.push(direntry);
         }
 
-        if id == 0 {
+        // FIXME: Could be made simpler
+        if obj_id == write_guard.tasks_collection_id() {
             let scheduler = schd();
+
             use core::fmt::Write;
 
             let mut pid_fmt_buf = heapless::String::<20>::new();
@@ -493,6 +504,7 @@ impl FileSystem for RwLock<ProcFS> {
             let direntry = DirEntry::new("self", attrs);
             children.push(direntry);
         }
+
         Ok(children.into_boxed_slice())
     }
 }

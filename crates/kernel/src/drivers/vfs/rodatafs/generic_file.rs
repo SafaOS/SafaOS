@@ -1,7 +1,7 @@
 use crate::utils::alloc::PageString;
 
 #[derive(Debug)]
-pub(super) struct GenericProcFSFile {
+pub(super) struct GenericRodFSFile {
     name: &'static str,
     pub id: usize,
     data: Option<PageString>,
@@ -10,7 +10,7 @@ pub(super) struct GenericProcFSFile {
     fetch: fn(&mut Self) -> Option<PageString>,
 }
 
-impl GenericProcFSFile {
+impl GenericRodFSFile {
     pub fn name(&self) -> &'static str {
         self.name
     }

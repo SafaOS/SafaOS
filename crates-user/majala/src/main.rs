@@ -31,7 +31,7 @@ struct Arguments {
 
 fn majala() -> io::Result<()> {
     let args = Arguments::parse();
-    let journal = File::open("proc:/eve-journal")?;
+    let journal = File::open("rod:/eve-journal")?;
 
     let mut stdout = stdout();
     let mut reader = BufReader::new(journal);

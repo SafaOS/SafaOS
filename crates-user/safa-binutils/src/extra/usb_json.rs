@@ -130,7 +130,7 @@ pub struct USBInfo {
 
 impl USBInfo {
     pub fn fetch() -> io::Result<Self> {
-        let file = File::open("proc:/usbinfo")?;
+        let file = File::open("rod:/usbinfo")?;
         let reader = BufReader::new(file);
         Ok(serde_json::from_reader(reader)?)
     }

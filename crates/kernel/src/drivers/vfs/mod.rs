@@ -19,8 +19,8 @@ use crate::{
 use hashbrown::HashMap;
 use thiserror::Error;
 
-pub mod procfs;
 pub mod ramfs;
+pub mod rodatafs;
 #[cfg(test)]
 pub mod tests;
 
@@ -467,8 +467,8 @@ impl VFS {
         devices::init(&mut this);
         // processes
         this.mount(
-            DriveName::new_const("proc"),
-            RwLock::new(procfs::ProcFS::create()),
+            DriveName::new_const("rod"),
+            RwLock::new(rodatafs::RodFS::create()),
         )
         .unwrap();
         // ramdisk

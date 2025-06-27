@@ -51,7 +51,7 @@ impl MemInfo {
     }
 
     pub fn fetch() -> io::Result<Self> {
-        let file = File::open("proc:/meminfo")?;
+        let file = File::open("rod:/meminfo")?;
         let reader = BufReader::new(file);
         Ok(serde_json::from_reader(reader)?)
     }
@@ -83,14 +83,14 @@ impl ProcessInfo {
         self.ppid
     }
 
-    /// Gets all process info in `proc:/`
+    /// Gets all process info in `rod:/`
     /// returns a Vector of ProcessInfo, longest process name length, and longest pid length (as str) if successful for formatting pruposes
     pub fn fetch_all() -> io::Result<(Vec<ProcessInfo>, usize, usize)> {
         let mut processes = Vec::new();
         let mut longest_name = 0;
         let mut longest_pid = 0;
 
-        let dir = std::fs::read_dir("proc:/")?;
+        let dir = std::fs::read_dir("rod:/")?;
 
         for entry in dir {
             let entry = entry.unwrap();
@@ -149,7 +149,7 @@ impl CpuInfo {
     }
 
     pub fn fetch() -> io::Result<Self> {
-        let file = File::open("proc:/cpuinfo")?;
+        let file = File::open("rod:/cpuinfo")?;
         let reader = BufReader::new(file);
         Ok(serde_json::from_reader(reader)?)
     }
@@ -200,7 +200,7 @@ impl KernelInfo {
     }
 
     pub fn fetch() -> io::Result<Self> {
-        let file = File::open("proc:/kernelinfo")?;
+        let file = File::open("rod:/kernelinfo")?;
         let reader = BufReader::new(file);
         Ok(serde_json::from_reader(reader)?)
     }
