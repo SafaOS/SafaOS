@@ -7,10 +7,10 @@ use limine::framebuffer::MemoryModel;
 use limine::modules::InternalModule;
 use limine::modules::ModuleFlags;
 use limine::request::DeviceTreeBlobRequest;
+use limine::request::ExecutableAddressRequest;
+use limine::request::ExecutableFileRequest;
 use limine::request::FramebufferRequest;
 use limine::request::HhdmRequest;
-use limine::request::KernelAddressRequest;
-use limine::request::KernelFileRequest;
 use limine::request::MemoryMapRequest;
 use limine::request::ModuleRequest;
 use limine::request::RsdpRequest;
@@ -45,11 +45,11 @@ static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 
 #[used]
 #[link_section = ".requests"]
-static KERNEL_ADDRESS_REQUEST: KernelAddressRequest = KernelAddressRequest::new();
+static KERNEL_ADDRESS_REQUEST: ExecutableAddressRequest = ExecutableAddressRequest::new();
 
 #[used]
 #[link_section = ".requests"]
-static KERNEL_FILE_REQUEST: KernelFileRequest = KernelFileRequest::new();
+static KERNEL_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::new();
 
 #[used]
 #[link_section = ".requests"]

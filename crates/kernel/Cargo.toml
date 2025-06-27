@@ -17,7 +17,7 @@ bitflags = "2.6.0"
 macros = { path = "../macros" }
 int-enum = "1.1"
 heapless = { version = "0.8.0", features = ["serde"] }
-limine = "0.3.0"
+limine = "0.5.0"
 hashbrown = "0.15.2"
 
 serde = { version = "1.0", default-features = false, features = ["derive"] }
