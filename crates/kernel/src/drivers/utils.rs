@@ -4,7 +4,7 @@
 /// Performs a safe volitate read to a structure field
 #[macro_export]
 macro_rules! read_ref {
-    ($ref: expr) => {
+    ($ref: expr_2021) => {
         unsafe { core::ptr::read_volatile(&raw const $ref) }
     };
 }
@@ -13,7 +13,7 @@ pub use read_ref;
 /// Performs a safe volitate write to a structure's field
 #[macro_export]
 macro_rules! write_ref {
-    ($ref: expr, $value: expr) => {
+    ($ref: expr_2021, $value: expr_2021) => {
         unsafe { core::ptr::write_volatile(&raw mut $ref, $value) }
     };
 }

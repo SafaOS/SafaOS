@@ -162,7 +162,7 @@ impl Entry {
     /// otherwise treat the frame as a page table and deallocate it
     /// # Safety
     /// the caller must ensure that the entry is not used anymore
-    unsafe fn free(&mut self, level: u8) {
+    unsafe fn free(&mut self, level: u8) { unsafe {
         let frame = self.frame().unwrap();
 
         if level != 0 {
@@ -170,7 +170,7 @@ impl Entry {
             table.free(level);
         }
         self.deallocate();
-    }
+    }}
 
     /// deallocates a page table entry and invalidates it
     /// # Safety
@@ -247,13 +247,13 @@ impl PageTable {
     }
 
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    pub unsafe fn free(&mut self, level: u8) {
+    pub unsafe fn free(&mut self, level: u8) { unsafe {
         for entry in &mut self.0 {
             if entry.flags().contains(ArchEntryFlags::PRESENT) {
                 entry.free(level - 1);
             }
         }
-    }
+    }}
 
     /// maps a virtual `Page` to physical `Frame`
     pub unsafe fn map_to(
@@ -314,7 +314,7 @@ impl PageTable {
 }
 
 /// Maps architecture specific devices such as the UART serial in aarch64
-pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
+pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> { unsafe {
     let flags = EntryFlags::WRITE;
     table.map_to(
         Page::containing_address(super::cpu::PL011BASE.into_virt()),
@@ -322,4 +322,4 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
         flags,
     )?;
     Ok(())
-}
+}}

@@ -177,9 +177,9 @@ static PL011RAW: SyncUnsafeCell<PL011Serial> = SyncUnsafeCell::new(unsafe { zero
 static PCIERAW: SyncUnsafeCell<PCIe> = SyncUnsafeCell::new(unsafe { zeroed() });
 
 const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 5] {
-    let gic = &mut *GICRAW.get();
-    let gic: &'static mut dyn DeviceInfo = gic;
     unsafe {
+        let gic = &mut *GICRAW.get();
+        let gic: &'static mut dyn DeviceInfo = gic;
         [
             gic,
             &mut *ITSRAW.get(),

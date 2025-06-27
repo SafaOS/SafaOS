@@ -76,12 +76,12 @@ impl Display for InterruptFrame {
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn handle_serror(frame: *mut InterruptFrame) {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn handle_serror(frame: *mut InterruptFrame) { unsafe {
     panic!("UNRECOVERABLE SERROR:\n{}", &*frame);
-}
+}}
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn handle_sync_exception(frame: *mut InterruptFrame) {
     unsafe {
         let frame = &mut *frame;
@@ -89,14 +89,14 @@ unsafe extern "C" fn handle_sync_exception(frame: *mut InterruptFrame) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn handle_irq(frame: *mut InterruptFrame) {
     unsafe {
         interrupt(&mut *frame, false);
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn handle_fiq(frame: *mut InterruptFrame) {
     unsafe {
         interrupt(&mut *frame, true);

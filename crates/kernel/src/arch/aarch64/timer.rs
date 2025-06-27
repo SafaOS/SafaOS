@@ -12,12 +12,12 @@ pub const TIMER_IRQ: IntID = IntID::from_int_id(30);
 
 #[inline(always)]
 /// Resets the timer to count Nms again before tiggring interrupt
-unsafe fn reset_timer(n: usize) {
+unsafe fn reset_timer(n: usize) { unsafe {
     let freq: usize;
     asm!("mrs {}, cntfrq_el0", out(reg) freq);
     let value: u32 = ((freq / 1000) * n) as u32;
     asm!("msr cntp_tval_el0, {0:x}", in(reg) value);
-}
+}}
 
 pub fn init_generic_timer() {
     TIMER_IRQ

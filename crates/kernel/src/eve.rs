@@ -7,7 +7,7 @@ use crate::drivers::driver_poll::{self, PolledDriver};
 use crate::threading::expose::{function_spawn, SpawnFlags};
 use crate::utils::alloc::PageString;
 use crate::utils::locks::Mutex;
-use crate::{drivers::vfs, memory::paging::PhysPageTable, serial, threading::expose::thread_yield};
+use crate::{drivers::vfs, memory::paging::PhysPageTable, serial};
 use crate::{logging, threading};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
@@ -37,12 +37,8 @@ impl Eve {
 pub static EVE: Mutex<Eve> = Mutex::new(Eve::new());
 
 fn one_shot() -> Option<PhysPageTable> {
-    loop {
-        match EVE.try_lock() {
-            Some(mut eve) => return eve.clean_up_list.pop(),
-            None => thread_yield(),
-        }
-    }
+    let mut lock_guard = EVE.lock();
+    return lock_guard.clean_up_list.pop();
 }
 
 pub static KERNEL_STDIO: Lazy<TaskStdio> = Lazy::new(|| {

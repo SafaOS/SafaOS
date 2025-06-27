@@ -43,7 +43,7 @@ lazy_static! {
     static ref GICITS_TRANSLATION_BASE: VirtAddr = *GICITS_BASE + 0x010000;
 }
 
-unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
+unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> { unsafe {
     let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
     if let Some((gicc_base, size)) = *GICC {
         dest.map_contiguous_pages(
@@ -72,7 +72,7 @@ unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
         flags,
     )?;
     Ok(())
-}
+}}
 
 pub fn init_gic() {
     unsafe {

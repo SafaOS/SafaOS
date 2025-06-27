@@ -91,7 +91,7 @@ restore_cpu_status:
 "
 );
 
-extern "C" {
+unsafe extern "C" {
     ///  Takes a reference to [`CPUStatus`] and sets current cpu status (registers) to it
     pub fn restore_cpu_status(status: &CPUStatus) -> !;
 }
