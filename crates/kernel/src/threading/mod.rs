@@ -155,10 +155,6 @@ impl Scheduler {
     pub fn inited(&self) -> bool {
         self.tasks.len() > 0
     }
-
-    pub fn pids_len(&self) -> usize {
-        self.pids.len()
-    }
 }
 
 #[inline(always)]
