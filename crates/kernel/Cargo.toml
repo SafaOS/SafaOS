@@ -2,7 +2,7 @@
 [package]
 name = "kernel-snowball"
 version = "0.3.1"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 noto-sans-mono-bitmap = { version = "0.3.0", features = ["size_20"] }

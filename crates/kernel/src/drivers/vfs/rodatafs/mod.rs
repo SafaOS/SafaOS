@@ -255,11 +255,11 @@ impl InternalStructure {
     }
 
     fn try_generate_from_task(task_pid: Pid) -> Option<Self> {
-        if let Some(_) = threading::find(|task| task.pid == task_pid) {
+        match threading::find(|task| task.pid == task_pid) { Some(_) => {
             Some(Self::generate_from_task(task_pid))
-        } else {
+        } _ => {
             None
-        }
+        }}
     }
 
     fn get_mut(&mut self, idx: OpaqueRodFSObjID) -> Option<&mut RodFSObject> {

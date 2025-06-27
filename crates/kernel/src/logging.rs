@@ -127,7 +127,7 @@ pub const MIN_LOG_TYPE_NAME_WIDTH: usize = 5;
 
 #[macro_export]
 macro_rules! logln_ext {
-    ($name: literal, $name_color: literal, as $kind: expr, $($arg:tt)*) => {
+    ($name: literal, $name_color: literal, as $kind: expr_2021, $($arg:tt)*) => {
         $crate::logln!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m {kind}:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, kind = $kind, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
     };
 
@@ -138,7 +138,7 @@ macro_rules! logln_ext {
 
 #[macro_export]
 macro_rules! loglnboot_ext {
-    ($name: literal, $name_color: literal, as $kind: expr, $($arg:tt)*) => {
+    ($name: literal, $name_color: literal, as $kind: expr_2021, $($arg:tt)*) => {
         $crate::logln_boot!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m {kind}:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, kind = $kind, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
     };
 

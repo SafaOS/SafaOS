@@ -279,7 +279,7 @@ pub fn map_byte_slices(
     };
 
     macro_rules! map_if_not_enough {
-        ($bytes: expr) => {
+        ($bytes: expr_2021) => {
             if allocated_bytes_remaining < $bytes {
                 map_next_bytes($bytes, page_table, &mut allocated_bytes_remaining)?;
             } else {

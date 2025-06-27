@@ -175,17 +175,17 @@ impl Deref for FileRef {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn create(path: Path) -> FSResult<()> {
     VFS_STRUCT.read().createfile(path)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn remove(path: Path) -> FSResult<()> {
     VFS_STRUCT.read().remove_path(path)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn createdir(path: Path) -> FSResult<()> {
     VFS_STRUCT.read().createdir(path)
 }

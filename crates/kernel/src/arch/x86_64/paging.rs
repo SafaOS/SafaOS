@@ -3,16 +3,16 @@ use core::fmt::Debug;
 use core::ops::IndexMut;
 use core::{arch::asm, ops::Index};
 
+use crate::VirtAddr;
 use crate::arch::x86_64::interrupts::apic;
 use crate::arch::x86_64::pci;
 use crate::memory::paging::{EntryFlags, Page};
-use crate::VirtAddr;
 use crate::{
+    PhysAddr,
     memory::{
         frame_allocator::{self, Frame, FramePtr},
         paging::MapToError,
     },
-    PhysAddr,
 };
 
 const ENTRY_COUNT: usize = 512;
@@ -82,13 +82,15 @@ impl Entry {
     /// # Safety
     /// the caller must ensure that the entry is not used anymore
     unsafe fn free(&mut self, level: u8) {
-        let frame = self.frame().unwrap();
+        unsafe {
+            let frame = self.frame().unwrap();
 
-        if level != 0 {
-            let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
-            table.free(level);
+            if level != 0 {
+                let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
+                table.free(level);
+            }
+            self.deallocate();
         }
-        self.deallocate();
     }
 
     /// deallocates a page table entry and invalidates it
@@ -204,17 +206,19 @@ impl PageTable {
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
     pub unsafe fn free(&mut self, level: u8) {
-        // if the table is the pml4 we need not to free the higher half
-        // because it is shared with other tables
-        let last_entry = if level >= 4 {
-            HIGHER_HALF_ENTRY
-        } else {
-            ENTRY_COUNT
-        };
+        unsafe {
+            // if the table is the pml4 we need not to free the higher half
+            // because it is shared with other tables
+            let last_entry = if level >= 4 {
+                HIGHER_HALF_ENTRY
+            } else {
+                ENTRY_COUNT
+            };
 
-        for entry in &mut self.entries[0..last_entry] {
-            if entry.0 != 0 {
-                entry.free(level - 1);
+            for entry in &mut self.entries[0..last_entry] {
+                if entry.0 != 0 {
+                    entry.free(level - 1);
+                }
             }
         }
     }
@@ -238,12 +242,12 @@ impl PageTable {
         let entry = &mut level_1_table[level_1_index];
         // TODO: stress test this
         debug_assert!(
-                entry.frame().is_none(),
-                "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {page:?}",
-                entry,
-                entry.frame(),
-                frame,
-            );
+            entry.frame().is_none(),
+            "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {page:?}",
+            entry,
+            entry.frame(),
+            frame,
+        );
 
         *entry = Entry::new(flags, frame.start_address());
         Ok(())
@@ -305,14 +309,14 @@ pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
 
     let phys_addr = PhysAddr::from(phys_addr);
     let frame = Frame::containing_address(phys_addr);
-    let ptr = frame.into_ptr();
+    let ptr = unsafe { frame.into_ptr() };
     ptr
 }
 
 /// returns the current pml4 from cr3
 /// equalivent to [`current_higher_root_table`] in x86_64
 pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
-    current_higher_root_table()
+    unsafe { current_higher_root_table() }
 }
 
 /// sets the current higher half Page Table to `page_table`

@@ -31,7 +31,7 @@ use super::{
     this_state, this_state_mut, Pid,
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn thread_exit(code: usize) -> ! {
     let current = super::current();
     current.kill(code, None);
@@ -42,12 +42,12 @@ pub fn thread_exit(code: usize) -> ! {
     khalt()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn thread_yield() {
     crate::arch::threading::invoke_context_switch()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// waits for `pid` to exit
 /// returns it's exit code after cleaning it up
 pub fn wait(pid: Pid) -> usize {
@@ -74,7 +74,7 @@ pub fn wait(pid: Pid) -> usize {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
     let found = super::find(|p| p.pid == pid);
     found.map(|p| TaskInfo::from(&*p))
@@ -230,7 +230,7 @@ pub fn pspawn(
 
 /// also ensures the cwd ends with /
 /// will only Err if new_dir doesn't exists or is not a directory
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn chdir(new_dir: Path) -> FSResult<()> {
     VFS_STRUCT.read().verify_path_dir(new_dir)?;
 
@@ -285,7 +285,7 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
     });
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// can only Err if pid doesn't belong to process
 pub fn pkill(pid: Pid) -> Result<(), ()> {
     let current = super::current();
@@ -302,7 +302,7 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
     Err(())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// extends program break by `amount`
 /// returns the new program break ptr
 /// on fail returns null

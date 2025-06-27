@@ -309,16 +309,16 @@ context_switch_stub:
 "
 );
 
-extern "C" {
+unsafe extern "C" {
     ///  Takes a reference to [`CPUStatus`] and sets current cpu status (registers) to it
     pub fn restore_cpu_status(status: &CPUStatus) -> !;
 }
 
-extern "x86-interrupt" {
+unsafe extern "x86-interrupt" {
     pub fn context_switch_stub();
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn context_switch(mut capture: CPUStatus, frame: super::interrupts::InterruptFrame) {
     capture.rsp = frame.stack_pointer;
     capture.rip = frame.insturaction;

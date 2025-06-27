@@ -355,7 +355,7 @@ lazy_static! {
 impl<T: TTYInterface> HandleKey for TTY<T> {
     fn handle_key(&mut self, key: Key) {
         macro_rules! write_key {
-            ($mapped: expr) => {
+            ($mapped: expr_2021) => {
                 if self.settings.contains(TTYSettings::ECHO_INPUT) {
                     self.interface.hide_cursor();
                     let _ = self.interface.write_str($mapped.into());

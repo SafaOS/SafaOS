@@ -1,5 +1,5 @@
 use crate::{
-    debug,
+    PhysAddr, VirtAddr, debug,
     drivers::{
         utils::{read_ref, write_ref},
         xhci::{
@@ -13,7 +13,7 @@ use crate::{
         frame_allocator::{self, Frame},
         paging::PAGE_SIZE,
     },
-    sleep, sleep_until, warn, PhysAddr, VirtAddr,
+    sleep, sleep_until, warn,
 };
 use bitflags::bitflags;
 use core::fmt::Display;
@@ -692,19 +692,19 @@ impl<'s> XHCIRegisters<'s> {
     /// resets the XHCI controller to zero status
     /// unsafe because it asseums ownership of the XHCI registers
     pub unsafe fn new(caps: *mut CapsReg) -> Self {
-        let mut this = Self {
-            caps_regs: caps,
-            op_regs: (*caps).operational_regs_ptr(),
-            runtime_regs: (*caps).runtime_regs_ptr(),
-            buffers_frame: frame_allocator::allocate_frame()
-                .expect("failed to allocate frame for the XHCI buffers"),
-            scratchpad_buffers: None,
-            dcbaa: &mut [],
-        };
         unsafe {
+            let mut this = Self {
+                caps_regs: caps,
+                op_regs: (*caps).operational_regs_ptr(),
+                runtime_regs: (*caps).runtime_regs_ptr(),
+                buffers_frame: frame_allocator::allocate_frame()
+                    .expect("failed to allocate frame for the XHCI buffers"),
+                scratchpad_buffers: None,
+                dcbaa: &mut [],
+            };
             this.reset_zero();
+            this
         }
-        this
     }
 
     pub unsafe fn captabilities(&self) -> &'static CapsReg {
@@ -753,7 +753,7 @@ impl<'s> XHCIRegisters<'s> {
 
     /// Starts the XHCI controller
     pub unsafe fn start(&mut self) {
-        let regs = self.operational_regs();
+        let regs = unsafe { self.operational_regs() };
         write_ref!(
             regs.usbcmd,
             regs.usbcmd | USBCmd::RUN | USBCmd::INTERRUPT_ENABLE
@@ -773,36 +773,38 @@ impl<'s> XHCIRegisters<'s> {
     /// Resets the XHCI controller to zero status
     /// Unsafe because the controller needs to be reconfigured after this
     pub unsafe fn reset_zero(&mut self) {
-        let regs = self.operational_regs();
+        unsafe {
+            let regs = self.operational_regs();
 
-        write_ref!(regs.usbcmd, regs.usbcmd & !USBCmd::RUN);
+            write_ref!(regs.usbcmd, regs.usbcmd & !USBCmd::RUN);
 
-        if !sleep_until!(200 ms, read_ref!(regs.usbstatus).contains(USBSts::HCHALTED)) {
-            panic!(
-                "timeout after 200ms while resetting the XHCI, HCHALTED did not set: {:?}",
-                read_ref!(regs.usbstatus)
-            )
+            if !sleep_until!(200 ms, read_ref!(regs.usbstatus).contains(USBSts::HCHALTED)) {
+                panic!(
+                    "timeout after 200ms while resetting the XHCI, HCHALTED did not set: {:?}",
+                    read_ref!(regs.usbstatus)
+                )
+            }
+
+            // reset the controller
+            write_ref!(regs.usbcmd, read_ref!(regs.usbcmd) | USBCmd::HCRESET);
+
+            if !sleep_until!(1000 ms,
+                !read_ref!(regs.usbcmd).contains(USBCmd::HCRESET)
+                                && !read_ref!(regs.usbstatus).contains(USBSts::NOT_READY)
+            ) {
+                panic!(
+                    "timeout after 1000ms while resetting controller, controller was never ready: {:?}",
+                    read_ref!(regs.usbcmd),
+                )
+            }
+            // asserts the controller was reset
+            assert_eq!(regs.usbcmd, USBCmd::empty());
+            assert_eq!(regs.dnctrl, 0);
+            assert_eq!(regs.crcr, 0);
+            assert_eq!(regs.dcbaap, PhysAddr::null());
+            assert_eq!(regs.config, 0);
+            debug!(XHCIRegisters, "XHCI Reset\n{}", regs,);
         }
-
-        // reset the controller
-        write_ref!(regs.usbcmd, read_ref!(regs.usbcmd) | USBCmd::HCRESET);
-
-        if !sleep_until!(1000 ms,
-            !read_ref!(regs.usbcmd).contains(USBCmd::HCRESET)
-                            && !read_ref!(regs.usbstatus).contains(USBSts::NOT_READY)
-        ) {
-            panic!(
-                "timeout after 1000ms while resetting controller, controller was never ready: {:?}",
-                read_ref!(regs.usbcmd),
-            )
-        }
-        // asserts the controller was reset
-        assert_eq!(regs.usbcmd, USBCmd::empty());
-        assert_eq!(regs.dnctrl, 0);
-        assert_eq!(regs.crcr, 0);
-        assert_eq!(regs.dcbaap, PhysAddr::null());
-        assert_eq!(regs.config, 0);
-        debug!(XHCIRegisters, "XHCI Reset\n{}", regs,);
     }
 
     /// Reconfigures the XHCI controller given an event ring and a command ring
@@ -811,7 +813,7 @@ impl<'s> XHCIRegisters<'s> {
         event_ring: &mut XHCIEventRing,
         command_ring: &XHCICommandRing,
     ) {
-        let op_regs = self.operational_regs();
+        let op_regs = unsafe { self.operational_regs() };
         write_ref!(
             op_regs.config,
             self.captabilities().max_device_slots() as u32

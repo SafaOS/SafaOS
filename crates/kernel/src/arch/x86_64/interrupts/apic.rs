@@ -111,13 +111,13 @@ pub fn get_local_apic_reg(local_apic_addr: VirtAddr, local_apic_reg: u16) -> Vir
 // NOTES:
 // when we write the offset of the reg we want to access to ioregsel, iowin should have that reg
 // no it is not the addr of that reg it is the reg itself each reg is 32bits long
-pub unsafe fn write_ioapic_val_to_reg(ioapic_addr: VirtAddr, reg: u8, val: u32) {
+pub unsafe fn write_ioapic_val_to_reg(ioapic_addr: VirtAddr, reg: u8, val: u32) { unsafe {
     let reg_addr = ioapic_addr.into_ptr::<u32>();
     let val_addr = (ioapic_addr + 0x10).into_ptr::<u32>();
 
     core::ptr::write_volatile(reg_addr, reg as u32);
     core::ptr::write_volatile(val_addr, val);
-}
+}}
 
 #[derive(Debug, Clone, Copy)]
 pub struct IOREDTBL {
@@ -136,7 +136,7 @@ impl IOREDTBL {
     }
 }
 
-pub unsafe fn write_ioapic_irq(n: u8, table: IOREDTBL) {
+pub unsafe fn write_ioapic_irq(n: u8, table: IOREDTBL) { unsafe {
     let ioapic_addr = get_io_apic_addr();
     let offset1 = 0x10 + n * 2;
     let offset2 = offset1 + 1;
@@ -145,7 +145,7 @@ pub unsafe fn write_ioapic_irq(n: u8, table: IOREDTBL) {
 
     write_ioapic_val_to_reg(ioapic_addr, offset1, lower);
     write_ioapic_val_to_reg(ioapic_addr, offset2, higher);
-}
+}}
 
 fn enable_apic_keyboard(apic_id: u8) {
     unsafe {

@@ -26,7 +26,7 @@ pub struct SyscallContext {
     pub frame: InterruptFrame,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[unsafe(naked)]
 pub extern "x86-interrupt" fn syscall_base() -> ! {
     naked_asm!(
@@ -65,7 +65,7 @@ pub extern "x86-interrupt" fn syscall_base() -> ! {
 
 // FIXME: this is extremely unstable and fragile
 // FIXME: returns usize to make sure rax is used instead of ax
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn syscall_base_mapper(a: usize, b: usize, c: usize, d: usize, e: usize) -> usize {
     let number: usize;
     unsafe {

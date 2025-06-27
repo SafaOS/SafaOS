@@ -19,7 +19,7 @@ macro_rules! test_log {
 }
 
 macro_rules! ok {
-    ($last_time_us: expr) => {{
+    ($last_time_us: expr_2021) => {{
         let end_time_us = $crate::time!(us);
         let delta_time_us = end_time_us - $last_time_us;
         let delta_time_ms = delta_time_us / 1000;

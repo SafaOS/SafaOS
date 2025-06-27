@@ -103,7 +103,7 @@ fn d_create_benchmarks() {
     let mut fmt_buffer = heapless::String::<20>::new();
     use core::fmt::Write;
     macro_rules! path_to_test_file {
-        ($n: expr) => {{
+        ($n: expr_2021) => {{
             write!(&mut fmt_buffer, "test_file_{}", $n).expect("failed to generate test file name");
             let path = make_path!("test", &*fmt_buffer);
             path
@@ -151,7 +151,7 @@ fn d_create_benchmarks() {
     }
 
     macro_rules! log_results_time {
-        ($results:expr, $results_of: literal) => {{
+        ($results:expr_2021, $results_of: literal) => {{
             let (total_time, peak_time, min_time, average_time) = calculate_results_time(&*$results);
             test_log!(
                   "'{}' {} files in {}us ({}ms), peak {}us ({}ms), min {}us ({}ms), average {}us ({}ms)",

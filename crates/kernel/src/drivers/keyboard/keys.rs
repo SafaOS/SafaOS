@@ -46,7 +46,7 @@ impl Key {
 }
 
 macro_rules! row {
-    ($row: expr) => {
+    ($row: expr_2021) => {
         $row << 5
     };
 }

@@ -172,7 +172,7 @@ impl AliveTask {
     /// Makes `self` a zombie
     /// # Safety
     ///  unsafe because `self` becomes invalid after this call
-    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask {
+    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask { unsafe {
         let root_page_table = ManuallyDrop::take(&mut self.root_page_table);
         eve::add_cleanup(root_page_table);
         ZombieTask {
@@ -183,7 +183,7 @@ impl AliveTask {
             last_resource_id: self.resources.next_ri(),
             cwd: core::mem::take(&mut self.cwd),
         }
-    }
+    }}
 }
 
 impl ZombieTask {
@@ -371,9 +371,9 @@ impl Task {
         );
     }
 
-    pub unsafe fn set_context(&self, context: CPUStatus) {
+    pub unsafe fn set_context(&self, context: CPUStatus) { unsafe {
         *self.context.get() = context;
-    }
+    }}
 
     pub fn context(&self) -> &CPUStatus {
         unsafe { &*self.context.get() }

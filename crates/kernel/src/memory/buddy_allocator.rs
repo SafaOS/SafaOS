@@ -26,14 +26,14 @@ impl Block {
     #[inline]
     /// unsafe because there may be no next block causing UB
     /// use BuddyAllocator::next instead
-    pub unsafe fn next<'b>(&self) -> &'b mut Block {
+    pub unsafe fn next<'b>(&self) -> &'b mut Block { unsafe {
         let end = (self as *const Self).byte_add(self.size);
         &mut *end.cast_mut()
-    }
+    }}
 
-    pub unsafe fn data(&mut self) -> *mut u8 {
+    pub unsafe fn data(&mut self) -> *mut u8 { unsafe {
         (self as *mut Self).offset(1).cast()
-    }
+    }}
     /// divides self into 2 buddies
     /// returns the right buddy
     /// self is still valid and it points to the left buddy
@@ -296,11 +296,11 @@ impl BuddyAllocator<'_> {
         core::ptr::null_mut()
     }
     /// unsafe because ptr had to be allocated using self
-    pub unsafe fn deallocmut(&mut self, ptr: *mut u8) {
+    pub unsafe fn deallocmut(&mut self, ptr: *mut u8) { unsafe {
         let block: *mut Block = ptr.byte_sub(size_of::<Block>()).cast();
         (*block).free = true;
         self.coalescence_buddies_full();
-    }
+    }}
 }
 
 unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
@@ -308,10 +308,10 @@ unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
         self.lock().allocmut(layout)
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unsafe {
         _ = layout;
         self.lock().deallocmut(ptr);
-    }
+    }}
 }
 
 #[global_allocator]

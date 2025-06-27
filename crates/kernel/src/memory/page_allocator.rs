@@ -267,16 +267,16 @@ unsafe impl Allocator for Mutex<PageAllocator> {
         }
     }
 
-    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) { unsafe {
         self.lock().deallocmut(ptr.as_ptr(), layout.size());
-    }
+    }}
 
     unsafe fn grow(
         &self,
         ptr: core::ptr::NonNull<u8>,
         old_layout: core::alloc::Layout,
         new_layout: core::alloc::Layout,
-    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> { unsafe {
         if old_layout.size() % PAGE_SIZE != 0 {
             let actual_size = align_up(old_layout.size(), PAGE_SIZE);
             if actual_size >= new_layout.size() {
@@ -294,17 +294,17 @@ unsafe impl Allocator for Mutex<PageAllocator> {
         self.deallocate(ptr, old_layout);
 
         Ok(new_ptr)
-    }
+    }}
 
     unsafe fn shrink(
         &self,
         ptr: core::ptr::NonNull<u8>,
         _: core::alloc::Layout,
         new_layout: core::alloc::Layout,
-    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> { unsafe {
         let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
         Ok(core::ptr::NonNull::new_unchecked(slice))
-    }
+    }}
 }
 
 lazy_static! {

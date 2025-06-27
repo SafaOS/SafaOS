@@ -155,10 +155,10 @@ impl PhysPageTable {
 
     /// creates a new PhysPageTable from the current pml4 table
     /// takes ownership of the current lower half root page table meaning it will free it when the PhysPageTable is dropped
-    pub unsafe fn from_current() -> Self {
+    pub unsafe fn from_current() -> Self { unsafe {
         let inner = current_lower_root_table();
         Self { inner }
-    }
+    }}
 
     /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
     /// returns Err if any of the frames couldn't be allocated

@@ -88,7 +88,7 @@ macro_rules! time {
 /// sleep!(N ms)
 /// sleep!(N) (ms)
 macro_rules! sleep {
-    ($ms: expr) => {{
+    ($ms: expr_2021) => {{
         let start_time = $crate::time!(ms);
         let timeout_time = start_time + $ms as u64;
 
@@ -119,7 +119,7 @@ macro_rules! sleep_until {
         true
     }};
 
-    ($timeout_ms: literal ms, $cond: expr) => {{
+    ($timeout_ms: literal ms, $cond: expr_2021) => {{
         let start_time = $crate::time!(ms);
         let timeout_time = start_time + $timeout_ms;
         let mut success = true;
@@ -174,7 +174,7 @@ fn panic(info: &PanicInfo) -> ! {
     khalt();
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
     memory::sorcery::init_page_table();

@@ -37,7 +37,7 @@ impl KeyMapping {
 
 // beatuiful macro to create Mappings
 macro_rules! create_mapping {
-    ($({ $keycode: path,  $({ $($keyflag: path),* })|* } => $char: expr ),* $(,)?) => {
+    ($({ $keycode: path,  $({ $($keyflag: path),* })|* } => $char: expr_2021 ),* $(,)?) => {
         {
 
         let mut keymapping: KeyMapping = KeyMapping {keys: [[MappingEntry::default(); 16]; KeyCode::LastKey as usize]};

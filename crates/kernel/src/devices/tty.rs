@@ -82,14 +82,7 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
         }
     }
     fn sync(&self) -> FSResult<()> {
-        loop {
-            match self.try_write() {
-                Some(mut writer) => {
-                    writer.sync();
-                    return Ok(());
-                }
-                None => thread_yield(),
-            }
-        }
+        self.write().sync();
+        Ok(())
     }
 }
