@@ -8,15 +8,50 @@ use crate::{
     utils::{errors::ErrorStatus, path::Path},
 };
 use macros::syscall_handler;
+use safa_utils::abi::raw::io::OpenOptions;
 
+impl SyscallFFI for FileRef {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        FileRef::get(args).ok_or(ErrorStatus::InvalidResource)
+    }
+}
+
+impl SyscallFFI for DirIterRef {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        DirIterRef::get(args).ok_or(ErrorStatus::InvalidResource)
+    }
+}
+
+/// Opens a file or directory with all permissions
 #[syscall_handler]
-fn sysopen(path: Path, dest_fd: Option<&mut usize>) -> FSResult<()> {
+fn sysopen_all(path: Path, dest_fd: Option<&mut usize>) -> FSResult<()> {
     let file_ref = FileRef::open(path)?;
     if let Some(dest_fd) = dest_fd {
         *dest_fd = file_ref.ri();
     }
 
     Ok(())
+}
+
+/// Opens a file or directory with the specified options
+#[syscall_handler]
+fn sysopen(path: Path, options: u8, dest_fd: Option<&mut usize>) -> FSResult<()> {
+    let options = OpenOptions::from_bits(options);
+    let file_ref = FileRef::open_with_options(path, options)?;
+
+    if let Some(dest_fd) = dest_fd {
+        *dest_fd = file_ref.ri();
+    }
+
+    Ok(())
+}
+
+/// Removes a path
+#[syscall_handler]
+fn sysremove_path(path: Path) -> FSResult<()> {
+    vfs::expose::remove(path)
 }
 
 #[syscall_handler]
@@ -78,7 +113,7 @@ fn sysdiriter_next(
         *direntry = next;
         Ok(())
     } else {
-        *direntry = unsafe { vfs::expose::DirEntry::zeroed() };
+        *direntry = unsafe { core::mem::zeroed() };
         Err(ErrorStatus::Generic)
     }
 }
@@ -118,7 +153,7 @@ fn sysdup(fd: FileRef, dest_fd: &mut FileRef) -> FSResult<()> {
 
 #[syscall_handler]
 fn sysget_direntry(path: Path, dest_direntry: &mut DirEntry) -> FSResult<()> {
-    *dest_direntry = DirEntry::get_from_path(path)?;
+    *dest_direntry = vfs::expose::get_direntry(path)?;
     Ok(())
 }
 

@@ -1,14 +1,19 @@
 /// defines Syscall numbers
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum SyscallTable {
     SysExit = 0,
     SysYield = 1,
-
-    SysOpen = 2,
+    /// Opens a file or directory with all permissions
+    SysOpenAll = 2,
+    /// Opens a file or directory with given mode (permissions and flags)
+    SysOpen = 25,
+    /// Deletes a path
+    SysRemovePath = 28,
     SysDirIterOpen = 8,
-    SysClose = 5,
+    /// Destroys (closes) an open resource whether it is a file, directory, directory iterator, or any other resource
+    SysDestroyResource = 5,
+    /// Legacy system call to close a directory iterator, use [`SysDestroy`] instead
     SysDirIterClose = 9,
     SysDirIterNext = 10,
     SysWrite = 3,
@@ -31,7 +36,6 @@ pub enum SyscallTable {
 
     SysPSpawn = 19,
     SysWait = 11,
-    SysMetaTake = 25,
 
     SysShutdown = 20,
     SysReboot = 21,
@@ -41,7 +45,7 @@ pub enum SyscallTable {
 
 impl SyscallTable {
     // update when a new Syscall Num is added
-    const MAX: u16 = Self::SysUptime as u16;
+    const MAX: u16 = Self::SysRemovePath as u16;
 }
 
 impl TryFrom<u16> for SyscallTable {

@@ -7,16 +7,16 @@ use limine::framebuffer::MemoryModel;
 use limine::modules::InternalModule;
 use limine::modules::ModuleFlags;
 use limine::request::DeviceTreeBlobRequest;
+use limine::request::ExecutableAddressRequest;
+use limine::request::ExecutableFileRequest;
 use limine::request::FramebufferRequest;
 use limine::request::HhdmRequest;
-use limine::request::KernelAddressRequest;
-use limine::request::KernelFileRequest;
 use limine::request::MemoryMapRequest;
 use limine::request::ModuleRequest;
 use limine::request::RsdpRequest;
 
-use limine::response::MemoryMapResponse;
 use limine::BaseRevision;
+use limine::response::MemoryMapResponse;
 
 use crate::drivers::framebuffer::FrameBufferInfo;
 use crate::drivers::framebuffer::PixelFormat;
@@ -24,15 +24,15 @@ use crate::memory::align_up;
 use crate::utils::ustar::TarArchiveIter;
 
 #[used]
-#[link_section = ".requests"]
-static BASE_REVISION: BaseRevision = BaseRevision::new();
+#[unsafe(link_section = ".requests")]
+static BASE_REVISION: BaseRevision = BaseRevision::with_revision(2);
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static DEVICE_TREE_REQUEST: DeviceTreeBlobRequest = DeviceTreeBlobRequest::new();
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
 lazy_static! {
@@ -40,23 +40,23 @@ lazy_static! {
 }
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 
 #[used]
-#[link_section = ".requests"]
-static KERNEL_ADDRESS_REQUEST: KernelAddressRequest = KernelAddressRequest::new();
+#[unsafe(link_section = ".requests")]
+static KERNEL_ADDRESS_REQUEST: ExecutableAddressRequest = ExecutableAddressRequest::new();
 
 #[used]
-#[link_section = ".requests"]
-static KERNEL_FILE_REQUEST: KernelFileRequest = KernelFileRequest::new();
+#[unsafe(link_section = ".requests")]
+static KERNEL_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::new();
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static MMAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 const RAMDISK_MODULE: InternalModule = InternalModule::new()
@@ -64,7 +64,7 @@ const RAMDISK_MODULE: InternalModule = InternalModule::new()
     .with_flags(ModuleFlags::REQUIRED);
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static MODULES_REQUEST: ModuleRequest =
     ModuleRequest::new().with_internal_modules(&[&RAMDISK_MODULE]);
 

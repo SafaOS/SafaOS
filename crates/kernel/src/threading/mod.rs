@@ -4,20 +4,20 @@ pub mod task;
 #[cfg(test)]
 mod tests;
 
-pub type Pid = usize;
+pub type Pid = u32;
 
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
+use crate::VirtAddr;
 use crate::utils::locks::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::utils::types::Name;
-use crate::VirtAddr;
-use alloc::{boxed::Box, rc::Rc, vec::Vec};
+use alloc::{boxed::Box, rc::Rc};
 use slab::Slab;
 use task::{Task, TaskInfo, TaskState};
 
 use crate::{
-    arch::threading::{restore_cpu_status, CPUStatus},
+    arch::threading::{CPUStatus, restore_cpu_status},
     debug,
     memory::paging::PhysPageTable,
     utils::alloc::LinkedList,
@@ -43,17 +43,21 @@ impl Scheduler {
     /// inits the scheduler
     pub unsafe fn init(function: fn() -> !, name: &str) -> ! {
         debug!(Scheduler, "initing ...");
-        crate::arch::disable_interrupts();
-        let mut page_table = PhysPageTable::from_current();
-        let context = CPUStatus::create(
-            &mut page_table,
-            &[],
-            &[],
-            AbiStructures::default(),
-            VirtAddr::from(function as usize),
-            false,
-        )
-        .unwrap();
+        unsafe {
+            crate::arch::disable_interrupts();
+        }
+        let mut page_table = unsafe { PhysPageTable::from_current() };
+        let context = unsafe {
+            CPUStatus::create(
+                &mut page_table,
+                &[],
+                &[],
+                AbiStructures::default(),
+                VirtAddr::from(function as usize),
+                false,
+            )
+            .unwrap()
+        };
         let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
         let task = Task::new(
@@ -86,7 +90,7 @@ impl Scheduler {
             crate::arch::disable_interrupts();
         }
 
-        self.current().set_context(context);
+        unsafe { self.current().set_context(context) };
         for task in self.tasks.continue_iter() {
             if task.is_alive() {
                 break;
@@ -98,8 +102,8 @@ impl Scheduler {
 
     /// appends a task to the end of the scheduler taskes list
     /// returns the pid of the added task
-    fn add_task(&mut self, mut task: Task) -> usize {
-        let pid = self.pids.insert(());
+    fn add_task(&mut self, mut task: Task) -> Pid {
+        let pid = self.pids.insert(()) as Pid;
         task.pid = pid;
         self.tasks.push(Rc::new(task));
 
@@ -128,9 +132,9 @@ impl Scheduler {
 
     /// iterates through all taskes and executes `then` on each of them
     /// executed on all taskes
-    fn for_each<T>(&self, then: T)
+    pub fn for_each<T>(&self, mut then: T)
     where
-        T: Fn(&Task),
+        T: FnMut(&Task),
     {
         for task in self.tasks.clone_iter() {
             then(task);
@@ -145,7 +149,7 @@ impl Scheduler {
             .map(|task| TaskInfo::from(&*task));
 
         if let Some(ref info) = result {
-            self.pids.remove(info.pid);
+            self.pids.remove(info.pid as usize);
         }
         result
     }
@@ -155,26 +159,15 @@ impl Scheduler {
     pub fn inited(&self) -> bool {
         self.tasks.len() > 0
     }
-
-    #[inline(always)]
-    pub fn pids(&self) -> Vec<Pid> {
-        let mut vec = Vec::with_capacity(self.pids.len());
-        for task in self.tasks.clone_iter() {
-            vec.push(task.pid);
-        }
-
-        vec
-    }
 }
 
 #[inline(always)]
 /// performs a context switch using the scheduler, switching to the next task context
 /// to be used
 pub fn swtch(context: CPUStatus) -> CPUStatus {
-    if let Some(mut scheduler) = SCHEDULER.try_write().filter(|s| s.inited()) {
-        unsafe { scheduler.switch(context) }
-    } else {
-        context
+    match SCHEDULER.try_write().filter(|s| s.inited()) {
+        Some(mut scheduler) => unsafe { scheduler.switch(context) },
+        _ => context,
     }
 }
 
@@ -200,7 +193,7 @@ pub fn this() -> &'static Task {
 }
 
 /// acquires lock on scheduler and finds a task where executing `condition` on returns true
-fn find<C>(condition: C) -> Option<Rc<Task>>
+pub fn find<C>(condition: C) -> Option<Rc<Task>>
 where
     C: Fn(&Task) -> bool,
 {
@@ -217,7 +210,7 @@ where
 }
 
 /// acquires lock on scheduler and adds a task to it
-fn add(task: Task) -> usize {
+fn add(task: Task) -> Pid {
     SCHEDULER.write().add_task(task)
 }
 

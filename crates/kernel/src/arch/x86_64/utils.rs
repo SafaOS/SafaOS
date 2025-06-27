@@ -120,7 +120,7 @@ fn ticks_per_ms() -> u64 {
 // actually used in macros but rust thinks it is unused for some reason
 #[allow(unused)]
 /// Returns the number of milliseconds since the CPU was started
-pub fn time() -> u64 {
+pub fn time_ms() -> u64 {
     let ticks_per_ms = ticks_per_ms();
     let ticks = unsafe {
         core::arch::x86_64::_mm_lfence();
@@ -130,5 +130,24 @@ pub fn time() -> u64 {
         0
     } else {
         ticks / ticks_per_ms
+    }
+}
+
+#[inline(always)]
+// actually used in macros but rust thinks it is unused for some reason
+#[allow(unused)]
+/// Returns the number of microseconds since the CPU was started
+pub fn time_us() -> u64 {
+    let ticks_per_ms = ticks_per_ms();
+    let ticks_per_us = ticks_per_ms / 1000;
+
+    let ticks = unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    };
+    if unlikely(ticks_per_us == 0) {
+        0
+    } else {
+        ticks / ticks_per_us
     }
 }

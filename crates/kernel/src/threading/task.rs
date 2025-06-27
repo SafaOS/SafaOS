@@ -1,7 +1,7 @@
 use core::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
-    sync::atomic::{AtomicBool, AtomicUsize},
+    sync::atomic::{AtomicBool, AtomicU32},
 };
 
 use crate::utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -172,7 +172,7 @@ impl AliveTask {
     /// Makes `self` a zombie
     /// # Safety
     ///  unsafe because `self` becomes invalid after this call
-    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask {
+    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask { unsafe {
         let root_page_table = ManuallyDrop::take(&mut self.root_page_table);
         eve::add_cleanup(root_page_table);
         ZombieTask {
@@ -183,7 +183,7 @@ impl AliveTask {
             last_resource_id: self.resources.next_ri(),
             cwd: core::mem::take(&mut self.cwd),
         }
-    }
+    }}
 }
 
 impl ZombieTask {
@@ -276,7 +276,7 @@ pub struct Task {
     /// constant
     pub pid: Pid,
     /// Task may change it's parent pid
-    pub ppid: AtomicUsize,
+    pub ppid: AtomicU32,
     state: RwLock<TaskState>,
     name: Name,
     /// context must only be changed by the scheduler, so it is not protected by a lock
@@ -302,7 +302,7 @@ impl Task {
         Self {
             name,
             pid,
-            ppid: AtomicUsize::new(ppid),
+            ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
             context: UnsafeCell::new(context),
             state: RwLock::new(TaskState::Alive(AliveTask {
@@ -371,9 +371,9 @@ impl Task {
         );
     }
 
-    pub unsafe fn set_context(&self, context: CPUStatus) {
+    pub unsafe fn set_context(&self, context: CPUStatus) { unsafe {
         *self.context.get() = context;
-    }
+    }}
 
     pub fn context(&self) -> &CPUStatus {
         unsafe { &*self.context.get() }

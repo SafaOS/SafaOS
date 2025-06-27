@@ -33,7 +33,7 @@ pub mod serial {
 
 pub mod utils {
     #[allow(unused_imports)]
-    pub use super::arch::utils::{time, CPU_INFO};
+    pub use super::arch::utils::{time_ms, time_us, CPU_INFO};
 }
 
 pub mod registers {

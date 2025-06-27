@@ -5,7 +5,7 @@ use crate::{
     utils::alloc::PageString,
 };
 
-use super::ProcFSFile;
+use super::GenericRodFSFile as ProcFSFile;
 
 #[derive(Clone, Serialize)]
 pub struct MemInfo {
@@ -36,7 +36,7 @@ impl MemInfo {
 pub struct MemInfoFile;
 
 impl MemInfoFile {
-    pub fn new() -> ProcFSFile {
+    pub const fn new() -> ProcFSFile {
         ProcFSFile::new("meminfo", 0, Self::fetch)
     }
 

@@ -88,11 +88,13 @@ impl From<RGB> for (u8, u8, u8) {
 }
 
 impl RGB {
+    pub const BG_COLOR: RGB = Self::BLACK;
+    pub const FG_COLOR: RGB = Self::BRIGHT_WHITE;
     pub const BLACK: RGB = RGB::from_hex(0x282828);
     pub const BRIGHT_BLACK: RGB = RGB::from_hex(0x928374);
 
-    pub const WHITE: RGB = RGB::from_hex(0xebdbb2);
-    pub const BRIGHT_WHITE: RGB = RGB::from_hex(0xfbf1c7);
+    pub const WHITE: RGB = RGB::from_hex(0xa89984);
+    pub const BRIGHT_WHITE: RGB = RGB::from_hex(0xebdbb2);
 
     pub const RED: RGB = RGB::from_hex(0xcc241d);
     pub const BRIGHT_RED: RGB = RGB::from_hex(0xfb4934);

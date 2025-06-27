@@ -1,33 +1,20 @@
 use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
+use crate::threading::{resources, Pid};
+use crate::time;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
     arch::power,
-    drivers::vfs::expose::{DirEntry, DirIter, DirIterRef, File, FileRef},
+    drivers::vfs::expose::{DirEntry, DirIter, File, FileRef},
     utils::errors::ErrorStatus,
     VirtAddr,
 };
-use crate::{error, time};
-
-impl SyscallFFI for FileRef {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        FileRef::get(args).ok_or(ErrorStatus::InvalidResource)
-    }
-}
 
 impl SyscallFFI for File {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         File::from_fd(args).ok_or(ErrorStatus::InvalidResource)
-    }
-}
-
-impl SyscallFFI for DirIterRef {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIterRef::get(args).ok_or(ErrorStatus::InvalidResource)
     }
 }
 
@@ -69,10 +56,13 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysGetDirEntry => {
                 io::sysget_direntry_raw((a as *const u8, b), c as *mut DirEntry)
             }
-            SyscallTable::SysOpen => io::sysopen_raw((a as *const u8, b), c as *mut usize),
+            SyscallTable::SysOpenAll => io::sysopen_all_raw((a as *const u8, b), c as *mut usize),
+            SyscallTable::SysOpen => io::sysopen_raw((a as *const u8, b), c, d as *mut usize),
+            SyscallTable::SysRemovePath => io::sysremove_path_raw((a as *const u8, b)),
             SyscallTable::SysDirIterOpen => io::sysdiriter_open_raw(a, b as *mut usize),
-            // TODO: SysClose and SysDirIterClose should be the same syscall
-            SyscallTable::SysClose => Ok(drop(File::make(a)?)),
+            SyscallTable::SysDestroyResource => {
+                resources::remove_resource(a).ok_or(ErrorStatus::InvalidResource)
+            }
             SyscallTable::SysDirIterClose => Ok(drop(DirIter::make(a)?)),
             SyscallTable::SysDirIterNext => io::sysdiriter_next_raw(a, b as *mut DirEntry),
             SyscallTable::SysCreate => io::syscreate_raw((a as *const u8, b)),
@@ -87,7 +77,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysCtl => io::sysctl_raw(a, b, (c as *const usize, d)),
             // processes
             SyscallTable::SysPSpawn => {
-                processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut usize)
+                processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut Pid)
             }
             SyscallTable::SysWait => processes::syswait_raw(a, b as *mut usize),
             // power
@@ -95,22 +85,8 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysReboot => power::reboot(),
             SyscallTable::SysUptime => Ok({
                 let dest_uptime = <&mut u64>::make(a as *mut u64)?;
-                *dest_uptime = time!();
+                *dest_uptime = time!(ms);
             }),
-            #[allow(unreachable_patterns)]
-            syscall => {
-                error!(
-                    SyscallTable,
-                    "defined but unimplemented syscall {}({:?}) called with arguments {} {} {} {}",
-                    number,
-                    syscall,
-                    a,
-                    b,
-                    c,
-                    d
-                );
-                Err(ErrorStatus::InvalidSyscall)
-            }
         }
     }
 

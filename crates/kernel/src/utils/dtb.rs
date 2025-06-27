@@ -121,7 +121,7 @@ impl<'a> Display for NodeValue<'a> {
                     write!(f, "\"{s}\" ")?;
                 }
             }
-            Self::Other(ref prop_encoded) => {
+            Self::Other(prop_encoded) => {
                 let (start, prop_encoded_mid, reset) = unsafe { prop_encoded.align_to::<u32>() };
                 write!(f, "<")?;
 
@@ -207,7 +207,7 @@ pub struct Node<'a> {
 
 /// Gets the property of a Node and assumes it is of a certain kind
 macro_rules! node_get_prop_unchecked {
-    ($node: expr, $name: literal, $kind: path) => {{
+    ($node: expr_2021, $name: literal, $kind: path) => {{
         let prop = $node.get_prop($name);
         prop.map(|prop| {
             let $kind(x) = prop else {
@@ -216,7 +216,7 @@ macro_rules! node_get_prop_unchecked {
             x
         })
     }};
-    ($node: expr, $name: literal) => {{
+    ($node: expr_2021, $name: literal) => {{
         let prop = $node.get_prop($name)?;
         let NodeValue::Other(x) = prop else {
             unreachable!();

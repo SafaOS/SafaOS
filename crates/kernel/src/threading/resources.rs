@@ -1,17 +1,20 @@
 use core::fmt::Debug;
 
-use crate::utils::locks::{Mutex, MutexGuard};
+use crate::{
+    drivers::vfs::CollectionIterDescriptor,
+    utils::locks::{Mutex, MutexGuard},
+};
 use alloc::vec::Vec;
 
-use crate::drivers::vfs::{DirIterDescriptor, FileDescriptor};
+use crate::drivers::vfs::FSObjectDescriptor;
 
 use super::expose::thread_yield;
 
 #[derive(Clone)]
 pub enum Resource {
     Null,
-    File(FileDescriptor),
-    DirIter(DirIterDescriptor),
+    File(FSObjectDescriptor),
+    DirIter(CollectionIterDescriptor),
 }
 
 type ResourceItem = Mutex<Resource>;

@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use serde::{ser::SerializeStruct, Serialize};
 
 use crate::{
-    drivers::{pci::XHCI_DEVICE, vfs::procfs::ProcFSFile, xhci::usb_device::USBDevice},
+    drivers::{pci::XHCI_DEVICE, vfs::rodatafs::GenericRodFSFile, xhci::usb_device::USBDevice},
     utils::{alloc::PageString, locks::RwLockReadGuard},
 };
 
@@ -31,11 +31,11 @@ impl<'a> USBInfo<'a> {
 pub struct USBInfoFile;
 
 impl USBInfoFile {
-    pub fn new() -> ProcFSFile {
-        ProcFSFile::new("usbinfo", 0, Self::fetch)
+    pub const fn new() -> GenericRodFSFile {
+        GenericRodFSFile::new("usbinfo", 0, Self::fetch)
     }
 
-    pub fn fetch(_: &mut ProcFSFile) -> Option<PageString> {
+    pub fn fetch(_: &mut GenericRodFSFile) -> Option<PageString> {
         let mut page_string = PageString::with_capacity(1024);
         let mem_info = USBInfo::fetch();
 

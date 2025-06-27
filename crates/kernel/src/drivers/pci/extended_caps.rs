@@ -5,7 +5,7 @@ pub trait ExtendedCaptability: Sized {
     fn header(&self) -> &GenericCaptability;
     /// Shouldn't be manually implemented
     unsafe fn from_dwords(dwords: *mut u32) -> Self {
-        let slice = core::slice::from_raw_parts(dwords, size_of::<Self>() / 4);
+        let slice = unsafe { core::slice::from_raw_parts(dwords, size_of::<Self>() / 4) };
         unsafe { core::mem::transmute_copy(&slice) }
     }
 }

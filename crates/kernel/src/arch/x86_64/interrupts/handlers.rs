@@ -18,7 +18,7 @@ const ATTR_RING3: u8 = 3 << 5;
 const EMPTY_TABLE: IDTT = [GateDescriptor::default(); 256]; // making sure it is made at compile-time
 
 macro_rules! create_idt {
-    ($(($indx:literal, $handler:expr, $attributes:expr $(, $ist:literal)?)),*) => {
+    ($(($indx:literal, $handler:expr_2021, $attributes:expr_2021 $(, $ist:literal)?)),*) => {
         {
             let mut table = EMPTY_TABLE;
             $(
@@ -56,7 +56,7 @@ lazy_static! {
     );
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "x86-interrupt" fn divide_by_zero_handler(frame: InterruptFrame) {
     panic!("---- Divide By Zero Exception ----\n{}", frame);
 }
@@ -65,27 +65,27 @@ extern "x86-interrupt" fn invaild_opcode(frame: InterruptFrame) {
     panic!("---- Invaild OPCODE ----\n{}", frame);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptFrame) {
     serial!("hi from interrupt, breakpoint!\n{}", frame);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "x86-interrupt" fn dobule_fault_handler(frame: TrapFrame) {
     panic!("---- Double Fault ----\n{}", frame);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "x86-interrupt" fn stack_segment_fault_handler(frame: TrapFrame) {
     panic!("---- Stack-Segment Fault ----\n{}", frame);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "x86-interrupt" fn general_protection_fault_handler(frame: TrapFrame) {
     panic!("---- General Protection Fault ----\n{}", frame,);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "x86-interrupt" fn page_fault_handler(frame: TrapFrame) {
     let cr2: u64;
     unsafe { asm!("mov {}, cr2", out(reg) cr2) }
@@ -106,13 +106,13 @@ pub fn handle_ps2_keyboard() {
         crate::__navi_key_pressed(encoded);
     }
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "x86-interrupt" fn keyboard_interrupt_handler() {
     handle_ps2_keyboard();
     send_eoi();
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "x86-interrupt" fn do_nothing() {
     send_eoi();
 }

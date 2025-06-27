@@ -3,7 +3,6 @@ use lazy_static::lazy_static;
 
 use crate::{
     arch::aarch64::gic::{its::rdbase, GICITS_BASE},
-    time,
     utils::locks::Mutex,
     PhysAddr, VirtAddr,
 };
@@ -220,20 +219,9 @@ impl ITSCommandQueue {
 
     /// Waits until all commands has been handled by the ITS
     pub fn poll(&self) {
-        let timeout = 1000;
-        let start_time = time!();
-
-        while GITSCReader::read().offset() < GITSCWriter::read().offset() {
-            let now = time!();
-
-            if now >= start_time + timeout {
-                panic!(
-                    "time out after {}ms while waiting for the ITS to read commands",
-                    time!() - start_time
-                );
-            }
-
-            core::hint::spin_loop();
+        if !crate::sleep_until!(1000 ms, GITSCReader::read().offset() >= GITSCWriter::read().offset())
+        {
+            panic!("time out after 1000ms while waiting for the ITS to read commands",);
         }
     }
 }

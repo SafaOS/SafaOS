@@ -11,19 +11,24 @@ use safa_utils::{
     types::Name,
 };
 
-macro_rules! log {
+#[macro_export]
+macro_rules! test_log {
     ($($arg:tt)*) => {
-        $crate::logln!("[ \x1B[92m test \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
+        $crate::logln_ext!("test", "92", $($arg)*)
     };
 }
 
 macro_rules! ok {
-    ($last_time: expr) => {
+    ($last_time_us: expr_2021) => {{
+        let end_time_us = $crate::time!(us);
+        let delta_time_us = end_time_us - $last_time_us;
+        let delta_time_ms = delta_time_us / 1000;
         $crate::logln!(
-            "[ \x1B[92m OK   \x1B[0m  ]\x1b[90m:\x1B[0m delta {}ms",
-            $crate::time!() - $last_time
+            "[ \x1B[92m OK   \x1B[0m  ]\x1b[90m:\x1B[0m delta {}ms ({}us)",
+            delta_time_ms,
+            delta_time_us
         );
-    };
+    }};
 }
 
 pub trait Testable {
@@ -68,7 +73,7 @@ impl<T: Fn()> Testable for T {
 }
 
 pub fn test_runner(tests: &[&dyn Testable]) -> ! {
-    log!("sleeping for 5 second(s) until kernel finishes startup...");
+    test_log!("sleeping for 5 second(s) until kernel finishes startup...");
     sleep!(5000 ms);
 
     let tests_iter = tests
@@ -85,22 +90,25 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
             .filter(|x| x.piritory() == TestPiritory::Lowest),
     );
 
-    log!("running {} tests", tests.len());
-    let first_log = crate::time!();
+    test_log!("running {} tests", tests.len());
+    let first_log_ms = crate::time!(ms);
 
     for test in tests_iter {
         unsafe {
             crate::arch::disable_interrupts();
         }
-        log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
-        let last_log = crate::time!();
+        test_log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
+        let last_log = crate::time!(us);
         test.run();
         ok!(last_log);
         unsafe {
             crate::arch::enable_interrupts();
         }
     }
-    info!("finished running tests in {}ms", crate::time!() - first_log);
+    info!(
+        "finished running tests in {}ms",
+        crate::time!(ms) - first_log_ms
+    );
 
     // printing 'PLEASE EXIT' to the serial makes `safa-helper test` know that the kernel tests were successful
     info!("PLEASE EXIT, automatically attempting exiting after 1000ms, PLEASE EXIT");

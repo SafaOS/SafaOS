@@ -46,7 +46,7 @@ pub(crate) fn log_time_from_ms(ms: u64) -> (u32, u8, u8, u16) {
 #[macro_export]
 macro_rules! generic_log {
     ($write_macro:ident, $($arg:tt)*) => {{
-        let log_time = $crate::time!();
+        let log_time = $crate::time!(ms);
         let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
         $crate::$write_macro!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
     }};
@@ -127,7 +127,7 @@ pub const MIN_LOG_TYPE_NAME_WIDTH: usize = 5;
 
 #[macro_export]
 macro_rules! logln_ext {
-    ($name: literal, $name_color: literal, as $kind: expr, $($arg:tt)*) => {
+    ($name: literal, $name_color: literal, as $kind: expr_2021, $($arg:tt)*) => {
         $crate::logln!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m {kind}:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, kind = $kind, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
     };
 
@@ -138,7 +138,7 @@ macro_rules! logln_ext {
 
 #[macro_export]
 macro_rules! loglnboot_ext {
-    ($name: literal, $name_color: literal, as $kind: expr, $($arg:tt)*) => {
+    ($name: literal, $name_color: literal, as $kind: expr_2021, $($arg:tt)*) => {
         $crate::logln_boot!("[  \x1B[{name_color}m{name:<width$}\x1B[0m  ]\x1b[90m {kind}:\x1B[0m {}", format_args!($($arg)*), name_color = $name_color, name = $name, kind = $kind, width = $crate::logging::MIN_LOG_TYPE_NAME_WIDTH)
     };
 

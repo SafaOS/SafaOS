@@ -72,8 +72,11 @@ macro_rules! serial {
 /// Returns the number of milliseconds since the CPU was started
 #[macro_export]
 macro_rules! time {
-    () => {
-        $crate::arch::utils::time()
+    (ms) => {
+        $crate::arch::utils::time_ms()
+    };
+    (us) => {
+        $crate::arch::utils::time_us()
     };
 }
 
@@ -85,11 +88,11 @@ macro_rules! time {
 /// sleep!(N ms)
 /// sleep!(N) (ms)
 macro_rules! sleep {
-    ($ms: expr) => {{
-        let start_time = $crate::time!();
+    ($ms: expr_2021) => {{
+        let start_time = $crate::time!(ms);
         let timeout_time = start_time + $ms as u64;
 
-        while $crate::time!() < timeout_time {
+        while $crate::time!(ms) < timeout_time {
             core::hint::spin_loop()
         }
     }};
@@ -116,13 +119,13 @@ macro_rules! sleep_until {
         true
     }};
 
-    ($timeout_ms: literal ms, $cond: expr) => {{
-        let start_time = $crate::time!();
+    ($timeout_ms: literal ms, $cond: expr_2021) => {{
+        let start_time = $crate::time!(ms);
         let timeout_time = start_time + $timeout_ms;
         let mut success = true;
 
         while !$cond {
-            if $crate::time!() >= timeout_time {
+            if $crate::time!(ms) >= timeout_time {
                 success = $cond;
                 break;
             }
@@ -171,7 +174,7 @@ fn panic(info: &PanicInfo) -> ! {
     khalt();
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
     memory::sorcery::init_page_table();

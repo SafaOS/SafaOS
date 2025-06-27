@@ -84,7 +84,7 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
     Ok(largest_addr_virt + PAGE_SIZE)
 }
 
-unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> {
+unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> { unsafe {
     debug!(PageTable, "mapping kernel");
     let start = Page::containing_address(VirtAddr::from(0xffffffff80000000));
     let end = Page::containing_address(VirtAddr::from(0xffffffffffffffff));
@@ -99,7 +99,7 @@ unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapTo
     }
     debug!(PageTable, "mapped kernel");
     Ok(())
-}
+}}
 
 pub fn init_page_table() {
     debug!(PageTable, "initializing root page table ... ");

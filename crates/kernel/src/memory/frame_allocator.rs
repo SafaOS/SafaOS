@@ -139,13 +139,13 @@ impl RegionNode {
     /// creates a new region node in the given frame
     /// # Safety
     /// the caller must ensure that the frame is not used anymore
-    unsafe fn new_in(frame: Frame) -> *mut Self {
+    unsafe fn new_in(frame: Frame) -> *mut Self { unsafe {
         let frame_addr = frame.virt_addr();
         let region_pointer = frame_addr.into_ptr::<RegionNode>();
 
         *region_pointer = RegionNode::new(frame.start_address());
         region_pointer
-    }
+    }}
 
     pub const fn page_num(&self) -> usize {
         self.start_address.into_raw() / PAGE_SIZE

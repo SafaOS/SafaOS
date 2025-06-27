@@ -31,7 +31,7 @@ unsafe impl Sync for IRQInfo {}
 impl IRQInfo {
     fn setup(&mut self, irq_num: u32, trigger: IntTrigger) {
         match self {
-            IRQInfo::MSIX(ref mut msix) => msix.setup(irq_num, trigger),
+            IRQInfo::MSIX(msix) => msix.setup(irq_num, trigger),
         }
     }
 }

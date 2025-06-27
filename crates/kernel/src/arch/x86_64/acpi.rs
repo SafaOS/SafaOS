@@ -2,7 +2,7 @@ use core::ptr::addr_of;
 
 use lazy_static::lazy_static;
 
-use crate::{limine::HHDM, PhysAddr, RSDP_ADDR};
+use crate::{PhysAddr, RSDP_ADDR, limine::HHDM};
 
 lazy_static! {
     pub static ref PSDT_DESC: &'static dyn PTSD = get_sdt();
@@ -206,14 +206,18 @@ pub trait SDT: Send + Sync {
 // stands for Parent Table of System Descriptors (yes it gave me ptsd)
 pub trait PTSD: SDT + Send + Sync {
     unsafe fn get_entry(&self, signatrue: [u8; 4]) -> Option<*const ACPIHeader> {
-        for i in 0..(self.count()) {
-            let item = self.nth(i).0 as *const ACPIHeader;
-            let sign = (*item).signatrue;
-            if sign == signatrue {
-                return Some(item);
+        unsafe {
+            for i in 0..(self.count()) {
+                let item_ptr = self.nth(i).0 as *const ACPIHeader;
+                let item = item_ptr.read_unaligned();
+
+                let sign = item.signatrue;
+                if sign == signatrue {
+                    return Some(item_ptr);
+                }
             }
+            None
         }
-        None
     }
 
     // table item count
@@ -222,7 +226,7 @@ pub trait PTSD: SDT + Send + Sync {
 
 impl<'a> dyn PTSD + 'a {
     unsafe fn get_entry_cast<T: SDT>(&self, signatrue: [u8; 4]) -> Option<*const T> {
-        self.get_entry(signatrue).map(|p| p as *const T)
+        unsafe { self.get_entry(signatrue).map(|p| p as *const T) }
     }
 }
 
@@ -232,10 +236,12 @@ impl SDT for RSDT {
     }
 
     unsafe fn nth(&self, n: usize) -> (usize, usize) {
-        let addr = *self.table.as_ptr().add(n) as usize;
-        let addr = addr | *HHDM;
+        unsafe {
+            let addr = *self.table.as_ptr().add(n) as usize;
+            let addr = addr | *HHDM;
 
-        (addr, 0)
+            (addr, 0)
+        }
     }
 }
 
@@ -245,12 +251,14 @@ impl SDT for XSDT {
     }
 
     unsafe fn nth(&self, n: usize) -> (usize, usize) {
-        let table_ptr = addr_of!(self.table) as *const u64;
-        let addr = table_ptr.add(n);
-        let addr = core::ptr::read_unaligned(addr) as usize;
-        let addr = addr | *HHDM;
+        unsafe {
+            let table_ptr = addr_of!(self.table) as *const u64;
+            let addr = table_ptr.add(n);
+            let addr = core::ptr::read_unaligned(addr) as usize;
+            let addr = addr | *HHDM;
 
-        (addr, 0)
+            (addr, 0)
+        }
     }
 }
 
@@ -319,45 +327,49 @@ impl SDT for MADT {
     }
 
     unsafe fn nth(&self, n: usize) -> (usize, usize) {
-        let addr = self as *const Self;
+        unsafe {
+            let addr = self as *const Self;
 
-        if n == 0 {
-            let base = (addr).byte_add(size_of::<MADT>());
-            return (base as usize, base as usize - addr as usize);
+            if n == 0 {
+                let base = (addr).byte_add(size_of::<MADT>());
+                return (base as usize, base as usize - addr as usize);
+            }
+
+            let base = self.nth(0).0;
+            let mut record = base + (*(base as *const MADTRecord)).length as usize;
+
+            for _ in 1..n - 1 {
+                let next_record = record as *const MADTRecord;
+                let len = (*next_record).length;
+                record += len as usize;
+            }
+
+            (record, record - addr as usize)
         }
-
-        let base = self.nth(0).0;
-        let mut record = base + (*(base as *const MADTRecord)).length as usize;
-
-        for _ in 1..n - 1 {
-            let next_record = record as *const MADTRecord;
-            let len = (*next_record).length;
-            record += len as usize;
-        }
-
-        (record, record - addr as usize)
     }
 }
 
 impl MADT {
     pub unsafe fn get_record_of_type(&self, ty: u8) -> Option<*const MADTRecord> {
-        let len = self.header.len;
-        let mut current_offset = 0;
-        let mut i = 0;
+        unsafe {
+            let len = self.header.len;
+            let mut current_offset = 0;
+            let mut i = 0;
 
-        while current_offset <= len as usize {
-            let (ptr, offset) = self.nth(i);
-            let ptr = ptr as *const MADTRecord;
+            while current_offset <= len as usize {
+                let (ptr, offset) = self.nth(i);
+                let ptr = ptr as *const MADTRecord;
 
-            if (*ptr).entry_type == ty {
-                return Some(ptr);
+                if (*ptr).entry_type == ty {
+                    return Some(ptr);
+                }
+
+                i += 1;
+                current_offset = offset;
             }
 
-            i += 1;
-            current_offset = offset;
+            None
         }
-
-        None
     }
 
     pub fn get(ptsd: &dyn PTSD) -> &MADT {

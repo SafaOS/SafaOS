@@ -19,9 +19,9 @@ fn main() -> SysResult {
 
     write(
         &"name".blue(),
-        &"pid".red(),
-        &"ppid".red(),
-        &"is_alive".yellow(),
+        &"pid".bright_red(),
+        &"ppid".bright_red(),
+        &"is_alive".bright_yellow(),
     );
 
     println!(
@@ -34,10 +34,15 @@ fn main() -> SysResult {
         let is_alive: &dyn Display = if p.is_alive() {
             &"true".bright_green()
         } else {
-            &"false".red()
+            &"false".bright_red()
         };
 
-        write(&p.name().blue(), &p.pid().red(), &p.ppid().red(), is_alive);
+        write(
+            &p.name().blue(),
+            &p.pid().bright_red(),
+            &p.ppid().bright_red(),
+            is_alive,
+        );
     }
     SysResult::Success
 }

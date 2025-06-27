@@ -16,7 +16,7 @@ use safa_utils::{
 use thiserror::Error;
 
 use crate::{
-    drivers::vfs::{expose::File, FSError, FSResult, InodeType, VFS_STRUCT},
+    drivers::vfs::{expose::File, FSError, FSObjectType, FSResult, VFS_STRUCT},
     khalt,
     utils::{
         elf::{Elf, ElfError},
@@ -31,7 +31,7 @@ use super::{
     this_state, this_state_mut, Pid,
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn thread_exit(code: usize) -> ! {
     let current = super::current();
     current.kill(code, None);
@@ -42,15 +42,15 @@ pub fn thread_exit(code: usize) -> ! {
     khalt()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn thread_yield() {
     crate::arch::threading::invoke_context_switch()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// waits for `pid` to exit
 /// returns it's exit code after cleaning it up
-pub fn wait(pid: usize) -> usize {
+pub fn wait(pid: Pid) -> usize {
     // loops through the processes until it finds the process with `pid` as a zombie
     loop {
         // cycles through the processes one by one until it finds the process with `pid`
@@ -74,7 +74,7 @@ pub fn wait(pid: usize) -> usize {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
     let found = super::find(|p| p.pid == pid);
     found.map(|p| TaskInfo::from(&*p))
@@ -110,8 +110,8 @@ fn spawn_inner(
     name: Name,
     flags: SpawnFlags,
     structures: AbiStructures,
-    create_task: impl FnOnce(Name, usize, Box<PathBuf>) -> Result<Task, SpawnError>,
-) -> Result<usize, SpawnError> {
+    create_task: impl FnOnce(Name, Pid, Box<PathBuf>) -> Result<Task, SpawnError>,
+) -> Result<Pid, SpawnError> {
     let this = this_state();
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
         this.cwd()
@@ -176,7 +176,7 @@ pub fn function_spawn(
     env: &[&[u8]],
     flags: SpawnFlags,
     structures: AbiStructures,
-) -> Result<usize, SpawnError> {
+) -> Result<Pid, SpawnError> {
     spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let mut page_table = PhysPageTable::create()?;
         let context = unsafe {
@@ -202,7 +202,7 @@ pub fn spawn<T: Readable>(
     env: &[&[u8]],
     flags: SpawnFlags,
     structures: AbiStructures,
-) -> Result<usize, SpawnError> {
+) -> Result<Pid, SpawnError> {
     spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let elf = Elf::new(reader)?;
         let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, structures)?;
@@ -218,10 +218,10 @@ pub fn pspawn(
     env: &[&[u8]],
     flags: SpawnFlags,
     structures: AbiStructures,
-) -> Result<usize, FSError> {
+) -> Result<Pid, FSError> {
     let file = File::open(path)?;
 
-    if file.kind() != InodeType::File {
+    if file.kind() != FSObjectType::File {
         return Err(FSError::NotAFile);
     }
 
@@ -230,7 +230,7 @@ pub fn pspawn(
 
 /// also ensures the cwd ends with /
 /// will only Err if new_dir doesn't exists or is not a directory
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub fn chdir(new_dir: Path) -> FSResult<()> {
     VFS_STRUCT.read().verify_path_dir(new_dir)?;
 
@@ -246,7 +246,7 @@ pub fn chdir(new_dir: Path) -> FSResult<()> {
     Ok(())
 }
 
-fn can_terminate(mut process_ppid: usize, process_pid: usize, terminator_pid: usize) -> bool {
+fn can_terminate(mut process_ppid: Pid, process_pid: Pid, terminator_pid: Pid) -> bool {
     if process_ppid == terminator_pid || process_pid == terminator_pid {
         return true;
     }
@@ -285,7 +285,7 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
     });
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// can only Err if pid doesn't belong to process
 pub fn pkill(pid: Pid) -> Result<(), ()> {
     let current = super::current();
@@ -302,7 +302,7 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
     Err(())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// extends program break by `amount`
 /// returns the new program break ptr
 /// on fail returns null

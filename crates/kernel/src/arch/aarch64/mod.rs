@@ -75,6 +75,6 @@ pub unsafe fn enable_interrupts() {
 }
 
 #[inline(always)]
-pub unsafe fn hlt() {
+pub unsafe fn hlt() { unsafe {
     asm!("wfe");
-}
+}}

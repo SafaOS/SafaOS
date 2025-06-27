@@ -255,7 +255,7 @@ impl<T> LinkedList<T> {
         }
     }
 
-    unsafe fn push_node(&mut self, node: NonNull<LinkedListNode<T>>) {
+    unsafe fn push_node(&mut self, node: NonNull<LinkedListNode<T>>) { unsafe {
         if let Some(tail) = self.tail {
             (*tail.as_ptr()).next = Some(node);
             (*node.as_ptr()).prev = Some(tail);
@@ -268,9 +268,9 @@ impl<T> LinkedList<T> {
             self.current = Some(node);
         }
         self.len += 1;
-    }
+    }}
 
-    unsafe fn remove_node(&mut self, node: NonNull<LinkedListNode<T>>) -> T {
+    unsafe fn remove_node(&mut self, node: NonNull<LinkedListNode<T>>) -> T { unsafe {
         let next = (*node.as_ptr()).next;
         let prev = (*node.as_ptr()).prev;
 
@@ -297,7 +297,7 @@ impl<T> LinkedList<T> {
         self.len -= 1;
         let results = Box::from_non_null(node);
         results.inner
-    }
+    }}
 
     /// removes the first element where `condition` on returns true
     /// returns the removed element
