@@ -25,7 +25,7 @@ use crate::utils::ustar::TarArchiveIter;
 
 #[used]
 #[link_section = ".requests"]
-static BASE_REVISION: BaseRevision = BaseRevision::new();
+static BASE_REVISION: BaseRevision = BaseRevision::with_revision(2);
 
 #[used]
 #[link_section = ".requests"]
