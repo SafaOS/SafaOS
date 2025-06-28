@@ -7,7 +7,7 @@ use core::{arch::asm, fmt::Display};
 use handlers::IDT;
 use idt::IDTDesc;
 
-use crate::{VirtAddr, KERNEL_ELF};
+use crate::{KERNEL_ELF, VirtAddr};
 
 use super::threading::RFLAGS;
 use crate::drivers::interrupts::IRQInfo;
@@ -37,7 +37,7 @@ impl Display for TrapFrame {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let sym = KERNEL_ELF.sym_from_value_range(self.insturaction);
 
-        let name = sym.map(|sym| KERNEL_ELF.string_table_index(sym.name_index).unwrap());
+        let name = sym.and_then(|sym| KERNEL_ELF.string_table_index(sym.name_index));
         let name = name.as_deref().unwrap_or("???");
 
         writeln!(f, "---- Trap Frame ----")?;
@@ -137,7 +137,9 @@ macro_rules! irq_list {
     }
 }
 
-irq_list!(0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A);
+irq_list!(
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A
+);
 
 /// Registers the handler function `handler` to irq `irq_num`
 /// Make sure the num is retrieved from [`AVAILABLE_RQS`]

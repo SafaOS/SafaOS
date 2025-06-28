@@ -10,7 +10,7 @@ mod usbinfo;
 use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
 use crate::{
     drivers::vfs::{FSError, FSObjectID, FSResult, FileSystem, SeekOffset},
-    threading::{self, schd, Pid},
+    threading::{self, Pid, schd},
     utils::locks::RwLock,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -255,11 +255,10 @@ impl InternalStructure {
     }
 
     fn try_generate_from_task(task_pid: Pid) -> Option<Self> {
-        match threading::find(|task| task.pid == task_pid) { Some(_) => {
-            Some(Self::generate_from_task(task_pid))
-        } _ => {
-            None
-        }}
+        match threading::find(|task| task.pid() == task_pid) {
+            Some(_) => Some(Self::generate_from_task(task_pid)),
+            _ => None,
+        }
     }
 
     fn get_mut(&mut self, idx: OpaqueRodFSObjID) -> Option<&mut RodFSObject> {
@@ -374,7 +373,7 @@ impl RodFS {
     fn search_indx(&mut self, parent_id: RodFSObjID, name: &str) -> FSResult<RodFSObjID> {
         if parent_id == self.tasks_collection_id() {
             if name == "self" {
-                let pid = threading::current().pid;
+                let pid = threading::current().pid();
                 let task_obj_id = TaskObjID::new(0, pid);
                 return Ok(RodFSObjID::TaskID(task_obj_id));
             }
@@ -406,7 +405,7 @@ impl RodFS {
                 let task_pid = task_obj_id.task_pid();
                 // if the task is not found, it means the task has been terminated
                 // remove the task from the cache
-                if threading::find(|task| task.pid == task_pid).is_none() {
+                if threading::find(|task| task.pid() == task_pid).is_none() {
                     self.tasks_cache.remove(&task_pid);
                 }
             }
@@ -491,7 +490,7 @@ impl FileSystem for RwLock<RodFS> {
 
             let mut pid_fmt_buf = heapless::String::<20>::new();
             scheduler.for_each(|task| {
-                _ = write!(pid_fmt_buf, "{}", task.pid);
+                _ = write!(pid_fmt_buf, "{}", task.pid());
                 let attrs = FileAttr::new(FSObjectType::Directory, 0);
 
                 let direntry = DirEntry::new(&pid_fmt_buf, attrs);

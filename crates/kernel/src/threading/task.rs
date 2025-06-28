@@ -1,33 +1,36 @@
 use core::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
-    sync::atomic::{AtomicBool, AtomicU32},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use crate::utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::utils::types::Name;
+use crate::{
+    threading::cpu_context::Context,
+    utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
+};
 use alloc::{boxed::Box, vec::Vec};
 use safa_utils::abi::raw::processes::AbiStructures;
 use serde::Serialize;
 
 use crate::{
+    VirtAddr,
     arch::threading::CPUStatus,
     debug, eve,
     memory::{
         align_up, frame_allocator,
-        paging::{Page, PhysPageTable, PAGE_SIZE},
+        paging::{PAGE_SIZE, Page, PhysPageTable},
     },
     utils::{
         elf::{Elf, ElfError},
         io::Readable,
         path::{Path, PathBuf},
     },
-    VirtAddr,
 };
 
 use super::{
-    resources::{Resource, ResourceManager},
     Pid,
+    resources::{Resource, ResourceManager},
 };
 
 pub struct AliveTask {
@@ -172,18 +175,20 @@ impl AliveTask {
     /// Makes `self` a zombie
     /// # Safety
     ///  unsafe because `self` becomes invalid after this call
-    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask { unsafe {
-        let root_page_table = ManuallyDrop::take(&mut self.root_page_table);
-        eve::add_cleanup(root_page_table);
-        ZombieTask {
-            exit_code,
-            killed_by,
-            data_start: self.data_start,
-            data_break: self.data_break,
-            last_resource_id: self.resources.next_ri(),
-            cwd: core::mem::take(&mut self.cwd),
+    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask {
+        unsafe {
+            let root_page_table = ManuallyDrop::take(&mut self.root_page_table);
+            eve::add_cleanup(root_page_table);
+            ZombieTask {
+                exit_code,
+                killed_by,
+                data_start: self.data_start,
+                data_break: self.data_break,
+                last_resource_id: self.resources.next_ri(),
+                cwd: core::mem::take(&mut self.cwd),
+            }
         }
-    }}
+    }
 }
 
 impl ZombieTask {
@@ -272,19 +277,74 @@ impl TaskState {
     }
 }
 
+pub(super) struct CPUContexts {
+    contexts: Vec<Context>,
+    current_context_index: usize,
+}
+
+impl CPUContexts {
+    pub fn create(status: CPUStatus) -> Self {
+        let context = Context::new(0, status);
+        Self::new(context)
+    }
+
+    pub fn new(root_context: Context) -> Self {
+        Self {
+            contexts: alloc::vec![root_context],
+            current_context_index: 0,
+        }
+    }
+
+    pub fn current_mut(&mut self) -> &mut Context {
+        &mut self.contexts[self.current_context_index]
+    }
+
+    pub fn advance_swap(&mut self, current_status: CPUStatus) -> Option<&mut Context> {
+        self.current_mut().set_cpu_status(current_status);
+
+        if self.current_context_index + 1 < self.contexts.len() {
+            self.current_context_index += 1;
+            Some(self.current_mut())
+        } else {
+            self.current_context_index = 0;
+            None
+        }
+    }
+
+    pub fn exit_current(&mut self) -> bool {
+        self.contexts.swap_remove(self.current_context_index);
+        self.contexts.is_empty()
+    }
+}
+
 pub struct Task {
-    /// constant
-    pub pid: Pid,
-    /// Task may change it's parent pid
-    pub ppid: AtomicU32,
-    state: RwLock<TaskState>,
     name: Name,
-    /// context must only be changed by the scheduler, so it is not protected by a lock
-    context: UnsafeCell<CPUStatus>,
+    /// constant
+    pid: Pid,
+    /// Task may change it's parent pid
+    ppid: AtomicU32,
+    state: RwLock<TaskState>,
+    cpu_contexts: UnsafeCell<CPUContexts>,
     is_alive: AtomicBool,
 }
 
 impl Task {
+    pub const fn pid(&self) -> Pid {
+        self.pid
+    }
+
+    pub fn ppid(&self) -> Pid {
+        self.ppid.load(Ordering::Relaxed)
+    }
+
+    pub fn ppid_atomic(&self) -> &AtomicU32 {
+        &self.ppid
+    }
+
+    pub(super) const fn set_pid(&mut self, pid: Pid) {
+        self.pid = pid;
+    }
+
     /// Creates a new task
     /// # Panics
     /// if `cwd` or `name` have a length greater than 128 or 64 bytes respectively
@@ -294,17 +354,18 @@ impl Task {
         ppid: Pid,
         cwd: Box<PathBuf>,
         root_page_table: PhysPageTable,
-        context: CPUStatus,
+        status: CPUStatus,
         data_break: VirtAddr,
     ) -> Self {
         let data_break = VirtAddr::from(align_up(data_break.into_raw(), PAGE_SIZE));
+        let cpu_contexts = CPUContexts::create(status);
 
         Self {
             name,
             pid,
             ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
-            context: UnsafeCell::new(context),
+            cpu_contexts: UnsafeCell::new(cpu_contexts),
             state: RwLock::new(TaskState::Alive(AliveTask {
                 root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
@@ -371,20 +432,16 @@ impl Task {
         );
     }
 
-    pub unsafe fn set_context(&self, context: CPUStatus) { unsafe {
-        *self.context.get() = context;
-    }}
-
-    pub fn context(&self) -> &CPUStatus {
-        unsafe { &*self.context.get() }
+    pub(super) unsafe fn cpu_contexts(&self) -> &mut CPUContexts {
+        unsafe { &mut *self.cpu_contexts.get() }
     }
 
     fn at(&self) -> VirtAddr {
-        unsafe { (*self.context.get()).at() }
+        VirtAddr::null()
     }
 
     fn stack_at(&self) -> VirtAddr {
-        unsafe { (*self.context.get()).stack_at() }
+        VirtAddr::null()
     }
 
     pub(super) fn is_alive(&self) -> bool {

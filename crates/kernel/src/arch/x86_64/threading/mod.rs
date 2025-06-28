@@ -16,12 +16,12 @@ use core::arch::{asm, global_asm};
 use bitflags::bitflags;
 
 use crate::{
+    VirtAddr,
     memory::{
         copy_to_userspace,
-        paging::{EntryFlags, MapToError, PhysPageTable, PAGE_SIZE},
+        paging::{EntryFlags, MapToError, PAGE_SIZE, PhysPageTable},
     },
     threading::swtch,
-    VirtAddr,
 };
 
 use super::gdt::{KERNEL_CODE_SEG, KERNEL_DATA_SEG, USER_CODE_SEG, USER_DATA_SEG};
@@ -199,119 +199,15 @@ impl CPUStatus {
     }
 }
 
-global_asm!(
-    "
-.global restore_cpu_status
-.global context_switch_stub
-
-restore_cpu_status:
-    // push the iretq frame
-    push [rdi + 16]     // push ss
-    push [rdi]          // push rsp
-    push [rdi + 8]      // push rflags
-    push [rdi + 24]     // push cs
-    push [rdi + 32]     // push rip
-
-
-    mov r15, [rdi + 40]
-    mov r14, [rdi + 48]
-    mov r13, [rdi + 56]
-    mov r12, [rdi + 64]
-    mov r11, [rdi + 72]
-    mov r10, [rdi + 80]
-    mov r9, [rdi + 88]
-    mov r8, [rdi + 96]
-
-    mov rbp, [rdi + 104]
-    mov rsi, [rdi + 120]
-
-    mov rdx, [rdi + 128]
-    mov rcx, [rdi + 136]
-    mov rbx, [rdi + 144]
-
-    push [rdi + 0x70] // rdi
-    push [rdi + 0xA0] // rax
-
-    lea rax, [rdi + 0xA8]
-    movdqu xmm15, [rax+0x00]
-    movdqu xmm14, [rax+0x10]
-    movdqu xmm13, [rax+0x20]
-    movdqu xmm12, [rax+0x30]
-    movdqu xmm11, [rax+0x40]
-    movdqu xmm10, [rax+0x50]
-    movdqu xmm9, [rax+0x60]
-    movdqu xmm8, [rax+0x70]
-    movdqu xmm7, [rax+0x80]
-    movdqu xmm6, [rax+0x90]
-    movdqu xmm5, [rax+0xA0]
-    movdqu xmm4, [rax+0xB0]
-    movdqu xmm3, [rax+0xC0]
-    movdqu xmm2, [rax+0xD0]
-    movdqu xmm1, [rax+0xE0]
-    movdqu xmm0, [rax+0xF0]
-
-    mov rax, [rdi + 0x98]
-    mov cr3, rax
-
-    pop rax
-    pop rdi
-
-    iretq
-
-context_switch_stub:
-    sub rsp, 16*16      // allocate space for xmm registers
-    movdqu [rsp+0x00], xmm0
-    movdqu [rsp+0x10], xmm1
-    movdqu [rsp+0x20], xmm2
-    movdqu [rsp+0x30], xmm3
-    movdqu [rsp+0x40], xmm4
-    movdqu [rsp+0x50], xmm5
-    movdqu [rsp+0x60], xmm6
-    movdqu [rsp+0x70], xmm7
-    movdqu [rsp+0x80], xmm8
-    movdqu [rsp+0x90], xmm9
-    movdqu [rsp+0xA0], xmm10
-    movdqu [rsp+0xB0], xmm11
-    movdqu [rsp+0xC0], xmm12
-    movdqu [rsp+0xD0], xmm13
-    movdqu [rsp+0xE0], xmm14
-    movdqu [rsp+0xF0], xmm15
-
-    push rax
-    mov rax, cr3
-    push rax
-
-    push rbx
-    push rcx
-    push rdx
-
-    push rsi
-    push rdi
-    push rbp
-
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-
-    push 0    // rip
-    push 0x8  // cs
-    push 0x10 // ss
-    pushfq
-    push 0 // rsp
-    call context_switch
-    // UNREACHABLE!!!
-    ud2
-"
-);
+global_asm!(include_str!("./threading.asm"));
 
 unsafe extern "C" {
-    ///  Takes a reference to [`CPUStatus`] and sets current cpu status (registers) to it
-    pub fn restore_cpu_status(status: &CPUStatus) -> !;
+    /// Takes a reference to [`CPUStatus`] and sets current cpu status (registers) to it
+    /// also reloads the address space
+    /// assumes that the `status` is valid and points to a valid [`CPUStatus`] structure that is accessible by the new address space
+    pub fn restore_cpu_status_full(status: *const CPUStatus) -> !;
+    /// same as [`restore_cpu_status_full`] but does not reload the address space
+    pub fn restore_cpu_status_partial(status: *const CPUStatus) -> !;
 }
 
 unsafe extern "x86-interrupt" {
@@ -319,7 +215,10 @@ unsafe extern "x86-interrupt" {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn context_switch(mut capture: CPUStatus, frame: super::interrupts::InterruptFrame) {
+pub extern "C" fn context_switch(
+    mut capture: CPUStatus,
+    frame: super::interrupts::InterruptFrame,
+) -> ! {
     capture.rsp = frame.stack_pointer;
     capture.rip = frame.insturaction;
 
@@ -328,13 +227,33 @@ pub extern "C" fn context_switch(mut capture: CPUStatus, frame: super::interrupt
     capture.rflags = frame.flags;
 
     unsafe {
-        capture = swtch(capture);
+        let swtch_results = swtch(capture);
+
         super::interrupts::apic::send_eoi();
-        restore_cpu_status(&capture);
+        if let Some((new_context_ptr, address_space_changed)) = swtch_results {
+            let new_context_ref = new_context_ptr.as_ref();
+            if address_space_changed {
+                capture = *new_context_ref;
+                restore_cpu_status_full(&capture);
+            } else {
+                restore_cpu_status_partial(new_context_ref);
+            }
+        } else {
+            core::hint::cold_path();
+            restore_cpu_status_partial(&capture);
+        }
     }
 }
 
 #[inline(always)]
 pub fn invoke_context_switch() {
     unsafe { asm!("int 0x20") }
+}
+
+/// Fully restores the CPU status from the given [`CPUStatus`] structure.
+/// shouldn't be used
+pub unsafe fn restore_cpu_status(status: *const CPUStatus) -> ! {
+    unsafe {
+        restore_cpu_status_full(status);
+    }
 }

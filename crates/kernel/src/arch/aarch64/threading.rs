@@ -6,11 +6,12 @@ use core::{
 use safa_utils::abi::raw::processes::AbiStructures;
 
 use crate::{
+    PhysAddr, VirtAddr,
     memory::{
         copy_to_userspace, map_byte_slices, map_str_slices,
         paging::{EntryFlags, MapToError, PhysPageTable},
     },
-    threading, PhysAddr, VirtAddr,
+    threading,
 };
 
 use super::{
@@ -73,6 +74,15 @@ global_asm!(
     "
 .text
 .global restore_cpu_status
+.global restore_cpu_status_partial
+restore_cpu_status_partial:
+    ldp xzr, x2, [x0]
+    msr sp_el0, x2
+
+    mov x1, #0x10
+    add x0, x0, x1
+    b restore_frame
+
 restore_cpu_status:
     ldp x1, x2, [x0]
     # x0 has to be a higher half address or everything breaks....
@@ -94,6 +104,7 @@ restore_cpu_status:
 unsafe extern "C" {
     ///  Takes a reference to [`CPUStatus`] and sets current cpu status (registers) to it
     pub fn restore_cpu_status(status: &CPUStatus) -> !;
+    fn restore_cpu_status_partial(status: &CPUStatus) -> !;
 }
 
 impl CPUStatus {
@@ -182,17 +193,25 @@ impl CPUStatus {
     }
 }
 
-pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) -> ! {
+pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
     let context = unsafe { CPUStatus::from_current(frame) };
-    let new_context = threading::swtch(context);
+    let swtch_results = threading::swtch(context);
+    if let Some((new_context_ptr, address_space_changed)) = swtch_results {
+        unsafe {
+            let current_context = &mut *CURRENT_CONTEXT.get();
+            *current_context = *new_context_ptr.as_ptr();
 
-    let current_context = unsafe { &mut *CURRENT_CONTEXT.get() };
-    *current_context = new_context;
-
-    unsafe {
+            before_switch();
+            if !address_space_changed {
+                restore_cpu_status_partial(current_context);
+            } else {
+                restore_cpu_status(current_context);
+            }
+        }
+    } else {
+        core::hint::cold_path();
         before_switch();
-        restore_cpu_status(current_context)
-    };
+    }
 }
 
 pub fn invoke_context_switch() {

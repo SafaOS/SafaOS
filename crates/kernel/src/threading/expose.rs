@@ -1,10 +1,10 @@
 use core::sync::atomic::Ordering;
 
 use crate::{
+    VirtAddr,
     arch::threading::CPUStatus,
     memory::paging::{MapToError, PhysPageTable},
     utils::types::Name,
-    VirtAddr,
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
@@ -16,7 +16,7 @@ use safa_utils::{
 use thiserror::Error;
 
 use crate::{
-    drivers::vfs::{expose::File, FSError, FSObjectType, FSResult, VFS_STRUCT},
+    drivers::vfs::{FSError, FSObjectType, FSResult, VFS_STRUCT, expose::File},
     khalt,
     utils::{
         elf::{Elf, ElfError},
@@ -27,8 +27,9 @@ use crate::{
 };
 
 use super::{
+    Pid,
     task::{Task, TaskInfo},
-    this_state, this_state_mut, Pid,
+    this_state, this_state_mut,
 };
 
 #[unsafe(no_mangle)]
@@ -56,13 +57,13 @@ pub fn wait(pid: Pid) -> usize {
         // cycles through the processes one by one until it finds the process with `pid`
         // returns the exit code of the process if it's a zombie and cleans it up
         // if it's not a zombie it will be caught by the next above loop
-        let found = super::find(|process| process.pid == pid);
+        let found = super::find(|process| process.pid() == pid);
         let found = found.map(|process| process.state().map(|state| state.exit_code()).flatten());
 
         return match found {
             Some(Some(exit_code)) => {
                 // cleans up the process
-                super::remove(|p| p.pid == pid);
+                super::remove(|p| p.pid() == pid);
                 exit_code
             }
             Some(None) => {
@@ -76,7 +77,7 @@ pub fn wait(pid: Pid) -> usize {
 
 #[unsafe(no_mangle)]
 pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
-    let found = super::find(|p| p.pid == pid);
+    let found = super::find(|p| p.pid() == pid);
     found.map(|p| TaskInfo::from(&*p))
 }
 
@@ -120,7 +121,7 @@ fn spawn_inner(
     };
 
     let current = super::current();
-    let current_pid = current.pid;
+    let current_pid = current.pid();
 
     let cwd = Box::new(cwd.into_owned().unwrap());
     let task = create_task(name, current_pid, cwd)?;
@@ -256,10 +257,8 @@ fn can_terminate(mut process_ppid: Pid, process_pid: Pid, terminator_pid: Pid) -
             return true;
         }
 
-        let pprocess = super::find(|p| p.pid == process_ppid);
-        process_ppid = pprocess
-            .map(|process| process.ppid.load(Ordering::Relaxed))
-            .unwrap_or(0);
+        let pprocess = super::find(|p| p.pid() == process_ppid);
+        process_ppid = pprocess.map(|process| process.ppid()).unwrap_or(0);
     }
 
     false
@@ -267,7 +266,7 @@ fn can_terminate(mut process_ppid: Pid, process_pid: Pid, terminator_pid: Pid) -
 
 fn terminate(process_pid: Pid, terminator_pid: Pid) {
     super::for_each(|process| {
-        if process.pid == process_pid {
+        if process.pid() == process_pid {
             process.kill(1, Some(terminator_pid));
         }
     });
@@ -276,7 +275,7 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
     // prevents orphan processes from being left behind
     // TODO: figure out if orphan processes should be killed
     super::for_each(|p| {
-        _ = p.ppid.compare_exchange(
+        _ = p.ppid_atomic().compare_exchange(
             process_pid,
             terminator_pid,
             Ordering::Relaxed,
@@ -289,10 +288,10 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
 /// can only Err if pid doesn't belong to process
 pub fn pkill(pid: Pid) -> Result<(), ()> {
     let current = super::current();
-    let current_pid = current.pid;
+    let current_pid = current.pid();
 
-    let (process_ppid, process_pid) = super::find(|p| p.pid == pid)
-        .map(|process| (process.ppid.load(Ordering::Relaxed), process.pid))
+    let (process_ppid, process_pid) = super::find(|p| p.pid() == pid)
+        .map(|process| (process.ppid(), process.pid()))
         .ok_or(())?;
 
     if can_terminate(process_ppid, process_pid, current_pid) {

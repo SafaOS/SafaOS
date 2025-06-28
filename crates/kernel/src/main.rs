@@ -3,6 +3,7 @@
 #![test_runner(crate::test::test_runner)]
 #![reexport_test_harness_main = "kernel_testmain"]
 #![no_main]
+#![feature(cold_path)]
 #![feature(abi_x86_interrupt)]
 #![feature(allocator_api)]
 #![feature(pattern)]
@@ -42,8 +43,8 @@ mod utils;
 extern crate alloc;
 use arch::serial;
 
-use drivers::keyboard::keys::Key;
 use drivers::keyboard::HandleKey;
+use drivers::keyboard::keys::Key;
 use globals::*;
 
 pub use memory::PhysAddr;
@@ -96,9 +97,7 @@ macro_rules! sleep {
             core::hint::spin_loop()
         }
     }};
-    ($ms: literal ms) => {{
-        $crate::sleep!($ms)
-    }};
+    ($ms: literal ms) => {{ $crate::sleep!($ms) }};
 }
 
 #[macro_export]

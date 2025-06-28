@@ -1,10 +1,14 @@
+pub mod cpu_context;
 pub mod expose;
 pub mod resources;
 pub mod task;
 #[cfg(test)]
 mod tests;
 
+/// Process ID, a unique identifier for a process (task)
 pub type Pid = u32;
+
+use core::ptr::NonNull;
 
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
@@ -71,12 +75,16 @@ impl Scheduler {
         );
         self::add(task);
 
-        // getting the context of the first task
-        // like this so the scheduler read lock is released
-        let context = *self::current().context();
+        unsafe {
+            // getting the context of the first task
+            // like this so the scheduler read lock is released
+            let current = self::current();
+            let contexts = current.cpu_contexts();
+            let context = contexts.current_mut().cpu_status().as_ref();
 
-        debug!(Scheduler, "INITED ...");
-        unsafe { restore_cpu_status(&context) }
+            debug!(Scheduler, "INITED ...");
+            restore_cpu_status(context)
+        }
     }
 
     #[inline(always)]
@@ -85,26 +93,35 @@ impl Scheduler {
     }
 
     /// context switches into next task, takes current context outputs new context
-    pub unsafe fn switch(&mut self, context: CPUStatus) -> CPUStatus {
+    /// returns the new context and a boolean indicating if the address space has changed
+    /// if the address space has changed, please copy the context to somewhere accessible first
+    pub unsafe fn switch(&mut self, current_status: CPUStatus) -> (NonNull<CPUStatus>, bool) {
         unsafe {
-            crate::arch::disable_interrupts();
-        }
-
-        unsafe { self.current().set_context(context) };
-        for task in self.tasks.continue_iter() {
-            if task.is_alive() {
-                break;
+            let current = self.current();
+            if current.is_alive() {
+                let contexts = current.cpu_contexts();
+                if let Some(context) = contexts.advance_swap(current_status) {
+                    return (context.cpu_status(), false);
+                }
             }
-        }
 
-        *self.current().context()
+            for task in self.tasks.continue_iter() {
+                if task.is_alive() {
+                    break;
+                }
+            }
+
+            let current = self.current();
+            let contexts = current.cpu_contexts();
+            (contexts.current_mut().cpu_status(), true)
+        }
     }
 
     /// appends a task to the end of the scheduler taskes list
     /// returns the pid of the added task
     fn add_task(&mut self, mut task: Task) -> Pid {
         let pid = self.pids.insert(()) as Pid;
-        task.pid = pid;
+        task.set_pid(pid);
         self.tasks.push(Rc::new(task));
 
         debug!(
@@ -164,10 +181,14 @@ impl Scheduler {
 #[inline(always)]
 /// performs a context switch using the scheduler, switching to the next task context
 /// to be used
-pub fn swtch(context: CPUStatus) -> CPUStatus {
+/// returns the new context and a boolean indicating if the address space has changed
+/// if the address space has changed, please copy the context to somewhere accessible first
+///
+/// returns None if the scheduler is not yet initialized
+pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
     match SCHEDULER.try_write().filter(|s| s.inited()) {
-        Some(mut scheduler) => unsafe { scheduler.switch(context) },
-        _ => context,
+        Some(mut scheduler) => Some(unsafe { scheduler.switch(context) }),
+        _ => None,
     }
 }
 
