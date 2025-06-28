@@ -4,7 +4,11 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use crate::{memory::paging::MapToError, threading::cpu_context, utils::types::Name};
+use crate::{
+    memory::paging::MapToError,
+    threading::cpu_context::{self, Cid},
+    utils::types::Name,
+};
 use crate::{
     threading::cpu_context::Context,
     utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -339,9 +343,9 @@ impl CPUContexts {
         }
     }
 
-    pub fn exit_current(&mut self) -> bool {
-        self.contexts.swap_remove(self.current_context_index);
-        self.contexts.is_empty()
+    pub fn exit_current(&mut self) -> (Cid, bool) {
+        let context = self.contexts.swap_remove(self.current_context_index);
+        (context.cid(), self.contexts.is_empty())
     }
 }
 
@@ -442,6 +446,24 @@ impl Task {
 
     pub fn state_mut<'s>(&'s self) -> RwLockWriteGuard<'s, TaskState> {
         self.state.write()
+    }
+
+    pub fn kill_current_thread(&self, exit_code: usize) {
+        let _state = self.state.write();
+        let (cid, task_dead) = unsafe { self.cpu_contexts().exit_current() };
+        debug!(
+            Task,
+            "Task {} ({}) THREAD EXITED thread CID: {}, exit code: {}, task dead: {}",
+            self.pid(),
+            self.name(),
+            cid,
+            exit_code,
+            task_dead
+        );
+        if task_dead {
+            drop(_state);
+            self.kill(exit_code, None);
+        }
     }
 
     /// kills the task

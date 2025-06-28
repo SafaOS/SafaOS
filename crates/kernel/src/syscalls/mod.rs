@@ -2,7 +2,7 @@ use safa_utils::errors::SysResult;
 
 use crate::drivers::vfs::expose::FileAttr;
 use crate::threading::cpu_context::Cid;
-use crate::threading::{Pid, resources};
+use crate::threading::{self, Pid, resources};
 use crate::time;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
@@ -55,8 +55,6 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
         let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvalidSyscall)?;
         match syscall {
             // utils
-            SyscallTable::SysPExit => utils::sys_pexit(a),
-            SyscallTable::SysTYield => Ok(utils::sys_tyield()),
             SyscallTable::SysSbrk => utils::syssbrk_raw(a, b as *mut VirtAddr),
             SyscallTable::SysGetCWD => utils::sysgetcwd_raw((a as *mut u8, b), c as *mut usize),
             SyscallTable::SysCHDir => utils::syschdir_raw((a as *const u8, b)),
@@ -88,6 +86,9 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut Pid)
             }
             SyscallTable::SysTSpawn => processes::sys_tspawn_raw(a, b as *const _, c as *mut Cid),
+            SyscallTable::SysPExit => threading::expose::task_exit(a),
+            SyscallTable::SysTExit => threading::expose::thread_exit(a),
+            SyscallTable::SysTYield => Ok(threading::expose::thread_yield()),
             SyscallTable::SysWait => processes::syswait_raw(a, b as *mut usize),
             // power
             SyscallTable::SysShutdown => power::shutdown(),

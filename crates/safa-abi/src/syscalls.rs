@@ -38,6 +38,7 @@ pub enum SyscallTable {
     SysPSpawn = 19,
     /// Spawns a thread (context) inside the current process (task) with the given entry point
     SysTSpawn = 29,
+    SysTExit = 30,
     SysWait = 11,
 
     SysShutdown = 20,
@@ -48,11 +49,11 @@ pub enum SyscallTable {
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const _NEXT_SYSCALL_NUM: u16 = 30;
+const _NEXT_SYSCALL_NUM: u16 = 31;
 
 impl SyscallTable {
     // update when a new Syscall Num is added
-    const MAX: u16 = Self::SysTSpawn as u16;
+    const MAX: u16 = Self::SysTExit as u16;
 }
 
 impl TryFrom<u16> for SyscallTable {

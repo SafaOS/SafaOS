@@ -8,14 +8,6 @@ use crate::{
     utils::{errors::ErrorStatus, path::Path},
 };
 
-pub fn sys_pexit(code: usize) -> ! {
-    threading::expose::task_exit(code)
-}
-
-pub fn sys_tyield() {
-    threading::expose::thread_yield()
-}
-
 #[syscall_handler]
 fn syschdir(path: Path) -> Result<(), ErrorStatus> {
     threading::expose::chdir(path).map_err(|err| err.into())

@@ -18,7 +18,6 @@ use thiserror::Error;
 
 use crate::{
     drivers::vfs::{FSError, FSObjectType, FSResult, VFS_STRUCT, expose::File},
-    khalt,
     utils::{
         elf::{Elf, ElfError},
         errors::ErrorStatus,
@@ -38,9 +37,17 @@ pub fn task_exit(code: usize) -> ! {
     current.kill(code, None);
     drop(current);
 
-    // enables interrupts if they were disabled to give control back to the scheduler
-    unsafe { crate::arch::enable_interrupts() }
-    khalt()
+    thread_yield();
+    unreachable!("task didn't exit")
+}
+
+pub fn thread_exit(code: usize) -> ! {
+    let current = super::current();
+    current.kill_current_thread(code);
+    drop(current);
+
+    thread_yield();
+    unreachable!("thread didn't exit ")
 }
 
 #[unsafe(no_mangle)]
