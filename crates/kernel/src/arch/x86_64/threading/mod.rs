@@ -4,8 +4,8 @@ pub const STACK0_START: VirtAddr = VirtAddr::from(0x00007A3000000000);
 pub const STACK0_END: VirtAddr = STACK0_START + STACK_SIZE;
 pub const GUARD_PAGES_COUNT: usize = 1;
 
-pub const RING0_STACK_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
-pub const RING0_STACK_END: VirtAddr = RING0_STACK_START + STACK_SIZE;
+const RING0_STACK0_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
+const RING0_STACK0_END: VirtAddr = RING0_STACK0_START + STACK_SIZE;
 
 pub const ENVIRONMENT_START: VirtAddr = VirtAddr::from(0x00007E0000000000);
 pub const ARGV_START: VirtAddr = ENVIRONMENT_START + 0xA000000000;
@@ -14,6 +14,7 @@ pub const ENVIRONMENT_VARIABLES_START: VirtAddr = ENVIRONMENT_START + 0xE0000000
 pub const ABI_STRUCTURES_START: VirtAddr = ENVIRONMENT_START + 0x1000000000;
 use crate::{
     PhysAddr,
+    arch::x86_64::gdt::set_kernel_tss_stack,
     memory::{map_byte_slices, map_str_slices},
     threading::cpu_context,
 };
@@ -67,6 +68,7 @@ bitflags! {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct CPUStatus {
+    ring0_rsp: VirtAddr,
     rsp: VirtAddr,
     rflags: RFLAGS,
     ss: u64,
@@ -132,12 +134,13 @@ const fn make_usermode_regs(is_userspace: bool) -> (u64, u64, RFLAGS) {
     }
 }
 
-fn allocate_stack_for_context(
+fn allocate_generic_stack_for_context(
+    stack_generic_start: VirtAddr,
     page_table: &mut PhysPageTable,
     context_id: cpu_context::Cid,
 ) -> Result<VirtAddr, MapToError> {
     let guard_pages_size = GUARD_PAGES_COUNT * PAGE_SIZE;
-    let stack_start = STACK0_START + (context_id as usize * (STACK_SIZE + guard_pages_size));
+    let stack_start = stack_generic_start + (context_id as usize * (STACK_SIZE + guard_pages_size));
     let stack_end = stack_start + STACK_SIZE;
 
     page_table.alloc_map(
@@ -147,6 +150,20 @@ fn allocate_stack_for_context(
     )?;
 
     Ok(stack_end)
+}
+
+fn allocate_user_stack_for_context(
+    page_table: &mut PhysPageTable,
+    context_id: cpu_context::Cid,
+) -> Result<VirtAddr, MapToError> {
+    allocate_generic_stack_for_context(STACK0_START, page_table, context_id)
+}
+
+fn allocate_kernel_stack_for_context(
+    page_table: &mut PhysPageTable,
+    context_id: cpu_context::Cid,
+) -> Result<VirtAddr, MapToError> {
+    allocate_generic_stack_for_context(RING0_STACK0_START, page_table, context_id)
 }
 
 impl CPUStatus {
@@ -179,8 +196,8 @@ impl CPUStatus {
 
         // allocate the syscall stack
         page_table.alloc_map(
-            RING0_STACK_START,
-            RING0_STACK_END,
+            RING0_STACK0_START,
+            RING0_STACK0_END,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
@@ -212,6 +229,7 @@ impl CPUStatus {
         let (cs, ss, rflags) = make_usermode_regs(userspace);
 
         Ok(Self {
+            ring0_rsp: RING0_STACK0_END,
             rflags,
             rip: entry_point,
             rdi: argc as u64,
@@ -235,16 +253,19 @@ impl CPUStatus {
         arguments_ptr: *const (),
         userspace: bool,
     ) -> Result<Self, MapToError> {
-        let stack_end = allocate_stack_for_context(page_table, context_id)?;
+        let user_stack_end = allocate_user_stack_for_context(page_table, context_id)?;
+        let kernel_stack_end = allocate_kernel_stack_for_context(page_table, context_id)?;
+
         let (cs, ss, rflags) = make_usermode_regs(userspace);
 
         Ok(Self {
+            ring0_rsp: kernel_stack_end,
             rflags,
             rip: entry_point,
             rdi: context_id as u64,
             rsi: arguments_ptr as u64,
             cr3: page_table.phys_addr(),
-            rsp: stack_end,
+            rsp: user_stack_end,
             cs,
             ss,
             ..Default::default()
@@ -252,7 +273,7 @@ impl CPUStatus {
     }
 }
 
-global_asm!(include_str!("./threading.asm"));
+global_asm!(include_str!("./threading.asm"), default_kernel_stack = const RING0_STACK0_END.into_raw());
 
 unsafe extern "C" {
     /// Takes a reference to [`CPUStatus`] and sets current cpu status (registers) to it
@@ -285,6 +306,8 @@ pub extern "C" fn context_switch(
         super::interrupts::apic::send_eoi();
         if let Some((new_context_ptr, address_space_changed)) = swtch_results {
             let new_context_ref = new_context_ptr.as_ref();
+
+            set_kernel_tss_stack(new_context_ref.ring0_rsp);
             if address_space_changed {
                 capture = *new_context_ref;
                 restore_cpu_status_full(&capture);

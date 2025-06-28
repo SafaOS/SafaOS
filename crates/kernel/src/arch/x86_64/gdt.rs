@@ -1,7 +1,9 @@
 #![allow(static_mut_refs)]
-use core::arch::asm;
+use core::{arch::asm, cell::SyncUnsafeCell};
 
 use lazy_static::lazy_static;
+
+use crate::VirtAddr;
 
 #[repr(C, packed)]
 pub struct GDTEntry {
@@ -103,17 +105,25 @@ macro_rules! alloc_stack {
     }};
 }
 lazy_static! {
-    pub static ref TSS: TaskStateSegment = {
-        use super::threading::{RING0_STACK_END, STACK_SIZE};
+    static ref TSS: SyncUnsafeCell<TaskStateSegment> = {
+        use super::threading::STACK_SIZE;
         let mut tss = TaskStateSegment::new();
 
         tss.interrupt_stack_table[0] = alloc_stack!();
         tss.interrupt_stack_table[1] = alloc_stack!();
-        tss.privilege_stack_table[0] = RING0_STACK_END.into_raw() as u64;
+        tss.privilege_stack_table[0] = 0;
 
-        tss
+        SyncUnsafeCell::new(tss)
     };
 }
+
+pub unsafe fn set_kernel_tss_stack(stack_end: VirtAddr) {
+    unsafe {
+        let tss = &mut *TSS.get();
+        (*tss).privilege_stack_table[0] = stack_end.into_raw() as u64;
+    }
+}
+
 pub type GDTType = [GDTEntry; 7];
 //  TODO: improve this
 lazy_static! {
@@ -133,13 +143,13 @@ lazy_static! {
         ), // kernel data segment
 
         GDTEntry::new(
-            (((&*TSS) as *const TaskStateSegment as u64) & 0xFFFFFFFF) as u32,
+            ((TSS.get() as u64) & 0xFFFFFFFF) as u32,
             (size_of::<TaskStateSegment>() - 1) as u32,
             ACCESS_VALID | ACCESS_TYPE_TSS,
             FLAG_PAGELIMIT | FLAG_LONG
         ), // TSS segment
         GDTEntry::new_upper_64seg(
-            &*TSS as *const TaskStateSegment as u64,
+            TSS.get() as u64,
         ),
 
         GDTEntry::new(
@@ -176,6 +186,10 @@ lazy_static! {
     };
 }
 
+unsafe fn reload_tss() {
+    unsafe { asm!("ltr {0:x}", in(reg) TSS_SEG as u16) }
+}
+
 pub fn init_gdt() {
     unsafe {
         asm!("lgdt [{}]", in(reg) &*GDT_DESCRIPTOR, options(nostack));
@@ -202,6 +216,6 @@ pub fn init_gdt() {
             options(nostack),
         );
 
-        asm!("ltr {0:x}", in(reg) TSS_SEG as u16)
+        reload_tss();
     }
 }
