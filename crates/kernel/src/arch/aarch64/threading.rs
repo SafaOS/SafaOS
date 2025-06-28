@@ -11,7 +11,7 @@ use crate::{
         copy_to_userspace, map_byte_slices, map_str_slices,
         paging::{EntryFlags, MapToError, PhysPageTable},
     },
-    threading,
+    threading::{self, cpu_context},
 };
 
 use super::{
@@ -26,12 +26,15 @@ static CURRENT_CONTEXT: SyncUnsafeCell<CPUStatus> =
     SyncUnsafeCell::new(unsafe { core::mem::zeroed() });
 
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const STACK_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
-pub const STACK_END: VirtAddr = STACK_START + STACK_SIZE;
+
+pub const STACK0_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
+pub const STACK0_END: VirtAddr = STACK0_START + STACK_SIZE;
+
+pub const GUARD_PAGE_COUNT: usize = 2;
 
 pub const EL1_STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const EL1_STACK_START: VirtAddr = VirtAddr::from(0x00007A1000000000);
-pub const EL1_STACK_END: VirtAddr = EL1_STACK_START + EL1_STACK_SIZE;
+pub const EL1_STACK0_START: VirtAddr = VirtAddr::from(0x00007A1000000000);
+pub const EL1_STACK0_END: VirtAddr = EL1_STACK0_START + EL1_STACK_SIZE;
 
 pub const ENVIRONMENT_START: VirtAddr = VirtAddr::from(0x00007E0000000000);
 pub const ARGV_START: VirtAddr = ENVIRONMENT_START + 0xA000000000;
@@ -108,11 +111,57 @@ unsafe extern "C" {
 }
 
 impl CPUStatus {
+    /// Allocates a stack for a new thread, returns the end address of the stack
+    unsafe fn allocate_stack_for_context(
+        root_page_table: &mut PhysPageTable,
+        context_id: cpu_context::Cid,
+    ) -> Result<VirtAddr, MapToError> {
+        let guard_pages_size = GUARD_PAGE_COUNT * PAGE_SIZE;
+
+        let next_stack_start =
+            STACK0_START + ((STACK_SIZE + guard_pages_size) * (context_id as usize));
+        let next_stack_end = next_stack_start + STACK_SIZE;
+
+        assert!(
+            next_stack_start < EL1_STACK0_START,
+            "there is no way you allocated 64 GiBs worth of thread stacks :skull:"
+        );
+
+        root_page_table.alloc_map(
+            next_stack_start,
+            next_stack_end,
+            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+        )?;
+
+        Ok(next_stack_end)
+    }
+
+    /// Allocates a stack for a new thread, returns the end address of the stack
+    unsafe fn allocate_el1_stack_for_context(
+        root_page_table: &mut PhysPageTable,
+        context_id: cpu_context::Cid,
+    ) -> Result<VirtAddr, MapToError> {
+        let guard_pages_size = GUARD_PAGE_COUNT * PAGE_SIZE;
+
+        let next_stack_start =
+            EL1_STACK0_START + ((EL1_STACK_SIZE + guard_pages_size) * (context_id as usize));
+        let next_stack_end = next_stack_start + STACK_SIZE;
+
+        root_page_table.alloc_map(
+            next_stack_start,
+            next_stack_end,
+            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+        )?;
+
+        Ok(next_stack_end)
+    }
+
+    /// Creates a CPU Status Instance for Context (thread) 0
     /// Initializes a new userspace `CPUStatus` instance, initializes the stack, argv, etc...
     /// argument `userspace` determines if the process is in ring0 or not
     /// # Safety
     /// The caller must ensure `page_table` is not freed, as long as [`Self`] is alive otherwise it will cause UB
-    pub unsafe fn create(
+    pub unsafe fn create_root(
         page_table: &mut PhysPageTable,
         argv: &[&str],
         env: &[&[u8]],
@@ -121,16 +170,16 @@ impl CPUStatus {
         userspace: bool,
     ) -> Result<Self, MapToError> {
         let entry_point = entry_point.into_raw() as u64;
-        // allocate the stack
+        // allocate the stack for thread 0
         page_table.alloc_map(
-            STACK_START,
-            STACK_END,
+            STACK0_START,
+            STACK0_END,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
         page_table.alloc_map(
-            EL1_STACK_START,
-            EL1_STACK_END,
+            EL1_STACK0_START,
+            EL1_STACK0_END,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
@@ -167,13 +216,47 @@ impl CPUStatus {
         general_registers[4] = Reg(abi_structures_ptr as u64);
 
         Ok(Self {
-            sp_el0: STACK_END,
+            sp_el0: STACK0_END,
             ttbr0: page_table.phys_addr(),
             frame: InterruptFrame {
                 general_registers,
-                sp: Reg(EL1_STACK_END.into_raw() as u64),
+                sp: Reg(EL1_STACK0_END.into_raw() as u64),
                 elr: Reg(entry_point),
                 lr: Reg(entry_point),
+                spsr: if !userspace {
+                    Spsr::EL1H
+                } else {
+                    Spsr::empty()
+                },
+                ..Default::default()
+            },
+        })
+    }
+
+    /// Creates a child CPU Status Instance, that is status of a thread child of thread 0
+    pub unsafe fn create_child(
+        page_table: &mut PhysPageTable,
+        entry_point: VirtAddr,
+        context_id: cpu_context::Cid,
+        arguments_ptr: *const (),
+        userspace: bool,
+    ) -> Result<Self, MapToError> {
+        let el0_stack_end = unsafe { Self::allocate_stack_for_context(page_table, context_id)? };
+        let el1_stack_end =
+            unsafe { Self::allocate_el1_stack_for_context(page_table, context_id)? };
+
+        let mut general_registers = [Reg::default(); 29];
+        general_registers[0] = Reg(context_id as u64);
+        general_registers[1] = Reg(arguments_ptr as u64);
+
+        Ok(Self {
+            ttbr0: page_table.phys_addr(),
+            sp_el0: el0_stack_end,
+            frame: InterruptFrame {
+                general_registers,
+                sp: Reg(el1_stack_end.into_raw() as u64),
+                elr: Reg(entry_point.into_raw() as u64),
+                lr: Reg(entry_point.into_raw() as u64),
                 spsr: if !userspace {
                     Spsr::EL1H
                 } else {

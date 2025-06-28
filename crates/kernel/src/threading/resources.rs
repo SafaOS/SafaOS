@@ -142,24 +142,28 @@ where
     DO: FnOnce(MutexGuard<Resource>) -> R,
 {
     let current = super::current();
-    let state = current.state().unwrap();
+    let state = current.state();
 
-    state.resource_manager().unwrap().get(ri).map(then)
+    state
+        .resource_manager()
+        .expect("tried to get a resource in a dead task (process)")
+        .get(ri)
+        .map(then)
 }
 
 /// adds a resource to the current process
 pub fn add_resource(resource: Resource) -> usize {
     let current_task = super::current();
-    let mut current = current_task.state_mut().unwrap();
+    let mut current = current_task.state_mut();
 
     current
         .resource_manager_mut()
-        .unwrap()
+        .expect("tried to add a resource in a dead task (process)")
         .add_resource(resource)
 }
 
 pub fn duplicate_resource(ri: usize) -> usize {
-    let mut state = super::this_state_mut();
+    let mut state = super::this().state_mut();
     let manager = state.resource_manager_mut().unwrap();
 
     let resource = manager.get_mut(ri).unwrap();
@@ -170,7 +174,10 @@ pub fn duplicate_resource(ri: usize) -> usize {
 /// removes a resource from the current process with `ri`
 pub fn remove_resource(ri: usize) -> Option<()> {
     let current_task = super::current();
-    let mut current = current_task.state_mut().unwrap();
+    let mut current = current_task.state_mut();
 
-    current.resource_manager_mut().unwrap().remove_resource(ri)
+    current
+        .resource_manager_mut()
+        .expect("tried to remove a resource in a dead task")
+        .remove_resource(ri)
 }

@@ -4,14 +4,14 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
-use crate::threading::expose::{function_spawn, SpawnFlags};
+use crate::threading::cpu_context::Cid;
+use crate::threading::expose::kernel_thread_spawn;
 use crate::utils::alloc::PageString;
 use crate::utils::locks::Mutex;
+use crate::{debug, logging};
 use crate::{drivers::vfs, memory::paging::PhysPageTable, serial};
-use crate::{logging, threading};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
-use safa_utils::types::Name;
 use safa_utils::{
     abi::raw::processes::{AbiStructures, TaskStdio},
     make_path,
@@ -41,14 +41,15 @@ fn one_shot() -> Option<PhysPageTable> {
     return lock_guard.clean_up_list.pop();
 }
 
-pub static KERNEL_STDIO: Lazy<TaskStdio> = Lazy::new(|| {
+pub(super) static KERNEL_STDIO: Lazy<TaskStdio> = Lazy::new(|| {
     let stdin = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
     let stdout = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
     let stderr = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
     TaskStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
 });
 
-pub static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructures {
+#[allow(unused)]
+static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructures {
     stdio: *KERNEL_STDIO,
 });
 
@@ -57,24 +58,12 @@ lazy_static! {
         SyncUnsafeCell::new(driver_poll::take_poll());
 }
 
-fn poll_driver_thread() -> ! {
-    let current = threading::current();
-    let thread_name = current.name();
-    let mut poll_driver = None;
-    for polled_driver in unsafe { &*POLLING.get() } {
-        if polled_driver.thread_name() == thread_name {
-            poll_driver = Some(polled_driver);
-        }
-    }
-
-    let poll_driver = poll_driver.unwrap_or_else(|| {
-        panic!(
-            "failed to find a polled driver for the thread: {}",
-            thread_name
-        )
-    });
-    drop(current);
-    poll_driver.poll_function()
+fn poll_driver_thread(cid: Cid, driver: &&dyn PolledDriver) -> ! {
+    debug!(
+        "polling driver in thread: {}, thread CID: {cid}",
+        driver.thread_name()
+    );
+    driver.poll_function()
 }
 
 /// the main loop of Eve
@@ -87,21 +76,19 @@ pub fn main() -> ! {
 
     // FIXME: use threads
     for poll_driver in unsafe { &*POLLING.get() } {
-        function_spawn(
-            Name::try_from(poll_driver.thread_name()).unwrap(),
-            poll_driver_thread,
-            &[],
-            &[],
-            SpawnFlags::CLONE_RESOURCES,
-            *KERNEL_ABI_STRUCTURES,
-        )
-        .expect("failed to spawn a function for a polled driver");
+        kernel_thread_spawn(poll_driver_thread, poll_driver)
+            .expect("failed to spawn a thread function for a polled driver");
     }
 
     #[cfg(not(test))]
     {
+        use crate::threading::expose::SpawnFlags;
         use crate::{info, sleep, threading::expose::pspawn};
-        info!("kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell");
+        use safa_utils::types::Name;
+
+        info!(
+            "kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell"
+        );
         sleep!(2500 ms);
 
         // start the shell
@@ -119,20 +106,12 @@ pub fn main() -> ! {
 
     #[cfg(test)]
     {
-        fn run_tests() -> ! {
+        fn run_tests(_cid: Cid, _arg: &()) -> ! {
             crate::kernel_testmain();
             unreachable!()
         }
 
-        function_spawn(
-            Name::try_from("TestRunner").unwrap(),
-            run_tests,
-            &[],
-            &[],
-            SpawnFlags::CLONE_RESOURCES,
-            *KERNEL_ABI_STRUCTURES,
-        )
-        .unwrap();
+        kernel_thread_spawn(run_tests, &()).expect("failed to spawn Test Thread");
     }
 
     loop {

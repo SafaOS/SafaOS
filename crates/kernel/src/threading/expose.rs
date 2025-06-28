@@ -4,6 +4,7 @@ use crate::{
     VirtAddr,
     arch::threading::CPUStatus,
     memory::paging::{MapToError, PhysPageTable},
+    threading::{cpu_context::Cid, this},
     utils::types::Name,
 };
 use alloc::boxed::Box;
@@ -29,11 +30,10 @@ use crate::{
 use super::{
     Pid,
     task::{Task, TaskInfo},
-    this_state, this_state_mut,
 };
 
 #[unsafe(no_mangle)]
-pub fn thread_exit(code: usize) -> ! {
+pub fn task_exit(code: usize) -> ! {
     let current = super::current();
     current.kill(code, None);
     drop(current);
@@ -58,7 +58,7 @@ pub fn wait(pid: Pid) -> usize {
         // returns the exit code of the process if it's a zombie and cleans it up
         // if it's not a zombie it will be caught by the next above loop
         let found = super::find(|process| process.pid() == pid);
-        let found = found.map(|process| process.state().map(|state| state.exit_code()).flatten());
+        let found = found.map(|process| process.state().exit_code());
 
         return match found {
             Some(Some(exit_code)) => {
@@ -113,9 +113,9 @@ fn spawn_inner(
     structures: AbiStructures,
     create_task: impl FnOnce(Name, Pid, Box<PathBuf>) -> Result<Task, SpawnError>,
 ) -> Result<Pid, SpawnError> {
-    let this = this_state();
+    let this_task = this().state();
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        this.cwd()
+        this_task.cwd()
     } else {
         make_path!("ram", "")
     };
@@ -127,16 +127,16 @@ fn spawn_inner(
     let task = create_task(name, current_pid, cwd)?;
 
     let provide_resources = || {
-        let mut state = task.state_mut().unwrap();
+        let mut state = task.state_mut();
         let Some(task_resources) = state.resource_manager_mut() else {
             unreachable!();
         };
 
-        drop(this);
-        let mut this = this_state_mut();
+        drop(this_task);
+        let mut this_task = this().state_mut();
 
         let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-            this.clone_resources()
+            this_task.clone_resources()
         } else {
             // clone only necessary resources
             let mut resources = heapless::Vec::<usize, 3>::new();
@@ -155,7 +155,7 @@ fn spawn_inner(
             if resources.is_empty() {
                 return Ok(());
             }
-            this.clone_specific_resources(&resources)?
+            this_task.clone_specific_resources(&resources)?
         };
 
         task_resources.overwrite_resources(clone);
@@ -181,7 +181,7 @@ pub fn function_spawn(
     spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let mut page_table = PhysPageTable::create()?;
         let context = unsafe {
-            CPUStatus::create(
+            CPUStatus::create_root(
                 &mut page_table,
                 argv,
                 env,
@@ -191,12 +191,21 @@ pub fn function_spawn(
             )
         }?;
 
-        let task = Task::new(name, 0, ppid, cwd, page_table, context, VirtAddr::null());
+        let task = Task::new(
+            name,
+            0,
+            ppid,
+            cwd,
+            page_table,
+            context,
+            VirtAddr::null(),
+            false,
+        );
         Ok(task)
     })
 }
 
-pub fn spawn<T: Readable>(
+fn spawn<T: Readable>(
     name: Name,
     reader: &T,
     argv: &[&str],
@@ -229,13 +238,28 @@ pub fn pspawn(
     spawn(name, &file, argv, env, flags, structures).map_err(|_| FSError::NotExecutable)
 }
 
+pub fn thread_spawn(entry_point: VirtAddr, argument_ptr: VirtAddr) -> Result<Cid, MapToError> {
+    let this = this();
+    this.append_context(entry_point, argument_ptr)
+}
+
+pub fn kernel_thread_spawn<T: 'static>(
+    func: fn(cid: Cid, &'static T) -> !,
+    arg: &'static T,
+) -> Result<Cid, MapToError> {
+    thread_spawn(
+        VirtAddr::from(func as usize),
+        VirtAddr::from(arg as *const T as usize),
+    )
+}
+
 /// also ensures the cwd ends with /
 /// will only Err if new_dir doesn't exists or is not a directory
 #[unsafe(no_mangle)]
 pub fn chdir(new_dir: Path) -> FSResult<()> {
     VFS_STRUCT.read().verify_path_dir(new_dir)?;
 
-    let mut state = this_state_mut();
+    let mut state = this().state_mut();
     let cwd = state.cwd_mut();
 
     if new_dir.is_absolute() {
@@ -307,6 +331,6 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
 /// on fail returns null
 pub fn sbrk(amount: isize) -> Result<*mut u8, ErrorStatus> {
     let current = super::current();
-    let mut state = current.state_mut().unwrap();
+    let mut state = current.state_mut();
     state.extend_data_by(amount).ok_or(ErrorStatus::OutOfMemory)
 }

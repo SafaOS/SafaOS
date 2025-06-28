@@ -14,11 +14,11 @@ use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
 use crate::VirtAddr;
-use crate::utils::locks::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use crate::utils::locks::{RwLock, RwLockReadGuard};
 use crate::utils::types::Name;
 use alloc::{boxed::Box, rc::Rc};
 use slab::Slab;
-use task::{Task, TaskInfo, TaskState};
+use task::{Task, TaskInfo};
 
 use crate::{
     arch::threading::{CPUStatus, restore_cpu_status},
@@ -52,7 +52,7 @@ impl Scheduler {
         }
         let mut page_table = unsafe { PhysPageTable::from_current() };
         let context = unsafe {
-            CPUStatus::create(
+            CPUStatus::create_root(
                 &mut page_table,
                 &[],
                 &[],
@@ -72,6 +72,7 @@ impl Scheduler {
             page_table,
             context,
             VirtAddr::null(),
+            false,
         );
         self::add(task);
 
@@ -196,6 +197,8 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
+/// Returns a shared reference to the current task
+/// opposite to `this()` which returns a static reference, this function returns a shared reference and typically used in unsafe code
 pub fn current() -> Rc<Task> {
     SCHEDULER.read().current().clone()
 }
@@ -243,32 +246,4 @@ fn remove(condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
 
 pub fn schd() -> RwLockReadGuard<'static, Scheduler> {
     SCHEDULER.read()
-}
-
-/// Gets a readlock on the current task's states
-/// # Safety
-/// Safe because the task always is
-#[inline(always)]
-#[must_use]
-pub fn this_state() -> RwLockReadGuard<'static, TaskState> {
-    loop {
-        match this().state() {
-            Some(s) => return s,
-            None => expose::thread_yield(),
-        }
-    }
-}
-
-/// Gets a writelock on the current task's states
-/// # Safety
-/// Safe because the task always is
-#[inline(always)]
-#[must_use]
-pub fn this_state_mut() -> RwLockWriteGuard<'static, TaskState> {
-    loop {
-        match this().state_mut() {
-            Some(s) => return s,
-            None => expose::thread_yield(),
-        }
-    }
 }

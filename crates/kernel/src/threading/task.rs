@@ -4,7 +4,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use crate::utils::types::Name;
+use crate::{memory::paging::MapToError, threading::cpu_context, utils::types::Name};
 use crate::{
     threading::cpu_context::Context,
     utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -280,6 +280,7 @@ impl TaskState {
 pub(super) struct CPUContexts {
     contexts: Vec<Context>,
     current_context_index: usize,
+    next_cid: cpu_context::Cid,
 }
 
 impl CPUContexts {
@@ -292,11 +293,38 @@ impl CPUContexts {
         Self {
             contexts: alloc::vec![root_context],
             current_context_index: 0,
+            next_cid: 1,
         }
     }
 
     pub fn current_mut(&mut self) -> &mut Context {
         &mut self.contexts[self.current_context_index]
+    }
+
+    /// Allocate a new context and add it to the list of contexts given an entry point.
+    /// Returns the id of the new context.
+    pub fn allocate_add(
+        &mut self,
+        root_page_table: &mut PhysPageTable,
+        entry_point: VirtAddr,
+        argument_ptr: VirtAddr,
+        userspace: bool,
+    ) -> Result<cpu_context::Cid, MapToError> {
+        let cid = self.next_cid;
+        self.next_cid += 1;
+
+        let cpu_status = unsafe {
+            CPUStatus::create_child(
+                root_page_table,
+                entry_point,
+                cid,
+                argument_ptr.into_ptr::<()>(),
+                userspace,
+            )?
+        };
+
+        self.contexts.push(Context::new(cid, cpu_status));
+        Ok(cid)
     }
 
     pub fn advance_swap(&mut self, current_status: CPUStatus) -> Option<&mut Context> {
@@ -326,6 +354,7 @@ pub struct Task {
     state: RwLock<TaskState>,
     cpu_contexts: UnsafeCell<CPUContexts>,
     is_alive: AtomicBool,
+    userspace_task: bool,
 }
 
 impl Task {
@@ -356,6 +385,7 @@ impl Task {
         root_page_table: PhysPageTable,
         status: CPUStatus,
         data_break: VirtAddr,
+        userspace_task: bool,
     ) -> Self {
         let data_break = VirtAddr::from(align_up(data_break.into_raw(), PAGE_SIZE));
         let cpu_contexts = CPUContexts::create(status);
@@ -374,10 +404,12 @@ impl Task {
                 data_break,
                 cwd,
             })),
+            userspace_task,
         }
     }
 
     /// Creates a new task from an elf
+    /// that task is assumed to be in the userspace
     pub fn from_elf<T: Readable>(
         name: Name,
         pid: Pid,
@@ -393,10 +425,10 @@ impl Task {
         let data_break = elf.load_exec(&mut page_table)?;
 
         let context = unsafe {
-            CPUStatus::create(&mut page_table, args, env, structures, entry_point, true)?
+            CPUStatus::create_root(&mut page_table, args, env, structures, entry_point, true)?
         };
         Ok(Self::new(
-            name, pid, ppid, cwd, page_table, context, data_break,
+            name, pid, ppid, cwd, page_table, context, data_break, true,
         ))
     }
 
@@ -404,12 +436,12 @@ impl Task {
         &self.name
     }
 
-    pub fn state<'s>(&'s self) -> Option<RwLockReadGuard<'s, TaskState>> {
-        self.state.try_read()
+    pub fn state<'s>(&'s self) -> RwLockReadGuard<'s, TaskState> {
+        self.state.read()
     }
 
-    pub fn state_mut<'s>(&'s self) -> Option<RwLockWriteGuard<'s, TaskState>> {
-        self.state.try_write()
+    pub fn state_mut<'s>(&'s self) -> RwLockWriteGuard<'s, TaskState> {
+        self.state.write()
     }
 
     /// kills the task
@@ -434,6 +466,23 @@ impl Task {
 
     pub(super) unsafe fn cpu_contexts(&self) -> &mut CPUContexts {
         unsafe { &mut *self.cpu_contexts.get() }
+    }
+
+    pub fn append_context(
+        &self,
+        entry_point: VirtAddr,
+        argument_ptr: VirtAddr,
+    ) -> Result<cpu_context::Cid, MapToError> {
+        let mut state_mut = self.state.write();
+        let alive = state_mut
+            .alive_mut()
+            .expect("attempt to spawn a thread on a dead Task (process)");
+        let page_table = &mut alive.root_page_table;
+
+        unsafe {
+            let contexts = self.cpu_contexts();
+            contexts.allocate_add(page_table, entry_point, argument_ptr, self.userspace_task)
+        }
     }
 
     fn at(&self) -> VirtAddr {
@@ -473,7 +522,7 @@ impl From<&Task> for TaskInfo {
         let at = task.at();
         let stack_addr = task.stack_at();
 
-        let state = task.state().unwrap();
+        let state = task.state();
 
         let (exit_code, data_start, data_break, killed_by, last_resource_id) = match &*state {
             TaskState::Alive(AliveTask {

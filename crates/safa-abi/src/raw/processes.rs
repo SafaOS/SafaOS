@@ -48,7 +48,7 @@ impl BitOr for SpawnFlags {
 
 /// configuration for the spawn syscall
 #[repr(C)]
-pub struct SpawnConfig {
+pub struct PSpawnConfig {
     /// config version for compatibility
     /// added in kernel version 0.2.1 and therefore breaking compatibility with any program compiled for version below 0.2.1
     pub version: u8,
@@ -59,7 +59,7 @@ pub struct SpawnConfig {
     pub env: RawSliceMut<RawSlice<u8>>,
 }
 
-impl SpawnConfig {
+impl PSpawnConfig {
     pub fn new(
         name: &str,
         argv: *mut [&[u8]],
@@ -78,6 +78,28 @@ impl SpawnConfig {
             env,
             flags,
             stdio: stdio as *const TaskStdio,
+        }
+    }
+}
+
+/// configuration for the thread spawn syscall
+/// for now it takes only a single argument pointer which is a pointer to an optional argument, that pointer is going to be passed to the thread as the second argument
+#[repr(C)]
+pub struct TSpawnConfig {
+    pub revision: u32,
+    pub argument_ptr: *const (),
+}
+
+impl TSpawnConfig {
+    pub const fn into_rust(&self) -> *const () {
+        self.argument_ptr
+    }
+
+    /// Create a new thread spawn configuration with the latest revision
+    pub const fn new(argument_ptr: *const ()) -> Self {
+        Self {
+            revision: 0,
+            argument_ptr,
         }
     }
 }

@@ -4,16 +4,15 @@ use safa_utils::io::Cursor;
 
 use super::SyscallFFI;
 use crate::{
-    threading,
+    VirtAddr, threading,
     utils::{errors::ErrorStatus, path::Path},
-    VirtAddr,
 };
 
-pub fn sysexit(code: usize) -> ! {
-    threading::expose::thread_exit(code)
+pub fn sys_pexit(code: usize) -> ! {
+    threading::expose::task_exit(code)
 }
 
-pub fn sysyield() {
+pub fn sys_tyield() {
     threading::expose::thread_yield()
 }
 
@@ -27,7 +26,7 @@ fn syschdir(path: Path) -> Result<(), ErrorStatus> {
 /// `dest_len` if it is not null
 /// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
 fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let state = threading::this_state();
+    let state = threading::this().state();
     let cwd = state.cwd();
 
     let len = cwd.len();

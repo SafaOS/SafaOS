@@ -3,12 +3,11 @@
 use crate::arch::threading::CPUStatus;
 
 /// Context ID, a unique identifier for a thread.
-type Cid = u32;
+pub type Cid = u32;
 
 pub enum ContextStatus {
     Runnable,
     Sleeping(u64),
-    AwaitingCleanup,
 }
 
 pub struct Context {
@@ -36,9 +35,5 @@ impl Context {
             id,
             cpu_status,
         }
-    }
-
-    pub fn exit(&mut self) {
-        self.status = ContextStatus::AwaitingCleanup;
     }
 }

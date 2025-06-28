@@ -1,12 +1,16 @@
 use safa_utils::abi::{
     self,
     raw::{
-        processes::{AbiStructures, TaskStdio},
         RawSlice, RawSliceMut,
+        processes::{AbiStructures, PSpawnConfig, TSpawnConfig, TaskStdio},
     },
 };
 
-use crate::{threading::Pid, utils::types::Name};
+use crate::{
+    VirtAddr,
+    threading::{Pid, cpu_context::Cid},
+    utils::types::Name,
+};
 use core::fmt::Write;
 
 use crate::{
@@ -99,11 +103,11 @@ fn into_args_slice<'a>(args_raw: &RawSliceMut<RawSlice<u8>>) -> Result<&'a [&'a 
 #[syscall_handler]
 fn syspspawn(
     path: Path,
-    config: &abi::raw::processes::SpawnConfig,
+    config: &PSpawnConfig,
     dest_pid: Option<&mut Pid>,
 ) -> Result<(), ErrorStatus> {
     fn as_rust(
-        this: &abi::raw::processes::SpawnConfig,
+        this: &PSpawnConfig,
     ) -> Result<
         (
             Option<&str>,
@@ -132,6 +136,23 @@ fn syspspawn(
     let results = syspspawn_inner(name, path, argv, env, flags, stdio)?;
     if let Some(dest_pid) = dest_pid {
         *dest_pid = results;
+    }
+    Ok(())
+}
+
+#[syscall_handler]
+fn sys_tspawn(
+    entry_point: VirtAddr,
+    config: &TSpawnConfig,
+    target_cid: Option<&mut Cid>,
+) -> Result<(), ErrorStatus> {
+    let argument_ptr = config.into_rust();
+    let argument_ptr = VirtAddr::from_ptr(argument_ptr);
+
+    let thread_cid = threading::expose::thread_spawn(entry_point, argument_ptr)
+        .map_err(|_| ErrorStatus::MMapError)?;
+    if let Some(target_cid) = target_cid {
+        *target_cid = thread_cid;
     }
     Ok(())
 }

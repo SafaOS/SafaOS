@@ -1,6 +1,8 @@
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
-pub const STACK_START: VirtAddr = VirtAddr::from(0x00007A3000000000);
-pub const STACK_END: VirtAddr = STACK_START + STACK_SIZE;
+
+pub const STACK0_START: VirtAddr = VirtAddr::from(0x00007A3000000000);
+pub const STACK0_END: VirtAddr = STACK0_START + STACK_SIZE;
+pub const GUARD_PAGES_COUNT: usize = 1;
 
 pub const RING0_STACK_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
 pub const RING0_STACK_END: VirtAddr = RING0_STACK_START + STACK_SIZE;
@@ -10,7 +12,11 @@ pub const ARGV_START: VirtAddr = ENVIRONMENT_START + 0xA000000000;
 pub const ENVIRONMENT_VARIABLES_START: VirtAddr = ENVIRONMENT_START + 0xE000000000;
 
 pub const ABI_STRUCTURES_START: VirtAddr = ENVIRONMENT_START + 0x1000000000;
-use crate::memory::{map_byte_slices, map_str_slices};
+use crate::{
+    PhysAddr,
+    memory::{map_byte_slices, map_str_slices},
+    threading::cpu_context,
+};
 use core::arch::{asm, global_asm};
 
 use bitflags::bitflags;
@@ -84,7 +90,7 @@ pub struct CPUStatus {
     rdx: u64,
     rcx: u64,
     rbx: u64,
-    cr3: u64,
+    cr3: PhysAddr,
     rax: u64,
 
     // ffi-safe alternative for u128
@@ -108,6 +114,41 @@ pub struct CPUStatus {
 
 use safa_utils::abi::raw::processes::AbiStructures;
 
+const fn make_usermode_regs(is_userspace: bool) -> (u64, u64, RFLAGS) {
+    if is_userspace {
+        (
+            USER_CODE_SEG as u64,
+            USER_DATA_SEG as u64,
+            RFLAGS::IOPL_LOW
+                .union(RFLAGS::IOPL_HIGH)
+                .union(RFLAGS::from_bits_retain(0x202)),
+        )
+    } else {
+        (
+            KERNEL_CODE_SEG as u64,
+            KERNEL_DATA_SEG as u64,
+            RFLAGS::from_bits_retain(0x202),
+        )
+    }
+}
+
+fn allocate_stack_for_context(
+    page_table: &mut PhysPageTable,
+    context_id: cpu_context::Cid,
+) -> Result<VirtAddr, MapToError> {
+    let guard_pages_size = GUARD_PAGES_COUNT * PAGE_SIZE;
+    let stack_start = STACK0_START + (context_id as usize * (STACK_SIZE + guard_pages_size));
+    let stack_end = stack_start + STACK_SIZE;
+
+    page_table.alloc_map(
+        stack_start,
+        stack_end,
+        EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+    )?;
+
+    Ok(stack_end)
+}
+
 impl CPUStatus {
     pub fn at(&self) -> VirtAddr {
         self.rip
@@ -121,7 +162,7 @@ impl CPUStatus {
     /// argument `userspace` determines if the process is in ring0 or not
     /// # Safety
     /// The caller must ensure `page_table` is not freed, as long as [`Self`] is alive otherwise it will cause UB
-    pub unsafe fn create(
+    pub unsafe fn create_root(
         page_table: &mut PhysPageTable,
         argv: &[&str],
         env: &[&[u8]],
@@ -131,8 +172,8 @@ impl CPUStatus {
     ) -> Result<Self, MapToError> {
         // allocate the stack
         page_table.alloc_map(
-            STACK_START,
-            STACK_END,
+            STACK0_START,
+            STACK0_END,
             EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
         )?;
 
@@ -168,19 +209,7 @@ impl CPUStatus {
 
         let abi_structures_ptr = ABI_STRUCTURES_START.into_ptr::<AbiStructures>();
 
-        let (cs, ss, rflags) = if userspace {
-            (
-                USER_CODE_SEG as u64,
-                USER_DATA_SEG as u64,
-                RFLAGS::IOPL_LOW | RFLAGS::IOPL_HIGH | RFLAGS::from_bits_retain(0x202),
-            )
-        } else {
-            (
-                KERNEL_CODE_SEG as u64,
-                KERNEL_DATA_SEG as u64,
-                RFLAGS::from_bits_retain(0x202),
-            )
-        };
+        let (cs, ss, rflags) = make_usermode_regs(userspace);
 
         Ok(Self {
             rflags,
@@ -190,8 +219,32 @@ impl CPUStatus {
             rdx: envc as u64,
             rcx: env_ptr as u64,
             r8: abi_structures_ptr as u64,
-            cr3: page_table.phys_addr().into_raw() as u64,
-            rsp: STACK_END,
+            cr3: page_table.phys_addr(),
+            rsp: STACK0_END,
+            cs,
+            ss,
+            ..Default::default()
+        })
+    }
+
+    /// Creates a child CPU Status Instance, that is status of a thread child of thread 0
+    pub unsafe fn create_child(
+        page_table: &mut PhysPageTable,
+        entry_point: VirtAddr,
+        context_id: cpu_context::Cid,
+        arguments_ptr: *const (),
+        userspace: bool,
+    ) -> Result<Self, MapToError> {
+        let stack_end = allocate_stack_for_context(page_table, context_id)?;
+        let (cs, ss, rflags) = make_usermode_regs(userspace);
+
+        Ok(Self {
+            rflags,
+            rip: entry_point,
+            rdi: context_id as u64,
+            rsi: arguments_ptr as u64,
+            cr3: page_table.phys_addr(),
+            rsp: stack_end,
             cs,
             ss,
             ..Default::default()

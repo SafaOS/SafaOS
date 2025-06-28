@@ -2,8 +2,9 @@ use core::any::type_name;
 
 use crate::{
     arch::power::shutdown,
+    eve::KERNEL_STDIO,
     info, sleep,
-    threading::expose::{pspawn, wait, SpawnFlags},
+    threading::expose::{SpawnFlags, pspawn, wait},
 };
 use safa_utils::{
     abi::raw::processes::{AbiStructures, TaskStdio},
@@ -75,6 +76,7 @@ impl<T: Fn()> Testable for T {
 pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     test_log!("sleeping for 5 second(s) until kernel finishes startup...");
     sleep!(5000 ms);
+    _ = *KERNEL_STDIO;
 
     let tests_iter = tests
         .iter()
