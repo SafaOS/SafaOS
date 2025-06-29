@@ -10,7 +10,7 @@ mod usbinfo;
 use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
 use crate::{
     drivers::vfs::{FSError, FSObjectID, FSResult, FileSystem, SeekOffset},
-    threading::{self, Pid, schd},
+    threading::{self, Pid},
     utils::locks::RwLock,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -255,7 +255,7 @@ impl InternalStructure {
     }
 
     fn try_generate_from_task(task_pid: Pid) -> Option<Self> {
-        match threading::find(|task| task.pid() == task_pid) {
+        match threading::find(|task| task.pid() == task_pid, |_| ()) {
             Some(_) => Some(Self::generate_from_task(task_pid)),
             _ => None,
         }
@@ -373,7 +373,7 @@ impl RodFS {
     fn search_indx(&mut self, parent_id: RodFSObjID, name: &str) -> FSResult<RodFSObjID> {
         if parent_id == self.tasks_collection_id() {
             if name == "self" {
-                let pid = threading::current().pid();
+                let pid = threading::this().pid();
                 let task_obj_id = TaskObjID::new(0, pid);
                 return Ok(RodFSObjID::TaskID(task_obj_id));
             }
@@ -405,7 +405,7 @@ impl RodFS {
                 let task_pid = task_obj_id.task_pid();
                 // if the task is not found, it means the task has been terminated
                 // remove the task from the cache
-                if threading::find(|task| task.pid() == task_pid).is_none() {
+                if threading::find(|task| task.pid() == task_pid, |_| ()).is_none() {
                     self.tasks_cache.remove(&task_pid);
                 }
             }
@@ -484,12 +484,10 @@ impl FileSystem for RwLock<RodFS> {
 
         // FIXME: Could be made simpler
         if obj_id == write_guard.tasks_collection_id() {
-            let scheduler = schd();
-
             use core::fmt::Write;
 
             let mut pid_fmt_buf = heapless::String::<20>::new();
-            scheduler.for_each(|task| {
+            threading::for_each(|task| {
                 _ = write!(pid_fmt_buf, "{}", task.pid());
                 let attrs = FileAttr::new(FSObjectType::Directory, 0);
 

@@ -453,6 +453,10 @@ impl Task {
         self.state.read()
     }
 
+    pub fn try_state<'s>(&'s self) -> Option<RwLockReadGuard<'s, TaskState>> {
+        self.state.try_read()
+    }
+
     pub fn state_mut<'s>(&'s self) -> RwLockWriteGuard<'s, TaskState> {
         self.state.write()
     }

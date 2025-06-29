@@ -34,20 +34,22 @@ use super::{
 
 #[unsafe(no_mangle)]
 pub fn task_exit(code: usize) -> ! {
-    let current = super::current();
+    let current = super::this();
     current.kill(code, None);
-    drop(current);
 
     thread_yield();
+    // current becomes invalid here
+
     unreachable!("task didn't exit")
 }
 
 pub fn thread_exit(code: usize) -> ! {
-    let current = super::current();
+    let current = super::this();
     current.kill_current_thread(code);
-    drop(current);
 
     thread_yield();
+    // context becomes invalid here
+
     unreachable!("thread didn't exit ")
 }
 
@@ -62,7 +64,7 @@ pub unsafe fn thread_sleep_for_ms(ms: u64) {
     #[cfg(debug_assertions)]
     let curr_time = time!(ms);
 
-    let current = super::current();
+    let current = super::this();
     unsafe { current.context_sleep_for_ms(ms) };
     thread_yield();
     // makes sure the thread slept for the correct amount of time
@@ -93,8 +95,10 @@ pub fn wait(pid: Pid) -> usize {
         // cycles through the processes one by one until it finds the process with `pid`
         // returns the exit code of the process if it's a zombie and cleans it up
         // if it's not a zombie it will be caught by the next above loop
-        let found = super::find(|process| process.pid() == pid);
-        let found = found.map(|process| process.state().exit_code());
+        let found = super::find(
+            |process| process.pid() == pid,
+            |process| process.try_state().and_then(|state| state.exit_code()),
+        );
 
         return match found {
             Some(Some(exit_code)) => {
@@ -113,8 +117,7 @@ pub fn wait(pid: Pid) -> usize {
 
 #[unsafe(no_mangle)]
 pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
-    let found = super::find(|p| p.pid() == pid);
-    found.map(|p| TaskInfo::from(&*p))
+    super::find(|p| p.pid() == pid, |t| TaskInfo::from(t))
 }
 
 bitflags! {
@@ -156,7 +159,7 @@ fn spawn_inner(
         make_path!("ram", "")
     };
 
-    let current = super::current();
+    let current = super::this();
     let current_pid = current.pid();
 
     let cwd = Box::new(cwd.into_owned().unwrap());
@@ -317,8 +320,9 @@ fn can_terminate(mut process_ppid: Pid, process_pid: Pid, terminator_pid: Pid) -
             return true;
         }
 
-        let pprocess = super::find(|p| p.pid() == process_ppid);
-        process_ppid = pprocess.map(|process| process.ppid()).unwrap_or(0);
+        // find a parenty process and use it's ppid
+        process_ppid =
+            super::find(|p| p.pid() == process_ppid, |process| process.ppid()).unwrap_or(0);
     }
 
     false
@@ -347,12 +351,11 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
 #[unsafe(no_mangle)]
 /// can only Err if pid doesn't belong to process
 pub fn pkill(pid: Pid) -> Result<(), ()> {
-    let current = super::current();
+    let current = super::this();
     let current_pid = current.pid();
 
-    let (process_ppid, process_pid) = super::find(|p| p.pid() == pid)
-        .map(|process| (process.ppid(), process.pid()))
-        .ok_or(())?;
+    let (process_ppid, process_pid) =
+        super::find(|p| p.pid() == pid, |task| (task.ppid(), task.pid())).ok_or(())?;
 
     if can_terminate(process_ppid, process_pid, current_pid) {
         terminate(process_pid, current_pid);
@@ -366,7 +369,7 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
 /// returns the new program break ptr
 /// on fail returns null
 pub fn sbrk(amount: isize) -> Result<*mut u8, ErrorStatus> {
-    let current = super::current();
+    let current = super::this();
     let mut state = current.state_mut();
     state.extend_data_by(amount).ok_or(ErrorStatus::OutOfMemory)
 }

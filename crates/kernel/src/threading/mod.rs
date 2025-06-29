@@ -8,6 +8,7 @@ mod tests;
 /// Process ID, a unique identifier for a process (task)
 pub type Pid = u32;
 
+use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use lazy_static::lazy_static;
@@ -15,10 +16,10 @@ use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
 use crate::threading::cpu_context::ContextStatus;
 use crate::threading::task::CPUContexts;
-use crate::utils::locks::{RwLock, RwLockReadGuard};
+use crate::utils::locks::RwLock;
 use crate::utils::types::Name;
 use crate::{VirtAddr, time};
-use alloc::{boxed::Box, rc::Rc};
+use alloc::boxed::Box;
 use slab::Slab;
 use task::{Task, TaskInfo};
 
@@ -26,11 +27,169 @@ use crate::{
     arch::threading::{CPUStatus, restore_cpu_status},
     debug,
     memory::paging::PhysPageTable,
-    utils::alloc::LinkedList,
 };
 
+struct TaskNode {
+    inner: Task,
+    next: Option<NonNull<TaskNode>>,
+    prev: Option<NonNull<TaskNode>>,
+}
+
+struct SchedulerTaskQueue {
+    head: Option<NonNull<TaskNode>>,
+    current: Option<NonNull<TaskNode>>,
+    tail: Option<NonNull<TaskNode>>,
+    len: usize,
+}
+
+impl SchedulerTaskQueue {
+    pub const fn new() -> Self {
+        Self {
+            head: None,
+            current: None,
+            tail: None,
+            len: 0,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Advances the current task pointer in a circular manner, returning a reference to the next task which is now the current task.
+    /// returns None only if the queue is empty.
+    pub fn advance_circular(&mut self) -> Option<&Task> {
+        if let Some(current) = self.current.take() {
+            let current_ref = unsafe { current.as_ref() };
+            if let Some(next) = current_ref.next {
+                self.current = Some(next);
+            } else {
+                self.current = self.head;
+            }
+            self.current()
+        } else {
+            None
+        }
+    }
+
+    pub fn current(&self) -> Option<&Task> {
+        if let Some(current) = self.current {
+            let current_ref = unsafe { current.as_ref() };
+            Some(&current_ref.inner)
+        } else {
+            None
+        }
+    }
+
+    pub fn push_back(&mut self, task: Task) {
+        let node = Box::new(TaskNode {
+            inner: task,
+            next: None,
+            prev: None,
+        });
+
+        let mut node_ptr = NonNull::new(Box::into_raw(node)).unwrap();
+        let node_ref = unsafe { node_ptr.as_mut() };
+
+        if let Some(mut tail) = self.tail {
+            let tail_ref = unsafe { tail.as_mut() };
+            debug_assert!(tail_ref.next.is_none());
+
+            tail_ref.next = Some(node_ptr);
+            node_ref.prev = Some(tail);
+        } else {
+            self.head = Some(node_ptr);
+        }
+
+        if self.current.is_none() {
+            self.current = Some(node_ptr);
+        }
+        self.tail = Some(node_ptr);
+
+        self.len += 1;
+    }
+
+    pub fn tail(&self) -> Option<&Task> {
+        if let Some(tail) = self.tail {
+            let tail_ref = unsafe { tail.as_ref() };
+            Some(&tail_ref.inner)
+        } else {
+            None
+        }
+    }
+
+    pub fn iter<'a>(&'a self) -> SchedulerTaskIter<'a> {
+        SchedulerTaskIter {
+            queue: PhantomData,
+            current: self.head.map(|h| unsafe { h.as_ref() }),
+        }
+    }
+
+    unsafe fn remove_raw_inner(&mut self, mut node_ptr: NonNull<TaskNode>) -> Box<TaskNode> {
+        unsafe {
+            let node = node_ptr.as_mut();
+            let prev_ptr = node.prev.take();
+            let next_ptr = node.next.take();
+
+            let prev = prev_ptr.map(|mut prev| prev.as_mut());
+            let next = next_ptr.map(|mut next| next.as_mut());
+
+            if let Some(prev) = prev {
+                prev.next = next_ptr;
+            } else {
+                self.head = next_ptr;
+            }
+
+            if let Some(next) = next {
+                next.prev = prev_ptr;
+            } else {
+                self.tail = prev_ptr;
+            }
+
+            if let Some(current) = self.current
+                && current == node_ptr
+            {
+                self.current = next_ptr;
+            }
+
+            self.len -= 1;
+            Box::from_non_null(node_ptr)
+        }
+    }
+
+    fn remove_where<F>(&mut self, mut predicate: F) -> Option<Box<TaskNode>>
+    where
+        F: FnMut(&Task) -> bool,
+    {
+        let mut current = self.head;
+        while let Some(mut node_ptr) = current {
+            let node = unsafe { node_ptr.as_mut() };
+            current = node.next;
+            if predicate(&node.inner) {
+                return Some(unsafe { self.remove_raw_inner(node_ptr) });
+            }
+        }
+        None
+    }
+}
+
+struct SchedulerTaskIter<'a> {
+    queue: PhantomData<&'a SchedulerTaskQueue>,
+    current: Option<&'a TaskNode>,
+}
+
+impl<'a> Iterator for SchedulerTaskIter<'a> {
+    type Item = &'a Task;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.current.take()?;
+        self.current = current.next.map(|node| unsafe { node.as_ref() });
+        Some(&current.inner)
+    }
+}
+
 pub struct Scheduler {
-    tasks: LinkedList<Rc<Task>>,
+    tasks: SchedulerTaskQueue,
     pids: Slab<()>,
 }
 
@@ -38,9 +197,9 @@ unsafe impl Send for Scheduler {}
 unsafe impl Sync for Scheduler {}
 
 impl Scheduler {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            tasks: LinkedList::new(),
+            tasks: SchedulerTaskQueue::new(),
             pids: Slab::new(),
         }
     }
@@ -81,7 +240,7 @@ impl Scheduler {
         unsafe {
             // getting the context of the first task
             // like this so the scheduler read lock is released
-            let current = self::current();
+            let current = self::this();
             let contexts = current.cpu_contexts();
             let context = contexts.current_mut().cpu_status().as_ref();
 
@@ -91,7 +250,7 @@ impl Scheduler {
     }
 
     #[inline(always)]
-    fn current(&self) -> &Rc<Task> {
+    fn current(&self) -> &Task {
         unsafe { self.tasks.current().unwrap_unchecked() }
     }
 
@@ -151,7 +310,7 @@ impl Scheduler {
                 }
             }
 
-            for task in self.tasks.continue_iter() {
+            while let Some(task) = self.tasks.advance_circular() {
                 if !task.is_alive() {
                     continue;
                 }
@@ -171,25 +330,25 @@ impl Scheduler {
     fn add_task(&mut self, mut task: Task) -> Pid {
         let pid = self.pids.insert(()) as Pid;
         task.set_pid(pid);
-        self.tasks.push(Rc::new(task));
+        self.tasks.push_back(task);
 
         debug!(
             Scheduler,
             "Task {} ({}) ADDED",
             pid,
-            self.tasks.last().unwrap().name()
+            self.tasks.tail().unwrap().name()
         );
         pid
     }
 
     /// finds a task where executing `condition` on returns true and returns it
-    fn find<C>(&self, condition: C) -> Option<Rc<Task>>
+    fn find<C>(&self, condition: C) -> Option<&Task>
     where
         C: Fn(&Task) -> bool,
     {
-        for task in self.tasks.clone_iter() {
+        for task in self.tasks.iter() {
             if condition(task) {
-                return Some(task.clone());
+                return Some(task);
             }
         }
 
@@ -202,7 +361,7 @@ impl Scheduler {
     where
         T: FnMut(&Task),
     {
-        for task in self.tasks.clone_iter() {
+        for task in self.tasks.iter() {
             then(task);
         }
     }
@@ -212,7 +371,7 @@ impl Scheduler {
         let result = self
             .tasks
             .remove_where(|task| condition(task))
-            .map(|task| TaskInfo::from(&*task));
+            .map(|task| TaskInfo::from(&task.inner));
 
         if let Some(ref info) = result {
             self.pids.remove(info.pid as usize);
@@ -245,16 +404,10 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
-/// Returns a shared reference to the current task
-/// opposite to `this()` which returns a static reference, this function returns a shared reference and typically used in unsafe code
-pub fn current() -> Rc<Task> {
-    SCHEDULER.read().current().clone()
-}
-
 fn this_ptr() -> *const Task {
     let read = SCHEDULER.read();
     let curr = read.current();
-    Rc::downgrade(curr).as_ptr()
+    curr
 }
 
 /// Returns a static reference to the current task
@@ -264,19 +417,21 @@ pub fn this() -> &'static Task {
     unsafe { &*this_ptr() }
 }
 
-/// acquires lock on scheduler and finds a task where executing `condition` on returns true
-pub fn find<C>(condition: C) -> Option<Rc<Task>>
+/// acquires lock on scheduler and finds a task where executing `condition` on returns true and returns the result of `map` on that task
+pub fn find<C, M, R>(condition: C, map: M) -> Option<R>
 where
     C: Fn(&Task) -> bool,
+    M: Fn(&Task) -> R,
 {
-    SCHEDULER.read().find(condition)
+    let schd = SCHEDULER.read();
+    schd.find(condition).map(map)
 }
 
 /// acquires lock on scheduler
 /// executes `then` on each task
-fn for_each<T>(then: T)
+pub fn for_each<T>(then: T)
 where
-    T: Fn(&Task),
+    T: FnMut(&Task),
 {
     SCHEDULER.read().for_each(then)
 }
@@ -290,8 +445,4 @@ fn add(task: Task) -> Pid {
 /// acquires lock on scheduler and removes a task from it where `condition` on the task returns true
 fn remove(condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
     SCHEDULER.write().remove(condition)
-}
-
-pub fn schd() -> RwLockReadGuard<'static, Scheduler> {
-    SCHEDULER.read()
 }
