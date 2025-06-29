@@ -2,9 +2,10 @@ use core::sync::atomic::Ordering;
 
 use crate::{
     VirtAddr,
-    arch::threading::CPUStatus,
+    arch::{disable_interrupts, enable_interrupts, threading::CPUStatus},
     memory::paging::{MapToError, PhysPageTable},
     threading::{cpu_context::Cid, this},
+    time,
     utils::types::Name,
 };
 use alloc::boxed::Box;
@@ -53,6 +54,34 @@ pub fn thread_exit(code: usize) -> ! {
 #[unsafe(no_mangle)]
 pub fn thread_yield() {
     crate::arch::threading::invoke_context_switch()
+}
+
+/// Sleeps the current thread for `ms` milliseconds.
+/// unsafe because interrupts has to be disabled before calling this function
+pub unsafe fn thread_sleep_for_ms(ms: u64) {
+    #[cfg(debug_assertions)]
+    let curr_time = time!(ms);
+
+    let current = super::current();
+    unsafe { current.context_sleep_for_ms(ms) };
+    thread_yield();
+    // makes sure the thread slept for the correct amount of time
+    #[cfg(debug_assertions)]
+    debug_assert!(
+        curr_time + ms <= time!(ms),
+        "Thread didn't sleep for the correct amount of time, only waited for: {}ms",
+        curr_time + ms - time!(ms)
+    );
+}
+
+/// Sleeps the current kernel thread for `ms` milliseconds.
+/// safe because interrupts are properly managed in this function, expect interrupts to be enabled after calling this function
+pub fn kthread_sleep_for_ms(ms: u64) {
+    unsafe {
+        disable_interrupts();
+        thread_sleep_for_ms(ms);
+        enable_interrupts();
+    };
 }
 
 #[unsafe(no_mangle)]

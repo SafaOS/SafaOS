@@ -331,9 +331,18 @@ impl CPUContexts {
         Ok(cid)
     }
 
-    pub fn advance_swap(&mut self, current_status: CPUStatus) -> Option<&mut Context> {
-        self.current_mut().set_cpu_status(current_status);
+    pub fn set_current_cpu_status(&mut self, cpu_status: CPUStatus) {
+        self.current_mut().set_cpu_status(cpu_status);
+    }
 
+    pub fn sleep_for_ms(&mut self, ms: u64) {
+        self.current_mut().sleep_for_ms(ms);
+    }
+
+    /// Advance the current context to the next one. wraps around if necessary.
+    ///
+    /// will return the next context on wrap returns None
+    pub fn advance(&mut self) -> Option<&mut Context> {
         if self.current_context_index + 1 < self.contexts.len() {
             self.current_context_index += 1;
             Some(self.current_mut())
@@ -486,8 +495,16 @@ impl Task {
         );
     }
 
-    pub(super) unsafe fn cpu_contexts(&self) -> &mut CPUContexts {
+    pub(super) const unsafe fn cpu_contexts(&self) -> &mut CPUContexts {
         unsafe { &mut *self.cpu_contexts.get() }
+    }
+
+    /// Puts the current thread to sleep for the specified number of milliseconds.
+    /// unsafe because the current thread has to not be interrupted until the operation is complete.
+    pub unsafe fn context_sleep_for_ms(&self, ms: u64) {
+        unsafe {
+            self.cpu_contexts().sleep_for_ms(ms);
+        }
     }
 
     pub fn append_context(

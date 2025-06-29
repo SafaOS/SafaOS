@@ -13,9 +13,11 @@ use core::ptr::NonNull;
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
-use crate::VirtAddr;
+use crate::threading::cpu_context::ContextStatus;
+use crate::threading::task::CPUContexts;
 use crate::utils::locks::{RwLock, RwLockReadGuard};
 use crate::utils::types::Name;
+use crate::{VirtAddr, time};
 use alloc::{boxed::Box, rc::Rc};
 use slab::Slab;
 use task::{Task, TaskInfo};
@@ -93,6 +95,47 @@ impl Scheduler {
         unsafe { self.tasks.current().unwrap_unchecked() }
     }
 
+    /// from given cpu contexts choose a context to run
+    /// if `set_current_status` is `Some`, set the current (first) context's cpu status to the given status
+    ///
+    /// if `pick_first` is `true`, pick the first context in the list otherwise pick the next context in the list (completely ignoring the first context)
+    ///
+    /// returns None if no context is available
+    fn choose_context(
+        cpu_contexts: &mut CPUContexts,
+        set_current_status: Option<CPUStatus>,
+        pick_first: bool,
+    ) -> Option<NonNull<CPUStatus>> {
+        if let Some(status) = set_current_status {
+            cpu_contexts.set_current_cpu_status(status);
+        }
+
+        fn pick_context_inner(context: &mut cpu_context::Context) -> Option<NonNull<CPUStatus>> {
+            match context.status() {
+                ContextStatus::Runnable => Some(context.cpu_status()),
+                ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
+                    context.set_status(ContextStatus::Runnable);
+                    Some(context.cpu_status())
+                }
+                ContextStatus::Sleeping(_) => None,
+            }
+        }
+
+        if pick_first {
+            let current_context = cpu_contexts.current_mut();
+            if let Some(cpu_status) = pick_context_inner(current_context) {
+                return Some(cpu_status);
+            }
+        }
+
+        while let Some(context) = cpu_contexts.advance() {
+            if let Some(cpu_status) = pick_context_inner(context) {
+                return Some(cpu_status);
+            }
+        }
+        None
+    }
+
     /// context switches into next task, takes current context outputs new context
     /// returns the new context and a boolean indicating if the address space has changed
     /// if the address space has changed, please copy the context to somewhere accessible first
@@ -100,21 +143,26 @@ impl Scheduler {
         unsafe {
             let current = self.current();
             if current.is_alive() {
-                let contexts = current.cpu_contexts();
-                if let Some(context) = contexts.advance_swap(current_status) {
-                    return (context.cpu_status(), false);
+                let cpu_contexts = current.cpu_contexts();
+                if let Some(cpu_status) =
+                    Self::choose_context(cpu_contexts, Some(current_status), false)
+                {
+                    return (cpu_status, false);
                 }
             }
 
             for task in self.tasks.continue_iter() {
-                if task.is_alive() {
-                    break;
+                if !task.is_alive() {
+                    continue;
+                }
+
+                let cpu_contexts = task.cpu_contexts();
+                if let Some(cpu_status) = Self::choose_context(cpu_contexts, None, true) {
+                    return (cpu_status, true);
                 }
             }
 
-            let current = self.current();
-            let contexts = current.cpu_contexts();
-            (contexts.current_mut().cpu_status(), true)
+            unreachable!("context switch failed")
         }
     }
 

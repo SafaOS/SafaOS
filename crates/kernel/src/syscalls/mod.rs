@@ -89,6 +89,9 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysPExit => threading::expose::task_exit(a),
             SyscallTable::SysTExit => threading::expose::thread_exit(a),
             SyscallTable::SysTYield => Ok(threading::expose::thread_yield()),
+            SyscallTable::SysTSleep => {
+                Ok(unsafe { threading::expose::thread_sleep_for_ms(a as u64) })
+            }
             SyscallTable::SysWait => processes::syswait_raw(a, b as *mut usize),
             // power
             SyscallTable::SysShutdown => power::shutdown(),

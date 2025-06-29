@@ -2,21 +2,22 @@
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::{sleep, utils::locks::RwLock};
+use crate::{threading::expose::kthread_sleep_for_ms, utils::locks::RwLock};
 
 pub trait PolledDriver: Send + Sync {
     fn thread_name(&self) -> &'static str;
     #[inline(always)]
     /// The amount of dealy until poll is called again
-    fn run_every_ms(&self) -> usize {
+    fn run_every_ms(&self) -> u64 {
         100
     }
     /// Executed every [`Self::run_every_ms`]
     fn poll(&self);
     fn poll_function(&self) -> ! {
+        let sleep_ms = self.run_every_ms();
         loop {
             self.poll();
-            sleep!(self.run_every_ms());
+            kthread_sleep_for_ms(sleep_ms);
         }
     }
 }
