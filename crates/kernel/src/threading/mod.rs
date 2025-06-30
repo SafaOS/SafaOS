@@ -8,13 +8,14 @@ mod tests;
 /// Process ID, a unique identifier for a process (task)
 pub type Pid = u32;
 
+use core::cell::SyncUnsafeCell;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
-use crate::threading::cpu_context::ContextStatus;
+use crate::threading::cpu_context::{ContextPriority, ContextStatus};
 use crate::threading::task::CPUContexts;
 use crate::utils::locks::RwLock;
 use crate::utils::types::Name;
@@ -28,6 +29,23 @@ use crate::{
     debug,
     memory::paging::PhysPageTable,
 };
+
+static TIMESLICES_LEFT: SyncUnsafeCell<u32> = SyncUnsafeCell::new(0);
+
+/// Subtracts one timeslice from the current context's timeslices passed.
+/// Returns `true` if the current context has finished all of its timeslices.
+unsafe fn timeslices_sub_finished() -> bool {
+    let ptr = TIMESLICES_LEFT.get();
+    unsafe {
+        if *ptr < 1 {
+            *ptr = 0;
+            true
+        } else {
+            *ptr -= 1;
+            false
+        }
+    }
+}
 
 struct TaskNode {
     inner: Task,
@@ -233,6 +251,7 @@ impl Scheduler {
             page_table,
             context,
             VirtAddr::null(),
+            ContextPriority::Medium,
             false,
         );
         self::add(task);
@@ -264,17 +283,19 @@ impl Scheduler {
         cpu_contexts: &mut CPUContexts,
         set_current_status: Option<CPUStatus>,
         pick_first: bool,
-    ) -> Option<NonNull<CPUStatus>> {
+    ) -> Option<(NonNull<CPUStatus>, ContextPriority)> {
         if let Some(status) = set_current_status {
             cpu_contexts.set_current_cpu_status(status);
         }
 
-        fn pick_context_inner(context: &mut cpu_context::Context) -> Option<NonNull<CPUStatus>> {
+        fn pick_context_inner(
+            context: &mut cpu_context::Context,
+        ) -> Option<(NonNull<CPUStatus>, ContextPriority)> {
             match context.status() {
-                ContextStatus::Runnable => Some(context.cpu_status()),
+                ContextStatus::Runnable => Some((context.cpu_status(), context.priority())),
                 ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
                     context.set_status(ContextStatus::Runnable);
-                    Some(context.cpu_status())
+                    Some((context.cpu_status(), context.priority()))
                 }
                 ContextStatus::Sleeping(_) => None,
             }
@@ -282,14 +303,14 @@ impl Scheduler {
 
         if pick_first {
             let current_context = cpu_contexts.current_mut();
-            if let Some(cpu_status) = pick_context_inner(current_context) {
-                return Some(cpu_status);
+            if let Some((cpu_status, priority)) = pick_context_inner(current_context) {
+                return Some((cpu_status, priority));
             }
         }
 
         while let Some(context) = cpu_contexts.advance() {
-            if let Some(cpu_status) = pick_context_inner(context) {
-                return Some(cpu_status);
+            if let Some((cpu_status, priority)) = pick_context_inner(context) {
+                return Some((cpu_status, priority));
             }
         }
         None
@@ -298,15 +319,18 @@ impl Scheduler {
     /// context switches into next task, takes current context outputs new context
     /// returns the new context and a boolean indicating if the address space has changed
     /// if the address space has changed, please copy the context to somewhere accessible first
-    pub unsafe fn switch(&mut self, current_status: CPUStatus) -> (NonNull<CPUStatus>, bool) {
+    pub unsafe fn switch(
+        &mut self,
+        current_status: CPUStatus,
+    ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
         unsafe {
             let current = self.current();
             if current.is_alive() {
                 let cpu_contexts = current.cpu_contexts();
-                if let Some(cpu_status) =
+                if let Some((cpu_status, priority)) =
                     Self::choose_context(cpu_contexts, Some(current_status), false)
                 {
-                    return (cpu_status, false);
+                    return (cpu_status, priority, false);
                 }
             }
 
@@ -316,8 +340,9 @@ impl Scheduler {
                 }
 
                 let cpu_contexts = task.cpu_contexts();
-                if let Some(cpu_status) = Self::choose_context(cpu_contexts, None, true) {
-                    return (cpu_status, true);
+                if let Some((cpu_status, priority)) = Self::choose_context(cpu_contexts, None, true)
+                {
+                    return (cpu_status, priority, true);
                 }
             }
 
@@ -386,16 +411,31 @@ impl Scheduler {
     }
 }
 
+pub(super) unsafe fn before_thread_yield() {
+    unsafe {
+        *TIMESLICES_LEFT.get() = 0;
+    }
+}
+
 #[inline(always)]
 /// performs a context switch using the scheduler, switching to the next task context
 /// to be used
 /// returns the new context and a boolean indicating if the address space has changed
 /// if the address space has changed, please copy the context to somewhere accessible first
 ///
-/// returns None if the scheduler is not yet initialized
+/// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
 pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
+    if !unsafe { timeslices_sub_finished() } {
+        return None;
+    }
+
     match SCHEDULER.try_write().filter(|s| s.inited()) {
-        Some(mut scheduler) => Some(unsafe { scheduler.switch(context) }),
+        Some(mut scheduler) => unsafe {
+            let (cpu_status, priority, address_space_changed) = scheduler.switch(context);
+            *TIMESLICES_LEFT.get() = priority.timeslices();
+
+            Some((cpu_status, address_space_changed))
+        },
         _ => None,
     }
 }

@@ -1,6 +1,9 @@
 use safa_utils::{abi::raw::processes::AbiStructures, make_path, types::Name};
 
-use crate::threading::expose::{pspawn, wait, SpawnFlags};
+use crate::threading::{
+    cpu_context::ContextPriority,
+    expose::{SpawnFlags, pspawn, wait},
+};
 
 #[test_case]
 fn spawn_test() {
@@ -13,6 +16,7 @@ fn spawn_test() {
         &[],
         &[],
         SpawnFlags::empty(),
+        ContextPriority::Medium,
         AbiStructures::default(),
     )
     .unwrap();

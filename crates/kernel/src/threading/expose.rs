@@ -2,9 +2,12 @@ use core::sync::atomic::Ordering;
 
 use crate::{
     VirtAddr,
-    arch::{disable_interrupts, enable_interrupts, threading::CPUStatus},
-    memory::paging::{MapToError, PhysPageTable},
-    threading::{cpu_context::Cid, this},
+    arch::{disable_interrupts, enable_interrupts},
+    memory::paging::MapToError,
+    threading::{
+        cpu_context::{Cid, ContextPriority},
+        this,
+    },
     time,
     utils::types::Name,
 };
@@ -55,6 +58,9 @@ pub fn thread_exit(code: usize) -> ! {
 
 #[unsafe(no_mangle)]
 pub fn thread_yield() {
+    unsafe {
+        super::before_thread_yield();
+    }
     crate::arch::threading::invoke_context_switch()
 }
 
@@ -207,54 +213,18 @@ fn spawn_inner(
     Ok(pid)
 }
 
-// used by tests...
-#[allow(unused)]
-pub fn function_spawn(
-    name: Name,
-    function: fn() -> !,
-    argv: &[&str],
-    env: &[&[u8]],
-    flags: SpawnFlags,
-    structures: AbiStructures,
-) -> Result<Pid, SpawnError> {
-    spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
-        let mut page_table = PhysPageTable::create()?;
-        let context = unsafe {
-            CPUStatus::create_root(
-                &mut page_table,
-                argv,
-                env,
-                structures,
-                VirtAddr::from(function as usize),
-                false,
-            )
-        }?;
-
-        let task = Task::new(
-            name,
-            0,
-            ppid,
-            cwd,
-            page_table,
-            context,
-            VirtAddr::null(),
-            false,
-        );
-        Ok(task)
-    })
-}
-
 fn spawn<T: Readable>(
     name: Name,
     reader: &T,
     argv: &[&str],
     env: &[&[u8]],
     flags: SpawnFlags,
+    priority: ContextPriority,
     structures: AbiStructures,
 ) -> Result<Pid, SpawnError> {
     spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let elf = Elf::new(reader)?;
-        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, structures)?;
+        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, priority, structures)?;
         Ok(task)
     })
 }
@@ -266,6 +236,7 @@ pub fn pspawn(
     argv: &[&str],
     env: &[&[u8]],
     flags: SpawnFlags,
+    priority: ContextPriority,
     structures: AbiStructures,
 ) -> Result<Pid, FSError> {
     let file = File::open(path)?;
@@ -274,21 +245,27 @@ pub fn pspawn(
         return Err(FSError::NotAFile);
     }
 
-    spawn(name, &file, argv, env, flags, structures).map_err(|_| FSError::NotExecutable)
+    spawn(name, &file, argv, env, flags, priority, structures).map_err(|_| FSError::NotExecutable)
 }
 
-pub fn thread_spawn(entry_point: VirtAddr, argument_ptr: VirtAddr) -> Result<Cid, MapToError> {
+pub fn thread_spawn(
+    entry_point: VirtAddr,
+    argument_ptr: VirtAddr,
+    priority: Option<ContextPriority>,
+) -> Result<Cid, MapToError> {
     let this = this();
-    this.append_context(entry_point, argument_ptr)
+    this.append_context(entry_point, argument_ptr, priority)
 }
 
 pub fn kernel_thread_spawn<T: 'static>(
     func: fn(cid: Cid, &'static T) -> !,
     arg: &'static T,
+    priority: Option<ContextPriority>,
 ) -> Result<Cid, MapToError> {
     thread_spawn(
         VirtAddr::from(func as usize),
         VirtAddr::from(arg as *const T as usize),
+        priority,
     )
 }
 

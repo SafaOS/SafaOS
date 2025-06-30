@@ -2,7 +2,7 @@ use safa_utils::abi::{
     self,
     raw::{
         RawSlice, RawSliceMut,
-        processes::{AbiStructures, PSpawnConfig, TSpawnConfig, TaskStdio},
+        processes::{AbiStructures, ContextPriority, PSpawnConfig, TSpawnConfig, TaskStdio},
     },
 };
 
@@ -36,6 +36,7 @@ fn syspspawn_inner(
     argv: &[&str],
     env: &[&[u8]],
     flags: SpawnFlags,
+    priority: ContextPriority,
     stdio: Option<TaskStdio>,
 ) -> Result<Pid, ErrorStatus> {
     let name = match name {
@@ -53,6 +54,7 @@ fn syspspawn_inner(
         argv,
         env,
         flags,
+        priority,
         AbiStructures {
             stdio: stdio.unwrap_or_default(),
         },
@@ -115,6 +117,7 @@ fn syspspawn(
             &[&[u8]],
             SpawnFlags,
             Option<TaskStdio>,
+            Option<ContextPriority>,
         ),
         ErrorStatus,
     > {
@@ -122,18 +125,32 @@ fn syspspawn(
         let argv = into_args_slice(&this.argv)?;
         let env = into_bytes_slice(&this.env)?;
 
-        let stdio: Option<&abi::raw::processes::TaskStdio> = if this.version >= 1 {
+        let stdio: Option<&abi::raw::processes::TaskStdio> = if this.revision >= 1 {
             Option::make(this.stdio)?
         } else {
             None
         };
 
-        Ok((name, argv, env, this.flags.into(), stdio.copied()))
+        let priority: Option<ContextPriority> = if this.revision >= 2 {
+            this.priority.into()
+        } else {
+            None
+        };
+
+        Ok((name, argv, env, this.flags.into(), stdio.copied(), priority))
     }
 
-    let (name, argv, env, flags, stdio) = as_rust(config)?;
+    let (name, argv, env, flags, stdio, priority) = as_rust(config)?;
 
-    let results = syspspawn_inner(name, path, argv, env, flags, stdio)?;
+    let results = syspspawn_inner(
+        name,
+        path,
+        argv,
+        env,
+        flags,
+        priority.unwrap_or(ContextPriority::Medium),
+        stdio,
+    )?;
     if let Some(dest_pid) = dest_pid {
         *dest_pid = results;
     }
@@ -146,10 +163,10 @@ fn sys_tspawn(
     config: &TSpawnConfig,
     target_cid: Option<&mut Cid>,
 ) -> Result<(), ErrorStatus> {
-    let argument_ptr = config.into_rust();
+    let (argument_ptr, priority) = config.into_rust();
     let argument_ptr = VirtAddr::from_ptr(argument_ptr);
 
-    let thread_cid = threading::expose::thread_spawn(entry_point, argument_ptr)
+    let thread_cid = threading::expose::thread_spawn(entry_point, argument_ptr, priority)
         .map_err(|_| ErrorStatus::MMapError)?;
     if let Some(target_cid) = target_cid {
         *target_cid = thread_cid;

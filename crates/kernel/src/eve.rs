@@ -4,7 +4,7 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
-use crate::threading::cpu_context::Cid;
+use crate::threading::cpu_context::{Cid, ContextPriority};
 use crate::threading::expose::kernel_thread_spawn;
 use crate::utils::alloc::PageString;
 use crate::utils::locks::Mutex;
@@ -76,7 +76,7 @@ pub fn main() -> ! {
 
     // FIXME: use threads
     for poll_driver in unsafe { &*POLLING.get() } {
-        kernel_thread_spawn(poll_driver_thread, poll_driver)
+        kernel_thread_spawn(poll_driver_thread, poll_driver, Some(ContextPriority::High))
             .expect("failed to spawn a thread function for a polled driver");
     }
 
@@ -99,6 +99,7 @@ pub fn main() -> ! {
             &["sys:/bin/safa", "-i"],
             &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
             SpawnFlags::empty(),
+            ContextPriority::Medium,
             *KERNEL_ABI_STRUCTURES,
         )
         .unwrap();
@@ -106,12 +107,15 @@ pub fn main() -> ! {
 
     #[cfg(test)]
     {
+        use crate::threading::cpu_context::ContextPriority;
+
         fn run_tests(_cid: Cid, _arg: &()) -> ! {
             crate::kernel_testmain();
             unreachable!()
         }
 
-        kernel_thread_spawn(run_tests, &()).expect("failed to spawn Test Thread");
+        kernel_thread_spawn(run_tests, &(), Some(ContextPriority::Medium))
+            .expect("failed to spawn Test Thread");
     }
 
     loop {

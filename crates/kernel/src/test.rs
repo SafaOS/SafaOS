@@ -4,7 +4,10 @@ use crate::{
     arch::power::shutdown,
     eve::KERNEL_STDIO,
     info, sleep,
-    threading::expose::{SpawnFlags, pspawn, wait},
+    threading::{
+        cpu_context::ContextPriority,
+        expose::{SpawnFlags, pspawn, wait},
+    },
 };
 use safa_utils::{
     abi::raw::processes::{AbiStructures, TaskStdio},
@@ -133,6 +136,7 @@ fn userspace_test_script() {
         &[],
         &[],
         SpawnFlags::empty(),
+        ContextPriority::Medium,
         AbiStructures { stdio },
     )
     .unwrap();

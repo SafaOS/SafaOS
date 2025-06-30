@@ -6,7 +6,7 @@ use core::{
 
 use crate::{
     memory::paging::MapToError,
-    threading::cpu_context::{self, Cid},
+    threading::cpu_context::{self, Cid, ContextPriority},
     utils::types::Name,
 };
 use crate::{
@@ -285,19 +285,21 @@ pub(super) struct CPUContexts {
     contexts: Vec<Context>,
     current_context_index: usize,
     next_cid: cpu_context::Cid,
+    default_priority: ContextPriority,
 }
 
 impl CPUContexts {
-    pub fn create(status: CPUStatus) -> Self {
-        let context = Context::new(0, status);
-        Self::new(context)
+    pub fn create(status: CPUStatus, default_priority: ContextPriority) -> Self {
+        let context = Context::new(0, status, default_priority);
+        Self::new(context, default_priority)
     }
 
-    pub fn new(root_context: Context) -> Self {
+    pub fn new(root_context: Context, default_priority: ContextPriority) -> Self {
         Self {
             contexts: alloc::vec![root_context],
             current_context_index: 0,
             next_cid: 1,
+            default_priority,
         }
     }
 
@@ -312,6 +314,7 @@ impl CPUContexts {
         root_page_table: &mut PhysPageTable,
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
+        priority: Option<ContextPriority>,
         userspace: bool,
     ) -> Result<cpu_context::Cid, MapToError> {
         let cid = self.next_cid;
@@ -327,7 +330,11 @@ impl CPUContexts {
             )?
         };
 
-        self.contexts.push(Context::new(cid, cpu_status));
+        self.contexts.push(Context::new(
+            cid,
+            cpu_status,
+            priority.unwrap_or(self.default_priority),
+        ));
         Ok(cid)
     }
 
@@ -398,10 +405,11 @@ impl Task {
         root_page_table: PhysPageTable,
         status: CPUStatus,
         data_break: VirtAddr,
+        default_priority: ContextPriority,
         userspace_task: bool,
     ) -> Self {
         let data_break = VirtAddr::from(align_up(data_break.into_raw(), PAGE_SIZE));
-        let cpu_contexts = CPUContexts::create(status);
+        let cpu_contexts = CPUContexts::create(status, default_priority);
 
         Self {
             name,
@@ -431,6 +439,7 @@ impl Task {
         elf: Elf<T>,
         args: &[&str],
         env: &[&[u8]],
+        default_priority: ContextPriority,
         structures: AbiStructures,
     ) -> Result<Self, ElfError> {
         let entry_point = elf.header().entry_point;
@@ -441,7 +450,15 @@ impl Task {
             CPUStatus::create_root(&mut page_table, args, env, structures, entry_point, true)?
         };
         Ok(Self::new(
-            name, pid, ppid, cwd, page_table, context, data_break, true,
+            name,
+            pid,
+            ppid,
+            cwd,
+            page_table,
+            context,
+            data_break,
+            default_priority,
+            true,
         ))
     }
 
@@ -515,6 +532,7 @@ impl Task {
         &self,
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
+        piritory: Option<ContextPriority>,
     ) -> Result<cpu_context::Cid, MapToError> {
         let mut state_mut = self.state.write();
         let alive = state_mut
@@ -524,7 +542,13 @@ impl Task {
 
         unsafe {
             let contexts = self.cpu_contexts();
-            contexts.allocate_add(page_table, entry_point, argument_ptr, self.userspace_task)
+            contexts.allocate_add(
+                page_table,
+                entry_point,
+                argument_ptr,
+                piritory,
+                self.userspace_task,
+            )
         }
     }
 

@@ -46,17 +46,39 @@ impl BitOr for SpawnFlags {
     }
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextPriority {
+    Low,
+    Medium,
+    High,
+}
+
+impl ContextPriority {
+    /// Returns the number of timeslices a thread with this priority should be given.
+    pub const fn timeslices(&self) -> u32 {
+        match self {
+            Self::Low => 1,
+            Self::Medium => 3,
+            Self::High => 5,
+        }
+    }
+}
+
 /// configuration for the spawn syscall
 #[repr(C)]
 pub struct PSpawnConfig {
     /// config version for compatibility
     /// added in kernel version 0.2.1 and therefore breaking compatibility with any program compiled for version below 0.2.1
-    pub version: u8,
+    /// revision 1: added env
+    /// revision 2: added priority (v0.4.0)
+    pub revision: u8,
     pub name: RawSlice<u8>,
     pub argv: RawSliceMut<RawSlice<u8>>,
     pub flags: SpawnFlags,
     pub stdio: *const TaskStdio,
     pub env: RawSliceMut<RawSlice<u8>>,
+    pub priority: Optional<ContextPriority>,
 }
 
 impl PSpawnConfig {
@@ -66,18 +88,20 @@ impl PSpawnConfig {
         env: *mut [&[u8]],
         flags: SpawnFlags,
         stdio: &TaskStdio,
+        priority: Option<ContextPriority>,
     ) -> Self {
         let name = unsafe { RawSlice::from_slice(name.as_bytes()) };
         let argv = unsafe { RawSliceMut::from_slices(argv) };
         let env = unsafe { RawSliceMut::from_slices(env) };
 
         Self {
-            version: 1,
+            revision: 2,
             name,
             argv,
             env,
             flags,
             stdio: stdio as *const TaskStdio,
+            priority: priority.into(),
         }
     }
 }
@@ -88,18 +112,20 @@ impl PSpawnConfig {
 pub struct TSpawnConfig {
     pub revision: u32,
     pub argument_ptr: *const (),
+    pub priority: Optional<ContextPriority>,
 }
 
 impl TSpawnConfig {
-    pub const fn into_rust(&self) -> *const () {
-        self.argument_ptr
+    pub fn into_rust(&self) -> (*const (), Option<ContextPriority>) {
+        (self.argument_ptr, self.priority.into())
     }
 
     /// Create a new thread spawn configuration with the latest revision
-    pub const fn new(argument_ptr: *const ()) -> Self {
+    pub fn new(argument_ptr: *const (), priority: Option<ContextPriority>) -> Self {
         Self {
             revision: 0,
             argument_ptr,
+            priority: priority.into(),
         }
     }
 }

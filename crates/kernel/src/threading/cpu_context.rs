@@ -12,14 +12,23 @@ pub enum ContextStatus {
     Sleeping(u64),
 }
 
+pub use safa_utils::abi::raw::processes::ContextPriority;
+
 #[derive(Debug)]
 pub struct Context {
     id: Cid,
+
+    priority: ContextPriority,
+
     status: ContextStatus,
     cpu_status: CPUStatus,
 }
 
 impl Context {
+    pub const fn priority(&self) -> ContextPriority {
+        self.priority
+    }
+
     pub const fn cid(&self) -> Cid {
         self.id
     }
@@ -44,11 +53,12 @@ impl Context {
         unsafe { core::ptr::NonNull::new_unchecked(&mut self.cpu_status) }
     }
 
-    pub(super) fn new(id: Cid, cpu_status: CPUStatus) -> Self {
+    pub(super) fn new(id: Cid, cpu_status: CPUStatus, priority: ContextPriority) -> Self {
         Context {
             status: ContextStatus::Runnable,
             id,
             cpu_status,
+            priority,
         }
     }
 }
