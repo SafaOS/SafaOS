@@ -592,7 +592,12 @@ impl VFS {
             let path = PathParts::new(inode.name());
 
             if cfg!(debug_assertions) {
-                debug!(VFS, "Unpacking ({}) {path} ...", inode.kind);
+                debug!(
+                    VFS,
+                    "Unpacking ({}) {path} ({}KiB) ...",
+                    inode.kind,
+                    inode.data().len() / 1024
+                );
             }
 
             match inode.kind {
