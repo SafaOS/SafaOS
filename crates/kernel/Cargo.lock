@@ -263,15 +263,7 @@ name = "safa-abi"
 version = "0.2.6"
 
 [[package]]
-name = "safa-utils"
-version = "0.2.0"
-dependencies = [
- "heapless",
- "safa-abi",
-]
-
-[[package]]
-name = "safrin-core"
+name = "safa-core"
 version = "0.4.0"
 dependencies = [
  "bitfield-struct",
@@ -295,6 +287,14 @@ dependencies = [
  "slab",
  "spin",
  "thiserror",
+]
+
+[[package]]
+name = "safa-utils"
+version = "0.2.0"
+dependencies = [
+ "heapless",
+ "safa-abi",
 ]
 
 [[package]]
