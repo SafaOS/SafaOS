@@ -373,7 +373,9 @@ impl RodFS {
     fn search_indx(&mut self, parent_id: RodFSObjID, name: &str) -> FSResult<RodFSObjID> {
         if parent_id == self.tasks_collection_id() {
             if name == "self" {
-                let pid = threading::this().pid();
+                let curr_task = threading::this_task();
+
+                let pid = curr_task.pid();
                 let task_obj_id = TaskObjID::new(0, pid);
                 return Ok(RodFSObjID::TaskID(task_obj_id));
             }

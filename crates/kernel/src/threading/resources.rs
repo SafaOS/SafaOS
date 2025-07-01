@@ -141,7 +141,7 @@ pub fn get_resource<DO, R>(ri: usize, then: DO) -> Option<R>
 where
     DO: FnOnce(MutexGuard<Resource>) -> R,
 {
-    let this = super::this();
+    let this = super::this_task();
     let state = this.state();
 
     state
@@ -153,7 +153,7 @@ where
 
 /// adds a resource to the current process
 pub fn add_resource(resource: Resource) -> usize {
-    let this = super::this();
+    let this = super::this_task();
     let mut state = this.state_mut();
 
     state
@@ -163,7 +163,8 @@ pub fn add_resource(resource: Resource) -> usize {
 }
 
 pub fn duplicate_resource(ri: usize) -> usize {
-    let mut state = super::this().state_mut();
+    let current_task = super::this_task();
+    let mut state = current_task.state_mut();
     let manager = state.resource_manager_mut().unwrap();
 
     let resource = manager.get_mut(ri).unwrap();
@@ -173,7 +174,7 @@ pub fn duplicate_resource(ri: usize) -> usize {
 
 /// removes a resource from the current process with `ri`
 pub fn remove_resource(ri: usize) -> Option<()> {
-    let current_task = super::this();
+    let current_task = super::this_task();
     let mut current = current_task.state_mut();
 
     current

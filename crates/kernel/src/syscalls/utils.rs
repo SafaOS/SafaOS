@@ -18,7 +18,8 @@ fn syschdir(path: Path) -> Result<(), ErrorStatus> {
 /// `dest_len` if it is not null
 /// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
 fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let state = threading::this().state();
+    let this_task = threading::this_task();
+    let state = this_task.state();
     let cwd = state.cwd();
 
     let len = cwd.len();

@@ -1,5 +1,6 @@
 pub mod cpu_context;
 pub mod expose;
+mod queue;
 pub mod resources;
 pub mod task;
 #[cfg(test)]
@@ -9,14 +10,14 @@ mod tests;
 pub type Pid = u32;
 
 use core::cell::SyncUnsafeCell;
-use core::marker::PhantomData;
 use core::ptr::NonNull;
 
+use alloc::sync::Arc;
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
-use crate::threading::cpu_context::{ContextPriority, ContextStatus};
-use crate::threading::task::CPUContexts;
+use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread};
+use crate::threading::queue::{TaskQueue, ThreadQueue};
 use crate::utils::locks::RwLock;
 use crate::utils::types::Name;
 use crate::{VirtAddr, time};
@@ -47,167 +48,9 @@ unsafe fn timeslices_sub_finished() -> bool {
     }
 }
 
-struct TaskNode {
-    inner: Task,
-    next: Option<NonNull<TaskNode>>,
-    prev: Option<NonNull<TaskNode>>,
-}
-
-struct SchedulerTaskQueue {
-    head: Option<NonNull<TaskNode>>,
-    current: Option<NonNull<TaskNode>>,
-    tail: Option<NonNull<TaskNode>>,
-    len: usize,
-}
-
-impl SchedulerTaskQueue {
-    pub const fn new() -> Self {
-        Self {
-            head: None,
-            current: None,
-            tail: None,
-            len: 0,
-        }
-    }
-
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-
-    /// Advances the current task pointer in a circular manner, returning a reference to the next task which is now the current task.
-    /// returns None only if the queue is empty.
-    pub fn advance_circular(&mut self) -> Option<&Task> {
-        if let Some(current) = self.current.take() {
-            let current_ref = unsafe { current.as_ref() };
-            if let Some(next) = current_ref.next {
-                self.current = Some(next);
-            } else {
-                self.current = self.head;
-            }
-            self.current()
-        } else {
-            None
-        }
-    }
-
-    pub fn current(&self) -> Option<&Task> {
-        if let Some(current) = self.current {
-            let current_ref = unsafe { current.as_ref() };
-            Some(&current_ref.inner)
-        } else {
-            None
-        }
-    }
-
-    pub fn push_back(&mut self, task: Task) {
-        let node = Box::new(TaskNode {
-            inner: task,
-            next: None,
-            prev: None,
-        });
-
-        let mut node_ptr = NonNull::new(Box::into_raw(node)).unwrap();
-        let node_ref = unsafe { node_ptr.as_mut() };
-
-        if let Some(mut tail) = self.tail {
-            let tail_ref = unsafe { tail.as_mut() };
-            debug_assert!(tail_ref.next.is_none());
-
-            tail_ref.next = Some(node_ptr);
-            node_ref.prev = Some(tail);
-        } else {
-            self.head = Some(node_ptr);
-        }
-
-        if self.current.is_none() {
-            self.current = Some(node_ptr);
-        }
-        self.tail = Some(node_ptr);
-
-        self.len += 1;
-    }
-
-    pub fn tail(&self) -> Option<&Task> {
-        if let Some(tail) = self.tail {
-            let tail_ref = unsafe { tail.as_ref() };
-            Some(&tail_ref.inner)
-        } else {
-            None
-        }
-    }
-
-    pub fn iter<'a>(&'a self) -> SchedulerTaskIter<'a> {
-        SchedulerTaskIter {
-            queue: PhantomData,
-            current: self.head.map(|h| unsafe { h.as_ref() }),
-        }
-    }
-
-    unsafe fn remove_raw_inner(&mut self, mut node_ptr: NonNull<TaskNode>) -> Box<TaskNode> {
-        unsafe {
-            let node = node_ptr.as_mut();
-            let prev_ptr = node.prev.take();
-            let next_ptr = node.next.take();
-
-            let prev = prev_ptr.map(|mut prev| prev.as_mut());
-            let next = next_ptr.map(|mut next| next.as_mut());
-
-            if let Some(prev) = prev {
-                prev.next = next_ptr;
-            } else {
-                self.head = next_ptr;
-            }
-
-            if let Some(next) = next {
-                next.prev = prev_ptr;
-            } else {
-                self.tail = prev_ptr;
-            }
-
-            if let Some(current) = self.current
-                && current == node_ptr
-            {
-                self.current = next_ptr;
-            }
-
-            self.len -= 1;
-            Box::from_non_null(node_ptr)
-        }
-    }
-
-    fn remove_where<F>(&mut self, mut predicate: F) -> Option<Box<TaskNode>>
-    where
-        F: FnMut(&Task) -> bool,
-    {
-        let mut current = self.head;
-        while let Some(mut node_ptr) = current {
-            let node = unsafe { node_ptr.as_mut() };
-            current = node.next;
-            if predicate(&node.inner) {
-                return Some(unsafe { self.remove_raw_inner(node_ptr) });
-            }
-        }
-        None
-    }
-}
-
-struct SchedulerTaskIter<'a> {
-    queue: PhantomData<&'a SchedulerTaskQueue>,
-    current: Option<&'a TaskNode>,
-}
-
-impl<'a> Iterator for SchedulerTaskIter<'a> {
-    type Item = &'a Task;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let current = self.current.take()?;
-        self.current = current.next.map(|node| unsafe { node.as_ref() });
-        Some(&current.inner)
-    }
-}
-
 pub struct Scheduler {
-    tasks: SchedulerTaskQueue,
+    threads_queue: ThreadQueue,
+    tasks_queue: TaskQueue,
     pids: Slab<()>,
 }
 
@@ -217,7 +60,8 @@ unsafe impl Sync for Scheduler {}
 impl Scheduler {
     pub const fn new() -> Self {
         Self {
-            tasks: SchedulerTaskQueue::new(),
+            threads_queue: ThreadQueue::new(),
+            tasks_queue: TaskQueue::new(),
             pids: Slab::new(),
         }
     }
@@ -243,7 +87,7 @@ impl Scheduler {
         };
         let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
-        let task = Task::new(
+        let (task, root_thread) = Task::new(
             Name::try_from(name).expect("initial process name too long"),
             0,
             0,
@@ -254,23 +98,19 @@ impl Scheduler {
             ContextPriority::Medium,
             false,
         );
-        self::add(task);
 
         unsafe {
-            // getting the context of the first task
-            // like this so the scheduler read lock is released
-            let current = self::this();
-            let contexts = current.cpu_contexts();
-            let context = contexts.current_mut().cpu_status().as_ref();
+            let status = root_thread.context().cpu_status();
+            self::add(task, root_thread);
 
             debug!(Scheduler, "INITED ...");
-            restore_cpu_status(context)
+            restore_cpu_status(status.as_ref())
         }
     }
 
     #[inline(always)]
-    fn current(&self) -> &Task {
-        unsafe { self.tasks.current().unwrap_unchecked() }
+    fn current_thread(&self) -> &Thread {
+        unsafe { self.threads_queue.current().unwrap_unchecked() }
     }
 
     /// from given cpu contexts choose a context to run
@@ -279,42 +119,42 @@ impl Scheduler {
     /// if `pick_first` is `true`, pick the first context in the list otherwise pick the next context in the list (completely ignoring the first context)
     ///
     /// returns None if no context is available
-    fn choose_context(
-        cpu_contexts: &mut CPUContexts,
-        set_current_status: Option<CPUStatus>,
-        pick_first: bool,
-    ) -> Option<(NonNull<CPUStatus>, ContextPriority)> {
-        if let Some(status) = set_current_status {
-            cpu_contexts.set_current_cpu_status(status);
-        }
+    // fn choose_context(
+    //     cpu_contexts: &mut CPUContexts,
+    //     set_current_status: Option<CPUStatus>,
+    //     pick_first: bool,
+    // ) -> Option<(NonNull<CPUStatus>, ContextPriority)> {
+    //     if let Some(status) = set_current_status {
+    //         cpu_contexts.set_current_cpu_status(status);
+    //     }
 
-        fn pick_context_inner(
-            context: &mut cpu_context::Context,
-        ) -> Option<(NonNull<CPUStatus>, ContextPriority)> {
-            match context.status() {
-                ContextStatus::Runnable => Some((context.cpu_status(), context.priority())),
-                ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
-                    context.set_status(ContextStatus::Runnable);
-                    Some((context.cpu_status(), context.priority()))
-                }
-                ContextStatus::Sleeping(_) => None,
-            }
-        }
+    //     fn pick_context_inner(
+    //         context: &mut cpu_context::Context,
+    //     ) -> Option<(NonNull<CPUStatus>, ContextPriority)> {
+    //         match context.status() {
+    //             ContextStatus::Runnable => Some((context.cpu_status(), context.priority())),
+    //             ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
+    //                 context.set_status(ContextStatus::Runnable);
+    //                 Some((context.cpu_status(), context.priority()))
+    //             }
+    //             ContextStatus::Sleeping(_) => None,
+    //         }
+    //     }
 
-        if pick_first {
-            let current_context = cpu_contexts.current_mut();
-            if let Some((cpu_status, priority)) = pick_context_inner(current_context) {
-                return Some((cpu_status, priority));
-            }
-        }
+    //     if pick_first {
+    //         let current_context = cpu_contexts.current_mut();
+    //         if let Some((cpu_status, priority)) = pick_context_inner(current_context) {
+    //             return Some((cpu_status, priority));
+    //         }
+    //     }
 
-        while let Some(context) = cpu_contexts.advance() {
-            if let Some((cpu_status, priority)) = pick_context_inner(context) {
-                return Some((cpu_status, priority));
-            }
-        }
-        None
-    }
+    //     while let Some(context) = cpu_contexts.advance() {
+    //         if let Some((cpu_status, priority)) = pick_context_inner(context) {
+    //             return Some((cpu_status, priority));
+    //         }
+    //     }
+    //     None
+    // }
 
     /// context switches into next task, takes current context outputs new context
     /// returns the new context and a boolean indicating if the address space has changed
@@ -324,46 +164,65 @@ impl Scheduler {
         current_status: CPUStatus,
     ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
         unsafe {
-            let current = self.current();
-            if current.is_alive() {
-                let cpu_contexts = current.cpu_contexts();
-                if let Some((cpu_status, priority)) =
-                    Self::choose_context(cpu_contexts, Some(current_status), false)
-                {
-                    return (cpu_status, priority, false);
-                }
-            }
+            let current_thread = self.current_thread();
+            let current_task = current_thread.task();
+            let current_pid = current_task.pid();
 
-            while let Some(task) = self.tasks.advance_circular() {
-                if !task.is_alive() {
+            current_thread.context().set_cpu_status(current_status);
+
+            while let Some(thread) = self.threads_queue.advance_circular() {
+                if thread.is_dead() {
                     continue;
                 }
 
-                let cpu_contexts = task.cpu_contexts();
-                if let Some((cpu_status, priority)) = Self::choose_context(cpu_contexts, None, true)
-                {
-                    return (cpu_status, priority, true);
+                let context = thread.context();
+                let status = context.status();
+
+                let mut choose_context = move |set_runnable: bool| {
+                    if set_runnable {
+                        context.set_status(ContextStatus::Runnable);
+                    }
+                    let task_pid = thread.task().pid();
+                    let address_space_changed = task_pid != current_pid;
+
+                    let priority = context.priority();
+                    let cpu_status = context.cpu_status();
+                    (cpu_status, priority, address_space_changed)
+                };
+
+                match status {
+                    ContextStatus::Runnable => return choose_context(false),
+                    ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
+                        return choose_context(true);
+                    }
+                    ContextStatus::Sleeping(_) => continue,
                 }
             }
 
+            // TODO: fallback to the idle thread? for now the idle thread is just a part of the queue
             unreachable!("context switch failed")
         }
     }
 
     /// appends a task to the end of the scheduler taskes list
     /// returns the pid of the added task
-    fn add_task(&mut self, mut task: Task) -> Pid {
+    fn add_task(&mut self, task: Arc<Task>, root_thread: Arc<Thread>) -> Pid {
         let pid = self.pids.insert(()) as Pid;
-        task.set_pid(pid);
-        self.tasks.push_back(task);
+        unsafe { task.set_pid(pid) };
 
-        debug!(
-            Scheduler,
-            "Task {} ({}) ADDED",
-            pid,
-            self.tasks.tail().unwrap().name()
-        );
+        self.tasks_queue.push_back(task.clone());
+        self.threads_queue.push_back(root_thread);
+
+        let name = task.name();
+
+        debug!(Scheduler, "Task {} ({}) ADDED", pid, name);
         pid
+    }
+
+    /// appends a thread to the end of the scheduler threads list
+    /// returns the tid of the added thread
+    fn add_thread(&mut self, thread: Arc<Thread>) {
+        self.threads_queue.push_back(thread);
     }
 
     /// finds a task where executing `condition` on returns true and returns it
@@ -371,9 +230,9 @@ impl Scheduler {
     where
         C: Fn(&Task) -> bool,
     {
-        for task in self.tasks.iter() {
+        for task in self.tasks_queue.iter() {
             if condition(task) {
-                return Some(task);
+                return Some(&**task);
             }
         }
 
@@ -386,17 +245,16 @@ impl Scheduler {
     where
         T: FnMut(&Task),
     {
-        for task in self.tasks.iter() {
+        for task in self.tasks_queue.iter() {
             then(task);
         }
     }
 
     /// attempt to remove a task where executing `condition` on returns true, returns the removed task info
     pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
-        let result = self
-            .tasks
-            .remove_where(|task| condition(task))
-            .map(|task| TaskInfo::from(&task.inner));
+        self.threads_queue.remove_where(|thread| thread.is_dead());
+        let task = self.tasks_queue.remove_where(|task| condition(task));
+        let result = task.map(|task| TaskInfo::from(&*task));
 
         if let Some(ref info) = result {
             self.pids.remove(info.pid as usize);
@@ -407,7 +265,7 @@ impl Scheduler {
     #[inline(always)]
     /// whether or not has been properly initialized using `init`
     pub fn inited(&self) -> bool {
-        self.tasks.len() > 0
+        self.tasks_queue.len() > 0
     }
 }
 
@@ -444,17 +302,24 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
-fn this_ptr() -> *const Task {
+fn this_thread_ptr() -> *const Thread {
     let read = SCHEDULER.read();
-    let curr = read.current();
+    let curr = read.current_thread();
     curr
 }
 
 /// Returns a static reference to the current task
 /// # Safety
 /// Safe because the current Task is always alive as long as there is code executing
-pub fn this() -> &'static Task {
-    unsafe { &*this_ptr() }
+pub fn this_task() -> Arc<Task> {
+    this_thread().task().clone()
+}
+
+/// Returns a static reference to the current task
+/// # Safety
+/// Safe because the current Thread is always alive as long as there is code executing
+pub fn this_thread() -> &'static Thread {
+    unsafe { &*this_thread_ptr() }
 }
 
 /// acquires lock on scheduler and finds a task where executing `condition` on returns true and returns the result of `map` on that task
@@ -477,8 +342,13 @@ where
 }
 
 /// acquires lock on scheduler and adds a task to it
-fn add(task: Task) -> Pid {
-    SCHEDULER.write().add_task(task)
+fn add(task: Arc<Task>, root_thread: Arc<Thread>) -> Pid {
+    SCHEDULER.write().add_task(task, root_thread)
+}
+
+/// acquires lock on scheduler and adds a thread to it
+fn add_thread(thread: Arc<Thread>) {
+    SCHEDULER.write().add_thread(thread)
 }
 
 /// returns the result of `then` if a task was found

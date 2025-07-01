@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 
 use crate::{
@@ -5,8 +6,8 @@ use crate::{
     arch::{disable_interrupts, enable_interrupts},
     memory::paging::MapToError,
     threading::{
-        cpu_context::{Cid, ContextPriority},
-        this,
+        cpu_context::{Cid, ContextPriority, Thread},
+        this_task,
     },
     time,
     utils::types::Name,
@@ -37,8 +38,8 @@ use super::{
 
 #[unsafe(no_mangle)]
 pub fn task_exit(code: usize) -> ! {
-    let current = super::this();
-    current.kill(code, None);
+    let current_task = super::this_task();
+    current_task.kill(code, None);
 
     thread_yield();
     // current becomes invalid here
@@ -47,8 +48,8 @@ pub fn task_exit(code: usize) -> ! {
 }
 
 pub fn thread_exit(code: usize) -> ! {
-    let current = super::this();
-    current.kill_current_thread(code);
+    let current = super::this_thread();
+    current.kill_thread(code);
 
     thread_yield();
     // context becomes invalid here
@@ -70,8 +71,8 @@ pub unsafe fn thread_sleep_for_ms(ms: u64) {
     #[cfg(debug_assertions)]
     let curr_time = time!(ms);
 
-    let current = super::this();
-    unsafe { current.context_sleep_for_ms(ms) };
+    let current = super::this_thread();
+    unsafe { current.context().sleep_for_ms(ms) };
     thread_yield();
     // makes sure the thread slept for the correct amount of time
     #[cfg(debug_assertions)]
@@ -156,20 +157,22 @@ fn spawn_inner(
     name: Name,
     flags: SpawnFlags,
     structures: AbiStructures,
-    create_task: impl FnOnce(Name, Pid, Box<PathBuf>) -> Result<Task, SpawnError>,
+    create_task: impl FnOnce(Name, Pid, Box<PathBuf>) -> Result<(Arc<Task>, Arc<Thread>), SpawnError>,
 ) -> Result<Pid, SpawnError> {
-    let this_task = this().state();
+    let this_task = this_task();
+    let this_state = this_task.state();
+
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        this_task.cwd()
+        this_state.cwd()
     } else {
         make_path!("ram", "")
     };
 
-    let current = super::this();
-    let current_pid = current.pid();
+    let current_task = super::this_task();
+    let current_pid = current_task.pid();
 
     let cwd = Box::new(cwd.into_owned().unwrap());
-    let task = create_task(name, current_pid, cwd)?;
+    let (task, root_thread) = create_task(name, current_pid, cwd)?;
 
     let provide_resources = || {
         let mut state = task.state_mut();
@@ -177,11 +180,11 @@ fn spawn_inner(
             unreachable!();
         };
 
-        drop(this_task);
-        let mut this_task = this().state_mut();
+        drop(this_state);
+        let mut this_state = this_task.state_mut();
 
         let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-            this_task.clone_resources()
+            this_state.clone_resources()
         } else {
             // clone only necessary resources
             let mut resources = heapless::Vec::<usize, 3>::new();
@@ -200,7 +203,7 @@ fn spawn_inner(
             if resources.is_empty() {
                 return Ok(());
             }
-            this_task.clone_specific_resources(&resources)?
+            this_state.clone_specific_resources(&resources)?
         };
 
         task_resources.overwrite_resources(clone);
@@ -209,7 +212,7 @@ fn spawn_inner(
 
     provide_resources().map_err(|()| FSError::InvalidResource)?;
 
-    let pid = super::add(task);
+    let pid = super::add(task, root_thread);
     Ok(pid)
 }
 
@@ -253,8 +256,11 @@ pub fn thread_spawn(
     argument_ptr: VirtAddr,
     priority: Option<ContextPriority>,
 ) -> Result<Cid, MapToError> {
-    let this = this();
-    this.append_context(entry_point, argument_ptr, priority)
+    let this = this_task();
+    let thread = Task::create_thread_from_task(&this, entry_point, argument_ptr, priority)?;
+    let cid = unsafe { thread.context().cid() };
+    super::add_thread(thread);
+    Ok(cid)
 }
 
 pub fn kernel_thread_spawn<T: 'static>(
@@ -275,7 +281,8 @@ pub fn kernel_thread_spawn<T: 'static>(
 pub fn chdir(new_dir: Path) -> FSResult<()> {
     VFS_STRUCT.read().verify_path_dir(new_dir)?;
 
-    let mut state = this().state_mut();
+    let task = this_task();
+    let mut state = task.state_mut();
     let cwd = state.cwd_mut();
 
     if new_dir.is_absolute() {
@@ -328,8 +335,8 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
 #[unsafe(no_mangle)]
 /// can only Err if pid doesn't belong to process
 pub fn pkill(pid: Pid) -> Result<(), ()> {
-    let current = super::this();
-    let current_pid = current.pid();
+    let current_task = super::this_task();
+    let current_pid = current_task.pid();
 
     let (process_ppid, process_pid) =
         super::find(|p| p.pid() == pid, |task| (task.ppid(), task.pid())).ok_or(())?;
@@ -346,7 +353,7 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
 /// returns the new program break ptr
 /// on fail returns null
 pub fn sbrk(amount: isize) -> Result<*mut u8, ErrorStatus> {
-    let current = super::this();
-    let mut state = current.state_mut();
+    let current_task = super::this_task();
+    let mut state = current_task.state_mut();
     state.extend_data_by(amount).ok_or(ErrorStatus::OutOfMemory)
 }

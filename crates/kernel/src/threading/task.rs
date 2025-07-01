@@ -4,16 +4,13 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
+use crate::utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::{
     memory::paging::MapToError,
-    threading::cpu_context::{self, Cid, ContextPriority},
+    threading::cpu_context::{Cid, ContextPriority, Thread},
     utils::types::Name,
 };
-use crate::{
-    threading::cpu_context::Context,
-    utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
-};
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use safa_utils::abi::raw::processes::AbiStructures;
 use serde::Serialize;
 
@@ -281,105 +278,26 @@ impl TaskState {
     }
 }
 
-pub(super) struct CPUContexts {
-    contexts: Vec<Context>,
-    current_context_index: usize,
-    next_cid: cpu_context::Cid,
-    default_priority: ContextPriority,
-}
-
-impl CPUContexts {
-    pub fn create(status: CPUStatus, default_priority: ContextPriority) -> Self {
-        let context = Context::new(0, status, default_priority);
-        Self::new(context, default_priority)
-    }
-
-    pub fn new(root_context: Context, default_priority: ContextPriority) -> Self {
-        Self {
-            contexts: alloc::vec![root_context],
-            current_context_index: 0,
-            next_cid: 1,
-            default_priority,
-        }
-    }
-
-    pub fn current_mut(&mut self) -> &mut Context {
-        &mut self.contexts[self.current_context_index]
-    }
-
-    /// Allocate a new context and add it to the list of contexts given an entry point.
-    /// Returns the id of the new context.
-    pub fn allocate_add(
-        &mut self,
-        root_page_table: &mut PhysPageTable,
-        entry_point: VirtAddr,
-        argument_ptr: VirtAddr,
-        priority: Option<ContextPriority>,
-        userspace: bool,
-    ) -> Result<cpu_context::Cid, MapToError> {
-        let cid = self.next_cid;
-        self.next_cid += 1;
-
-        let cpu_status = unsafe {
-            CPUStatus::create_child(
-                root_page_table,
-                entry_point,
-                cid,
-                argument_ptr.into_ptr::<()>(),
-                userspace,
-            )?
-        };
-
-        self.contexts.push(Context::new(
-            cid,
-            cpu_status,
-            priority.unwrap_or(self.default_priority),
-        ));
-        Ok(cid)
-    }
-
-    pub fn set_current_cpu_status(&mut self, cpu_status: CPUStatus) {
-        self.current_mut().set_cpu_status(cpu_status);
-    }
-
-    pub fn sleep_for_ms(&mut self, ms: u64) {
-        self.current_mut().sleep_for_ms(ms);
-    }
-
-    /// Advance the current context to the next one. wraps around if necessary.
-    ///
-    /// will return the next context on wrap returns None
-    pub fn advance(&mut self) -> Option<&mut Context> {
-        if self.current_context_index + 1 < self.contexts.len() {
-            self.current_context_index += 1;
-            Some(self.current_mut())
-        } else {
-            self.current_context_index = 0;
-            None
-        }
-    }
-
-    pub fn exit_current(&mut self) -> (Cid, bool) {
-        let context = self.contexts.swap_remove(self.current_context_index);
-        (context.cid(), self.contexts.is_empty())
-    }
-}
-
 pub struct Task {
     name: Name,
     /// constant
-    pid: Pid,
+    pid: UnsafeCell<Pid>,
     /// Task may change it's parent pid
     ppid: AtomicU32,
     state: RwLock<TaskState>,
-    cpu_contexts: UnsafeCell<CPUContexts>,
     is_alive: AtomicBool,
     userspace_task: bool,
+
+    next_cid: AtomicU32,
+    default_priority: ContextPriority,
+
+    threads: Mutex<Vec<Arc<Thread>>>,
+    pub context_count: AtomicU32,
 }
 
 impl Task {
     pub const fn pid(&self) -> Pid {
-        self.pid
+        unsafe { *self.pid.get() }
     }
 
     pub fn ppid(&self) -> Pid {
@@ -390,11 +308,13 @@ impl Task {
         &self.ppid
     }
 
-    pub(super) const fn set_pid(&mut self, pid: Pid) {
-        self.pid = pid;
+    pub(super) const unsafe fn set_pid(&self, pid: Pid) {
+        unsafe {
+            self.pid.get().write(pid);
+        }
     }
 
-    /// Creates a new task
+    /// Creates a new task returning a combination of the task and the main thread
     /// # Panics
     /// if `cwd` or `name` have a length greater than 128 or 64 bytes respectively
     pub fn new(
@@ -407,16 +327,21 @@ impl Task {
         data_break: VirtAddr,
         default_priority: ContextPriority,
         userspace_task: bool,
-    ) -> Self {
+    ) -> (Arc<Self>, Arc<Thread>) {
         let data_break = VirtAddr::from(align_up(data_break.into_raw(), PAGE_SIZE));
-        let cpu_contexts = CPUContexts::create(status, default_priority);
 
-        Self {
+        let task = Arc::new(Self {
             name,
-            pid,
+            pid: UnsafeCell::new(pid),
+
             ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
-            cpu_contexts: UnsafeCell::new(cpu_contexts),
+            threads: Mutex::new(Vec::new()),
+
+            next_cid: AtomicU32::new(1),
+            context_count: AtomicU32::new(1),
+            default_priority,
+
             state: RwLock::new(TaskState::Alive(AliveTask {
                 root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
@@ -426,7 +351,63 @@ impl Task {
                 cwd,
             })),
             userspace_task,
-        }
+        });
+
+        let thread = Arc::new(Self::create_thread_from_status(&task, 0, status, None));
+        task.threads.lock().push(thread.clone());
+
+        (task, thread)
+    }
+
+    /// Creates a new thread from a CPU status giving it a `cid` and everything
+    fn create_thread_from_status(
+        task: &Arc<Task>,
+        cid: Cid,
+        cpu_status: CPUStatus,
+        priority: Option<ContextPriority>,
+    ) -> Thread {
+        Thread::new(
+            cid,
+            cpu_status,
+            task,
+            priority.unwrap_or(task.default_priority),
+        )
+    }
+
+    /// Creates a new thread from a CPU status giving it a `cid` and everything
+    /// adds to the task's context count so it tracks this thread
+    pub fn create_thread_from_task(
+        task: &Arc<Task>,
+        entry_point: VirtAddr,
+        argument_ptr: VirtAddr,
+        priority: Option<ContextPriority>,
+    ) -> Result<Arc<Thread>, MapToError> {
+        let mut write_guard = task.state_mut();
+        let state = write_guard
+            .alive_mut()
+            .expect("tried to create a thread in a task that is not alive");
+        let page_table = &mut state.root_page_table;
+
+        let context_id = task.next_cid.fetch_add(1, Ordering::SeqCst);
+
+        let cpu_status = unsafe {
+            CPUStatus::create_child(
+                page_table,
+                entry_point,
+                context_id,
+                argument_ptr.into_ptr::<()>(),
+                task.userspace_task,
+            )?
+        };
+
+        let thread = Arc::new(Self::create_thread_from_status(
+            task, context_id, cpu_status, priority,
+        ));
+
+        task.threads.lock().push(thread.clone());
+        task.context_count.fetch_add(1, Ordering::Relaxed);
+
+        Ok(thread)
     }
 
     /// Creates a new task from an elf
@@ -441,7 +422,7 @@ impl Task {
         env: &[&[u8]],
         default_priority: ContextPriority,
         structures: AbiStructures,
-    ) -> Result<Self, ElfError> {
+    ) -> Result<(Arc<Self>, Arc<Thread>), ElfError> {
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;
@@ -449,6 +430,7 @@ impl Task {
         let context = unsafe {
             CPUStatus::create_root(&mut page_table, args, env, structures, entry_point, true)?
         };
+
         Ok(Self::new(
             name,
             pid,
@@ -478,78 +460,29 @@ impl Task {
         self.state.write()
     }
 
-    pub fn kill_current_thread(&self, exit_code: usize) {
-        let _state = self.state.write();
-        let (cid, task_dead) = unsafe { self.cpu_contexts().exit_current() };
-        debug!(
-            Task,
-            "Task {} ({}) THREAD EXITED thread CID: {}, exit code: {}, task dead: {}",
-            self.pid(),
-            self.name(),
-            cid,
-            exit_code,
-            task_dead
-        );
-        if task_dead {
-            drop(_state);
-            self.kill(exit_code, None);
-        }
-    }
-
     /// kills the task
     /// if `killed_by` is `None` the task will be killed by itself
     pub fn kill(&self, exit_code: usize, killed_by: Option<Pid>) {
+        let threads = self.threads.lock();
         let mut state = self.state.write();
-        let killed_by = killed_by.unwrap_or(self.pid);
+        let killed_by = killed_by.unwrap_or(self.pid());
 
         state.die(exit_code, killed_by);
         self.is_alive
             .store(false, core::sync::atomic::Ordering::Relaxed);
 
+        for thread in &*threads {
+            thread.mark_dead();
+        }
+
         debug!(
             Task,
             "Task {} ({}) TERMINATED with code {} by {}",
-            self.pid,
+            self.pid(),
             self.name(),
             exit_code,
             killed_by
         );
-    }
-
-    pub(super) const unsafe fn cpu_contexts(&self) -> &mut CPUContexts {
-        unsafe { &mut *self.cpu_contexts.get() }
-    }
-
-    /// Puts the current thread to sleep for the specified number of milliseconds.
-    /// unsafe because the current thread has to not be interrupted until the operation is complete.
-    pub unsafe fn context_sleep_for_ms(&self, ms: u64) {
-        unsafe {
-            self.cpu_contexts().sleep_for_ms(ms);
-        }
-    }
-
-    pub fn append_context(
-        &self,
-        entry_point: VirtAddr,
-        argument_ptr: VirtAddr,
-        piritory: Option<ContextPriority>,
-    ) -> Result<cpu_context::Cid, MapToError> {
-        let mut state_mut = self.state.write();
-        let alive = state_mut
-            .alive_mut()
-            .expect("attempt to spawn a thread on a dead Task (process)");
-        let page_table = &mut alive.root_page_table;
-
-        unsafe {
-            let contexts = self.cpu_contexts();
-            contexts.allocate_add(
-                page_table,
-                entry_point,
-                argument_ptr,
-                piritory,
-                self.userspace_task,
-            )
-        }
     }
 
     fn at(&self) -> VirtAddr {
@@ -620,7 +553,7 @@ impl From<&Task> for TaskInfo {
 
         Self {
             ppid,
-            pid: task.pid,
+            pid: task.pid(),
             name,
             last_resource_id,
             exit_code,

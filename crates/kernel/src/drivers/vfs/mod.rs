@@ -8,7 +8,7 @@ use crate::{
     devices::{self, Device},
     error, limine,
     memory::{frame_allocator, paging::PAGE_SIZE},
-    threading::this,
+    threading::this_task,
     time,
     utils::{
         errors::{ErrorStatus, IntoErr},
@@ -554,7 +554,8 @@ impl VFS {
             self.resolve_abs_path(path)
         } else {
             let relative_parts = path.parts().unwrap_or_default();
-            let state = this().state();
+            let task = this_task();
+            let state = task.state();
             let cwd = state.cwd();
             self.resolve_relative_path(cwd, relative_parts)
         }
