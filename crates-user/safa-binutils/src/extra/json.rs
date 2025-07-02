@@ -90,7 +90,7 @@ impl ProcessInfo {
         let mut longest_name = 0;
         let mut longest_pid = 0;
 
-        let dir = std::fs::read_dir("rod:/")?;
+        let dir = std::fs::read_dir("rod:/tasks")?;
 
         for entry in dir {
             let entry = entry.unwrap();
