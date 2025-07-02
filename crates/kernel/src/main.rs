@@ -145,12 +145,23 @@ pub fn khalt() -> ! {
 
 #[allow(unused_imports)]
 use core::panic::PanicInfo;
+use core::sync::atomic::AtomicBool;
+
+static PANCIKED: AtomicBool = AtomicBool::new(false);
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     unsafe {
         arch::disable_interrupts();
     }
+
+    if PANCIKED.load(core::sync::atomic::Ordering::Relaxed) {
+        unsafe { arch::serial::SERIAL.force_unlock() };
+        error!("\x1B[31mkernel panic within a panic:\n{info}\n\x1B[0mno stack trace");
+        khalt()
+    }
+    PANCIKED.store(true, core::sync::atomic::Ordering::Relaxed);
+
     let stack = unsafe { logging::StackTrace::current() };
     unsafe {
         arch::serial::SERIAL.force_unlock();
