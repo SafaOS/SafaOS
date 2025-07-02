@@ -52,6 +52,8 @@ pub trait Testable {
 pub enum TestPiritory {
     // crate::arch tests must be ran before other tests to ensure fail order
     Highest,
+    // memory tests
+    High,
     Medium,
     // tests that run last, given to this module tests
     Lowest,
@@ -64,6 +66,8 @@ const fn get_test_piritory<T: ?Sized>() -> TestPiritory {
             TestPiritory::Lowest
         } else if const_str::contains!(name, "arch::") {
             TestPiritory::Highest
+        } else if const_str::contains!(name, "memory::") {
+            TestPiritory::High
         } else {
             TestPiritory::Medium
         }
@@ -84,6 +88,7 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     let tests_iter = tests
         .iter()
         .filter(|x| x.piritory() == TestPiritory::Highest);
+    let tests_iter = tests_iter.chain(tests.iter().filter(|x| x.piritory() == TestPiritory::High));
     let tests_iter = tests_iter.chain(
         tests
             .iter()
