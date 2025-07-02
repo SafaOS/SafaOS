@@ -109,52 +109,9 @@ impl Scheduler {
     }
 
     #[inline(always)]
-    fn current_thread(&self) -> &Thread {
+    fn current_thread(&self) -> &Arc<Thread> {
         unsafe { self.threads_queue.current().unwrap_unchecked() }
     }
-
-    /// from given cpu contexts choose a context to run
-    /// if `set_current_status` is `Some`, set the current (first) context's cpu status to the given status
-    ///
-    /// if `pick_first` is `true`, pick the first context in the list otherwise pick the next context in the list (completely ignoring the first context)
-    ///
-    /// returns None if no context is available
-    // fn choose_context(
-    //     cpu_contexts: &mut CPUContexts,
-    //     set_current_status: Option<CPUStatus>,
-    //     pick_first: bool,
-    // ) -> Option<(NonNull<CPUStatus>, ContextPriority)> {
-    //     if let Some(status) = set_current_status {
-    //         cpu_contexts.set_current_cpu_status(status);
-    //     }
-
-    //     fn pick_context_inner(
-    //         context: &mut cpu_context::Context,
-    //     ) -> Option<(NonNull<CPUStatus>, ContextPriority)> {
-    //         match context.status() {
-    //             ContextStatus::Runnable => Some((context.cpu_status(), context.priority())),
-    //             ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
-    //                 context.set_status(ContextStatus::Runnable);
-    //                 Some((context.cpu_status(), context.priority()))
-    //             }
-    //             ContextStatus::Sleeping(_) => None,
-    //         }
-    //     }
-
-    //     if pick_first {
-    //         let current_context = cpu_contexts.current_mut();
-    //         if let Some((cpu_status, priority)) = pick_context_inner(current_context) {
-    //             return Some((cpu_status, priority));
-    //         }
-    //     }
-
-    //     while let Some(context) = cpu_contexts.advance() {
-    //         if let Some((cpu_status, priority)) = pick_context_inner(context) {
-    //             return Some((cpu_status, priority));
-    //         }
-    //     }
-    //     None
-    // }
 
     /// context switches into next task, takes current context outputs new context
     /// returns the new context and a boolean indicating if the address space has changed
@@ -179,10 +136,16 @@ impl Scheduler {
                 let status = context.status();
 
                 let mut choose_context = move |set_runnable: bool| {
+                    let task = thread.task();
+                    debug_assert!(
+                        task.is_alive(),
+                        "thread didn't get marked as dead when Task was killed..."
+                    );
+
                     if set_runnable {
                         context.set_status(ContextStatus::Runnable);
                     }
-                    let task_pid = thread.task().pid();
+                    let task_pid = task.pid();
                     let address_space_changed = task_pid != current_pid;
 
                     let priority = context.priority();
@@ -252,8 +215,11 @@ impl Scheduler {
 
     /// attempt to remove a task where executing `condition` on returns true, returns the removed task info
     pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
-        self.threads_queue.remove_where(|thread| thread.is_dead());
         let task = self.tasks_queue.remove_where(|task| condition(task));
+        if let Some(ref task) = task {
+            self.threads_queue
+                .remove_where(|thread| thread.task().pid() == task.pid());
+        }
         let result = task.map(|task| TaskInfo::from(&*task));
 
         if let Some(ref info) = result {
@@ -302,12 +268,6 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
-fn this_thread_ptr() -> *const Thread {
-    let read = SCHEDULER.read();
-    let curr = read.current_thread();
-    curr
-}
-
 /// Returns a static reference to the current task
 /// # Safety
 /// Safe because the current Task is always alive as long as there is code executing
@@ -318,8 +278,10 @@ pub fn this_task() -> Arc<Task> {
 /// Returns a static reference to the current task
 /// # Safety
 /// Safe because the current Thread is always alive as long as there is code executing
-pub fn this_thread() -> &'static Thread {
-    unsafe { &*this_thread_ptr() }
+pub fn this_thread() -> Arc<Thread> {
+    let read = SCHEDULER.read();
+    let curr = read.current_thread();
+    curr.clone()
 }
 
 /// acquires lock on scheduler and finds a task where executing `condition` on returns true and returns the result of `map` on that task
