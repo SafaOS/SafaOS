@@ -46,35 +46,32 @@ impl Thread {
     }
 
     pub fn is_dead(&self) -> bool {
-        self.is_dead.load(core::sync::atomic::Ordering::Relaxed)
+        self.is_dead.load(core::sync::atomic::Ordering::SeqCst)
     }
 
-    pub fn mark_dead(&self) {
+    pub fn mark_dead(&self, task_dead: bool) {
         self.is_dead
             .store(true, core::sync::atomic::Ordering::SeqCst);
+
+        debug!(
+            Task,
+            "Task {} ({}) THREAD EXITED thread CID: {}, task dead: {task_dead}",
+            self.task().pid(),
+            self.task().name(),
+            unsafe { self.context().cid() },
+        );
     }
 
     pub fn kill_thread(&self, exit_code: usize) {
         let task = &self.parent_task;
         let _state = task.state_mut();
 
-        self.mark_dead();
-
         let task_dead = task
             .context_count
             .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
-            == 0;
+            <= 1;
 
-        let cid = unsafe { self.context().cid() };
-        debug!(
-            Task,
-            "Task {} ({}) THREAD EXITED thread CID: {}, exit code: {}, task dead: {}",
-            task.pid(),
-            task.name(),
-            cid,
-            exit_code,
-            task_dead
-        );
+        self.mark_dead(task_dead);
 
         if task_dead {
             drop(_state);

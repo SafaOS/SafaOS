@@ -472,7 +472,7 @@ impl Task {
             .store(false, core::sync::atomic::Ordering::Relaxed);
 
         for thread in &*threads {
-            thread.mark_dead();
+            thread.mark_dead(true);
         }
 
         debug!(
