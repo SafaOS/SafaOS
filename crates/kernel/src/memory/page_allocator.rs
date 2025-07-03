@@ -12,9 +12,8 @@ use lazy_static::lazy_static;
 use crate::{debug, utils::locks::Mutex};
 
 use super::{
-    align_up, frame_allocator,
-    paging::{current_higher_root_table, EntryFlags, MapToError, Page, PAGE_SIZE},
-    VirtAddr,
+    VirtAddr, align_up, frame_allocator,
+    paging::{EntryFlags, MapToError, PAGE_SIZE, Page, current_higher_root_table},
 };
 
 /// a bitmap page allocator which allocates contiguous virtual memory pages
@@ -186,7 +185,7 @@ impl PageAllocator {
                 root_table.map_to(
                     page,
                     frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
-                    EntryFlags::WRITE,
+                    EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
                 )?
             }
         }
@@ -267,44 +266,51 @@ unsafe impl Allocator for Mutex<PageAllocator> {
         }
     }
 
-    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) { unsafe {
-        self.lock().deallocmut(ptr.as_ptr(), layout.size());
-    }}
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+        unsafe {
+            self.lock().deallocmut(ptr.as_ptr(), layout.size());
+        }
+    }
 
     unsafe fn grow(
         &self,
         ptr: core::ptr::NonNull<u8>,
         old_layout: core::alloc::Layout,
         new_layout: core::alloc::Layout,
-    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> { unsafe {
-        if old_layout.size() % PAGE_SIZE != 0 {
-            let actual_size = align_up(old_layout.size(), PAGE_SIZE);
-            if actual_size >= new_layout.size() {
-                let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
-                return Ok(core::ptr::NonNull::new_unchecked(slice));
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        unsafe {
+            if old_layout.size() % PAGE_SIZE != 0 {
+                let actual_size = align_up(old_layout.size(), PAGE_SIZE);
+                if actual_size >= new_layout.size() {
+                    let slice =
+                        core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
+                    return Ok(core::ptr::NonNull::new_unchecked(slice));
+                }
             }
+
+            let new_ptr = self.allocate(new_layout)?;
+            core::ptr::copy_nonoverlapping(
+                ptr.as_ptr(),
+                new_ptr.as_ptr() as *mut u8,
+                old_layout.size(),
+            );
+            self.deallocate(ptr, old_layout);
+
+            Ok(new_ptr)
         }
-
-        let new_ptr = self.allocate(new_layout)?;
-        core::ptr::copy_nonoverlapping(
-            ptr.as_ptr(),
-            new_ptr.as_ptr() as *mut u8,
-            old_layout.size(),
-        );
-        self.deallocate(ptr, old_layout);
-
-        Ok(new_ptr)
-    }}
+    }
 
     unsafe fn shrink(
         &self,
         ptr: core::ptr::NonNull<u8>,
         _: core::alloc::Layout,
         new_layout: core::alloc::Layout,
-    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> { unsafe {
-        let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
-        Ok(core::ptr::NonNull::new_unchecked(slice))
-    }}
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        unsafe {
+            let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
+            Ok(core::ptr::NonNull::new_unchecked(slice))
+        }
+    }
 }
 
 lazy_static! {
