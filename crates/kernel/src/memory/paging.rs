@@ -1,5 +1,5 @@
 pub const PAGE_SIZE: usize = 4096;
-use crate::memory::PhysAddr;
+use crate::{arch, memory::PhysAddr};
 use bitflags::bitflags;
 use core::{
     fmt::{Debug, LowerHex},
@@ -8,12 +8,11 @@ use core::{
 use thiserror::Error;
 
 use super::{
-    align_down,
+    VirtAddr, align_down,
     frame_allocator::{self, Frame, FramePtr},
-    VirtAddr,
 };
 
-pub use crate::arch::paging::{current_higher_root_table, current_lower_root_table, PageTable};
+pub use crate::arch::paging::{PageTable, current_higher_root_table, current_lower_root_table};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Page {
@@ -73,7 +72,40 @@ impl Iterator for IterPage {
 }
 
 impl PageTable {
-    /// Map `page_num` pages starting at `start_virt_addr` to frames starting at `start_phys_addr`
+    fn flush_cache(&mut self) {
+        unsafe {
+            if self as *mut _ == current_higher_root_table().as_ptr()
+                || self as *mut _ == current_lower_root_table().as_ptr()
+            {
+                arch::flush_cache();
+            }
+        }
+    }
+
+    /// maps a virtual `Page` to physical `Frame`
+    /// flushes the cache if necessary
+    pub unsafe fn map_to(
+        &mut self,
+        page: Page,
+        frame: Frame,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        unsafe {
+            self.map_to_uncached(page, frame, flags)?;
+            self.flush_cache();
+            Ok(())
+        }
+    }
+
+    /// unmaps a page, flushes the cache if necessary
+    pub unsafe fn unmap(&mut self, page: Page) {
+        unsafe {
+            self.unmap_uncached(page);
+            self.flush_cache();
+        }
+    }
+
+    /// Map `page_num` pages starting at `start_virt_addr` to frames starting at `start_phys_addr` and flushes cache if successful
     pub unsafe fn map_contiguous_pages(
         &mut self,
         start_virt_addr: VirtAddr,
@@ -92,10 +124,58 @@ impl PageTable {
         let iter = page_iter.zip(frame_iter);
         for (page, frame) in iter {
             unsafe {
-                self.map_to(page, frame, flags)?;
+                self.map_to_uncached(page, frame, flags)?;
             }
         }
         Ok(())
+    }
+
+    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
+    /// returns Err if any of the frames couldn't be allocated
+    /// the mapped pages are zeroed
+    ///
+    /// flushes the cache if successful
+    pub unsafe fn alloc_map(
+        &mut self,
+        from: VirtAddr,
+        to: VirtAddr,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        let from_page = Page::containing_address(from);
+        let to_page = Page::containing_address(to);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+            let virt_addr = frame.virt_addr();
+            unsafe {
+                self.map_to_uncached(page, frame, flags)?;
+            }
+
+            unsafe {
+                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
+            }
+        }
+
+        self.flush_cache();
+        Ok(())
+    }
+
+    /// Deallocates and unmaps pages from `from` to `to` then flushes the cache if necessary
+    pub unsafe fn free_unmap(&mut self, from: VirtAddr, to: VirtAddr) {
+        let from_page = Page::containing_address(from);
+        let to_page = Page::containing_address(to);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            unsafe {
+                self.unmap_uncached(page);
+            }
+        }
+        self.flush_cache();
     }
 }
 
@@ -155,39 +235,11 @@ impl PhysPageTable {
 
     /// creates a new PhysPageTable from the current pml4 table
     /// takes ownership of the current lower half root page table meaning it will free it when the PhysPageTable is dropped
-    pub unsafe fn from_current() -> Self { unsafe {
-        let inner = current_lower_root_table();
-        Self { inner }
-    }}
-
-    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
-    /// returns Err if any of the frames couldn't be allocated
-    /// the mapped pages are zeroed
-    pub fn alloc_map(
-        &mut self,
-        from: VirtAddr,
-        to: VirtAddr,
-        flags: EntryFlags,
-    ) -> Result<(), MapToError> {
-        let from_page = Page::containing_address(from);
-        let to_page = Page::containing_address(to);
-
-        let iter = Page::iter_pages(from_page, to_page);
-
-        for page in iter {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-            let virt_addr = frame.virt_addr();
-            unsafe {
-                self.map_to(page, frame, flags)?;
-            }
-
-            unsafe {
-                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
-            }
+    pub unsafe fn from_current() -> Self {
+        unsafe {
+            let inner = current_lower_root_table();
+            Self { inner }
         }
-
-        Ok(())
     }
 
     pub fn phys_addr(&self) -> PhysAddr {

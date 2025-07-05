@@ -1,12 +1,12 @@
 use bitflags::bitflags;
 
 use crate::{
+    PhysAddr, VirtAddr,
     arch::aarch64::registers::SYS_MAIR,
     memory::{
         frame_allocator::{self, Frame, FramePtr},
         paging::{EntryFlags, MapToError, Page},
     },
-    PhysAddr, VirtAddr,
 };
 use core::{
     arch::asm,
@@ -162,15 +162,17 @@ impl Entry {
     /// otherwise treat the frame as a page table and deallocate it
     /// # Safety
     /// the caller must ensure that the entry is not used anymore
-    unsafe fn free(&mut self, level: u8) { unsafe {
-        let frame = self.frame().unwrap();
+    unsafe fn free(&mut self, level: u8) {
+        unsafe {
+            let frame = self.frame().unwrap();
 
-        if level != 0 {
-            let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
-            table.free(level);
+            if level != 0 {
+                let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
+                table.free(level);
+            }
+            self.deallocate();
         }
-        self.deallocate();
-    }}
+    }
 
     /// deallocates a page table entry and invalidates it
     /// # Safety
@@ -226,10 +228,10 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let ttbr1_el1: PhysAddr = page_table.phys_addr();
     unsafe {
         asm!("
-        msr ttbr1_el1, {}
-        tlbi VMALLE1
-        dsb ISH
-        isb", in(reg) ttbr1_el1.into_raw());
+      msr ttbr1_el1, {}
+      tlbi VMALLE1
+      dsb ISH
+      isb", in(reg) ttbr1_el1.into_raw());
         let mair = SYS_MAIR;
         mair.sync();
     }
@@ -247,16 +249,18 @@ impl PageTable {
     }
 
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    pub unsafe fn free(&mut self, level: u8) { unsafe {
-        for entry in &mut self.0 {
-            if entry.flags().contains(ArchEntryFlags::PRESENT) {
-                entry.free(level - 1);
+    pub unsafe fn free(&mut self, level: u8) {
+        unsafe {
+            for entry in &mut self.0 {
+                if entry.flags().contains(ArchEntryFlags::PRESENT) {
+                    entry.free(level - 1);
+                }
             }
         }
-    }}
+    }
 
-    /// maps a virtual `Page` to physical `Frame`
-    pub unsafe fn map_to(
+    /// maps a virtual `Page` to physical `Frame` without flushing the cache
+    pub unsafe fn map_to_uncached(
         &mut self,
         page: Page,
         frame: Frame,
@@ -303,23 +307,32 @@ impl PageTable {
         Some(&mut l3[l3_index])
     }
 
-    /// unmaps a page
-    pub unsafe fn unmap(&mut self, page: Page) {
+    /// unmaps a page without flushing the cache
+    pub unsafe fn unmap_uncached(&mut self, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {
+            if entry
+                .frame()
+                .is_some_and(|frame| frame.start_address() == PhysAddr::from(0xbead2000))
+            {
+                crate::serial!("unmapping faulting frame: {entry:?} from {page:?}\n");
+            }
+
             unsafe { entry.deallocate() };
         }
     }
 }
 
 /// Maps architecture specific devices such as the UART serial in aarch64
-pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> { unsafe {
-    let flags = EntryFlags::WRITE;
-    table.map_to(
-        Page::containing_address(super::cpu::PL011BASE.into_virt()),
-        Frame::containing_address(*super::cpu::PL011BASE),
-        flags,
-    )?;
-    Ok(())
-}}
+pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
+    unsafe {
+        let flags = EntryFlags::WRITE;
+        table.map_to(
+            Page::containing_address(super::cpu::PL011BASE.into_virt()),
+            Frame::containing_address(*super::cpu::PL011BASE),
+            flags,
+        )?;
+        Ok(())
+    }
+}

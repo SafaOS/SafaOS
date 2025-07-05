@@ -7,9 +7,8 @@ use crate::{
 };
 
 use super::{
-    align_up,
-    paging::{current_higher_root_table, EntryFlags, Page},
-    VirtAddr,
+    VirtAddr, align_up,
+    paging::{EntryFlags, Page, current_higher_root_table},
 };
 
 pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
@@ -26,14 +25,16 @@ impl Block {
     #[inline]
     /// unsafe because there may be no next block causing UB
     /// use BuddyAllocator::next instead
-    pub unsafe fn next<'b>(&self) -> &'b mut Block { unsafe {
-        let end = (self as *const Self).byte_add(self.size);
-        &mut *end.cast_mut()
-    }}
+    pub unsafe fn next<'b>(&self) -> &'b mut Block {
+        unsafe {
+            let end = (self as *const Self).byte_add(self.size);
+            &mut *end.cast_mut()
+        }
+    }
 
-    pub unsafe fn data(&mut self) -> *mut u8 { unsafe {
-        (self as *mut Self).offset(1).cast()
-    }}
+    pub unsafe fn data(&mut self) -> *mut u8 {
+        unsafe { (self as *mut Self).offset(1).cast() }
+    }
     /// divides self into 2 buddies
     /// returns the right buddy
     /// self is still valid and it points to the left buddy
@@ -142,21 +143,10 @@ impl BuddyAllocator<'_> {
         let size = align_down_to_power_of_2(INIT_HEAP_SIZE - diff);
         let end = start + size;
 
-        let page_range = {
-            let heap_start_page = Page::containing_address(start);
-            let heap_end_page = Page::containing_address(end);
-            Page::iter_pages(heap_start_page, heap_end_page)
-        };
-
         let flags = EntryFlags::WRITE;
         let mut root_table = unsafe { current_higher_root_table() };
-        for page in page_range {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-
-            unsafe {
-                root_table.map_to(page, frame, flags)?;
-            };
+        unsafe {
+            root_table.alloc_map(start, end, flags)?;
         }
 
         debug!(
@@ -296,11 +286,13 @@ impl BuddyAllocator<'_> {
         core::ptr::null_mut()
     }
     /// unsafe because ptr had to be allocated using self
-    pub unsafe fn deallocmut(&mut self, ptr: *mut u8) { unsafe {
-        let block: *mut Block = ptr.byte_sub(size_of::<Block>()).cast();
-        (*block).free = true;
-        self.coalescence_buddies_full();
-    }}
+    pub unsafe fn deallocmut(&mut self, ptr: *mut u8) {
+        unsafe {
+            let block: *mut Block = ptr.byte_sub(size_of::<Block>()).cast();
+            (*block).free = true;
+            self.coalescence_buddies_full();
+        }
+    }
 }
 
 unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
@@ -308,10 +300,12 @@ unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
         self.lock().allocmut(layout)
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unsafe {
-        _ = layout;
-        self.lock().deallocmut(ptr);
-    }}
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe {
+            _ = layout;
+            self.lock().deallocmut(ptr);
+        }
+    }
 }
 
 #[global_allocator]

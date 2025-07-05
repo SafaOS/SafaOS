@@ -56,6 +56,7 @@ pub fn time_ms() -> u64 {
     count / (freq / 1000)
 }
 
+#[allow(unused)]
 #[inline(always)]
 /// Returns the number of microseconds since the CPU was started
 pub fn time_us() -> u64 {

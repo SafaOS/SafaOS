@@ -223,8 +223,8 @@ impl PageTable {
         }
     }
 
-    /// maps a virtual `Page` to physical `Frame`
-    pub unsafe fn map_to(
+    /// maps a virtual `Page` to physical `Frame`, without flushing the cache
+    pub unsafe fn map_to_uncached(
         &mut self,
         page: Page,
         frame: Frame,
@@ -277,8 +277,8 @@ impl PageTable {
         Some(&mut level_1_table[level_1_index])
     }
 
-    /// unmaps a page
-    pub unsafe fn unmap(&mut self, page: Page) {
+    /// unmaps a page without flushing the cache
+    pub unsafe fn unmap_uncached(&mut self, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {

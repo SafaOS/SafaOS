@@ -12,8 +12,8 @@ use lazy_static::lazy_static;
 use crate::{debug, utils::locks::Mutex};
 
 use super::{
-    VirtAddr, align_up, frame_allocator,
-    paging::{EntryFlags, MapToError, PAGE_SIZE, Page, current_higher_root_table},
+    VirtAddr, align_up,
+    paging::{EntryFlags, MapToError, PAGE_SIZE, current_higher_root_table},
 };
 
 /// a bitmap page allocator which allocates contiguous virtual memory pages
@@ -176,19 +176,12 @@ impl PageAllocator {
             .ok_or(MapToError::FrameAllocationFailed)?;
 
         let addr = VirtAddr::from_ptr(ptr);
-        let start_page = Page::containing_address(addr);
-        let end_page = Page::containing_address(addr + (pages * PAGE_SIZE));
 
         let mut root_table = unsafe { current_higher_root_table() };
-        for page in Page::iter_pages(start_page, end_page) {
-            unsafe {
-                root_table.map_to(
-                    page,
-                    frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
-                    EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
-                )?
-            }
+        unsafe {
+            root_table.alloc_map(addr, addr + (pages * PAGE_SIZE), EntryFlags::WRITE)?;
         }
+
         Ok((ptr, pages))
     }
 
@@ -206,14 +199,9 @@ impl PageAllocator {
         let start: VirtAddr = ptr.into();
         let end = start + size;
 
-        let start = Page::containing_address(start);
-        let end = Page::containing_address(end);
-
         let mut root_table = unsafe { current_higher_root_table() };
-        for page in Page::iter_pages(start, end) {
-            unsafe {
-                root_table.unmap(page);
-            }
+        unsafe {
+            root_table.free_unmap(start, end);
         }
 
         let usizes = page_count / usize::BITS as usize;

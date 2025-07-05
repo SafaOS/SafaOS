@@ -114,3 +114,16 @@ pub unsafe fn enable_interrupts() {
 pub unsafe fn hlt() {
     unsafe { core::arch::asm!("hlt") }
 }
+
+pub unsafe fn flush_cache() {
+    unsafe {
+        // TODO: use INVLPG
+        core::arch::asm!(
+            "
+            mov rax, cr3
+            mov cr3, rax
+            ",
+            options(nomem, nostack)
+        )
+    }
+}

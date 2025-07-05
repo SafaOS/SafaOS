@@ -134,7 +134,7 @@ const fn make_usermode_regs(is_userspace: bool) -> (u64, u64, RFLAGS) {
     }
 }
 
-fn allocate_generic_stack_for_context(
+unsafe fn allocate_generic_stack_for_context(
     stack_generic_start: VirtAddr,
     page_table: &mut PhysPageTable,
     context_id: cpu_context::Cid,
@@ -143,27 +143,29 @@ fn allocate_generic_stack_for_context(
     let stack_start = stack_generic_start + (context_id as usize * (STACK_SIZE + guard_pages_size));
     let stack_end = stack_start + STACK_SIZE;
 
-    page_table.alloc_map(
-        stack_start,
-        stack_end,
-        EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-    )?;
+    unsafe {
+        page_table.alloc_map(
+            stack_start,
+            stack_end,
+            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+        )?;
+    }
 
     Ok(stack_end)
 }
 
-fn allocate_user_stack_for_context(
+unsafe fn allocate_user_stack_for_context(
     page_table: &mut PhysPageTable,
     context_id: cpu_context::Cid,
 ) -> Result<VirtAddr, MapToError> {
-    allocate_generic_stack_for_context(STACK0_START, page_table, context_id)
+    unsafe { allocate_generic_stack_for_context(STACK0_START, page_table, context_id) }
 }
 
-fn allocate_kernel_stack_for_context(
+unsafe fn allocate_kernel_stack_for_context(
     page_table: &mut PhysPageTable,
     context_id: cpu_context::Cid,
 ) -> Result<VirtAddr, MapToError> {
-    allocate_generic_stack_for_context(RING0_STACK0_START, page_table, context_id)
+    unsafe { allocate_generic_stack_for_context(RING0_STACK0_START, page_table, context_id) }
 }
 
 impl CPUStatus {
@@ -187,19 +189,21 @@ impl CPUStatus {
         entry_point: VirtAddr,
         userspace: bool,
     ) -> Result<Self, MapToError> {
-        // allocate the stack
-        page_table.alloc_map(
-            STACK0_START,
-            STACK0_END,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
+        unsafe {
+            // allocate the stack
+            page_table.alloc_map(
+                STACK0_START,
+                STACK0_END,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )?;
 
-        // allocate the syscall stack
-        page_table.alloc_map(
-            RING0_STACK0_START,
-            RING0_STACK0_END,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
+            // allocate the syscall stack
+            page_table.alloc_map(
+                RING0_STACK0_START,
+                RING0_STACK0_END,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )?;
+        }
 
         let argc = argv.len();
         let envc = env.len();
@@ -217,12 +221,14 @@ impl CPUStatus {
         let structures_bytes: &[u8] =
             &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) };
 
-        page_table.alloc_map(
-            ABI_STRUCTURES_START,
-            ABI_STRUCTURES_START + PAGE_SIZE,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
-        copy_to_userspace(page_table, ABI_STRUCTURES_START.into(), structures_bytes);
+        unsafe {
+            page_table.alloc_map(
+                ABI_STRUCTURES_START,
+                ABI_STRUCTURES_START + PAGE_SIZE,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )?;
+            copy_to_userspace(page_table, ABI_STRUCTURES_START.into(), structures_bytes);
+        }
 
         let abi_structures_ptr = ABI_STRUCTURES_START.into_ptr::<AbiStructures>();
 
@@ -253,23 +259,25 @@ impl CPUStatus {
         arguments_ptr: *const (),
         userspace: bool,
     ) -> Result<Self, MapToError> {
-        let user_stack_end = allocate_user_stack_for_context(page_table, context_id)?;
-        let kernel_stack_end = allocate_kernel_stack_for_context(page_table, context_id)?;
+        unsafe {
+            let user_stack_end = allocate_user_stack_for_context(page_table, context_id)?;
+            let kernel_stack_end = allocate_kernel_stack_for_context(page_table, context_id)?;
 
-        let (cs, ss, rflags) = make_usermode_regs(userspace);
+            let (cs, ss, rflags) = make_usermode_regs(userspace);
 
-        Ok(Self {
-            ring0_rsp: kernel_stack_end,
-            rflags,
-            rip: entry_point,
-            rdi: context_id as u64,
-            rsi: arguments_ptr as u64,
-            cr3: page_table.phys_addr(),
-            rsp: user_stack_end,
-            cs,
-            ss,
-            ..Default::default()
-        })
+            Ok(Self {
+                ring0_rsp: kernel_stack_end,
+                rflags,
+                rip: entry_point,
+                rdi: context_id as u64,
+                rsi: arguments_ptr as u64,
+                cr3: page_table.phys_addr(),
+                rsp: user_stack_end,
+                cs,
+                ss,
+                ..Default::default()
+            })
+        }
     }
 }
 

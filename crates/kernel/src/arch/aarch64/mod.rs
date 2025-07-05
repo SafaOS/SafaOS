@@ -19,13 +19,9 @@ global_asm!(
     "
 .text
 .global kboot
-kboot:
-    # parks all cores except for core 0
-    mrs x1, mpidr_el1
-    and x1, x1, #3
-    cmp x1, #0
-    bne khalt
+.global stack_init
 
+stack_init:
     mov x0, sp
     # Enables SP_ELx
     mrs x1, spsel
@@ -33,10 +29,17 @@ kboot:
     msr spsel, x1
     # Restores the stack back after enabling
     mov sp, x0
+    ret
 
+# boots core 0
+kboot:
     b kstart
 "
 );
+
+unsafe extern "C" {
+    fn stack_init();
+}
 
 /// Switches to el1
 fn switch_to_el1() {
@@ -51,9 +54,17 @@ fn switch_to_el1() {
 }
 
 #[inline(always)]
-pub fn init_phase1() {
+fn setup_core_generic() {
+    unsafe {
+        stack_init();
+    }
     switch_to_el1();
     exceptions::init_exceptions();
+}
+
+#[inline(always)]
+pub fn init_phase1() {
+    setup_core_generic();
 
     cpu::init();
 }
@@ -75,6 +86,20 @@ pub unsafe fn enable_interrupts() {
 }
 
 #[inline(always)]
-pub unsafe fn hlt() { unsafe {
-    asm!("wfe");
-}}
+pub unsafe fn hlt() {
+    unsafe {
+        asm!("wfe");
+    }
+}
+
+pub fn flush_cache() {
+    unsafe {
+        asm!(
+            "
+            tlbi VMALLE1
+            dsb ISH
+            isb
+            "
+        );
+    }
+}

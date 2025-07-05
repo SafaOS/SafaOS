@@ -127,11 +127,13 @@ impl CPUStatus {
             "there is no way you allocated 64 GiBs worth of thread stacks :skull:"
         );
 
-        root_page_table.alloc_map(
-            next_stack_start,
-            next_stack_end,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
+        unsafe {
+            root_page_table.alloc_map(
+                next_stack_start,
+                next_stack_end,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )?;
+        }
 
         Ok(next_stack_end)
     }
@@ -146,12 +148,13 @@ impl CPUStatus {
         let next_stack_start =
             EL1_STACK0_START + ((EL1_STACK_SIZE + guard_pages_size) * (context_id as usize));
         let next_stack_end = next_stack_start + STACK_SIZE;
-
-        root_page_table.alloc_map(
-            next_stack_start,
-            next_stack_end,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
+        unsafe {
+            root_page_table.alloc_map(
+                next_stack_start,
+                next_stack_end,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )?;
+        }
 
         Ok(next_stack_end)
     }
@@ -170,18 +173,20 @@ impl CPUStatus {
         userspace: bool,
     ) -> Result<Self, MapToError> {
         let entry_point = entry_point.into_raw() as u64;
-        // allocate the stack for thread 0
-        page_table.alloc_map(
-            STACK0_START,
-            STACK0_END,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
+        unsafe {
+            // allocate the stack for thread 0
+            page_table.alloc_map(
+                STACK0_START,
+                STACK0_END,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )?;
 
-        page_table.alloc_map(
-            EL1_STACK0_START,
-            EL1_STACK0_END,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
+            page_table.alloc_map(
+                EL1_STACK0_START,
+                EL1_STACK0_END,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )?;
+        }
 
         let argc = argv.len();
         let envc = env.len();
@@ -199,12 +204,14 @@ impl CPUStatus {
         let structures_bytes: &[u8] =
             &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) };
 
-        page_table.alloc_map(
-            ABI_STRUCTURES_START,
-            ABI_STRUCTURES_START + PAGE_SIZE,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
-        copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
+        unsafe {
+            page_table.alloc_map(
+                ABI_STRUCTURES_START,
+                ABI_STRUCTURES_START + PAGE_SIZE,
+                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
+            )?;
+            copy_to_userspace(page_table, ABI_STRUCTURES_START, structures_bytes);
+        }
 
         let abi_structures_ptr = ABI_STRUCTURES_START.into_ptr::<AbiStructures>();
 
