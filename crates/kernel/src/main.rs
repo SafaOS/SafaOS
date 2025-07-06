@@ -11,7 +11,6 @@
 #![feature(box_vec_non_null)]
 #![feature(vec_into_raw_parts)]
 #![feature(iter_collect_into)]
-#![feature(let_chains)]
 #![feature(sync_unsafe_cell)]
 #![feature(never_type)]
 #![feature(likely_unlikely)]
@@ -145,26 +144,23 @@ pub fn khalt() -> ! {
 
 #[allow(unused_imports)]
 use core::panic::PanicInfo;
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicUsize;
 
-static PANCIKED: AtomicBool = AtomicBool::new(false);
-
+static PANCIKED: AtomicUsize = AtomicUsize::new(0);
+const MAX_PANICK_COUNT: usize = 3;
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     unsafe {
         arch::disable_interrupts();
     }
 
-    if PANCIKED.load(core::sync::atomic::Ordering::Relaxed) {
-        unsafe { arch::serial::SERIAL.force_unlock() };
-        error!("\x1B[31mkernel panic within a panic:\n{info}\n\x1B[0mno stack trace");
+    if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Relaxed) >= MAX_PANICK_COUNT {
+        error!("\n\x1B[31mkernel panic within a panic:\n{info}\n\x1B[0mno stack trace");
         khalt()
     }
-    PANCIKED.store(true, core::sync::atomic::Ordering::Relaxed);
 
     let stack = unsafe { logging::StackTrace::current() };
     unsafe {
-        arch::serial::SERIAL.force_unlock();
         if !logging::QUITE_PANIC {
             FRAMEBUFFER_TERMINAL.force_unlock_write();
             FRAMEBUFFER_TERMINAL.write().clear();

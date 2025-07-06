@@ -10,7 +10,7 @@ use core::{
     ptr::NonNull,
 };
 
-use paging::{EntryFlags, MapToError, Page, PageTable, PhysPageTable, PAGE_SIZE};
+use paging::{EntryFlags, MapToError, PAGE_SIZE, Page, PageTable, PhysPageTable};
 use safa_utils::abi::raw::RawSlice;
 use serde::Serialize;
 
@@ -152,7 +152,7 @@ impl VirtAddr {
     }
 
     #[inline(always)]
-    pub fn into_ptr<T>(self) -> *mut T {
+    pub const fn into_ptr<T>(self) -> *mut T {
         self.0 as *mut T
     }
 
