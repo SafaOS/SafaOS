@@ -1,6 +1,6 @@
 use super::gic;
 use crate::{
-    arch::aarch64::{gic::IntID, timer::TIMER_IRQ},
+    arch::aarch64::{gic::IntID, registers::MPIDR, timer::TIMER_IRQ},
     drivers::interrupts::IRQ_MANAGER,
     syscalls::syscall,
     warn,
@@ -71,15 +71,18 @@ impl Display for InterruptFrame {
         writeln!(f, "SPSR: {:?}", self.spsr)?;
         writeln!(f, "ELR: {:#x}", self.elr)?;
         writeln!(f, "{}", self.esr)?;
-        write!(f, "FAR: {:?}", self.far)?;
+        writeln!(f, "FAR: {:?}", self.far)?;
+        write!(f, "CPU: {}", MPIDR::read().cpuid())?;
         Ok(())
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn handle_serror(frame: *mut InterruptFrame) { unsafe {
-    panic!("UNRECOVERABLE SERROR:\n{}", &*frame);
-}}
+unsafe extern "C" fn handle_serror(frame: *mut InterruptFrame) {
+    unsafe {
+        panic!("UNRECOVERABLE SERROR:\n{}", &*frame);
+    }
+}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn handle_sync_exception(frame: *mut InterruptFrame) {

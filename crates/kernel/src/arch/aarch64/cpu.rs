@@ -6,8 +6,8 @@ use core::{cell::SyncUnsafeCell, mem::zeroed};
 use lazy_static::lazy_static;
 
 use crate::{
-    utils::dtb::{self, DeviceTree, NodeValue},
     PhysAddr,
+    utils::dtb::{self, DeviceTree, NodeValue},
 };
 
 struct GICInfo {

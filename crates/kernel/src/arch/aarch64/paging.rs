@@ -2,7 +2,7 @@ use bitflags::bitflags;
 
 use crate::{
     PhysAddr, VirtAddr,
-    arch::aarch64::registers::SYS_MAIR,
+    arch::{aarch64::registers::SYS_MAIR, arch_utils},
     memory::{
         frame_allocator::{self, Frame, FramePtr},
         paging::{EntryFlags, MapToError, Page},
@@ -226,15 +226,21 @@ pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
 /// sets the current higher half Page Table to `page_table`
 pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let ttbr1_el1: PhysAddr = page_table.phys_addr();
-    unsafe {
-        asm!("
-      msr ttbr1_el1, {}
-      tlbi VMALLE1
-      dsb ISH
-      isb", in(reg) ttbr1_el1.into_raw());
-        let mair = SYS_MAIR;
-        mair.sync();
+    extern "C" fn inner(ttbr_addr: usize) {
+        unsafe {
+            crate::serial!("syncing for a core, with addr: {ttbr_addr:#x}...\n");
+            asm!("
+              msr ttbr1_el1, {}
+              tlbi VMALLE1
+              dsb ISH
+              isb", in(reg) ttbr_addr);
+            let mair = SYS_MAIR;
+            mair.sync();
+        }
     }
+
+    arch_utils::parked_cpus_do(inner, ttbr1_el1.into_raw());
+    inner(ttbr1_el1.into_raw());
 }
 
 // TODO: maybe use traits here

@@ -1,5 +1,9 @@
 use core::arch::{asm, global_asm};
 
+use limine::mp::Cpu;
+
+use crate::{arch::arch_utils, limine::MP_RESPONSE};
+
 mod cpu;
 mod exceptions;
 mod gic;
@@ -62,11 +66,28 @@ fn setup_core_generic() {
     exceptions::init_exceptions();
 }
 
+extern "C" fn boot_core(_: &Cpu) -> ! {
+    setup_core_generic();
+    arch_utils::cpu_park()
+}
+
 #[inline(always)]
 pub fn init_phase1() {
     setup_core_generic();
 
     cpu::init();
+    let cpus = (*MP_RESPONSE).cpus();
+
+    for cpu in cpus {
+        cpu.goto_address.write(boot_core);
+    }
+
+    while arch_utils::PARKED_CORES_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+        != cpus.len() - 1
+    /* the current CPU */
+    {
+        core::hint::spin_loop();
+    }
 }
 
 #[inline(never)]

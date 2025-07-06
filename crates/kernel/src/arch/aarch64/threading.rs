@@ -1,6 +1,7 @@
 use core::{
     arch::{asm, global_asm},
     cell::SyncUnsafeCell,
+    sync::atomic::AtomicBool,
 };
 
 use safa_utils::abi::raw::processes::AbiStructures;
@@ -304,11 +305,14 @@ pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: i
     }
 }
 
+pub(super) static CAN_CONTEXT_SWITCH: AtomicBool = AtomicBool::new(false);
 pub fn invoke_context_switch() {
-    timer::TIMER_IRQ.set_pending();
-    unsafe {
-        // FIXME: ....
-        super::enable_interrupts();
-        super::disable_interrupts();
+    if CAN_CONTEXT_SWITCH.load(core::sync::atomic::Ordering::Acquire) {
+        timer::TIMER_IRQ.set_pending();
+        unsafe {
+            // FIXME: ....
+            super::enable_interrupts();
+            super::disable_interrupts();
+        }
     }
 }

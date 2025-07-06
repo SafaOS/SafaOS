@@ -3,7 +3,7 @@ use core::arch::asm;
 
 use bitfield_struct::bitfield;
 
-use crate::{debug, VirtAddr};
+use crate::{VirtAddr, arch::aarch64::registers::MPIDR, debug};
 
 /// This driver uses the GICC memory mapped registers instead of AArch64 native registers when available
 #[inline(always)]
@@ -250,12 +250,17 @@ pub fn init() {
         let icc_ctlr = ICCCtlr::get();
         debug!(
             ICCCtlr,
-            "Initialized, eoi mode: {}, priority bits: {}, intID bits: {}, affinity 3 valid: {}, extended intID range: {}",
+            "Initialized, eoi mode: {}, priority bits: {}, intID bits: {}, affinity 3 valid: {}, extended intID range: {} for CPU: {}",
             icc_ctlr.eoi_mode(),
             icc_ctlr.pri_bits() + 1,
-            if icc_ctlr.idbits_24() == 1 { "24" } else {"16"},
+            if icc_ctlr.idbits_24() == 1 {
+                "24"
+            } else {
+                "16"
+            },
             icc_ctlr.af3v(),
             icc_ctlr.ext_range_intid(),
+            MPIDR::read().cpuid(),
         );
     }
 
