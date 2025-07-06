@@ -1,5 +1,6 @@
 //! Architecture specific code,
 //! this module contains everything that would make a difference between architectures such i   nitilization and handling context switching
+mod arch_utils;
 use cfg_if::cfg_if;
 
 cfg_if! {

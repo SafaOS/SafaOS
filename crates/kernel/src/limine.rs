@@ -13,10 +13,12 @@ use limine::request::FramebufferRequest;
 use limine::request::HhdmRequest;
 use limine::request::MemoryMapRequest;
 use limine::request::ModuleRequest;
+use limine::request::MpRequest;
 use limine::request::RsdpRequest;
 
 use limine::BaseRevision;
 use limine::response::MemoryMapResponse;
+use limine::response::MpResponse;
 
 use crate::drivers::framebuffer::FrameBufferInfo;
 use crate::drivers::framebuffer::PixelFormat;
@@ -26,6 +28,19 @@ use crate::utils::ustar::TarArchiveIter;
 #[used]
 #[unsafe(link_section = ".requests")]
 static BASE_REVISION: BaseRevision = BaseRevision::with_revision(2);
+
+#[used]
+#[unsafe(link_section = ".requests")]
+static MP_REQUEST: MpRequest = MpRequest::new();
+
+// TODO: rewrite this whole module to be more generic
+lazy_static! {
+    pub static ref MP_RESPONSE: &'static MpResponse = get_mp_info();
+}
+fn get_mp_info() -> &'static MpResponse {
+    let mp_response = MP_REQUEST.get_response().expect("no Limine MP Response");
+    mp_response
+}
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -77,6 +92,7 @@ pub fn get_phy_offset() -> usize {
     HHDM_REQUEST.get_response().unwrap().offset() as usize
 }
 
+#[allow(unused)]
 pub fn rsdp_addr() -> usize {
     RSDP_REQUEST.get_response().unwrap().address() as usize
 }
