@@ -17,6 +17,7 @@ pub enum ContextStatus {
 use alloc::sync::Arc;
 pub use safa_utils::abi::raw::processes::ContextPriority;
 
+#[derive(Debug)]
 pub struct Thread {
     context: UnsafeCell<Context>,
     is_dead: AtomicBool,
@@ -80,7 +81,7 @@ impl Thread {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Context {
     id: Cid,
 

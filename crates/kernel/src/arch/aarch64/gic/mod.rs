@@ -88,6 +88,11 @@ lazy_static! {
     static ref GICR_DESCRIPTORS: Box<[gicr::GICRDesc]> =
         unsafe { gicr::GICRDesc::get_all_from_base(*GICR_BASE) }.into_boxed_slice();
 }
+
+pub fn gic_init_cpu() {
+    cpu_if::init();
+}
+
 pub fn init_gic() {
     unsafe {
         map_gic(&mut *current_higher_root_table()).expect("failed to map gic");
@@ -103,11 +108,6 @@ pub fn init_gic() {
         gicr.init(enable_lpis);
     }
 
-    extern "C" fn init_cpu(_: usize) {
-        cpu_if::init();
-    }
-
-    super::arch_utils::parked_cpus_do(init_cpu, 0);
     cpu_if::init();
     its::init();
 }
@@ -185,7 +185,7 @@ impl IntID {
         &self,
         get_gicd_reg: impl Fn() -> *mut T,
         get_gicr_reg: impl Fn(&GICRDesc) -> *mut T,
-        do_with_reg: impl Fn(*mut T),
+        mut do_with_reg: impl FnMut(*mut T),
         lpi_manager_do: impl Fn(&mut LPIManager),
     ) {
         match self.kind {
@@ -256,6 +256,27 @@ impl IntID {
             );
         }
         self
+    }
+
+    pub fn is_pending(&self) -> bool {
+        unsafe {
+            let interrupt = self.id;
+            let value = interrupt % 32;
+            let index = (interrupt / 32) as usize;
+            let mut pending = false;
+
+            self.do_all_generic_custom::<false, _>(
+                || gicd::icpendr0(),
+                |gicr| gicr.icpendr0(),
+                |reg| {
+                    let reg = reg.add(index);
+                    let reg = reg.read_volatile();
+                    pending = ((reg >> value) & 1) == 1;
+                },
+                |_| unimplemented!(),
+            );
+            pending
+        }
     }
     /// Sets the group of the interrupt to `group` in all CPUs
     pub fn set_group_all(&self, group: IntGroup) -> &Self {

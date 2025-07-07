@@ -1,6 +1,5 @@
 //! Architecture specific code,
 //! this module contains everything that would make a difference between architectures such i   nitilization and handling context switching
-mod arch_utils;
 use cfg_if::cfg_if;
 
 cfg_if! {
@@ -19,7 +18,10 @@ cfg_if! {
 
 /// Contains everything related to threading, such as code for context switching
 pub mod threading {
-    pub use super::arch::threading::{CPUStatus, invoke_context_switch, restore_cpu_status};
+    pub use super::arch::threading::{
+        CPUStatus, cpu_local_storage_ptr, cpu_local_storages, init_cpus, invoke_context_switch,
+        restore_cpu_status,
+    };
 }
 
 pub use arch::{disable_interrupts, enable_interrupts, flush_cache, hlt, init_phase1, init_phase2};
@@ -38,7 +40,7 @@ pub mod utils {
 }
 
 pub mod registers {
-    pub use super::arch::registers::StackFrame;
+    pub use super::arch::registers::{MPIDR, StackFrame};
 }
 
 pub mod pci {

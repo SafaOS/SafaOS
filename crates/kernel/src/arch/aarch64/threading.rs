@@ -1,18 +1,34 @@
 use core::{
     arch::{asm, global_asm},
     cell::SyncUnsafeCell,
-    sync::atomic::AtomicBool,
+    mem::MaybeUninit,
+    ptr::NonNull,
 };
 
-use safa_utils::abi::raw::processes::AbiStructures;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use limine::mp::Cpu;
+use safa_utils::abi::raw::processes::{AbiStructures, ContextPriority};
 
 use crate::{
     PhysAddr, VirtAddr,
+    arch::{
+        disable_interrupts,
+        paging::{CURRENT_HIGHER_HALF_TABLE, set_current_higher_page_table_phys},
+        registers::MPIDR,
+    },
+    debug,
+    limine::MP_RESPONSE,
     memory::{
         copy_to_userspace, map_byte_slices, map_str_slices,
         paging::{EntryFlags, MapToError, PhysPageTable},
     },
-    threading::{self, cpu_context},
+    threading::{
+        self, CPULocalStorage, SCHEDULER_INITED,
+        cpu_context::{self},
+        queue::ThreadQueue,
+        task::Task,
+    },
+    utils::locks::Mutex,
 };
 
 use super::{
@@ -21,10 +37,6 @@ use super::{
     timer,
 };
 use crate::memory::paging::PAGE_SIZE;
-
-/// Store the context to switch to in the higher half, so that it isn't affected by lower half translation table switch
-static CURRENT_CONTEXT: SyncUnsafeCell<CPUStatus> =
-    SyncUnsafeCell::new(unsafe { core::mem::zeroed() });
 
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
 
@@ -285,18 +297,19 @@ impl CPUStatus {
 }
 
 pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
+    if crate::PANCIKED.load(core::sync::atomic::Ordering::Acquire) > 0 {
+        crate::khalt()
+    }
+
     let context = unsafe { CPUStatus::from_current(frame) };
     let swtch_results = threading::swtch(context);
     if let Some((new_context_ptr, address_space_changed)) = swtch_results {
         unsafe {
-            let current_context = &mut *CURRENT_CONTEXT.get();
-            *current_context = *new_context_ptr.as_ptr();
-
             before_switch();
             if !address_space_changed {
-                restore_cpu_status_partial(current_context);
+                restore_cpu_status_partial(new_context_ptr.as_ref());
             } else {
-                restore_cpu_status(current_context);
+                restore_cpu_status(new_context_ptr.as_ref());
             }
         }
     } else {
@@ -305,14 +318,138 @@ pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: i
     }
 }
 
-pub(super) static CAN_CONTEXT_SWITCH: AtomicBool = AtomicBool::new(false);
 pub fn invoke_context_switch() {
-    if CAN_CONTEXT_SWITCH.load(core::sync::atomic::Ordering::Acquire) {
-        timer::TIMER_IRQ.set_pending();
+    if SCHEDULER_INITED.load(core::sync::atomic::Ordering::Acquire) {
         unsafe {
-            // FIXME: ....
+            super::disable_interrupts();
+            timer::TIMER_IRQ.set_pending();
+            debug_assert!(timer::TIMER_IRQ.is_pending());
             super::enable_interrupts();
+            while timer::TIMER_IRQ.is_pending() {
+                core::hint::spin_loop();
+            }
             super::disable_interrupts();
         }
     }
+}
+
+static CPU_LOCALS: Mutex<Vec<&CPULocalStorage>> = Mutex::new(Vec::new());
+
+unsafe fn set_tpidr(value: VirtAddr) {
+    crate::serial!("tpidr_el1 set to: {value:#x}\n");
+    unsafe {
+        asm!("msr tpidr_el1, {}", in(reg) value.into_raw(), options(nomem, nostack));
+    }
+}
+
+/// Creates a cpu local storage from a given task and an idle function
+/// creates and adds a thread to the given task that is the idle thread for the caller CPU
+///
+/// unsafe because the caller is responsible for the memory which was allocated using a Box
+unsafe fn create_cpu_local(
+    task: &Arc<Task>,
+    idle_function: fn() -> !,
+) -> Result<(&'static CPULocalStorage, NonNull<CPUStatus>), MapToError> {
+    let (thread, _) = Task::add_thread_to_task(
+        task,
+        VirtAddr::from(idle_function as usize),
+        VirtAddr::null(),
+        Some(ContextPriority::Low),
+    )?;
+
+    let status = unsafe { thread.context().cpu_status() };
+    let mut queue = ThreadQueue::new();
+    queue.push_back(thread);
+
+    let cpu_local = CPULocalStorage::new(queue);
+    let cpu_local_boxed = Box::new(cpu_local);
+
+    unsafe {
+        let cpu_local_ref = Box::into_non_null(cpu_local_boxed).as_ref();
+        Ok((cpu_local_ref, status))
+    }
+}
+
+unsafe fn add_new_cpu_local(task: &Arc<Task>, idle_function: fn() -> !) -> NonNull<CPUStatus> {
+    let (cpu_local, status) = unsafe {
+        create_cpu_local(task, idle_function).expect("failed to create a CPU local for a CPU")
+    };
+    unsafe {
+        set_tpidr(VirtAddr::from_ptr(cpu_local));
+    }
+    CPU_LOCALS.lock().push(cpu_local);
+    status
+}
+
+fn boot_core_inner(task: &Arc<Task>, idle_function: fn() -> !) -> ! {
+    let cpuid = MPIDR::read().cpuid();
+    unsafe {
+        debug!("setting up CPU: {}", cpuid);
+
+        let status = add_new_cpu_local(task, idle_function);
+        let status = status.as_ref();
+
+        debug!(
+            "CPU {}: jumping to {:#x}, with stack at {:#x}",
+            cpuid,
+            status.at(),
+            status.stack_at()
+        );
+
+        restore_cpu_status(status)
+    }
+}
+
+extern "C" fn boot_cpu(_: &Cpu) -> ! {
+    unsafe {
+        disable_interrupts();
+    }
+    super::setup_cpu_generic0();
+
+    unsafe {
+        let ttbr1_el1 = *CURRENT_HIGHER_HALF_TABLE.get();
+        set_current_higher_page_table_phys(ttbr1_el1);
+        super::setup_cpu_generic1();
+
+        let (task, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
+        boot_core_inner(task, *idle_function)
+    }
+}
+
+static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Task>, fn() -> !)>> =
+    SyncUnsafeCell::new(MaybeUninit::uninit());
+
+pub unsafe fn init_cpus(task: &Arc<Task>, idle_function: fn() -> !) -> NonNull<CPUStatus> {
+    let jmp_to = unsafe {
+        // the current CPU should take local 0
+        *BOOT_CORE_ARGS.get() = MaybeUninit::new((task.clone(), idle_function));
+        add_new_cpu_local(task, idle_function)
+    };
+
+    let cpus = (*MP_RESPONSE).cpus();
+
+    for cpu in cpus {
+        if MPIDR::from_bits(cpu.mpidr).cpuid() != MPIDR::read().cpuid() {
+            cpu.goto_address.write(boot_cpu);
+        }
+    }
+
+    while CPU_LOCALS.lock().len() != cpus.len() {
+        core::hint::spin_loop();
+    }
+
+    jmp_to
+}
+
+/// Retrieves a pointer local to each CPU to a CPU Local Storage
+pub fn cpu_local_storage_ptr() -> *mut CPULocalStorage {
+    let ptr: *mut CPULocalStorage;
+    unsafe { asm!("mrs {}, tpidr_el1", out(reg) ptr, options(nostack, nomem)) }
+    ptr
+}
+
+/// Returns a list of pointers of CPU local storage to each cpu, can then be used by the scheduler to manage distrubting threads across CPUs
+pub unsafe fn cpu_local_storages() -> &'static [&'static CPULocalStorage] {
+    // only is called after the CPUs are initialized so should be safe
+    unsafe { &*CPU_LOCALS.data_ptr() }
 }

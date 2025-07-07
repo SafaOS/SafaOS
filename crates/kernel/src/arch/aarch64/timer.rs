@@ -25,43 +25,39 @@ unsafe fn reset_timer(n: usize) {
     }
 }
 
+pub fn setup_generic_timer() {
+    let freq: usize;
+    unsafe {
+        asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    }
+
+    unsafe {
+        // Enables timer interrupt
+        reset_timer(TIMER_TICK_PER_MS);
+        asm!(
+            "
+        mov x1, #{flags}
+        mrs x2, cntp_ctl_el0
+        orr x2, x2, x1
+        msr cntp_ctl_el0, x2
+        ",
+            flags = const 0b001,
+        );
+    }
+
+    let mpidr = MPIDR::read();
+
+    info!(
+        "initialized generic timer with freq: {}Mhz for CPU: {}",
+        freq / 1000 / 1000,
+        mpidr.cpuid()
+    );
+}
 pub fn init_generic_timer() {
     TIMER_IRQ
         .clear_pending_all()
         .set_group_all(IntGroup::NonSecure)
         .enable_all();
-
-    extern "C" fn setup_inner(_: usize) {
-        let freq: usize;
-        unsafe {
-            asm!("mrs {}, cntfrq_el0", out(reg) freq);
-        }
-
-        unsafe {
-            // Enables timer interrupt
-            reset_timer(TIMER_TICK_PER_MS);
-            asm!(
-                "
-            mov x1, #{flags}
-            mrs x2, cntp_ctl_el0
-            orr x2, x2, x1
-            msr cntp_ctl_el0, x2
-            ",
-                flags = const 0b001,
-            );
-        }
-
-        let mpidr = MPIDR::read();
-
-        info!(
-            "initialized generic timer with freq: {}Mhz for CPU: {}",
-            freq / 1000 / 1000,
-            mpidr.cpuid()
-        );
-    }
-
-    setup_inner(0);
-    super::arch_utils::parked_cpus_do(setup_inner, 0);
 }
 
 pub fn on_interrupt(ctx: &mut InterruptFrame, is_fiq: bool) {

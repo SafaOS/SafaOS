@@ -1,11 +1,12 @@
 use super::{
+    VirtAddr,
     frame_allocator::FramePtr,
     paging::{EntryFlags, PAGE_SIZE},
-    VirtAddr,
 };
 use ::limine::memory_map::EntryType;
 
 use crate::{
+    PhysAddr,
     arch::{
         self,
         paging::{current_higher_root_table, set_current_higher_page_table},
@@ -13,7 +14,6 @@ use crate::{
     debug,
     limine::{self, HHDM},
     memory::{align_up, frame_allocator},
-    PhysAddr,
 };
 
 use super::paging::{MapToError, Page, PageTable};
@@ -84,31 +84,34 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
     Ok(largest_addr_virt + PAGE_SIZE)
 }
 
-unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> { unsafe {
-    debug!(PageTable, "mapping kernel");
-    let start = Page::containing_address(VirtAddr::from(0xffffffff80000000));
-    let end = Page::containing_address(VirtAddr::from(0xffffffffffffffff));
-    let iter = Page::iter_pages(start, end);
-    let flags = EntryFlags::WRITE;
+unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> {
+    unsafe {
+        debug!(PageTable, "mapping kernel");
+        let start = Page::containing_address(VirtAddr::from(0xffffffff80000000));
+        let end = Page::containing_address(VirtAddr::from(0xffffffffffffffff));
+        let iter = Page::iter_pages(start, end);
+        let flags = EntryFlags::WRITE;
 
-    for page in iter {
-        let Some(frame) = src.get_frame(page) else {
-            break;
-        };
-        dest.map_to(page, frame, flags)?;
+        for page in iter {
+            let Some(frame) = src.get_frame(page) else {
+                break;
+            };
+            dest.map_to(page, frame, flags)?;
+        }
+        debug!(PageTable, "mapped kernel");
+        Ok(())
     }
-    debug!(PageTable, "mapped kernel");
-    Ok(())
-}}
+}
 
 pub fn init_page_table() {
     debug!(PageTable, "initializing root page table ... ");
-    let previous_table = unsafe { super::paging::current_higher_root_table() };
+    let _ = unsafe { super::paging::current_higher_root_table() };
     let table = create_root_page_table().unwrap();
     unsafe {
         set_current_higher_page_table(table);
     }
     // de-allocating the previous root table
-    let frame = previous_table.frame();
-    frame_allocator::deallocate_frame(frame)
+    // FIXME: could still be used by other cpus so i don't free it for now
+    // let frame = previous_table.frame();
+    // frame_allocator::deallocate_frame(frame)
 }

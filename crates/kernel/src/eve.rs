@@ -2,10 +2,12 @@
 //! it is responsible for managing a few things related to it's children
 
 use core::cell::SyncUnsafeCell;
+use core::sync::atomic::AtomicUsize;
 
+use crate::arch::{disable_interrupts, enable_interrupts};
 use crate::drivers::driver_poll::{self, PolledDriver};
 use crate::threading::cpu_context::{Cid, ContextPriority};
-use crate::threading::expose::kernel_thread_spawn;
+use crate::threading::expose::{kernel_thread_spawn, thread_exit};
 use crate::utils::alloc::PageString;
 use crate::utils::locks::Mutex;
 use crate::{debug, logging};
@@ -34,11 +36,20 @@ impl Eve {
     }
 }
 
-pub static EVE: Mutex<Eve> = Mutex::new(Eve::new());
+static EVE: Mutex<Eve> = Mutex::new(Eve::new());
+static AWAITING_CLEANUP: AtomicUsize = AtomicUsize::new(0);
 
-fn one_shot() -> Option<PhysPageTable> {
+fn one_shot() {
+    unsafe {
+        disable_interrupts();
+    }
     let mut lock_guard = EVE.lock();
-    return lock_guard.clean_up_list.pop();
+    let item = lock_guard.clean_up_list.pop();
+    drop(lock_guard);
+    drop(item);
+    unsafe {
+        enable_interrupts();
+    }
 }
 
 pub(super) static KERNEL_STDIO: Lazy<TaskStdio> = Lazy::new(|| {
@@ -76,8 +87,13 @@ pub fn main() -> ! {
 
     // FIXME: use threads
     for poll_driver in unsafe { &*POLLING.get() } {
-        kernel_thread_spawn(poll_driver_thread, poll_driver, Some(ContextPriority::High))
-            .expect("failed to spawn a thread function for a polled driver");
+        kernel_thread_spawn(
+            poll_driver_thread,
+            poll_driver,
+            Some(ContextPriority::High),
+            Some(0),
+        )
+        .expect("failed to spawn a thread function for a polled driver");
     }
 
     #[cfg(not(test))]
@@ -114,12 +130,28 @@ pub fn main() -> ! {
             unreachable!()
         }
 
-        kernel_thread_spawn(run_tests, &(), Some(ContextPriority::Medium))
+        kernel_thread_spawn(run_tests, &(), Some(ContextPriority::Medium), None)
             .expect("failed to spawn Test Thread");
     }
 
+    kernel_thread_spawn(cleanup_function, &(), Some(ContextPriority::High), None)
+        .expect("failed to spawn cleanup thread");
+    thread_exit(0)
+}
+
+fn cleanup_function(_: u32, (): &()) -> ! {
     loop {
-        one_shot();
+        if AWAITING_CLEANUP.load(core::sync::atomic::Ordering::Acquire) > 0 {
+            one_shot();
+            AWAITING_CLEANUP.fetch_sub(1, core::sync::atomic::Ordering::Release);
+        }
+        core::hint::spin_loop();
+    }
+}
+
+pub fn idle_function() -> ! {
+    crate::serial!("entered idle\n");
+    loop {
         core::hint::spin_loop();
     }
 }
@@ -127,4 +159,5 @@ pub fn main() -> ! {
 /// adds a page table to the list of page tables that need to be cleaned up
 pub fn add_cleanup(page_table: PhysPageTable) {
     EVE.lock().add_cleanup(page_table);
+    AWAITING_CLEANUP.fetch_add(1, core::sync::atomic::Ordering::Release);
 }

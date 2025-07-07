@@ -154,7 +154,7 @@ fn panic(info: &PanicInfo) -> ! {
         arch::disable_interrupts();
     }
 
-    if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Relaxed) >= MAX_PANICK_COUNT {
+    if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Release) >= MAX_PANICK_COUNT {
         error!("\n\x1B[31mkernel panic within a panic:\n{info}\n\x1B[0mno stack trace");
         khalt()
     }
@@ -193,7 +193,7 @@ extern "C" fn kstart() -> ! {
     unsafe {
         debug!(Scheduler, "Eve starting...");
         logging::BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
-        Scheduler::init(eve::main, "Eve");
+        Scheduler::init(eve::main, eve::idle_function, "Eve");
     }
 
     #[allow(unreachable_code)]

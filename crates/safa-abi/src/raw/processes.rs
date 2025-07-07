@@ -113,19 +113,26 @@ pub struct TSpawnConfig {
     pub revision: u32,
     pub argument_ptr: *const (),
     pub priority: Optional<ContextPriority>,
+    /// The index of the CPU to append to, if it is None the kernel will choose one, use `0` for the boot CPU
+    pub cpu: Optional<usize>,
 }
 
 impl TSpawnConfig {
-    pub fn into_rust(&self) -> (*const (), Option<ContextPriority>) {
-        (self.argument_ptr, self.priority.into())
+    pub fn into_rust(&self) -> (*const (), Option<ContextPriority>, Option<usize>) {
+        (self.argument_ptr, self.priority.into(), self.cpu.into())
     }
 
     /// Create a new thread spawn configuration with the latest revision
-    pub fn new(argument_ptr: *const (), priority: Option<ContextPriority>) -> Self {
+    pub fn new(
+        argument_ptr: *const (),
+        priority: Option<ContextPriority>,
+        cpu: Option<usize>,
+    ) -> Self {
         Self {
             revision: 0,
             argument_ptr,
             priority: priority.into(),
+            cpu: cpu.into(),
         }
     }
 }

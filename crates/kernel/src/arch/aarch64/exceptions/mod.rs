@@ -29,6 +29,7 @@ pub struct InterruptFrame {
     pub lr: Reg,
     /// The saved sp at the start of the interrupt (sp_el1)
     pub sp: Reg,
+    pub fpu_registers: [[u8; 16]; 32],
 }
 
 impl Display for InterruptFrame {

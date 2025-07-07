@@ -368,6 +368,7 @@ impl CPUID {
     }
 }
 #[bitfield(u64)]
+#[derive(PartialEq, Eq)]
 pub struct MPIDR {
     /**
     Affinity level 0. The value of the MPIDR.{Aff2, Aff1, Aff0} or MPIDR_EL1.{Aff3, Aff2, Aff1, Aff0} set of fields of each PE must be unique within the system as a whole.

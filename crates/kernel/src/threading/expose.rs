@@ -78,8 +78,8 @@ pub unsafe fn thread_sleep_for_ms(ms: u64) {
     #[cfg(debug_assertions)]
     debug_assert!(
         curr_time + ms <= time!(ms),
-        "Thread didn't sleep for the correct amount of time, only waited for: {}ms",
-        curr_time + ms - time!(ms)
+        "Thread didn't sleep for the correct amount of time, only waited for: {}ms, instead of {ms}ms",
+        time!(ms) - curr_time
     );
 }
 
@@ -251,27 +251,35 @@ pub fn pspawn(
     spawn(name, &file, argv, env, flags, priority, structures).map_err(|_| FSError::NotExecutable)
 }
 
+/// Spawns a userspace function in a new thread
+///
+/// if `cpu` is Some it will append to that CPU instead of choosing one, use CPU 0 to append to boot CPU
 pub fn thread_spawn(
     entry_point: VirtAddr,
     argument_ptr: VirtAddr,
     priority: Option<ContextPriority>,
+    cpu: Option<usize>,
 ) -> Result<Cid, MapToError> {
     let this = this_task();
-    let thread = Task::create_thread_from_task(&this, entry_point, argument_ptr, priority)?;
-    let cid = unsafe { thread.context().cid() };
-    super::add_thread(thread);
+    let (thread, cid) = Task::add_thread_to_task(&this, entry_point, argument_ptr, priority)?;
+    super::add_thread(thread, cpu);
     Ok(cid)
 }
 
+/// Spawns a kernel function in a new thread
+///
+/// if `cpu` is Some it will append to that CPU instead of choosing one, use CPU 0 to append to boot CPU
 pub fn kernel_thread_spawn<T: 'static>(
     func: fn(cid: Cid, &'static T) -> !,
     arg: &'static T,
     priority: Option<ContextPriority>,
+    cpu: Option<usize>,
 ) -> Result<Cid, MapToError> {
     thread_spawn(
         VirtAddr::from(func as usize),
         VirtAddr::from(arg as *const T as usize),
         priority,
+        cpu,
     )
 }
 

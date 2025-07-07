@@ -33,7 +33,7 @@ use super::{
     Pid,
     resources::{Resource, ResourceManager},
 };
-
+#[derive(Debug)]
 pub struct AliveTask {
     root_page_table: ManuallyDrop<PhysPageTable>,
     resources: ResourceManager,
@@ -44,7 +44,7 @@ pub struct AliveTask {
 
     cwd: Box<PathBuf>,
 }
-
+#[derive(Debug)]
 pub struct ZombieTask {
     exit_code: usize,
     killed_by: Pid,
@@ -197,7 +197,7 @@ impl ZombieTask {
         self.cwd.as_path()
     }
 }
-
+#[derive(Debug)]
 pub enum TaskState {
     Alive(AliveTask),
     Zombie(ZombieTask),
@@ -295,6 +295,21 @@ pub struct Task {
     pub context_count: AtomicU32,
 }
 
+impl core::fmt::Debug for Task {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Task")
+            .field("name", &self.name)
+            .field("state", &self.state)
+            .field("pid", &self.pid)
+            .field("ppid", &self.ppid)
+            .field("is_alive", &self.is_alive)
+            .finish()
+    }
+}
+
+unsafe impl Send for Task {}
+unsafe impl Sync for Task {}
+
 impl Task {
     pub const fn pid(&self) -> Pid {
         unsafe { *self.pid.get() }
@@ -376,19 +391,39 @@ impl Task {
 
     /// Creates a new thread from a CPU status giving it a `cid` and everything
     /// adds to the task's context count so it tracks this thread
-    pub fn create_thread_from_task(
+    pub fn add_thread_to_task(
         task: &Arc<Task>,
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
-    ) -> Result<Arc<Thread>, MapToError> {
+    ) -> Result<(Arc<Thread>, Cid), MapToError> {
+        let context_id = task.next_cid.fetch_add(1, Ordering::SeqCst);
+        let thread = Self::create_thread_from_task_owned(
+            task,
+            context_id,
+            entry_point,
+            argument_ptr,
+            priority,
+        )
+        .map(|thread| Arc::new(thread))?;
+        task.threads.lock().push(thread.clone());
+        Ok((thread, context_id))
+    }
+
+    /// Creates a new thread for a given task
+    /// doesn't add to the task's thread list so the thread is owned by the caller
+    pub fn create_thread_from_task_owned(
+        task: &Arc<Task>,
+        context_id: Cid,
+        entry_point: VirtAddr,
+        argument_ptr: VirtAddr,
+        priority: Option<ContextPriority>,
+    ) -> Result<Thread, MapToError> {
         let mut write_guard = task.state_mut();
         let state = write_guard
             .alive_mut()
             .expect("tried to create a thread in a task that is not alive");
         let page_table = &mut state.root_page_table;
-
-        let context_id = task.next_cid.fetch_add(1, Ordering::SeqCst);
 
         let cpu_status = unsafe {
             CPUStatus::create_child(
@@ -400,11 +435,7 @@ impl Task {
             )?
         };
 
-        let thread = Arc::new(Self::create_thread_from_status(
-            task, context_id, cpu_status, priority,
-        ));
-
-        task.threads.lock().push(thread.clone());
+        let thread = Self::create_thread_from_status(task, context_id, cpu_status, priority);
         task.context_count.fetch_add(1, Ordering::Relaxed);
 
         Ok(thread)
@@ -466,10 +497,10 @@ impl Task {
         let threads = self.threads.lock();
         let mut state = self.state.write();
         let killed_by = killed_by.unwrap_or(self.pid());
-
+        crate::serial!("killing my beloved\n");
         state.die(exit_code, killed_by);
         self.is_alive
-            .store(false, core::sync::atomic::Ordering::Relaxed);
+            .store(false, core::sync::atomic::Ordering::Release);
 
         for thread in &*threads {
             thread.mark_dead(true);
@@ -494,7 +525,7 @@ impl Task {
     }
 
     pub(super) fn is_alive(&self) -> bool {
-        self.is_alive.load(core::sync::atomic::Ordering::Relaxed)
+        self.is_alive.load(core::sync::atomic::Ordering::Acquire)
     }
 }
 

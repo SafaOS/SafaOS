@@ -163,10 +163,10 @@ fn sys_tspawn(
     config: &TSpawnConfig,
     target_cid: Option<&mut Cid>,
 ) -> Result<(), ErrorStatus> {
-    let (argument_ptr, priority) = config.into_rust();
+    let (argument_ptr, priority, cpu) = config.into_rust();
     let argument_ptr = VirtAddr::from_ptr(argument_ptr);
 
-    let thread_cid = threading::expose::thread_spawn(entry_point, argument_ptr, priority)
+    let thread_cid = threading::expose::thread_spawn(entry_point, argument_ptr, priority, cpu)
         .map_err(|_| ErrorStatus::MMapError)?;
     if let Some(target_cid) = target_cid {
         *target_cid = thread_cid;

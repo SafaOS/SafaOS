@@ -1,9 +1,5 @@
 use core::arch::{asm, global_asm};
 
-use limine::mp::Cpu;
-
-use crate::{arch::arch_utils, limine::MP_RESPONSE};
-
 mod cpu;
 mod exceptions;
 mod gic;
@@ -57,43 +53,45 @@ fn switch_to_el1() {
     }
 }
 
+fn enable_fp() {
+    unsafe {
+        asm!(
+            "
+            # No trap to all NEON & FP instructions
+            mov x0, #0x00300000
+            mrs x1, CPACR_EL1
+            orr x0, x0, x1
+            msr CPACR_EL1, X0
+            "
+        )
+    }
+}
 #[inline(always)]
-fn setup_core_generic() {
+fn setup_cpu_generic0() {
     unsafe {
         stack_init();
     }
     switch_to_el1();
     exceptions::init_exceptions();
+    enable_fp();
 }
 
-extern "C" fn boot_core(_: &Cpu) -> ! {
-    setup_core_generic();
-    arch_utils::cpu_park()
+fn setup_cpu_generic1() {
+    gic::gic_init_cpu();
+    timer::setup_generic_timer();
 }
 
 #[inline(always)]
 pub fn init_phase1() {
-    setup_core_generic();
-
+    setup_cpu_generic0();
     cpu::init();
-    let cpus = (*MP_RESPONSE).cpus();
-
-    for cpu in cpus {
-        cpu.goto_address.write(boot_core);
-    }
-
-    while arch_utils::PARKED_CORES_COUNT.load(core::sync::atomic::Ordering::Relaxed)
-        != cpus.len() - 1
-    /* the current CPU */
-    {
-        core::hint::spin_loop();
-    }
 }
 
 #[inline(never)]
 pub fn init_phase2() {
     gic::init_gic();
     timer::init_generic_timer();
+    setup_cpu_generic1();
 }
 
 #[inline(always)]

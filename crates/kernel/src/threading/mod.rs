@@ -1,6 +1,6 @@
 pub mod cpu_context;
 pub mod expose;
-mod queue;
+pub mod queue;
 pub mod resources;
 pub mod task;
 #[cfg(test)]
@@ -11,6 +11,7 @@ pub type Pid = u32;
 
 use core::cell::SyncUnsafeCell;
 use core::ptr::NonNull;
+use core::sync::atomic::AtomicBool;
 
 use alloc::sync::Arc;
 use lazy_static::lazy_static;
@@ -18,9 +19,9 @@ use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
 use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread};
 use crate::threading::queue::{TaskQueue, ThreadQueue};
-use crate::utils::locks::RwLock;
+use crate::utils::locks::{Mutex, MutexGuard, SpinRwLock};
 use crate::utils::types::Name;
-use crate::{VirtAddr, time};
+use crate::{VirtAddr, arch, time};
 use alloc::boxed::Box;
 use slab::Slab;
 use task::{Task, TaskInfo};
@@ -31,12 +32,37 @@ use crate::{
     memory::paging::PhysPageTable,
 };
 
-static TIMESLICES_LEFT: SyncUnsafeCell<u32> = SyncUnsafeCell::new(0);
+#[derive(Debug)]
+pub struct CPULocalStorage {
+    schedule_queue: Mutex<ThreadQueue>,
+    time_slices_left: SyncUnsafeCell<u32>,
+}
+impl CPULocalStorage {
+    pub fn new(threads_queue: ThreadQueue) -> Self {
+        Self {
+            schedule_queue: Mutex::new(threads_queue),
+            time_slices_left: SyncUnsafeCell::new(0),
+        }
+    }
+}
+
+unsafe impl Send for CPULocalStorage {}
+unsafe impl Sync for CPULocalStorage {}
+
+impl CPULocalStorage {
+    pub fn get() -> &'static Self {
+        unsafe { &*arch::threading::cpu_local_storage_ptr().cast() }
+    }
+    pub fn get_all() -> &'static [&'static Self] {
+        unsafe { arch::threading::cpu_local_storages() }
+    }
+}
 
 /// Subtracts one timeslice from the current context's timeslices passed.
 /// Returns `true` if the current context has finished all of its timeslices.
 unsafe fn timeslices_sub_finished() -> bool {
-    let ptr = TIMESLICES_LEFT.get();
+    let local = CPULocalStorage::get();
+    let ptr = local.time_slices_left.get();
     unsafe {
         if *ptr < 1 {
             *ptr = 0;
@@ -49,7 +75,6 @@ unsafe fn timeslices_sub_finished() -> bool {
 }
 
 pub struct Scheduler {
-    threads_queue: ThreadQueue,
     tasks_queue: TaskQueue,
     pids: Slab<()>,
 }
@@ -60,15 +85,13 @@ unsafe impl Sync for Scheduler {}
 impl Scheduler {
     pub const fn new() -> Self {
         Self {
-            threads_queue: ThreadQueue::new(),
             tasks_queue: TaskQueue::new(),
             pids: Slab::new(),
         }
     }
 
-    #[inline]
     /// inits the scheduler
-    pub unsafe fn init(function: fn() -> !, name: &str) -> ! {
+    pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &str) -> ! {
         debug!(Scheduler, "initing ...");
         unsafe {
             crate::arch::disable_interrupts();
@@ -80,7 +103,7 @@ impl Scheduler {
                 &[],
                 &[],
                 AbiStructures::default(),
-                VirtAddr::from(function as usize),
+                VirtAddr::from(main_function as usize),
                 false,
             )
             .unwrap()
@@ -100,34 +123,39 @@ impl Scheduler {
         );
 
         unsafe {
-            let status = root_thread.context().cpu_status();
+            crate::arch::disable_interrupts();
+            let status = arch::threading::init_cpus(&task, idle_function);
+            crate::serial!("DONEEE\n");
+            let status = status.as_ref();
             self::add(task, root_thread);
+            SCHEDULER_INITED.store(true, core::sync::atomic::Ordering::Release);
 
-            debug!(Scheduler, "INITED ...");
-            restore_cpu_status(status.as_ref())
+            debug!(
+                Scheduler,
+                "INITED, jumping to: {:#x} with stack: {:#x} ...",
+                status.at(),
+                status.stack_at()
+            );
+            restore_cpu_status(status)
         }
-    }
-
-    #[inline(always)]
-    fn current_thread(&self) -> &Arc<Thread> {
-        unsafe { self.threads_queue.current().unwrap_unchecked() }
     }
 
     /// context switches into next task, takes current context outputs new context
     /// returns the new context and a boolean indicating if the address space has changed
     /// if the address space has changed, please copy the context to somewhere accessible first
     pub unsafe fn switch(
-        &mut self,
+        threads_queue: &mut ThreadQueue,
         current_status: CPUStatus,
     ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
         unsafe {
-            let current_thread = self.current_thread();
+            let queue = threads_queue;
+            let current_thread = queue.current().unwrap();
             let current_task = current_thread.task();
             let current_pid = current_task.pid();
 
             current_thread.context().set_cpu_status(current_status);
 
-            while let Some(thread) = self.threads_queue.advance_circular() {
+            while let Some(thread) = queue.advance_circular() {
                 if thread.is_dead() {
                     continue;
                 }
@@ -174,7 +202,7 @@ impl Scheduler {
         unsafe { task.set_pid(pid) };
 
         self.tasks_queue.push_back(task.clone());
-        self.threads_queue.push_back(root_thread);
+        self.add_thread(root_thread, None);
 
         let name = task.name();
 
@@ -184,8 +212,43 @@ impl Scheduler {
 
     /// appends a thread to the end of the scheduler threads list
     /// returns the tid of the added thread
-    fn add_thread(&mut self, thread: Arc<Thread>) {
-        self.threads_queue.push_back(thread);
+    ///
+    /// by default (if `cpu` is None) chooses the least full CPU to append to otherwise if CPU is Some(i) and i is a valid CPU index, chooses that CPU
+    /// use Some(0) to append to the boot CPU
+    fn add_thread(&mut self, thread: Arc<Thread>, cpu: Option<usize>) {
+        let cpu_locals = CPULocalStorage::get_all();
+
+        let (mut thread_queue, cpu_index) = if let Some(cpu) = cpu
+            && let Some(local) = cpu_locals.get(cpu)
+        {
+            (local.schedule_queue.lock(), cpu)
+        } else {
+            let mut least_full: Option<(MutexGuard<'static, ThreadQueue>, usize)> = None;
+
+            for (index, cpu_local) in cpu_locals.iter().enumerate() {
+                let queue = cpu_local.schedule_queue.lock();
+                if least_full
+                    .as_ref()
+                    .is_none_or(|(curr_queue, _)| curr_queue.len() > queue.len())
+                {
+                    let is_empty = queue.len() == 1;
+                    least_full = Some((queue, index));
+                    if is_empty {
+                        break;
+                    }
+                }
+            }
+            least_full.expect("no CPUs were found")
+        };
+
+        let cid = unsafe { thread.context().cid() };
+        let pid = thread.task().pid();
+
+        thread_queue.push_back(thread);
+        debug!(
+            Scheduler,
+            "Thread {cid} added for Task {pid}, CPU: {cpu_index}"
+        );
     }
 
     /// finds a task where executing `condition` on returns true and returns it
@@ -217,9 +280,13 @@ impl Scheduler {
     pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
         let task = self.tasks_queue.remove_where(|task| condition(task));
         if let Some(ref task) = task {
-            self.threads_queue
-                .remove_where(|thread| thread.task().pid() == task.pid());
+            let cpu_locals = CPULocalStorage::get_all();
+            for cpu_local in cpu_locals {
+                let mut queue = cpu_local.schedule_queue.lock();
+                queue.remove_where(|thread| thread.task().pid() == task.pid());
+            }
         }
+
         let result = task.map(|task| TaskInfo::from(&*task));
 
         if let Some(ref info) = result {
@@ -227,17 +294,13 @@ impl Scheduler {
         }
         result
     }
-
-    #[inline(always)]
-    /// whether or not has been properly initialized using `init`
-    pub fn inited(&self) -> bool {
-        self.tasks_queue.len() > 0
-    }
 }
+
+pub static SCHEDULER_INITED: AtomicBool = AtomicBool::new(false);
 
 pub(super) unsafe fn before_thread_yield() {
     unsafe {
-        *TIMESLICES_LEFT.get() = 0;
+        *CPULocalStorage::get().time_slices_left.get() = 0;
     }
 }
 
@@ -249,23 +312,25 @@ pub(super) unsafe fn before_thread_yield() {
 ///
 /// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
 pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
-    if !unsafe { timeslices_sub_finished() } {
+    // FIXME: i relay on short circuit here which might not be a good idea
+    if !SCHEDULER_INITED.load(core::sync::atomic::Ordering::Acquire)
+        || !unsafe { timeslices_sub_finished() }
+    {
         return None;
     }
 
-    match SCHEDULER.try_write().filter(|s| s.inited()) {
-        Some(mut scheduler) => unsafe {
-            let (cpu_status, priority, address_space_changed) = scheduler.switch(context);
-            *TIMESLICES_LEFT.get() = priority.timeslices();
+    let local = CPULocalStorage::get();
+    let mut queue = local.schedule_queue.lock();
+    unsafe {
+        let (cpu_status, priority, address_space_changed) = Scheduler::switch(&mut queue, context);
+        *local.time_slices_left.get() = priority.timeslices();
 
-            Some((cpu_status, address_space_changed))
-        },
-        _ => None,
+        Some((cpu_status, address_space_changed))
     }
 }
 
 lazy_static! {
-    static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
+    static ref SCHEDULER: SpinRwLock<Scheduler> = SpinRwLock::new(Scheduler::new());
 }
 
 /// Returns a static reference to the current task
@@ -279,9 +344,11 @@ pub fn this_task() -> Arc<Task> {
 /// # Safety
 /// Safe because the current Thread is always alive as long as there is code executing
 pub fn this_thread() -> Arc<Thread> {
-    let read = SCHEDULER.read();
-    let curr = read.current_thread();
-    curr.clone()
+    let curr_queue = CPULocalStorage::get().schedule_queue.lock();
+    curr_queue
+        .current()
+        .expect("no current thread found for the current CPU")
+        .clone()
 }
 
 /// acquires lock on scheduler and finds a task where executing `condition` on returns true and returns the result of `map` on that task
@@ -309,8 +376,8 @@ fn add(task: Arc<Task>, root_thread: Arc<Thread>) -> Pid {
 }
 
 /// acquires lock on scheduler and adds a thread to it
-fn add_thread(thread: Arc<Thread>) {
-    SCHEDULER.write().add_thread(thread)
+fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
+    SCHEDULER.write().add_thread(thread, cpu)
 }
 
 /// returns the result of `then` if a task was found

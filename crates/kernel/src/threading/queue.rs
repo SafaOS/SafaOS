@@ -10,12 +10,37 @@ struct Node<T> {
     prev: Option<NonNull<Node<T>>>,
 }
 
-pub(super) struct SchedulerQueue<T> {
+// impl<T: core::fmt::Debug> core::fmt::Debug for Node<T> {
+//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+//         f.debug_struct("Node")
+//             .field("inner", &self.inner)
+//             .field("next", &self.next.map(|ptr| unsafe { ptr.as_ref() }))
+//             .field("prev", &self.next.map(|ptr| unsafe { ptr.as_ref() }))
+//             .finish()
+//     }
+// }
+
+#[derive(Debug)]
+pub struct SchedulerQueue<T> {
     head: Option<NonNull<Node<T>>>,
     current: Option<NonNull<Node<T>>>,
     tail: Option<NonNull<Node<T>>>,
     len: usize,
 }
+
+// impl<T: core::fmt::Debug> core::fmt::Debug for SchedulerQueue<T> {
+//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+//         f.debug_struct("SchedulerQueue")
+//             .field("head", &self.head.map(|head| unsafe { head.as_ref() }))
+//             .field("tail", &self.tail.map(|tail| unsafe { tail.as_ref() }))
+//             .field(
+//                 "current",
+//                 &self.current.map(|current| unsafe { current.as_ref() }),
+//             )
+//             .field("len", &self.len)
+//             .finish()
+//     }
+// }
 
 impl<T> SchedulerQueue<T> {
     pub const fn new() -> Self {
@@ -84,7 +109,7 @@ impl<T> SchedulerQueue<T> {
         self.len += 1;
     }
 
-    pub fn iter<'a>(&'a self) -> SchedulerQueueIter<'a, T> {
+    pub(super) fn iter<'a>(&'a self) -> SchedulerQueueIter<'a, T> {
         SchedulerQueueIter {
             queue: PhantomData,
             current: self.head.map(|h| unsafe { h.as_ref() }),
@@ -138,6 +163,9 @@ impl<T> SchedulerQueue<T> {
         None
     }
 }
+
+unsafe impl<T: Send> Send for SchedulerQueue<T> {}
+unsafe impl<T: Sync> Sync for SchedulerQueue<T> {}
 
 pub type ThreadQueue = SchedulerQueue<Arc<Thread>>;
 pub type TaskQueue = SchedulerQueue<Arc<Task>>;
