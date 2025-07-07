@@ -9,6 +9,8 @@ use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use limine::mp::Cpu;
 use safa_utils::abi::raw::processes::{AbiStructures, ContextPriority};
 
+#[cfg(debug_assertions)]
+use crate::sleep_until;
 use crate::{
     PhysAddr, VirtAddr,
     arch::{
@@ -321,14 +323,28 @@ pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: i
 pub fn invoke_context_switch() {
     if SCHEDULER_INITED.load(core::sync::atomic::Ordering::Acquire) {
         unsafe {
-            super::disable_interrupts();
+            let interrupts_disabled = super::interrupts_disabled();
+            if !interrupts_disabled {
+                super::disable_interrupts();
+            }
+
             timer::TIMER_IRQ.set_pending();
-            debug_assert!(timer::TIMER_IRQ.is_pending());
+            #[cfg(not(debug_assertions))]
+            while !timer::TIMER_IRQ.is_pending() {
+                core::hint::spin_loop();
+            }
+
+            #[cfg(debug_assertions)]
+            sleep_until!(10 ms, timer::TIMER_IRQ.is_pending());
+
             super::enable_interrupts();
             while timer::TIMER_IRQ.is_pending() {
                 core::hint::spin_loop();
             }
-            super::disable_interrupts();
+
+            if interrupts_disabled {
+                super::disable_interrupts();
+            }
         }
     }
 }
