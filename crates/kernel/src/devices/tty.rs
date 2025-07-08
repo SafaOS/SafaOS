@@ -1,12 +1,11 @@
 use core::str;
 
-use crate::utils::locks::{RwLock, SPIN_AMOUNT};
+use crate::{threading::expose::kthread_sleep_for_ms, utils::locks::RwLock};
 use int_enum::IntEnum;
 
 use crate::{
     drivers::vfs::{CtlArgs, FSError, FSResult},
-    terminal::{TTYInterface, TTYSettings, TTY},
-    threading::expose::thread_yield,
+    terminal::{TTY, TTYInterface, TTYSettings},
     utils::bstr::BStr,
 };
 
@@ -43,26 +42,16 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
             tty.enable_input();
             // TODO: add thread sleep
             drop(tty);
-            for _ in 0..SPIN_AMOUNT {
-                core::hint::spin_loop();
-            }
-            thread_yield();
+            kthread_sleep_for_ms(10);
         }
     }
 
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
         let str = BStr::from_bytes(buffer);
-        loop {
-            let lock = self.try_write();
+        let mut write_guard = self.write();
 
-            match lock {
-                Some(mut tty) => {
-                    tty.write_bstr(str);
-                    return Ok(buffer.len());
-                }
-                None => thread_yield(),
-            }
-        }
+        write_guard.write_bstr(str);
+        Ok(buffer.len())
     }
 
     fn ctl(&self, cmd: u16, mut args: CtlArgs) -> FSResult<()> {

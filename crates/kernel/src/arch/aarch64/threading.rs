@@ -162,7 +162,7 @@ impl CPUStatus {
 
         let next_stack_start =
             EL1_STACK0_START + ((EL1_STACK_SIZE + guard_pages_size) * (context_id as usize));
-        let next_stack_end = next_stack_start + STACK_SIZE;
+        let next_stack_end = next_stack_start + EL1_STACK_SIZE;
         unsafe {
             root_page_table.alloc_map(
                 next_stack_start,
