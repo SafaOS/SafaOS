@@ -1,5 +1,10 @@
 use core::arch::{asm, global_asm};
 
+use crate::arch::aarch64::{
+    exceptions::{HALT_ALL_SGI, HALT_RESPONSE},
+    threading::READY_CPUS,
+};
+
 mod cpu;
 mod exceptions;
 mod gic;
@@ -92,6 +97,7 @@ pub fn init_phase2() {
     gic::init_gic();
     timer::init_generic_timer();
     setup_cpu_generic1();
+    HALT_ALL_SGI.clear_pending_all().enable_all();
 }
 
 #[inline(always)]
@@ -108,6 +114,17 @@ pub unsafe fn disable_interrupts() {
 #[inline(always)]
 pub unsafe fn enable_interrupts() {
     unsafe { asm!("msr DAIFClr, #0b1111") }
+}
+
+/// Halts all CPUs
+#[inline(always)]
+pub unsafe fn halt_all() {
+    HALT_ALL_SGI.request_sgi_all(true);
+    while HALT_RESPONSE.load(core::sync::atomic::Ordering::Relaxed)
+        < READY_CPUS.load(core::sync::atomic::Ordering::SeqCst) - 1
+    {
+        core::hint::spin_loop();
+    }
 }
 
 #[inline(always)]

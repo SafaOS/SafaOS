@@ -2,12 +2,14 @@ use super::gic;
 use crate::{
     arch::aarch64::{gic::IntID, registers::MPIDR, timer::TIMER_IRQ},
     drivers::interrupts::IRQ_MANAGER,
+    khalt,
     syscalls::syscall,
     warn,
 };
 use core::{
     arch::{asm, global_asm},
     fmt::Display,
+    sync::atomic::AtomicUsize,
 };
 
 use super::registers::{Esr, ExcClass, Reg, Spsr};
@@ -107,6 +109,9 @@ unsafe extern "C" fn handle_fiq(frame: *mut InterruptFrame) {
     }
 }
 
+pub const HALT_ALL_SGI: IntID = IntID::from_int_id(0);
+pub static HALT_RESPONSE: AtomicUsize = AtomicUsize::new(0);
+
 #[inline]
 fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
     let int_id = gic::cpu_if::get_int_id(is_fiq /* Group 0 interrupts are FIQs */);
@@ -119,6 +124,11 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
         // TODO: instead of making this a special case just use the interrupt abstraction layer to register the timer
         // but maybe this is faster?
         i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
+        i if i == HALT_ALL_SGI.id() => {
+            HALT_RESPONSE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            crate::serial!("haltingg: {is_fiq}...\n");
+            khalt()
+        }
         // LPIs
         i if i >= 8192 => {
             let int = IntID::from_int_id(i);

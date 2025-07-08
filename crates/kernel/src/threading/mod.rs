@@ -320,6 +320,7 @@ impl Scheduler {
 
 pub static SCHEDULER_INITED: AtomicBool = AtomicBool::new(false);
 
+/// Scheduler should be initialized first
 pub(super) unsafe fn before_thread_yield() {
     unsafe {
         *CPULocalStorage::get().time_slices_left.get() = 0;
@@ -334,14 +335,13 @@ pub(super) unsafe fn before_thread_yield() {
 ///
 /// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
 pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
-    // FIXME: i relay on short circuit here which might not be a good idea
-    if !SCHEDULER_INITED.load(core::sync::atomic::Ordering::Acquire)
-        || !unsafe { timeslices_sub_finished() }
-    {
+    if !SCHEDULER_INITED.load(core::sync::atomic::Ordering::Acquire) {
         return None;
     }
 
-    let _write_guard = SCHEDULER.write();
+    if !unsafe { timeslices_sub_finished() } {
+        return None;
+    }
 
     let local = CPULocalStorage::get();
     let mut queue = local.schedule_queue.lock();

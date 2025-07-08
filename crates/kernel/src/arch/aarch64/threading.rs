@@ -3,6 +3,7 @@ use core::{
     cell::SyncUnsafeCell,
     mem::MaybeUninit,
     ptr::NonNull,
+    sync::atomic::AtomicUsize,
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
@@ -299,10 +300,6 @@ impl CPUStatus {
 }
 
 pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
-    if crate::PANCIKED.load(core::sync::atomic::Ordering::Acquire) > 0 {
-        crate::khalt()
-    }
-
     let context = unsafe { CPUStatus::from_current(frame) };
     let swtch_results = threading::swtch(context);
     if let Some((new_context_ptr, address_space_changed)) = swtch_results {
@@ -411,7 +408,7 @@ fn boot_core_inner(task: &Arc<Task>, idle_function: fn() -> !) -> ! {
             status.at(),
             status.stack_at()
         );
-
+        READY_CPUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         restore_cpu_status(status)
     }
 }
@@ -434,6 +431,7 @@ extern "C" fn boot_cpu(_: &Cpu) -> ! {
 
 static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Task>, fn() -> !)>> =
     SyncUnsafeCell::new(MaybeUninit::uninit());
+pub(super) static READY_CPUS: AtomicUsize = AtomicUsize::new(1);
 
 pub unsafe fn init_cpus(task: &Arc<Task>, idle_function: fn() -> !) -> NonNull<CPUStatus> {
     let jmp_to = unsafe {
@@ -450,7 +448,7 @@ pub unsafe fn init_cpus(task: &Arc<Task>, idle_function: fn() -> !) -> NonNull<C
         }
     }
 
-    while CPU_LOCALS.lock().len() != cpus.len() {
+    while READY_CPUS.load(core::sync::atomic::Ordering::Relaxed) != cpus.len() {
         core::hint::spin_loop();
     }
 

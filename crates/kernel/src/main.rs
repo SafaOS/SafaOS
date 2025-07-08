@@ -48,6 +48,7 @@ use globals::*;
 
 pub use memory::PhysAddr;
 pub use memory::VirtAddr;
+use spin::Mutex;
 use terminal::FRAMEBUFFER_TERMINAL;
 use threading::Scheduler;
 
@@ -146,6 +147,7 @@ pub fn khalt() -> ! {
 use core::panic::PanicInfo;
 use core::sync::atomic::AtomicUsize;
 
+use crate::arch::registers::MPIDR;
 use crate::arch::serial::SERIAL;
 
 static PANCIKED: AtomicUsize = AtomicUsize::new(0);
@@ -155,6 +157,12 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe {
         arch::disable_interrupts();
     }
+
+    unsafe {
+        arch::halt_all();
+    }
+    static _PANICK_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = _PANICK_LOCK.lock();
 
     if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Release) >= MAX_PANICK_COUNT {
         unsafe {
@@ -174,12 +182,14 @@ fn panic(info: &PanicInfo) -> ! {
     }
 
     panic_println!(
-        "\x1B[31mkernel panic:\n{}, at {}\x1B[0m",
+        "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
         info.message(),
-        info.location().unwrap()
+        info.location().unwrap(),
+        MPIDR::read().cpuid(),
     );
     panic_println!("{}", stack);
 
+    drop(_guard);
     #[cfg(test)]
     arch::power::shutdown();
     #[cfg(not(test))]

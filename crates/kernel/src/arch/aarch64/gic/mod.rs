@@ -7,7 +7,7 @@ use crate::{
         aarch64::{
             cpu,
             gic::gicr::{GICRDesc, lpis::LPIManager},
-            registers::MPIDR,
+            registers::{CPUID, MPIDR},
         },
         paging::current_higher_root_table,
     },
@@ -112,7 +112,7 @@ pub fn init_gic() {
     its::init();
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntKind {
     /// handled by the GICR
     PPI,
@@ -314,5 +314,16 @@ impl IntID {
     pub fn deactivate(&self, is_group0: bool) -> &Self {
         cpu_if::deactivate_int(self.id(), is_group0);
         self
+    }
+
+    /// Requests self assuming it is a sgi, if it isn't will panic
+    pub fn request_sgi_all(&self, is_group0: bool) {
+        assert_eq!(self.kind, IntKind::SGI);
+        cpu_if::send_sgi(
+            is_group0,
+            self.id() as u8,
+            CPUID::construct(0, 0, 0, 0),
+            true,
+        );
     }
 }

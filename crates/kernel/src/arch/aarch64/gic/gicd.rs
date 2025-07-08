@@ -20,14 +20,14 @@ pub fn init() {
 
         let gicd_typer = GICDTyper::get();
         info!(
-           "configured the GICD, max SPI intID: {}, LPIs support: {}, nmi: {}, 2 security states: {}, SPI MSI support: {}, intID bits: {}",
-           ((gicd_typer.it_lines_num() as u16 + 1) * 32) - 1,
-           gicd_typer.has_lpis(),
-           gicd_typer.nmi(),
-           gicd_typer.security_ext(),
-           gicd_typer.mbis(),
-           gicd_typer.id_bits() + 1,
-       );
+            "configured the GICD, max SPI intID: {}, LPIs support: {}, nmi: {}, 2 security states: {}, SPI MSI support: {}, intID bits: {}",
+            ((gicd_typer.it_lines_num() as u16 + 1) * 32) - 1,
+            gicd_typer.has_lpis(),
+            gicd_typer.nmi(),
+            gicd_typer.security_ext(),
+            gicd_typer.mbis(),
+            gicd_typer.id_bits() + 1,
+        );
         assert!(
             gicd_typer.has_lpis(),
             "no LPIs no MSIs no XHCI no USB no OS until AML for now"

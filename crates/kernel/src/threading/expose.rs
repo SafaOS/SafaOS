@@ -6,6 +6,7 @@ use crate::{
     arch::{disable_interrupts, enable_interrupts},
     memory::paging::MapToError,
     threading::{
+        SCHEDULER_INITED,
         cpu_context::{Cid, ContextPriority, Thread},
         this_task,
     },
@@ -59,6 +60,10 @@ pub fn thread_exit(code: usize) -> ! {
 
 #[unsafe(no_mangle)]
 pub fn thread_yield() {
+    if !SCHEDULER_INITED.load(Ordering::Acquire) {
+        return;
+    }
+
     unsafe {
         super::before_thread_yield();
     }
