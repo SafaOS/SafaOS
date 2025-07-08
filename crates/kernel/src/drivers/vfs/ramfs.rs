@@ -20,6 +20,17 @@ pub enum RamFSObjectState {
     StaticDevice(&'static dyn Device),
 }
 
+impl core::fmt::Debug for RamFSObjectState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Data(data) => write!(f, "Data({})", data.len()),
+            Self::Collection(items) => write!(f, "Collection({items:?})"),
+            Self::StaticDevice(device) => write!(f, "Device({})", device.name()),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct RamFSObject {
     state: RamFSObjectState,
     /// the amount of times this object is referenced by another object (a collection)
@@ -107,7 +118,7 @@ impl RamFSObject {
         }
     }
 
-    pub fn sync(&mut self) -> FSResult<()> {
+    pub fn sync(&self) -> FSResult<()> {
         match self.state {
             RamFSObjectState::Data(_) => Ok(()),
             RamFSObjectState::StaticDevice(device) => device.sync(),
@@ -208,6 +219,7 @@ impl RamFSObject {
     }
 }
 
+#[derive(Debug)]
 pub struct RamFS {
     objects: HashMap<FSObjectID, RamFSObject>,
     next_id: FSObjectID,
@@ -305,8 +317,8 @@ impl RamFS {
         results
     }
 
-    fn sync(&mut self, id: FSObjectID) -> FSResult<()> {
-        let obj = self.fget_mut(id)?;
+    fn sync(&self, id: FSObjectID) -> FSResult<()> {
+        let obj = self.fget(id)?;
         let results = obj.sync();
         // FIXME: if the object is a pointer and the pointed object is deleted it could be a problem...
         results
@@ -411,6 +423,10 @@ impl RamFS {
 }
 
 impl FileSystem for RwLock<RamFS> {
+    fn name(&self) -> &'static str {
+        "RamFS"
+    }
+
     fn read(&self, id: FSObjectID, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
         self.read().read(id, offset, buf)
     }
@@ -420,7 +436,7 @@ impl FileSystem for RwLock<RamFS> {
     }
 
     fn sync(&self, id: FSObjectID) -> FSResult<()> {
-        self.write().sync(id)
+        self.read().sync(id)
     }
 
     fn ctl<'a>(&'a self, id: FSObjectID, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
