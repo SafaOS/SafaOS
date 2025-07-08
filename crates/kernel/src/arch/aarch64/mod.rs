@@ -117,12 +117,13 @@ pub unsafe fn hlt() {
     }
 }
 
+/// Performs a TLB shootdown
 pub fn flush_cache() {
     unsafe {
         asm!(
             "
             tlbi VMALLE1
-            dsb ISH
+            dsb SY
             isb
             "
         );
