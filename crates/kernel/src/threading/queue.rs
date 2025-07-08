@@ -10,16 +10,6 @@ struct Node<T> {
     prev: Option<NonNull<Node<T>>>,
 }
 
-// impl<T: core::fmt::Debug> core::fmt::Debug for Node<T> {
-//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-//         f.debug_struct("Node")
-//             .field("inner", &self.inner)
-//             .field("next", &self.next.map(|ptr| unsafe { ptr.as_ref() }))
-//             .field("prev", &self.next.map(|ptr| unsafe { ptr.as_ref() }))
-//             .finish()
-//     }
-// }
-
 #[derive(Debug)]
 pub struct SchedulerQueue<T> {
     head: Option<NonNull<Node<T>>>,
@@ -27,20 +17,6 @@ pub struct SchedulerQueue<T> {
     tail: Option<NonNull<Node<T>>>,
     len: usize,
 }
-
-// impl<T: core::fmt::Debug> core::fmt::Debug for SchedulerQueue<T> {
-//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-//         f.debug_struct("SchedulerQueue")
-//             .field("head", &self.head.map(|head| unsafe { head.as_ref() }))
-//             .field("tail", &self.tail.map(|tail| unsafe { tail.as_ref() }))
-//             .field(
-//                 "current",
-//                 &self.current.map(|current| unsafe { current.as_ref() }),
-//             )
-//             .field("len", &self.len)
-//             .finish()
-//     }
-// }
 
 impl<T> SchedulerQueue<T> {
     pub const fn new() -> Self {

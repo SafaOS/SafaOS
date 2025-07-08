@@ -9,6 +9,7 @@ pub type Cid = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextStatus {
+    Running,
     Runnable,
     /// The thread is sleeping for a specified number of milliseconds.
     Sleeping(u64),

@@ -4,11 +4,17 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use crate::utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::{
     memory::paging::MapToError,
-    threading::cpu_context::{Cid, ContextPriority, Thread},
+    threading::{
+        cpu_context::{Cid, ContextPriority, Thread},
+        this_thread,
+    },
     utils::types::Name,
+};
+use crate::{
+    threading::cpu_context::ContextStatus,
+    utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use safa_utils::abi::raw::processes::AbiStructures;
@@ -17,7 +23,7 @@ use serde::Serialize;
 use crate::{
     VirtAddr,
     arch::threading::CPUStatus,
-    debug, eve,
+    debug,
     memory::{
         align_up, frame_allocator,
         paging::{PAGE_SIZE, Page, PhysPageTable},
@@ -54,6 +60,7 @@ pub struct ZombieTask {
 
     last_resource_id: usize,
     cwd: Box<PathBuf>,
+    root_page_table: ManuallyDrop<PhysPageTable>,
 }
 
 impl AliveTask {
@@ -178,9 +185,8 @@ impl AliveTask {
     ///  unsafe because `self` becomes invalid after this call
     unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask {
         unsafe {
-            let root_page_table = ManuallyDrop::take(&mut self.root_page_table);
-            eve::add_cleanup(root_page_table);
             ZombieTask {
+                root_page_table: ManuallyDrop::new(ManuallyDrop::take(&mut self.root_page_table)),
                 exit_code,
                 killed_by,
                 data_start: self.data_start,
@@ -205,6 +211,13 @@ pub enum TaskState {
 
 impl TaskState {
     fn zombie(&self) -> Option<&ZombieTask> {
+        match self {
+            TaskState::Zombie(zombie) => Some(zombie),
+            TaskState::Alive { .. } => None,
+        }
+    }
+
+    fn zombie_mut(&mut self) -> Option<&mut ZombieTask> {
         match self {
             TaskState::Zombie(zombie) => Some(zombie),
             TaskState::Alive { .. } => None,
@@ -286,6 +299,8 @@ pub struct Task {
     ppid: AtomicU32,
     state: RwLock<TaskState>,
     is_alive: AtomicBool,
+
+    pub schedule_cleanup: AtomicBool,
     userspace_task: bool,
 
     next_cid: AtomicU32,
@@ -351,6 +366,8 @@ impl Task {
 
             ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
+            schedule_cleanup: AtomicBool::new(false),
+
             threads: Mutex::new(Vec::new()),
 
             next_cid: AtomicU32::new(1),
@@ -496,26 +513,65 @@ impl Task {
     pub fn kill(&self, exit_code: usize, killed_by: Option<Pid>) {
         let threads = self.threads.lock();
         let mut state = self.state.write();
+
         let killed_by = killed_by.unwrap_or(self.pid());
-        crate::serial!("killing my beloved\n");
+        let pid = self.pid();
+
         state.die(exit_code, killed_by);
-        self.is_alive
-            .store(false, core::sync::atomic::Ordering::Release);
 
         for thread in &*threads {
             thread.mark_dead(true);
         }
 
+        let this_thread = this_thread();
+        let this_cid = unsafe { this_thread.context().cid() };
+        let this_pid = this_thread.task().pid();
+        let killing_self = this_pid == pid;
+
+        for thread in &*threads {
+            let context = unsafe { thread.context() };
+            let cid = context.cid();
+            // we don't have to wait for self to exit
+            if killing_self && this_cid == cid {
+                continue;
+            }
+
+            // wait for the thread to exit
+            while context.status() == ContextStatus::Running {
+                core::hint::spin_loop();
+            }
+        }
+
+        self.is_alive.store(false, Ordering::Release);
+
         debug!(
             Task,
             "Task {} ({}) TERMINATED with code {} by {}",
-            self.pid(),
+            pid,
             self.name(),
             exit_code,
             killed_by
         );
     }
 
+    pub(super) fn cleanup(&self) -> (TaskInfo, Option<PhysPageTable>) {
+        let mut page_table = None;
+
+        if self
+            .schedule_cleanup
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::Acquire)
+            .is_ok()
+        {
+            let mut state = self.state_mut();
+            let zombie = state
+                .zombie_mut()
+                .expect("attempt to cleanup an alive task");
+
+            page_table = Some(unsafe { ManuallyDrop::take(&mut zombie.root_page_table) });
+        }
+
+        (TaskInfo::from(self), page_table)
+    }
     fn at(&self) -> VirtAddr {
         VirtAddr::null()
     }

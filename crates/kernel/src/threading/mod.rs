@@ -125,7 +125,6 @@ impl Scheduler {
         unsafe {
             crate::arch::disable_interrupts();
             let status = arch::threading::init_cpus(&task, idle_function);
-            crate::serial!("DONEEE\n");
             let status = status.as_ref();
             self::add(task, root_thread);
             SCHEDULER_INITED.store(true, core::sync::atomic::Ordering::Release);
@@ -150,12 +149,28 @@ impl Scheduler {
         unsafe {
             let queue = threads_queue;
             let current_thread = queue.current().unwrap();
+            let current_context = current_thread.context();
             let current_task = current_thread.task();
             let current_pid = current_task.pid();
 
-            current_thread.context().set_cpu_status(current_status);
+            current_context.set_cpu_status(current_status);
+
+            if current_context.status() == ContextStatus::Running {
+                current_context.set_status(ContextStatus::Runnable);
+            }
+
+            if !current_task.is_alive() {
+                current_task
+                    .schedule_cleanup
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
+            }
 
             while let Some(thread) = queue.advance_circular() {
+                let task = thread.task();
+
+                let task_pid = task.pid();
+                let address_space_changed = task_pid != current_pid;
+
                 if thread.is_dead() {
                     continue;
                 }
@@ -163,18 +178,13 @@ impl Scheduler {
                 let context = thread.context();
                 let status = context.status();
 
-                let mut choose_context = move |set_runnable: bool| {
-                    let task = thread.task();
+                let mut choose_context = move || {
                     debug_assert!(
                         task.is_alive(),
                         "thread didn't get marked as dead when Task was killed..."
                     );
 
-                    if set_runnable {
-                        context.set_status(ContextStatus::Runnable);
-                    }
-                    let task_pid = task.pid();
-                    let address_space_changed = task_pid != current_pid;
+                    context.set_status(ContextStatus::Running);
 
                     let priority = context.priority();
                     let cpu_status = context.cpu_status();
@@ -182,11 +192,12 @@ impl Scheduler {
                 };
 
                 match status {
-                    ContextStatus::Runnable => return choose_context(false),
+                    ContextStatus::Runnable => return choose_context(),
                     ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
-                        return choose_context(true);
+                        return choose_context();
                     }
                     ContextStatus::Sleeping(_) => continue,
+                    ContextStatus::Running => unreachable!(),
                 }
             }
 
@@ -278,21 +289,33 @@ impl Scheduler {
 
     /// attempt to remove a task where executing `condition` on returns true, returns the removed task info
     pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
-        let task = self.tasks_queue.remove_where(|task| condition(task));
-        if let Some(ref task) = task {
-            let cpu_locals = CPULocalStorage::get_all();
-            for cpu_local in cpu_locals {
-                let mut queue = cpu_local.schedule_queue.lock();
-                queue.remove_where(|thread| thread.task().pid() == task.pid());
-            }
+        let task = self.tasks_queue.remove_where(|task| condition(task))?;
+
+        let cpu_locals = CPULocalStorage::get_all();
+        for cpu_local in cpu_locals {
+            let mut queue = cpu_local.schedule_queue.lock();
+            queue.remove_where(|thread| {
+                if thread.task().pid() == task.pid() {
+                    assert!(thread.is_dead());
+
+                    let context = unsafe { thread.context() };
+                    // wait for thread to exit
+                    while context.status() == ContextStatus::Running {
+                        crate::serial!("....\n");
+                        core::hint::spin_loop();
+                    }
+                    true
+                } else {
+                    false
+                }
+            });
         }
 
-        let result = task.map(|task| TaskInfo::from(&*task));
+        let (info, page_table) = task.cleanup();
+        drop(page_table);
 
-        if let Some(ref info) = result {
-            self.pids.remove(info.pid as usize);
-        }
-        result
+        self.pids.remove(info.pid as usize);
+        Some(info)
     }
 }
 
@@ -319,8 +342,11 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
         return None;
     }
 
+    let _write_guard = SCHEDULER.write();
+
     let local = CPULocalStorage::get();
     let mut queue = local.schedule_queue.lock();
+
     unsafe {
         let (cpu_status, priority, address_space_changed) = Scheduler::switch(&mut queue, context);
         *local.time_slices_left.get() = priority.timeslices();

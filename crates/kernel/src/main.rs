@@ -146,6 +146,8 @@ pub fn khalt() -> ! {
 use core::panic::PanicInfo;
 use core::sync::atomic::AtomicUsize;
 
+use crate::arch::serial::SERIAL;
+
 static PANCIKED: AtomicUsize = AtomicUsize::new(0);
 const MAX_PANICK_COUNT: usize = 3;
 #[panic_handler]
@@ -155,12 +157,16 @@ fn panic(info: &PanicInfo) -> ! {
     }
 
     if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Release) >= MAX_PANICK_COUNT {
+        unsafe {
+            SERIAL.force_unlock();
+        }
         error!("\n\x1B[31mkernel panic within a panic:\n{info}\n\x1B[0mno stack trace");
         khalt()
     }
 
     let stack = unsafe { logging::StackTrace::current() };
     unsafe {
+        SERIAL.force_unlock();
         if !logging::QUITE_PANIC {
             FRAMEBUFFER_TERMINAL.force_unlock_write();
             FRAMEBUFFER_TERMINAL.write().clear();
