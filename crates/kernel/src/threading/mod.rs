@@ -301,7 +301,6 @@ impl Scheduler {
                     let context = unsafe { thread.context() };
                     // wait for thread to exit
                     while context.status() == ContextStatus::Running {
-                        crate::serial!("....\n");
                         core::hint::spin_loop();
                     }
                     true

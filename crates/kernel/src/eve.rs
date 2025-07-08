@@ -5,7 +5,7 @@ use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
 use crate::threading::cpu_context::{Cid, ContextPriority};
-use crate::threading::expose::kernel_thread_spawn;
+use crate::threading::expose::{kernel_thread_spawn, thread_exit};
 use crate::utils::alloc::PageString;
 use crate::{debug, logging};
 use crate::{drivers::vfs, serial};
@@ -99,7 +99,7 @@ pub fn main() -> ! {
             .expect("failed to spawn Test Thread");
     }
 
-    idle_function()
+    thread_exit(0)
 }
 
 pub fn idle_function() -> ! {
