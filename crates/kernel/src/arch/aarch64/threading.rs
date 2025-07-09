@@ -326,18 +326,10 @@ pub fn invoke_context_switch() {
             }
 
             timer::TIMER_IRQ.set_pending();
-            #[cfg(not(debug_assertions))]
-            while !timer::TIMER_IRQ.is_pending() {
-                core::hint::spin_loop();
-            }
 
-            #[cfg(debug_assertions)]
             sleep_until!(10 ms, timer::TIMER_IRQ.is_pending());
-
             super::enable_interrupts();
-            while timer::TIMER_IRQ.is_pending() {
-                core::hint::spin_loop();
-            }
+            sleep_until!(10 ms, !timer::TIMER_IRQ.is_pending());
 
             if interrupts_disabled {
                 super::disable_interrupts();
