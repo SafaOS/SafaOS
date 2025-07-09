@@ -39,23 +39,27 @@ use super::{
 
 #[unsafe(no_mangle)]
 pub fn task_exit(code: usize) -> ! {
+    unsafe {
+        disable_interrupts();
+    }
     let current_task = super::this_task();
     current_task.kill(code, None);
 
-    thread_yield();
-    // current becomes invalid here
-
-    unreachable!("task didn't exit")
+    loop {
+        thread_yield();
+    }
 }
 
 pub fn thread_exit(code: usize) -> ! {
+    unsafe {
+        disable_interrupts();
+    }
     let current = super::this_thread();
     current.kill_thread(code);
 
-    thread_yield();
-    // context becomes invalid here
-
-    unreachable!("thread didn't exit ")
+    loop {
+        thread_yield();
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -78,14 +82,10 @@ pub unsafe fn thread_sleep_for_ms(ms: u64) {
 
     let current = super::this_thread();
     unsafe { current.context().sleep_for_ms(ms) };
-    thread_yield();
-    // makes sure the thread slept for the correct amount of time
-    #[cfg(debug_assertions)]
-    debug_assert!(
-        curr_time + ms <= time!(ms),
-        "Thread didn't sleep for the correct amount of time, only waited for: {}ms, instead of {ms}ms",
-        time!(ms) - curr_time
-    );
+
+    while curr_time + ms > time!(ms) {
+        thread_yield();
+    }
 }
 
 /// Sleeps the current kernel thread for `ms` milliseconds.
