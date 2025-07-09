@@ -18,8 +18,9 @@ use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
 use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread};
+use crate::threading::expose::thread_yield;
 use crate::threading::queue::{TaskQueue, ThreadQueue};
-use crate::utils::locks::{Mutex, MutexGuard, SpinRwLock};
+use crate::utils::locks::{RwLock, SpinMutex};
 use crate::utils::types::Name;
 use crate::{VirtAddr, arch, time};
 use alloc::boxed::Box;
@@ -34,13 +35,13 @@ use crate::{
 
 #[derive(Debug)]
 pub struct CPULocalStorage {
-    schedule_queue: Mutex<ThreadQueue>,
+    schedule_queue: SpinMutex<ThreadQueue>,
     time_slices_left: SyncUnsafeCell<u32>,
 }
 impl CPULocalStorage {
     pub fn new(threads_queue: ThreadQueue) -> Self {
         Self {
-            schedule_queue: Mutex::new(threads_queue),
+            schedule_queue: SpinMutex::new(threads_queue),
             time_slices_left: SyncUnsafeCell::new(0),
         }
     }
@@ -179,11 +180,6 @@ impl Scheduler {
                 let status = context.status();
 
                 let mut choose_context = move || {
-                    debug_assert!(
-                        task.is_alive(),
-                        "thread didn't get marked as dead when Task was killed..."
-                    );
-
                     context.set_status(ContextStatus::Running);
 
                     let priority = context.priority();
@@ -234,7 +230,7 @@ impl Scheduler {
         {
             (local.schedule_queue.lock(), cpu)
         } else {
-            let mut least_full: Option<(MutexGuard<'static, ThreadQueue>, usize)> = None;
+            let mut least_full: Option<(spin::MutexGuard<'static, ThreadQueue>, usize)> = None;
 
             for (index, cpu_local) in cpu_locals.iter().enumerate() {
                 let queue = cpu_local.schedule_queue.lock();
@@ -293,21 +289,35 @@ impl Scheduler {
 
         let cpu_locals = CPULocalStorage::get_all();
         for cpu_local in cpu_locals {
-            let mut queue = cpu_local.schedule_queue.lock();
-            queue.remove_where(|thread| {
-                if thread.task().pid() == task.pid() {
-                    assert!(thread.is_dead());
+            loop {
+                let mut queue = cpu_local.schedule_queue.lock();
+                let mut removed_all = true;
 
-                    let context = unsafe { thread.context() };
-                    // wait for thread to exit
-                    while context.status() == ContextStatus::Running {
-                        core::hint::spin_loop();
+                queue.remove_where(|thread| {
+                    if thread.task().pid() == task.pid() {
+                        assert!(thread.is_dead());
+
+                        let context = unsafe { thread.context() };
+                        // wait for thread to exit before removing
+                        if context.status() == ContextStatus::Running {
+                            removed_all = false;
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        false
                     }
-                    true
+                });
+                drop(queue);
+
+                if !removed_all {
+                    thread_yield();
+                    crate::sleep!(10 ms);
                 } else {
-                    false
+                    break;
                 }
-            });
+            }
         }
 
         let (info, page_table) = task.cleanup();
@@ -344,7 +354,8 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
     }
 
     let local = CPULocalStorage::get();
-    let mut queue = local.schedule_queue.lock();
+
+    let mut queue = local.schedule_queue.try_lock()?;
 
     unsafe {
         let (cpu_status, priority, address_space_changed) = Scheduler::switch(&mut queue, context);
@@ -355,7 +366,7 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
 }
 
 lazy_static! {
-    static ref SCHEDULER: SpinRwLock<Scheduler> = SpinRwLock::new(Scheduler::new());
+    static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
 /// Returns a static reference to the current task
@@ -380,7 +391,7 @@ pub fn this_thread() -> Arc<Thread> {
 pub fn find<C, M, R>(condition: C, map: M) -> Option<R>
 where
     C: Fn(&Task) -> bool,
-    M: Fn(&Task) -> R,
+    M: FnMut(&Task) -> R,
 {
     let schd = SCHEDULER.read();
     schd.find(condition).map(map)

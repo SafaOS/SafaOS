@@ -541,8 +541,6 @@ impl Task {
             }
         }
 
-        self.is_alive.store(false, Ordering::Release);
-
         debug!(
             Task,
             "Task {} ({}) TERMINATED with code {} by {}",
@@ -556,6 +554,7 @@ impl Task {
         // i actually have no idea why a thread yield would happen here...
         drop(state);
         drop(threads);
+        self.is_alive.store(false, Ordering::Release);
         this_thread.mark_dead(true);
     }
 

@@ -115,7 +115,7 @@ type RwLockExt<T> = lock_api::RwLock<LockRawRwLock, T>;
 pub type RwLockReadGuard<'a, T> = lock_api::RwLockReadGuard<'a, LockRawRwLock, T>;
 pub type RwLockWriteGuard<'a, T> = lock_api::RwLockWriteGuard<'a, LockRawRwLock, T>;
 
-pub type SpinRwLock<T> = spin::RwLock<T>;
+pub type SpinMutex<T> = spin::Mutex<T>;
 
 #[derive(Debug)]
 #[repr(transparent)]
