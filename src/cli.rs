@@ -213,6 +213,8 @@ pub fn run(opts: RunOpts, path: &str) {
             "virt,acpi=off,gic-version=3,its=on",
             "-cpu",
             "cortex-a72",
+            "-smp",
+            "4",
             "-device",
             "qemu-xhci",
             "-device",
