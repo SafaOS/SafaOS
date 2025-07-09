@@ -511,17 +511,13 @@ impl Task {
     /// kills the task
     /// if `killed_by` is `None` the task will be killed by itself
     pub fn kill(&self, exit_code: usize, killed_by: Option<Pid>) {
+        let pid = self.pid();
+        let killed_by = killed_by.unwrap_or(pid);
+
         let threads = self.threads.lock();
         let mut state = self.state.write();
 
-        let killed_by = killed_by.unwrap_or(self.pid());
-        let pid = self.pid();
-
         state.die(exit_code, killed_by);
-
-        for thread in &*threads {
-            thread.mark_dead(true);
-        }
 
         let this_thread = this_thread();
         let this_cid = unsafe { this_thread.context().cid() };
@@ -536,8 +532,11 @@ impl Task {
                 continue;
             }
 
+            thread.mark_dead(true);
+
             // wait for the thread to exit
             while context.status() == ContextStatus::Running {
+                super::expose::thread_yield();
                 core::hint::spin_loop();
             }
         }
@@ -552,6 +551,12 @@ impl Task {
             exit_code,
             killed_by
         );
+
+        // for some reason a thread yield may happen here sow e want to make sure everything is dropped before the task is unswitchable to
+        // i actually have no idea why a thread yield would happen here...
+        drop(state);
+        drop(threads);
+        this_thread.mark_dead(true);
     }
 
     pub(super) fn cleanup(&self) -> (TaskInfo, Option<PhysPageTable>) {
