@@ -2,7 +2,7 @@ use core::{marker::PhantomData, ptr::NonNull};
 
 use alloc::{boxed::Box, sync::Arc};
 
-use crate::threading::{cpu_context::Thread, task::Task};
+use crate::threading::task::Task;
 
 struct Node<T> {
     inner: T,
@@ -25,35 +25,6 @@ impl<T> SchedulerQueue<T> {
             current: None,
             tail: None,
             len: 0,
-        }
-    }
-
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-
-    /// Advances the current task pointer in a circular manner, returning a reference to the next node which is now the current node
-    /// returns None only if the queue is empty.
-    pub fn advance_circular(&mut self) -> Option<&T> {
-        if let Some(current) = self.current.take() {
-            let current_ref = unsafe { current.as_ref() };
-            if let Some(next) = current_ref.next {
-                self.current = Some(next);
-            } else {
-                self.current = self.head;
-            }
-            self.current()
-        } else {
-            None
-        }
-    }
-
-    pub fn current(&self) -> Option<&T> {
-        if let Some(current) = self.current {
-            let current_ref = unsafe { current.as_ref() };
-            Some(&current_ref.inner)
-        } else {
-            None
         }
     }
 
@@ -143,7 +114,6 @@ impl<T> SchedulerQueue<T> {
 unsafe impl<T: Send> Send for SchedulerQueue<T> {}
 unsafe impl<T: Sync> Sync for SchedulerQueue<T> {}
 
-pub type ThreadQueue = SchedulerQueue<Arc<Thread>>;
 pub type TaskQueue = SchedulerQueue<Arc<Task>>;
 
 impl TaskQueue {}

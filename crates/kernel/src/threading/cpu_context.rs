@@ -15,13 +15,42 @@ pub enum ContextStatus {
     Sleeping(u64),
 }
 
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
 pub use safa_utils::abi::raw::processes::ContextPriority;
+
+#[derive(Debug, Clone)]
+/// A node representing a Thread in a thread queue
+pub struct ThreadNode {
+    inner: Arc<Thread>,
+    pub(super) next: Option<Box<ThreadNode>>,
+}
+
+impl ThreadNode {
+    pub const fn new(thread: Arc<Thread>) -> Self {
+        Self {
+            inner: thread,
+            next: None,
+        }
+    }
+
+    pub const fn thread(&self) -> &Arc<Thread> {
+        &self.inner
+    }
+
+    /// Given a node that is a head of the thread list, make this thread the head instead
+    pub fn push_front(this: &mut Box<Self>, thread: Arc<Thread>) {
+        let node = ThreadNode::new(thread);
+        let old_node = core::mem::replace(this, Box::new(node));
+        // now this is the new node
+        this.next = Some(old_node);
+    }
+}
 
 #[derive(Debug)]
 pub struct Thread {
     context: UnsafeCell<Context>,
     is_dead: AtomicBool,
+    is_removed: AtomicBool,
     parent_task: Arc<Task>,
 }
 
@@ -35,6 +64,7 @@ impl Thread {
         Self {
             context: UnsafeCell::new(Context::new(cid, cpu_status, priority)),
             is_dead: AtomicBool::new(false),
+            is_removed: AtomicBool::new(false),
             parent_task: parent_task.clone(),
         }
     }
@@ -49,6 +79,15 @@ impl Thread {
 
     pub fn is_dead(&self) -> bool {
         self.is_dead.load(core::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn is_removed(&self) -> bool {
+        self.is_removed.load(core::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn mark_removed(&self) {
+        self.is_removed
+            .store(true, core::sync::atomic::Ordering::Release);
     }
 
     pub fn mark_dead(&self, task_dead: bool) {

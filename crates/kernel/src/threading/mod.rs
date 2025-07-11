@@ -9,17 +9,17 @@ mod tests;
 /// Process ID, a unique identifier for a process (task)
 pub type Pid = u32;
 
-use core::cell::SyncUnsafeCell;
+use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{AtomicBool, AtomicUsize};
 
 use alloc::sync::Arc;
 use lazy_static::lazy_static;
 use safa_utils::{abi::raw::processes::AbiStructures, make_path};
 
-use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread};
+use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};
 use crate::threading::expose::thread_yield;
-use crate::threading::queue::{TaskQueue, ThreadQueue};
+use crate::threading::queue::TaskQueue;
 use crate::utils::locks::{RwLock, SpinMutex};
 use crate::utils::types::Name;
 use crate::{VirtAddr, arch, time};
@@ -35,15 +35,31 @@ use crate::{
 
 #[derive(Debug)]
 pub struct CPULocalStorage {
-    schedule_queue: SpinMutex<ThreadQueue>,
+    current_thread: UnsafeCell<Arc<Thread>>,
+    thread_node_queue: SpinMutex<(Box<ThreadNode>, *mut ThreadNode)>,
+    threads_count: AtomicUsize,
+
     time_slices_left: SyncUnsafeCell<u32>,
 }
 impl CPULocalStorage {
-    pub fn new(threads_queue: ThreadQueue) -> Self {
-        Self {
-            schedule_queue: SpinMutex::new(threads_queue),
+    pub fn create(root_thread: Arc<Thread>) -> Box<Self> {
+        let root_thread_node = ThreadNode::new(root_thread.clone());
+        let mut root_thread_node = Box::new(root_thread_node);
+        let root_thread_node_ptr = &raw mut *root_thread_node;
+
+        let this = Self {
+            current_thread: UnsafeCell::new(root_thread),
+            thread_node_queue: SpinMutex::new((root_thread_node, root_thread_node_ptr)),
+            threads_count: AtomicUsize::new(0),
             time_slices_left: SyncUnsafeCell::new(0),
-        }
+        };
+
+        Box::new(this)
+    }
+    /// Get the current thread
+    pub fn current_thread(&self) -> Arc<Thread> {
+        // safe because the current thread is only ever read by the current thread and modifieded by context switch
+        unsafe { (*self.current_thread.get()).clone() }
     }
 }
 
@@ -144,13 +160,15 @@ impl Scheduler {
     /// returns the new context and a boolean indicating if the address space has changed
     /// if the address space has changed, please copy the context to somewhere accessible first
     pub unsafe fn switch(
-        threads_queue: &mut ThreadQueue,
+        root_thread_node: &mut ThreadNode,
+        current_thread_node: &mut *mut ThreadNode,
+        current_thread_ptr: *mut Arc<Thread>,
         current_status: CPUStatus,
     ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
         unsafe {
-            let queue = threads_queue;
-            let current_thread = queue.current().unwrap();
+            let current_thread = &*current_thread_ptr;
             let current_context = current_thread.context();
+            let current_cid = current_context.cid();
             let current_task = current_thread.task();
             let current_pid = current_task.pid();
 
@@ -166,39 +184,74 @@ impl Scheduler {
                     .store(true, core::sync::atomic::Ordering::SeqCst);
             }
 
-            while let Some(thread) = queue.advance_circular() {
-                let task = thread.task();
+            let mut current_node = *current_thread_node;
+            // FIXME: a lil bit unsafe
+            loop {
+                let (
+                    next_node,
+                    next_is_head, /* BECAREFUL head should be treated specially, especially when muttating */
+                ) = (*current_node)
+                    .next
+                    .as_deref_mut()
+                    .map(|n| (n, false))
+                    .unwrap_or((root_thread_node, true));
 
-                let task_pid = task.pid();
-                let address_space_changed = task_pid != current_pid;
+                {
+                    let thread = next_node.thread();
+                    let context = thread.context();
+                    let thread_cid = context.cid();
+                    let task = thread.task();
 
-                if thread.is_dead() {
-                    continue;
-                }
+                    let task_pid = task.pid();
+                    let address_space_changed = task_pid != current_pid;
 
-                let context = thread.context();
-                let status = context.status();
+                    if thread.is_dead() {
+                        debug_assert!(!thread.is_removed());
 
-                let mut choose_context = move || {
-                    context.set_status(ContextStatus::Running);
+                        // same cid, same thread, another thread must be the one to mark removal
+                        if !address_space_changed && thread_cid == current_cid {
+                            current_node = next_node;
+                        } else {
+                            thread.mark_removed();
+                            let next = next_node.next.take();
+                            if next_is_head {
+                                *root_thread_node =
+                                    /* all references to the node become invalid here... */
+                                    *next.expect("no more threads to use as the head of the queue");
+                            } else {
+                                (*current_node).next = next;
+                            }
+                        }
 
-                    let priority = context.priority();
-                    let cpu_status = context.cpu_status();
-                    (cpu_status, priority, address_space_changed)
-                };
-
-                match status {
-                    ContextStatus::Runnable => return choose_context(),
-                    ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
-                        return choose_context();
+                        continue;
                     }
-                    ContextStatus::Sleeping(_) => continue,
-                    ContextStatus::Running => unreachable!(),
+
+                    let status = context.status();
+
+                    macro_rules! choose_context {
+                        () => {{
+                            context.set_status(ContextStatus::Running);
+
+                            let priority = context.priority();
+                            let cpu_status = context.cpu_status();
+                            *current_thread_ptr = thread.clone();
+                            *current_thread_node = next_node;
+                            (cpu_status, priority, address_space_changed)
+                        }};
+                    }
+
+                    match status {
+                        ContextStatus::Runnable => return choose_context!(),
+                        ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
+                            return choose_context!();
+                        }
+                        ContextStatus::Sleeping(_) => {}
+                        ContextStatus::Running => unreachable!(),
+                    }
+
+                    current_node = next_node;
                 }
             }
-
-            // TODO: fallback to the idle thread? for now the idle thread is just a part of the queue
-            unreachable!("context switch failed")
         }
     }
 
@@ -225,33 +278,40 @@ impl Scheduler {
     fn add_thread(&mut self, thread: Arc<Thread>, cpu: Option<usize>) {
         let cpu_locals = CPULocalStorage::get_all();
 
-        let (mut thread_queue, cpu_index) = if let Some(cpu) = cpu
+        let (cpu_local, cpu_index) = if let Some(cpu) = cpu
             && let Some(local) = cpu_locals.get(cpu)
         {
-            (local.schedule_queue.lock(), cpu)
+            (local, cpu)
         } else {
-            let mut least_full: Option<(spin::MutexGuard<'static, ThreadQueue>, usize)> = None;
-
+            let mut least_full = None;
             for (index, cpu_local) in cpu_locals.iter().enumerate() {
-                let queue = cpu_local.schedule_queue.lock();
-                if least_full
-                    .as_ref()
-                    .is_none_or(|(curr_queue, _)| curr_queue.len() > queue.len())
-                {
-                    let is_empty = queue.len() == 1;
-                    least_full = Some((queue, index));
+                let threads_amount = cpu_local
+                    .threads_count
+                    .load(core::sync::atomic::Ordering::Acquire);
+
+                if least_full.is_none_or(|(amount, _, _)| amount > threads_amount) {
+                    let is_empty = threads_amount == 1;
+                    least_full = Some((threads_amount, cpu_local, index));
                     if is_empty {
                         break;
                     }
                 }
             }
-            least_full.expect("no CPUs were found")
+            let (_, cpu_local, index) = least_full.expect("no CPUs were found");
+            (cpu_local, index)
         };
+
+        let mut queue_lock = cpu_local.thread_node_queue.lock();
+        let (root_thread, _) = &mut *queue_lock;
 
         let cid = unsafe { thread.context().cid() };
         let pid = thread.task().pid();
 
-        thread_queue.push_back(thread);
+        ThreadNode::push_front(root_thread, thread);
+        cpu_local
+            .threads_count
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+
         debug!(
             Scheduler,
             "Thread {cid} added for Task {pid}, CPU: {cpu_index}"
@@ -287,36 +347,16 @@ impl Scheduler {
     pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
         let task = self.tasks_queue.remove_where(|task| condition(task))?;
 
-        let cpu_locals = CPULocalStorage::get_all();
-        for cpu_local in cpu_locals {
-            loop {
-                let mut queue = cpu_local.schedule_queue.lock();
-                let mut removed_all = true;
-
-                queue.remove_where(|thread| {
-                    if thread.task().pid() == task.pid() {
-                        assert!(thread.is_dead());
-
-                        let context = unsafe { thread.context() };
-                        // wait for thread to exit before removing
-                        if context.status() == ContextStatus::Running {
-                            removed_all = false;
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        false
-                    }
-                });
-                drop(queue);
-
-                if !removed_all {
-                    thread_yield();
-                    crate::sleep!(10 ms);
-                } else {
-                    break;
-                }
+        for thread in &*task.threads.lock() {
+            assert!(thread.is_dead());
+            // wait for thread to exit before removing
+            // will be removed on context switch at some point
+            while !thread.is_removed() {
+                // --> thread is removed on thread yield by the scheduler as a part of the thread list iteration
+                // one thread yield should be enough
+                thread_yield();
+                // however maybe the thread list is in another CPU...
+                core::hint::spin_loop();
             }
         }
 
@@ -355,10 +395,16 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
 
     let local = CPULocalStorage::get();
 
-    let mut queue = local.schedule_queue.try_lock()?;
+    let mut queue_lock = local.thread_node_queue.try_lock()?;
+    let (root_thread_node, current_thread_node_ptr) = &mut *queue_lock;
 
     unsafe {
-        let (cpu_status, priority, address_space_changed) = Scheduler::switch(&mut queue, context);
+        let (cpu_status, priority, address_space_changed) = Scheduler::switch(
+            &mut **root_thread_node,
+            current_thread_node_ptr,
+            local.current_thread.get(),
+            context,
+        );
         *local.time_slices_left.get() = priority.timeslices();
 
         Some((cpu_status, address_space_changed))
@@ -380,11 +426,7 @@ pub fn this_task() -> Arc<Task> {
 /// # Safety
 /// Safe because the current Thread is always alive as long as there is code executing
 pub fn this_thread() -> Arc<Thread> {
-    let curr_queue = CPULocalStorage::get().schedule_queue.lock();
-    curr_queue
-        .current()
-        .expect("no current thread found for the current CPU")
-        .clone()
+    CPULocalStorage::get().current_thread()
 }
 
 /// acquires lock on scheduler and finds a task where executing `condition` on returns true and returns the result of `map` on that task

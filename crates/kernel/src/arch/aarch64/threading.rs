@@ -28,7 +28,6 @@ use crate::{
     threading::{
         self, CPULocalStorage, SCHEDULER_INITED,
         cpu_context::{self},
-        queue::ThreadQueue,
         task::Task,
     },
     utils::locks::Mutex,
@@ -363,11 +362,8 @@ unsafe fn create_cpu_local(
     )?;
 
     let status = unsafe { thread.context().cpu_status() };
-    let mut queue = ThreadQueue::new();
-    queue.push_back(thread);
 
-    let cpu_local = CPULocalStorage::new(queue);
-    let cpu_local_boxed = Box::new(cpu_local);
+    let cpu_local_boxed = CPULocalStorage::create(thread);
 
     unsafe {
         let cpu_local_ref = Box::into_non_null(cpu_local_boxed).as_ref();

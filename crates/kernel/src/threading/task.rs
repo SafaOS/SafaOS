@@ -306,7 +306,7 @@ pub struct Task {
     next_cid: AtomicU32,
     default_priority: ContextPriority,
 
-    threads: Mutex<Vec<Arc<Thread>>>,
+    pub(super) threads: Mutex<Vec<Arc<Thread>>>,
     pub context_count: AtomicU32,
 }
 
