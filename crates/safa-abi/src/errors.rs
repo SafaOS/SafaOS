@@ -38,6 +38,8 @@ pub enum ErrorStatus {
     // errors sent by processes
     NotEnoughArguments = 0x16,
     OutOfMemory = 0x17,
+    /// Invaild Thread ID
+    InvalidTid = 0x18,
 }
 
 impl ErrorStatus {
@@ -56,6 +58,7 @@ impl ErrorStatus {
             InvalidSyscall => "Invalid Syscall",
             InvalidResource => "Invalid Resource",
             InvalidPid => "Invalid PID",
+            InvalidTid => "Invalid TID",
             InvalidOffset => "Invalid Offset",
             InvalidPtr => "Invalid Ptr (not aligned or null)",
             InvalidStr => "Invalid Str (not utf8)",

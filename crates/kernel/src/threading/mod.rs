@@ -167,8 +167,8 @@ impl Scheduler {
     ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
         unsafe {
             let current_thread = &*current_thread_ptr;
+            let current_cid = current_thread.cid();
             let current_context = current_thread.context();
-            let current_cid = current_context.cid();
             let current_task = current_thread.task();
             let current_pid = current_task.pid();
 
@@ -198,8 +198,7 @@ impl Scheduler {
 
                 {
                     let thread = next_node.thread();
-                    let context = thread.context();
-                    let thread_cid = context.cid();
+                    let thread_cid = thread.cid();
                     let task = thread.task();
 
                     let task_pid = task.pid();
@@ -226,6 +225,7 @@ impl Scheduler {
                         continue;
                     }
 
+                    let context = thread.context();
                     let status = context.status();
 
                     macro_rules! choose_context {
@@ -304,7 +304,7 @@ impl Scheduler {
         let mut queue_lock = cpu_local.thread_node_queue.lock();
         let (root_thread, _) = &mut *queue_lock;
 
-        let cid = unsafe { thread.context().cid() };
+        let cid = thread.cid();
         let pid = thread.task().pid();
 
         ThreadNode::push_front(root_thread, thread);

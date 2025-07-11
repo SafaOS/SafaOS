@@ -12,6 +12,7 @@ pub enum BlockedReason {
     /// The thread is sleeping until [`.0`] ms of boot time is reached
     SleepingUntil(u64),
     WaitingForTask(Arc<Task>),
+    WaitingForThread(Arc<Thread>),
 }
 
 impl BlockedReason {
@@ -19,6 +20,7 @@ impl BlockedReason {
         match self {
             Self::SleepingUntil(n) => time!(ms) >= *n,
             Self::WaitingForTask(task) => !task.is_alive(),
+            Self::WaitingForThread(thread) => thread.is_dead(),
         }
     }
 }
@@ -93,12 +95,16 @@ impl Thread {
         }
     }
 
-    pub fn task(&self) -> &Arc<Task> {
+    pub const fn task(&self) -> &Arc<Task> {
         &self.parent_task
     }
 
     pub const unsafe fn context(&self) -> &mut Context {
         unsafe { &mut *self.context.get() }
+    }
+
+    pub const fn cid(&self) -> Cid {
+        unsafe { self.context().id }
     }
 
     pub fn is_dead(&self) -> bool {
@@ -123,7 +129,7 @@ impl Thread {
             "Task {} ({}) THREAD EXITED thread CID: {}, task dead: {task_dead}",
             self.task().pid(),
             self.task().name(),
-            unsafe { self.context().cid() },
+            self.cid(),
         );
     }
 
@@ -160,10 +166,6 @@ impl Context {
         self.priority
     }
 
-    pub const fn cid(&self) -> Cid {
-        self.id
-    }
-
     pub const fn status(&self) -> &ContextStatus {
         &self.status
     }
@@ -178,6 +180,10 @@ impl Context {
 
     pub fn wait_for_task(&mut self, task: Arc<Task>) {
         self.status = ContextStatus::Blocked(BlockedReason::WaitingForTask(task));
+    }
+
+    pub fn wait_for_thread(&mut self, thread: Arc<Thread>) {
+        self.status = ContextStatus::Blocked(BlockedReason::WaitingForThread(thread));
     }
 
     pub const fn set_cpu_status(&mut self, status: CPUStatus) {

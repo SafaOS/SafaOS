@@ -12,6 +12,7 @@ use crate::{
     },
     time,
     utils::types::Name,
+    warn,
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
@@ -98,17 +99,13 @@ pub fn kthread_sleep_for_ms(ms: u64) {
     };
 }
 
-#[unsafe(no_mangle)]
 /// waits for `pid` to exit
 /// returns it's exit code after cleaning it up
-pub fn wait(pid: Pid) -> usize {
+pub fn wait_for_task(pid: Pid) -> Option<usize> {
     // cycles through the processes one by one until it finds the process with `pid`
     // returns the exit code of the process if it's a zombie and cleans it up
     // if it's not a zombie it will be caught by the next above loop
-    let found_task = super::find(|process| process.pid() == pid, |process| process.clone());
-    let Some(found_task) = found_task else {
-        return 0;
-    };
+    let found_task = super::find(|process| process.pid() == pid, |process| process.clone())?;
 
     let this = this_thread();
     unsafe { this.context().wait_for_task(found_task.clone()) };
@@ -117,12 +114,36 @@ pub fn wait(pid: Pid) -> usize {
         thread_yield();
     }
     // task is dead
-    // FIXME: handle multiple processes waiting on the same task using an error or such
+    // TODO: block multiple waits on same pid
     let Some(task_info) = super::remove(|p| p.pid() == pid) else {
-        return 0;
+        warn!("task with `{pid}` was already cleaned up by another wait operation");
+        return None;
     };
 
-    task_info.exit_code
+    Some(task_info.exit_code)
+}
+
+/// Waits for thread with id `cid` to exit
+/// threads don't have an exit code
+pub fn wait_for_thread(cid: Cid) -> Option<()> {
+    let this_thread = this_thread();
+    let this_task = this_thread.task();
+    let thread = this_task
+        .threads
+        .lock()
+        .iter()
+        .find(|thread| thread.cid() == cid)
+        .cloned()?;
+
+    unsafe {
+        this_thread.context().wait_for_thread(thread.clone());
+    }
+
+    while !thread.is_dead() {
+        thread_yield();
+    }
+
+    Some(())
 }
 
 #[unsafe(no_mangle)]

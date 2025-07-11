@@ -22,11 +22,17 @@ use super::SyscallFFI;
 use macros::syscall_handler;
 
 #[syscall_handler]
-fn syswait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let code = threading::expose::wait(pid);
+fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
+    let code = threading::expose::wait_for_task(pid).ok_or(ErrorStatus::InvalidPid)?;
     if let Some(dest_code) = dest_code {
         *dest_code = code;
     }
+    Ok(())
+}
+
+#[syscall_handler]
+fn syst_wait(tid: Cid) -> Result<(), ErrorStatus> {
+    threading::expose::wait_for_thread(tid).ok_or(ErrorStatus::InvalidTid)?;
     Ok(())
 }
 

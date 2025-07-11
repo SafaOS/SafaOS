@@ -6,7 +6,7 @@ use crate::{
     info, sleep,
     threading::{
         cpu_context::ContextPriority,
-        expose::{SpawnFlags, pspawn, wait},
+        expose::{SpawnFlags, pspawn, wait_for_task},
     },
 };
 use safa_utils::{
@@ -146,7 +146,7 @@ fn userspace_test_script() {
     )
     .unwrap();
     // thread yields, so works even when interrupts are disabled
-    let ret = wait(pid);
+    let ret = wait_for_task(pid);
 
-    assert_eq!(ret, 0);
+    assert_eq!(ret, Some(0));
 }

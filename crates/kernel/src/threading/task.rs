@@ -500,13 +500,14 @@ impl Task {
         state.die(exit_code, killed_by);
 
         let this_thread = this_thread();
-        let this_cid = unsafe { this_thread.context().cid() };
+        let this_cid = this_thread.cid();
+
         let this_pid = this_thread.task().pid();
         let killing_self = this_pid == pid;
 
         for thread in &*threads {
+            let cid = thread.cid();
             let context = unsafe { thread.context() };
-            let cid = context.cid();
             // we don't have to wait for self to exit
             if killing_self && this_cid == cid {
                 continue;

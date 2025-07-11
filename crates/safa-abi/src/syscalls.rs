@@ -40,7 +40,10 @@ pub enum SyscallTable {
     SysTSpawn = 29,
     SysTExit = 30,
     SysTSleep = 31,
-    SysWait = 11,
+    /// Waits for a child process with a given PID to exit
+    SysPWait = 11,
+    /// Waits for a child thread with a given TID to exit
+    SysTWait = 32,
 
     SysShutdown = 20,
     SysReboot = 21,
@@ -50,17 +53,12 @@ pub enum SyscallTable {
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const _NEXT_SYSCALL_NUM: u16 = 32;
-
-impl SyscallTable {
-    // update when a new Syscall Num is added
-    const MAX: u16 = Self::SysTSleep as u16;
-}
+const NEXT_SYSCALL_NUM: u16 = 33;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();
     fn try_from(value: u16) -> Result<Self, Self::Error> {
-        if value <= Self::MAX {
+        if value < NEXT_SYSCALL_NUM {
             Ok(unsafe { core::mem::transmute(value) })
         } else {
             Err(())
