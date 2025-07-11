@@ -8,7 +8,7 @@ use crate::{
     threading::{
         SCHEDULER_INITED,
         cpu_context::{Cid, ContextPriority, Thread},
-        this_task,
+        this_task, this_thread,
     },
     time,
     utils::types::Name,
@@ -102,34 +102,32 @@ pub fn kthread_sleep_for_ms(ms: u64) {
 /// waits for `pid` to exit
 /// returns it's exit code after cleaning it up
 pub fn wait(pid: Pid) -> usize {
-    // loops through the processes until it finds the process with `pid` as a zombie
-    loop {
-        // cycles through the processes one by one until it finds the process with `pid`
-        // returns the exit code of the process if it's a zombie and cleans it up
-        // if it's not a zombie it will be caught by the next above loop
-        let found = super::find(
-            |process| process.pid() == pid,
-            |process| process.try_state().and_then(|state| state.exit_code()),
-        );
+    // cycles through the processes one by one until it finds the process with `pid`
+    // returns the exit code of the process if it's a zombie and cleans it up
+    // if it's not a zombie it will be caught by the next above loop
+    let found_task = super::find(|process| process.pid() == pid, |process| process.clone());
+    let Some(found_task) = found_task else {
+        return 0;
+    };
 
-        return match found {
-            Some(Some(exit_code)) => {
-                // cleans up the process
-                super::remove(|p| p.pid() == pid);
-                exit_code
-            }
-            Some(None) => {
-                thread_yield();
-                continue;
-            }
-            None => 0,
-        };
+    let this = this_thread();
+    unsafe { this.context().wait_for_task(found_task.clone()) };
+
+    while found_task.is_alive() {
+        thread_yield();
     }
+    // task is dead
+    // FIXME: handle multiple processes waiting on the same task using an error or such
+    let Some(task_info) = super::remove(|p| p.pid() == pid) else {
+        return 0;
+    };
+
+    task_info.exit_code
 }
 
 #[unsafe(no_mangle)]
 pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
-    super::find(|p| p.pid() == pid, |t| TaskInfo::from(t))
+    super::find(|p| p.pid() == pid, |t| TaskInfo::from(&**t))
 }
 
 bitflags! {

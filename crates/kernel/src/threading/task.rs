@@ -4,6 +4,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
+use crate::utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::{
     memory::paging::MapToError,
     threading::{
@@ -11,10 +12,6 @@ use crate::{
         this_thread,
     },
     utils::types::Name,
-};
-use crate::{
-    threading::cpu_context::ContextStatus,
-    utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use safa_utils::abi::raw::processes::AbiStructures;
@@ -210,13 +207,6 @@ pub enum TaskState {
 }
 
 impl TaskState {
-    fn zombie(&self) -> Option<&ZombieTask> {
-        match self {
-            TaskState::Zombie(zombie) => Some(zombie),
-            TaskState::Alive { .. } => None,
-        }
-    }
-
     fn zombie_mut(&mut self) -> Option<&mut ZombieTask> {
         match self {
             TaskState::Zombie(zombie) => Some(zombie),
@@ -282,12 +272,6 @@ impl TaskState {
         };
 
         *self = TaskState::Zombie(unsafe { alive.die_mut(exit_code, killed_by) });
-    }
-    /// gets the exit code of the task
-    /// returns `None` if the task is alive
-    /// returns `Some(exit_code)` if the task is zombie
-    pub fn exit_code(&self) -> Option<usize> {
-        self.zombie().map(|zombie| zombie.exit_code)
     }
 }
 
@@ -500,10 +484,6 @@ impl Task {
         self.state.read()
     }
 
-    pub fn try_state<'s>(&'s self) -> Option<RwLockReadGuard<'s, TaskState>> {
-        self.state.try_read()
-    }
-
     pub fn state_mut<'s>(&'s self) -> RwLockWriteGuard<'s, TaskState> {
         self.state.write()
     }
@@ -535,7 +515,7 @@ impl Task {
             thread.mark_dead(true);
 
             // wait for the thread to exit
-            while context.status() == ContextStatus::Running {
+            while context.status().is_running() {
                 super::expose::thread_yield();
                 core::hint::spin_loop();
             }

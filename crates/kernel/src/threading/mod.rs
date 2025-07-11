@@ -22,7 +22,7 @@ use crate::threading::expose::thread_yield;
 use crate::threading::queue::TaskQueue;
 use crate::utils::locks::{RwLock, SpinMutex};
 use crate::utils::types::Name;
-use crate::{VirtAddr, arch, time};
+use crate::{VirtAddr, arch};
 use alloc::boxed::Box;
 use slab::Slab;
 use task::{Task, TaskInfo};
@@ -174,7 +174,7 @@ impl Scheduler {
 
             current_context.set_cpu_status(current_status);
 
-            if current_context.status() == ContextStatus::Running {
+            if current_context.status().is_running() {
                 current_context.set_status(ContextStatus::Runnable);
             }
 
@@ -242,10 +242,10 @@ impl Scheduler {
 
                     match status {
                         ContextStatus::Runnable => return choose_context!(),
-                        ContextStatus::Sleeping(time) if { time <= time!(ms) } => {
+                        ContextStatus::Blocked(reason) if reason.block_lifted() => {
                             return choose_context!();
                         }
-                        ContextStatus::Sleeping(_) => {}
+                        ContextStatus::Blocked(_) => {}
                         ContextStatus::Running => unreachable!(),
                     }
 
@@ -319,13 +319,13 @@ impl Scheduler {
     }
 
     /// finds a task where executing `condition` on returns true and returns it
-    fn find<C>(&self, condition: C) -> Option<&Task>
+    fn find<C>(&self, condition: C) -> Option<&Arc<Task>>
     where
         C: Fn(&Task) -> bool,
     {
         for task in self.tasks_queue.iter() {
             if condition(task) {
-                return Some(&**task);
+                return Some(&task);
             }
         }
 
@@ -433,7 +433,7 @@ pub fn this_thread() -> Arc<Thread> {
 pub fn find<C, M, R>(condition: C, map: M) -> Option<R>
 where
     C: Fn(&Task) -> bool,
-    M: FnMut(&Task) -> R,
+    M: FnMut(&Arc<Task>) -> R,
 {
     let schd = SCHEDULER.read();
     schd.find(condition).map(map)

@@ -7,12 +7,36 @@ use crate::{arch::threading::CPUStatus, debug, threading::task::Task, time};
 /// Context ID, a unique identifier for a thread.
 pub type Cid = u32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub enum BlockedReason {
+    /// The thread is sleeping until [`.0`] ms of boot time is reached
+    SleepingUntil(u64),
+    WaitingForTask(Arc<Task>),
+}
+
+impl BlockedReason {
+    pub fn block_lifted(&self) -> bool {
+        match self {
+            Self::SleepingUntil(n) => time!(ms) >= *n,
+            Self::WaitingForTask(task) => !task.is_alive(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum ContextStatus {
     Running,
     Runnable,
-    /// The thread is sleeping for a specified number of milliseconds.
-    Sleeping(u64),
+    Blocked(BlockedReason),
+}
+
+impl ContextStatus {
+    pub const fn is_running(&self) -> bool {
+        match self {
+            Self::Running => true,
+            _ => false,
+        }
+    }
 }
 
 use alloc::{boxed::Box, sync::Arc};
@@ -140,16 +164,20 @@ impl Context {
         self.id
     }
 
-    pub const fn status(&self) -> ContextStatus {
-        self.status
+    pub const fn status(&self) -> &ContextStatus {
+        &self.status
     }
 
-    pub const fn set_status(&mut self, status: ContextStatus) {
+    pub fn set_status(&mut self, status: ContextStatus) {
         self.status = status;
     }
 
     pub fn sleep_for_ms(&mut self, ms: u64) {
-        self.status = ContextStatus::Sleeping(time!(ms) + ms);
+        self.status = ContextStatus::Blocked(BlockedReason::SleepingUntil(time!(ms) + ms));
+    }
+
+    pub fn wait_for_task(&mut self, task: Arc<Task>) {
+        self.status = ContextStatus::Blocked(BlockedReason::WaitingForTask(task));
     }
 
     pub const fn set_cpu_status(&mut self, status: CPUStatus) {
