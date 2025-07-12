@@ -1,5 +1,27 @@
 use core::arch::asm;
 
+pub fn rdmsr(msr: u32) -> usize {
+    let (low, high): (u32, u32);
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr, out("eax") low, out("edx") high
+        );
+    }
+
+    (high as usize) << 32 | (low as usize)
+}
+
+pub unsafe fn wrmsr(msr: u32, value: u64) {
+    let (low, high) = (value as u32, (value >> 32) as u32);
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr, in("eax") low, in("edx") high
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct StackFrame {

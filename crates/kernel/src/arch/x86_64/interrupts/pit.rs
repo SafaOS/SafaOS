@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicI16, AtomicU8, Ordering};
 
 use crate::arch::x86_64::outb;
 
-use super::apic::{send_eoi, write_ioapic_irq, LVTEntry, LVTEntryFlags, IOREDTBL};
+use super::apic::{IOREDTBL, send_eoi, write_ioapic_irq};
 
 const PIT_CHANNEL_0: u16 = 0x40;
 const PIT_COMMAND_CHANNEL: u16 = 0x43;
@@ -33,12 +33,12 @@ pub fn prepare_sleep(ms: u32) {
 #[inline(always)]
 /// sleeps for amount of milliseconds specified by [`prepare_sleep`]
 /// returns the ticks that passed during the sleep according to `get_ticks`
-pub fn calibrate_sleep<F, G, FR, GR>(ioapic_id: u8, before_sleep: F, after_sleep: G) -> GR
+pub fn calibrate_sleep<F, G, FR, GR>(lapic_id: u8, before_sleep: F, after_sleep: G) -> GR
 where
     F: Fn() -> FR,
     G: Fn(FR) -> GR,
 {
-    enable(ioapic_id);
+    enable(lapic_id);
     let ticks = before_sleep();
 
     while PIT_COUNTER.load(Ordering::Relaxed) > 0 {
@@ -46,25 +46,26 @@ where
     }
 
     let result = after_sleep(ticks);
-    disable(ioapic_id);
+    disable(lapic_id);
     result
 }
 
 #[inline(always)]
-pub fn enable(ioapic_id: u8) {
+pub fn enable(lapic_id: u8) {
     let irq = PIT_IRQ.load(Ordering::Relaxed);
     unsafe {
-        let pit = IOREDTBL::new(LVTEntry::new(0x22, LVTEntryFlags::empty()), ioapic_id);
+        let pit = IOREDTBL::new().with_vector(0x22).with_destination(lapic_id);
+        crate::serial!("enabled!\n");
         write_ioapic_irq(irq, pit);
     }
 }
 
 #[inline(always)]
-pub fn disable(ioapic_id: u8) {
+pub fn disable(_lapic_id: u8) {
     let irq = PIT_IRQ.load(Ordering::Relaxed);
 
     unsafe {
-        let pit = IOREDTBL::new(LVTEntry::new(0x0, LVTEntryFlags::DISABLED), ioapic_id);
+        let pit = IOREDTBL::new().with_vector(0x0).with_masked(true);
         write_ioapic_irq(irq, pit);
     }
 }

@@ -2,10 +2,10 @@ use core::arch::asm;
 
 use crate::{arch::x86_64::gdt, println, serial};
 
-use super::{acpi, outb, outw};
+use super::{acpi, outb};
 
-const SLP_TYP_S5: u16 = 0x1C00;
-const SLP_EN: u16 = 1 << 13;
+// const SLP_TYP_S5: u16 = 0x1C00;
+// const SLP_EN: u16 = 1 << 13;
 
 pub fn shutdown() -> ! {
     loop {}

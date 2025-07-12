@@ -1,10 +1,18 @@
 #![allow(static_mut_refs)]
-use core::{arch::asm, cell::SyncUnsafeCell};
+use core::{
+    arch::asm,
+    cell::SyncUnsafeCell,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use lazy_static::lazy_static;
 
-use crate::VirtAddr;
+use crate::{
+    VirtAddr,
+    arch::x86_64::threading::{STACK_SIZE, arch_cpu_local_storage_ptr},
+};
 
+#[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct GDTEntry {
     limit0: u16,
@@ -94,77 +102,72 @@ impl TaskStateSegment {
     }
 }
 
-macro_rules! alloc_stack {
-    () => {{
-        use core::cell::SyncUnsafeCell;
-        static STACK: SyncUnsafeCell<[u8; STACK_SIZE]> = SyncUnsafeCell::new([0; STACK_SIZE]);
+const MAX_GDT_COUNT: usize = 256;
+static TSS_STACKS: [SyncUnsafeCell<[u8; STACK_SIZE]>; MAX_GDT_COUNT * 2] =
+    [const { SyncUnsafeCell::new([0xAA; STACK_SIZE]) }; MAX_GDT_COUNT * 2];
 
-        let stack_start = STACK.get();
-        let stack_end = unsafe { stack_start.byte_add(STACK_SIZE) };
-        stack_end as u64
-    }};
-}
 lazy_static! {
-    static ref TSS: SyncUnsafeCell<TaskStateSegment> = {
-        use super::threading::STACK_SIZE;
+    static ref TSS: [SyncUnsafeCell<TaskStateSegment>; MAX_GDT_COUNT] = core::array::from_fn(|n| {
         let mut tss = TaskStateSegment::new();
 
-        tss.interrupt_stack_table[0] = alloc_stack!();
-        tss.interrupt_stack_table[1] = alloc_stack!();
+        tss.interrupt_stack_table[0] = TSS_STACKS[(n * 2) + 0].get() as u64;
+        tss.interrupt_stack_table[1] = TSS_STACKS[(n * 2) + 1].get() as u64;
         tss.privilege_stack_table[0] = 0;
 
         SyncUnsafeCell::new(tss)
-    };
+    });
 }
 
+/// Gets the TSS addr for the current CPU
 pub unsafe fn set_kernel_tss_stack(stack_end: VirtAddr) {
     unsafe {
-        let tss = &mut *TSS.get();
+        let cpu_local = &*arch_cpu_local_storage_ptr();
+        let tss = cpu_local.tss_ptr;
         (*tss).privilege_stack_table[0] = stack_end.into_raw() as u64;
     }
 }
 
 pub type GDTType = [GDTEntry; 7];
-//  TODO: improve this
 lazy_static! {
-    pub static ref GDT: GDTType = [
-        GDTEntry::default().into(),
-        GDTEntry::new(
-            0,
-            0xFFFFF,
-            ACCESS_VALID | NON_SYSTEM | ACCESS_WRITE_READ | ACCESS_EXECUTABLE,
-            FLAG_PAGELIMIT | FLAG_LONG
-        ), // kernel code segment
-        GDTEntry::new(
-            0,
-            0xFFFFF,
-            ACCESS_VALID | ACCESS_WRITE_READ | NON_SYSTEM,
-            FLAG_PAGELIMIT | FLAG_LONG
-        ), // kernel data segment
-
-        GDTEntry::new(
-            ((TSS.get() as u64) & 0xFFFFFFFF) as u32,
-            (size_of::<TaskStateSegment>() - 1) as u32,
-            ACCESS_VALID | ACCESS_TYPE_TSS,
-            FLAG_PAGELIMIT | FLAG_LONG
-        ), // TSS segment
-        GDTEntry::new_upper_64seg(
-            TSS.get() as u64,
-        ),
-
-        GDTEntry::new(
-            0,
-            0xFFFFF,
-            ACCESS_VALID | NON_SYSTEM | ACCESS_DPL0 | ACCESS_DPL1 | ACCESS_WRITE_READ | ACCESS_EXECUTABLE,
-            FLAG_PAGELIMIT | FLAG_LONG
-        ), // user code segment
-        GDTEntry::new(
-            0,
-            0xFFFFF,
-            ACCESS_VALID | NON_SYSTEM | ACCESS_DPL0 | ACCESS_DPL1 | ACCESS_WRITE_READ,
-            FLAG_PAGELIMIT | FLAG_LONG
-        ) // user data segment
-    ];
+static ref GDTS: [GDTType; MAX_GDT_COUNT] = core::array::from_fn(|index| [
+    GDTEntry::default(),
+    GDTEntry::new(
+        0,
+        0xFFFFF,
+        ACCESS_VALID | NON_SYSTEM | ACCESS_WRITE_READ | ACCESS_EXECUTABLE,
+        FLAG_PAGELIMIT | FLAG_LONG,
+    ), // kernel code segment
+    GDTEntry::new(
+        0,
+        0xFFFFF,
+        ACCESS_VALID | ACCESS_WRITE_READ | NON_SYSTEM,
+        FLAG_PAGELIMIT | FLAG_LONG,
+    ), // kernel data segment
+    GDTEntry::new(
+        ((TSS[index].get() as u64) & 0xFFFFFFFF) as u32,
+        (size_of::<TaskStateSegment>() - 1) as u32,
+        ACCESS_VALID | ACCESS_TYPE_TSS,
+        FLAG_PAGELIMIT | FLAG_LONG,
+    ), // TSS segment
+    GDTEntry::new_upper_64seg(TSS[index].get() as u64),
+    GDTEntry::new(
+        0,
+        0xFFFFF,
+        ACCESS_VALID
+            | NON_SYSTEM
+            | ACCESS_DPL0
+            | ACCESS_DPL1
+            | ACCESS_WRITE_READ
+            | ACCESS_EXECUTABLE,
+        FLAG_PAGELIMIT | FLAG_LONG,
+    ), // user code segment
+    GDTEntry::new(
+        0,
+        0xFFFFF,
+        ACCESS_VALID | NON_SYSTEM | ACCESS_DPL0 | ACCESS_DPL1 | ACCESS_WRITE_READ,
+        FLAG_PAGELIMIT | FLAG_LONG,
+    ), // user data segment
+]);
 }
 
 pub const KERNEL_CODE_SEG: u8 = (1 * 8) | 0;
@@ -176,23 +179,48 @@ pub const USER_DATA_SEG: u8 = (6 * 8) | 3;
 
 #[repr(C, packed)]
 pub struct GDTDescriptor {
-    pub limit: u16,
-    pub base: usize,
+    limit: u16,
+    base: *const GDTType,
 }
+
+unsafe impl Send for GDTDescriptor {}
+unsafe impl Sync for GDTDescriptor {}
+
 lazy_static! {
-    pub static ref GDT_DESCRIPTOR: GDTDescriptor = GDTDescriptor {
-        limit: (size_of::<GDTType>() - 1) as u16,
-        base: (&*GDT) as *const GDTType as usize
+    static ref GDT_DESCRIPTORS: [GDTDescriptor; MAX_GDT_COUNT] = {
+        let mut descriptors = [const { unsafe { core::mem::zeroed() } }; MAX_GDT_COUNT];
+        let mut i = 0;
+        for gdt in &*GDTS {
+            descriptors[i] = GDTDescriptor {
+                limit: (size_of::<GDTType>() - 1) as u16,
+                base: gdt,
+            };
+
+            i += 1;
+        }
+        descriptors
     };
 }
+
+static NEXT_GDT_DESCRIPTOR: AtomicUsize = AtomicUsize::new(0);
 
 unsafe fn reload_tss() {
     unsafe { asm!("ltr {0:x}", in(reg) TSS_SEG as u16) }
 }
 
-pub fn init_gdt() {
+lazy_static! {
+    /// Pointer to the TSS of CPU 0
+    /// because CPU 0 boots in a special way
+    pub static ref TSS0_PTR: usize = TSS[0].get() as usize;
+}
+
+#[must_use = "returns a pointer to the TSS of the current CPU, this pointer must be stored in the CPU Local Storage"]
+pub fn init_gdt() -> *mut TaskStateSegment {
+    let this_gdt_index = NEXT_GDT_DESCRIPTOR.fetch_add(1, Ordering::SeqCst);
+    let gdt_descriptor: &GDTDescriptor = &GDT_DESCRIPTORS[this_gdt_index];
+
     unsafe {
-        asm!("lgdt [{}]", in(reg) &*GDT_DESCRIPTOR, options(nostack));
+        asm!("lgdt [{}]", in(reg) gdt_descriptor, options(nostack));
 
         asm!(
             "
@@ -217,5 +245,6 @@ pub fn init_gdt() {
         );
 
         reload_tss();
+        TSS[this_gdt_index].get()
     }
 }

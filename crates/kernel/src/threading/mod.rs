@@ -42,19 +42,17 @@ pub struct CPULocalStorage {
     time_slices_left: SyncUnsafeCell<u32>,
 }
 impl CPULocalStorage {
-    pub fn create(root_thread: Arc<Thread>) -> Box<Self> {
+    pub fn new(root_thread: Arc<Thread>) -> Self {
         let root_thread_node = ThreadNode::new(root_thread.clone());
         let mut root_thread_node = Box::new(root_thread_node);
         let root_thread_node_ptr = &raw mut *root_thread_node;
 
-        let this = Self {
+        Self {
             current_thread: UnsafeCell::new(root_thread),
             thread_node_queue: SpinMutex::new((root_thread_node, root_thread_node_ptr)),
             threads_count: AtomicUsize::new(0),
             time_slices_left: SyncUnsafeCell::new(0),
-        };
-
-        Box::new(this)
+        }
     }
     /// Get the current thread
     pub fn current_thread(&self) -> Arc<Thread> {

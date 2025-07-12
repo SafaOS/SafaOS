@@ -15,9 +15,9 @@ use crate::sleep_until;
 use crate::{
     PhysAddr, VirtAddr,
     arch::{
+        aarch64::registers::MPIDR,
         disable_interrupts,
         paging::{CURRENT_HIGHER_HALF_TABLE, set_current_higher_page_table_phys},
-        registers::MPIDR,
     },
     debug,
     limine::MP_RESPONSE,
@@ -363,7 +363,7 @@ unsafe fn create_cpu_local(
 
     let status = unsafe { thread.context().cpu_status() };
 
-    let cpu_local_boxed = CPULocalStorage::create(thread);
+    let cpu_local_boxed = Box::new(CPULocalStorage::new(thread));
 
     unsafe {
         let cpu_local_ref = Box::into_non_null(cpu_local_boxed).as_ref();

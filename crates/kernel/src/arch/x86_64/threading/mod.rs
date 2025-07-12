@@ -14,13 +14,31 @@ pub const ENVIRONMENT_VARIABLES_START: VirtAddr = ENVIRONMENT_START + 0xE0000000
 pub const ABI_STRUCTURES_START: VirtAddr = ENVIRONMENT_START + 0x1000000000;
 use crate::{
     PhysAddr,
-    arch::x86_64::gdt::set_kernel_tss_stack,
+    arch::{
+        disable_interrupts,
+        paging::{CURRENT_RING0_PAGE_TABLE, set_current_page_table_phys},
+        x86_64::{
+            gdt::{TSS0_PTR, TaskStateSegment, set_kernel_tss_stack},
+            registers::wrmsr,
+        },
+    },
+    debug,
+    limine::MP_RESPONSE,
     memory::{map_byte_slices, map_str_slices},
-    threading::cpu_context,
+    threading::{CPULocalStorage, cpu_context, task::Task},
+    utils::locks::Mutex,
 };
-use core::arch::{asm, global_asm};
+use core::{
+    arch::{asm, global_asm},
+    cell::SyncUnsafeCell,
+    mem::{MaybeUninit, offset_of},
+    ptr::NonNull,
+    sync::atomic::AtomicUsize,
+};
 
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use bitflags::bitflags;
+use limine::mp::Cpu;
 
 use crate::{
     VirtAddr,
@@ -114,7 +132,7 @@ pub struct CPUStatus {
     xmm0: [u8; 16],
 }
 
-use safa_utils::abi::raw::processes::AbiStructures;
+use safa_utils::abi::raw::processes::{AbiStructures, ContextPriority};
 
 const fn make_usermode_regs(is_userspace: bool) -> (u64, u64, RFLAGS) {
     if is_userspace {
@@ -339,5 +357,164 @@ pub fn invoke_context_switch() {
 pub unsafe fn restore_cpu_status(status: *const CPUStatus) -> ! {
     unsafe {
         restore_cpu_status_full(status);
+    }
+}
+
+static CPU_LOCALS: Mutex<Vec<&ArchCPULocalStorage>> = Mutex::new(Vec::new());
+static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Task>, fn() -> !)>> =
+    SyncUnsafeCell::new(MaybeUninit::uninit());
+static READY_CPUS: AtomicUsize = AtomicUsize::new(1);
+
+unsafe fn set_gs(value: VirtAddr) {
+    crate::serial!("gs set to: {value:#x} + 8\n");
+
+    unsafe {
+        wrmsr(0xC0000101, value.into_raw() as u64);
+        wrmsr(0xC0000102, value.into_raw() as u64);
+        asm!("swapgs");
+    }
+}
+
+/// Creates a cpu local storage from a given task and an idle function
+/// creates and adds a thread to the given task that is the idle thread for the caller CPU
+///
+/// unsafe because the caller is responsible for the memory which was allocated using a Box
+unsafe fn create_cpu_local(
+    tss_ptr: *mut TaskStateSegment,
+    task: &Arc<Task>,
+    idle_function: fn() -> !,
+) -> Result<(&'static ArchCPULocalStorage, NonNull<CPUStatus>), MapToError> {
+    assert!(!tss_ptr.is_null());
+
+    let (thread, _) = Task::add_thread_to_task(
+        task,
+        VirtAddr::from(idle_function as usize),
+        VirtAddr::null(),
+        Some(ContextPriority::Low),
+    )?;
+
+    let status = unsafe { thread.context().cpu_status() };
+
+    let cpu_local = CPULocalStorage::new(thread);
+    let arch_cpu_local_boxed = Box::new(ArchCPULocalStorage {
+        cpu_local,
+        tss_ptr,
+        ptr_to_self: core::ptr::dangling(),
+    });
+
+    let cpu_local_ref = Box::leak(arch_cpu_local_boxed);
+    (*cpu_local_ref).ptr_to_self = cpu_local_ref;
+    Ok((&*cpu_local_ref, status))
+}
+
+unsafe fn add_new_cpu_local(
+    tss_ptr: *mut TaskStateSegment,
+    task: &Arc<Task>,
+    idle_function: fn() -> !,
+) -> NonNull<CPUStatus> {
+    let (cpu_local, status) = unsafe {
+        create_cpu_local(tss_ptr, task, idle_function)
+            .expect("failed to create a CPU local for a CPU")
+    };
+    unsafe {
+        set_gs(
+            VirtAddr::from_ptr(cpu_local as *const ArchCPULocalStorage)
+                + offset_of!(ArchCPULocalStorage, ptr_to_self),
+        );
+    }
+    CPU_LOCALS.lock().push(cpu_local);
+    status
+}
+
+fn boot_core_inner(
+    tss_ptr: *mut TaskStateSegment,
+    lapic_id: u8,
+    task: &Arc<Task>,
+    idle_function: fn() -> !,
+) -> ! {
+    unsafe {
+        debug!("setting up CPU with lapic ID: {lapic_id}");
+
+        let status = add_new_cpu_local(tss_ptr, task, idle_function);
+        let status = status.as_ref();
+
+        debug!(
+            "CPU with lapic ID {}: jumping to {:#x}, with stack at {:#x}",
+            lapic_id,
+            status.at(),
+            status.stack_at()
+        );
+        READY_CPUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        restore_cpu_status(status)
+    }
+}
+
+extern "C" fn boot_cpu(cpu: &Cpu) -> ! {
+    unsafe {
+        disable_interrupts();
+    }
+    let tss_ptr = super::setup_cpu_generic0();
+
+    unsafe {
+        let phys_addr = *CURRENT_RING0_PAGE_TABLE.get();
+        set_current_page_table_phys(phys_addr);
+
+        crate::serial!("waaah: {}\n", cpu.lapic_id);
+        // FIXME: calibrate each CPU's TSC
+        let mut _ignored = 0;
+        super::setup_cpu_generic1(&mut _ignored);
+
+        let (task, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
+        boot_core_inner(tss_ptr, cpu.lapic_id as u8, task, *idle_function)
+    }
+}
+
+pub unsafe fn init_cpus(task: &Arc<Task>, idle_function: fn() -> !) -> NonNull<CPUStatus> {
+    let jmp_to = unsafe {
+        // the current CPU should take local 0
+        *BOOT_CORE_ARGS.get() = MaybeUninit::new((task.clone(), idle_function));
+        add_new_cpu_local(*TSS0_PTR as *mut TaskStateSegment, task, idle_function)
+    };
+
+    let cpus = (*MP_RESPONSE).cpus();
+
+    for cpu in &cpus[1..] {
+        crate::serial!("cccpu: {}\n", cpu.lapic_id);
+        cpu.goto_address.write(boot_cpu);
+    }
+
+    while READY_CPUS.load(core::sync::atomic::Ordering::Relaxed) != cpus.len() {
+        core::hint::spin_loop();
+    }
+
+    jmp_to
+}
+
+#[repr(C)]
+pub(in crate::arch::x86_64) struct ArchCPULocalStorage {
+    cpu_local: CPULocalStorage,
+    pub tss_ptr: *mut TaskStateSegment,
+    ptr_to_self: *const Self,
+}
+
+unsafe impl Send for ArchCPULocalStorage {}
+unsafe impl Sync for ArchCPULocalStorage {}
+
+pub(in crate::arch::x86_64) fn arch_cpu_local_storage_ptr() -> *mut ArchCPULocalStorage {
+    let ptr: *mut ArchCPULocalStorage;
+    unsafe { asm!("mov {}, gs:0", out(reg) ptr) }
+    ptr
+}
+/// Retrieves a pointer local to each CPU to a CPU Local Storage
+pub fn cpu_local_storage_ptr() -> *mut CPULocalStorage {
+    arch_cpu_local_storage_ptr().cast()
+}
+
+/// Returns a list of pointers of CPU local storage to each cpu, can then be used by the scheduler to manage distrubting threads across CPUs
+pub unsafe fn cpu_local_storages() -> &'static [&'static CPULocalStorage] {
+    // only is called after the CPUs are initialized so should be safe
+    unsafe {
+        &*((&*CPU_LOCALS.data_ptr()).as_slice() as *const [&ArchCPULocalStorage]
+            as *const [&CPULocalStorage])
     }
 }

@@ -78,23 +78,6 @@ impl Display for InterruptFrame {
     }
 }
 
-pub fn read_msr(msr: u32) -> usize {
-    let (low, high): (u32, u32);
-    unsafe {
-        asm!(
-            "
-            mov ecx, {0:e}
-            rdmsr
-            mov {1:e}, eax
-            mov {2:e}, edx
-            ",
-            in(reg) msr, out(reg) low, out(reg) high
-        );
-    }
-
-    (high as usize) << 32 | (low as usize)
-}
-
 pub fn init_idt() {
     unsafe {
         asm!("lidt [{}]", in(reg) &*IDTDesc, options(nostack));

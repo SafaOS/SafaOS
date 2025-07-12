@@ -147,7 +147,6 @@ pub fn khalt() -> ! {
 use core::panic::PanicInfo;
 use core::sync::atomic::AtomicUsize;
 
-use crate::arch::registers::MPIDR;
 use crate::arch::serial::SERIAL;
 
 static PANCIKED: AtomicUsize = AtomicUsize::new(0);
@@ -182,10 +181,9 @@ fn panic(info: &PanicInfo) -> ! {
     }
 
     panic_println!(
-        "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
+        "\x1B[31mkernel panic:\n{}, at {}\x1B[0m",
         info.message(),
         info.location().unwrap(),
-        MPIDR::read().cpuid(),
     );
     panic_println!("{}", stack);
 

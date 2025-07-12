@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use core::cell::SyncUnsafeCell;
 use core::fmt::Debug;
 use core::ops::IndexMut;
 use core::{arch::asm, ops::Index};
@@ -319,11 +320,20 @@ pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
     unsafe { current_higher_root_table() }
 }
 
+pub static CURRENT_RING0_PAGE_TABLE: SyncUnsafeCell<PhysAddr> =
+    SyncUnsafeCell::new(PhysAddr::null());
+
+pub(super) unsafe fn set_current_page_table_phys(phys_addr: PhysAddr) {
+    unsafe {
+        asm!("mov cr3, rax", in("rax") phys_addr.into_raw());
+    }
+}
 /// sets the current higher half Page Table to `page_table`
 pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let phys_addr = page_table.phys_addr();
     unsafe {
-        asm!("mov cr3, rax", in("rax") phys_addr.into_raw());
+        set_current_page_table_phys(phys_addr);
+        *CURRENT_RING0_PAGE_TABLE.get() = phys_addr;
     }
 }
 
