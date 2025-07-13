@@ -332,7 +332,10 @@ impl Debug for MAIR {
         debug_list.finish()
     }
 }
-
+/// A unique ID for each CPU
+///
+/// in x86_64 that is the LAPIC ID
+/// while in aarch64(current) that is the whole affinity clustures as indicated by MPIDR_EL1
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CPUID {
     aff0: u8,
@@ -365,6 +368,11 @@ impl CPUID {
 
     pub(super) const fn aff3(&self) -> u8 {
         self.aff3
+    }
+
+    /// Gets the current [`CPUID`]
+    pub fn get() -> Self {
+        MPIDR::read().cpuid()
     }
 }
 #[bitfield(u64)]

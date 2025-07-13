@@ -1,4 +1,25 @@
-use core::arch::asm;
+use core::{arch::asm, fmt::Display};
+
+use crate::arch::x86_64::interrupts::apic::{get_lapic_addr, get_lapic_id};
+
+/// A unique ID for each CPU
+///
+/// in x86_64(current) that is the LAPIC ID
+/// while in aarch64 that is the whole affinity clustures as indicated by MPIDR_EL1
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CPUID(u8);
+
+impl CPUID {
+    pub fn get() -> Self {
+        Self(get_lapic_id(get_lapic_addr()))
+    }
+}
+
+impl Display for CPUID {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 pub fn rdmsr(msr: u32) -> usize {
     let (low, high): (u32, u32);

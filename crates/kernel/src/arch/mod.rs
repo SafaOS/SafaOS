@@ -42,7 +42,7 @@ pub mod utils {
 }
 
 pub mod registers {
-    pub use super::arch::registers::StackFrame;
+    pub use super::arch::registers::{CPUID, StackFrame};
 }
 
 pub mod pci {

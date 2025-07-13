@@ -147,12 +147,14 @@ pub fn khalt() -> ! {
 use core::panic::PanicInfo;
 use core::sync::atomic::AtomicUsize;
 
+use crate::arch::registers::CPUID;
 use crate::arch::serial::SERIAL;
 
 static PANCIKED: AtomicUsize = AtomicUsize::new(0);
 const MAX_PANICK_COUNT: usize = 3;
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    let stack = unsafe { logging::StackTrace::current() };
     unsafe {
         arch::disable_interrupts();
     }
@@ -160,6 +162,7 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe {
         arch::halt_all();
     }
+
     static _PANICK_LOCK: Mutex<()> = Mutex::new(());
     let _guard = _PANICK_LOCK.lock();
 
@@ -167,11 +170,13 @@ fn panic(info: &PanicInfo) -> ! {
         unsafe {
             SERIAL.force_unlock();
         }
-        error!("\n\x1B[31mkernel panic within a panic:\n{info}\n\x1B[0mno stack trace");
+        error!(
+            "\n\x1B[31mkernel panic within a panic:\n{info}, cpu: {}\n\x1B[0mno stack trace",
+            CPUID::get()
+        );
         khalt()
     }
 
-    let stack = unsafe { logging::StackTrace::current() };
     unsafe {
         SERIAL.force_unlock();
         if !logging::QUITE_PANIC {
@@ -181,9 +186,10 @@ fn panic(info: &PanicInfo) -> ! {
     }
 
     panic_println!(
-        "\x1B[31mkernel panic:\n{}, at {}\x1B[0m",
+        "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
         info.message(),
         info.location().unwrap(),
+        CPUID::get(),
     );
     panic_println!("{}", stack);
 
