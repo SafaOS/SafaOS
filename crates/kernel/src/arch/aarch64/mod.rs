@@ -101,6 +101,18 @@ pub fn init_phase2() {
 }
 
 #[inline(always)]
+pub(super) fn get_daif() -> u64 {
+    let results: u64;
+    unsafe { asm!("mrs {:x}, DAIF", out(reg) results) };
+    results
+}
+
+#[inline(always)]
+pub(super) fn set_daif(value: u64) {
+    unsafe { asm!("msr DAIF, {:x}", in(reg) value) }
+}
+
+#[inline(always)]
 pub fn interrupts_disabled() -> bool {
     let results: u64;
     unsafe { asm!("mrs {:x}, DAIF", out(reg) results) };

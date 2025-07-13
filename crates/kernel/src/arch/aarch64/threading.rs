@@ -319,10 +319,8 @@ pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: i
 pub fn invoke_context_switch() {
     if SCHEDULER_INITED.load(core::sync::atomic::Ordering::Acquire) {
         unsafe {
-            let interrupts_disabled = super::interrupts_disabled();
-            if !interrupts_disabled {
-                super::disable_interrupts();
-            }
+            let daif = super::get_daif();
+            super::disable_interrupts();
 
             timer::TIMER_IRQ.set_pending();
 
@@ -330,9 +328,7 @@ pub fn invoke_context_switch() {
             super::enable_interrupts();
             sleep_until!(10 ms, !timer::TIMER_IRQ.is_pending());
 
-            if interrupts_disabled {
-                super::disable_interrupts();
-            }
+            super::set_daif(daif);
         }
     }
 }
