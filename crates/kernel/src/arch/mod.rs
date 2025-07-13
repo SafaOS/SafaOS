@@ -11,8 +11,7 @@ cfg_if! {
         use aarch64 as arch;
     }
     else {
-        pub mod unsupported;
-        use unsupported as arch;
+        compile_error!("unsupported architecture (target_arch unsupported)");
     }
 }
 
