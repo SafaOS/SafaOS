@@ -134,7 +134,6 @@ pub unsafe fn flush_cache_inner() {
             mov rax, cr3
             mov cr3, rax
             ",
-            options(nomem, nostack)
         )
     }
 }

@@ -67,6 +67,7 @@ extern "x86-interrupt" fn apic_err() {
 }
 extern "x86-interrupt" fn halt_handler() {
     crate::serial!("halting...\n");
+    send_eoi();
     khalt()
 }
 
