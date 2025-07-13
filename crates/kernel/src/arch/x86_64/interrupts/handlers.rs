@@ -7,7 +7,6 @@ use lazy_static::lazy_static;
 use super::idt::{GateDescriptor, IDTT};
 use super::{InterruptFrame, TrapFrame};
 
-use crate::arch::registers::CPUID;
 use crate::arch::x86_64::interrupts::apic::send_eoi;
 use crate::arch::x86_64::{flush_cache_inner, inb, threading};
 use crate::{drivers, khalt, serial};
@@ -123,13 +122,12 @@ pub fn handle_ps2_keyboard() {
         crate::__navi_key_pressed(encoded);
     }
 }
-#[unsafe(no_mangle)]
+
 pub extern "x86-interrupt" fn keyboard_interrupt_handler() {
     handle_ps2_keyboard();
     send_eoi();
 }
 
-#[unsafe(no_mangle)]
 pub extern "x86-interrupt" fn do_nothing() {
     send_eoi();
 }
