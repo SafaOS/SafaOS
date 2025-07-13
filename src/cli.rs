@@ -231,6 +231,8 @@ pub fn run(opts: RunOpts, path: &str) {
             "qemu-xhci",
             "-device",
             "usb-kbd",
+            "-smp",
+            "4",
         ],
     };
 
