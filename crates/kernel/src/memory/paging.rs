@@ -74,11 +74,7 @@ impl Iterator for IterPage {
 impl PageTable {
     fn flush_cache(&mut self) {
         unsafe {
-            if self as *mut _ == current_higher_root_table().as_ptr()
-                || self as *mut _ == current_lower_root_table().as_ptr()
-            {
-                arch::flush_cache();
-            }
+            arch::flush_cache();
         }
     }
 

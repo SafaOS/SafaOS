@@ -7,6 +7,7 @@ use lazy_static::lazy_static;
 use super::idt::{GateDescriptor, IDTT};
 use super::{InterruptFrame, TrapFrame};
 
+use crate::arch::registers::CPUID;
 use crate::arch::x86_64::interrupts::apic::send_eoi;
 use crate::arch::x86_64::{flush_cache_inner, inb, threading};
 use crate::{drivers, khalt, serial};
