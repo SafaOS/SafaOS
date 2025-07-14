@@ -65,7 +65,7 @@ pub fn thread_exit(code: usize) -> ! {
 
 #[unsafe(no_mangle)]
 pub fn thread_yield() {
-    if !SCHEDULER_INITED.load(Ordering::Acquire) {
+    if !unsafe { *SCHEDULER_INITED.get() } {
         return;
     }
 

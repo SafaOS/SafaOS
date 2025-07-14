@@ -11,7 +11,7 @@ pub type Pid = u32;
 
 use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicUsize};
+use core::sync::atomic::AtomicUsize;
 
 use alloc::sync::Arc;
 use lazy_static::lazy_static;
@@ -140,17 +140,17 @@ impl Scheduler {
         unsafe {
             crate::arch::disable_interrupts();
             let status = arch::threading::init_cpus(&task, idle_function);
-            let status = status.as_ref();
+            let status_ref = status.as_ref();
             self::add(task, root_thread);
-            SCHEDULER_INITED.store(true, core::sync::atomic::Ordering::Release);
+            *SCHEDULER_INITED.get() = true;
 
             debug!(
                 Scheduler,
                 "INITED, jumping to: {:#x} with stack: {:#x} ...",
-                status.at(),
-                status.stack_at()
+                status_ref.at(),
+                status_ref.stack_at()
             );
-            restore_cpu_status(status)
+            restore_cpu_status(status_ref)
         }
     }
 
@@ -366,7 +366,7 @@ impl Scheduler {
     }
 }
 
-pub static SCHEDULER_INITED: AtomicBool = AtomicBool::new(false);
+pub static SCHEDULER_INITED: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);
 
 /// Scheduler should be initialized first
 pub(super) unsafe fn before_thread_yield() {
@@ -383,7 +383,7 @@ pub(super) unsafe fn before_thread_yield() {
 ///
 /// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
 pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
-    if !SCHEDULER_INITED.load(core::sync::atomic::Ordering::Acquire) {
+    if !unsafe { *SCHEDULER_INITED.get() } {
         return None;
     }
 

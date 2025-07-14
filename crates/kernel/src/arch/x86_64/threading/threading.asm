@@ -1,8 +1,3 @@
-.section .data
-.global CURRENT_RING0_STACK_END
-CURRENT_RING0_STACK_END:
-.quad {default_kernel_stack}
-
 .section .text
 .global restore_cpu_status_full
 .global restore_cpu_status_partial
@@ -58,8 +53,6 @@ CURRENT_RING0_STACK_END:
 
 
 .macro restore_cpu_status_inner
-   mov rax, [rdi + RING0_RSP_OFFSET]
-   mov [CURRENT_RING0_STACK_END], rax
 // push the iretq frame
    push [rdi + SS_OFFSET]     // push ss
    push [rdi + RSP_OFFSET]          // push rsp
@@ -172,7 +165,7 @@ context_switch_stub:
     pushfq
     push 0 // rsp
     // ring0 rsp
-    push [CURRENT_RING0_STACK_END]
+    push 0
     call context_switch
     // UNREACHABLE!!!
     ud2

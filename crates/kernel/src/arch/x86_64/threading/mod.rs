@@ -18,14 +18,14 @@ use crate::{
         disable_interrupts,
         paging::{CURRENT_RING0_PAGE_TABLE, set_current_page_table_phys},
         x86_64::{
-            gdt::{TSS0_PTR, TaskStateSegment, set_kernel_tss_stack},
+            gdt::{TSS0_PTR, TaskStateSegment, get_kernel_tss_stack, set_kernel_tss_stack},
             registers::wrmsr,
         },
     },
     debug,
     limine::MP_RESPONSE,
     memory::{map_byte_slices, map_str_slices},
-    threading::{CPULocalStorage, cpu_context, task::Task},
+    threading::{CPULocalStorage, SCHEDULER_INITED, cpu_context, task::Task},
     utils::locks::Mutex,
 };
 use core::{
@@ -84,7 +84,7 @@ bitflags! {
 
 /// The CPU Status for each thread (registers)
 #[derive(Debug, Clone, Copy, Default)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct CPUStatus {
     ring0_rsp: VirtAddr,
     rsp: VirtAddr,
@@ -299,7 +299,7 @@ impl CPUStatus {
     }
 }
 
-global_asm!(include_str!("./threading.asm"), default_kernel_stack = const RING0_STACK0_END.into_raw());
+global_asm!(include_str!("./threading.asm"));
 
 unsafe extern "C" {
     /// Takes a reference to [`CPUStatus`] and sets current cpu status (registers) to it
@@ -319,6 +319,12 @@ pub extern "C" fn context_switch(
     mut capture: CPUStatus,
     frame: super::interrupts::InterruptFrame,
 ) -> ! {
+    capture.ring0_rsp = if unsafe { *SCHEDULER_INITED.get() } {
+        unsafe { get_kernel_tss_stack() }
+    } else {
+        VirtAddr::null()
+    };
+
     capture.rsp = frame.stack_pointer;
     capture.rip = frame.insturaction;
 
@@ -354,8 +360,9 @@ pub fn invoke_context_switch() {
 
 /// Fully restores the CPU status from the given [`CPUStatus`] structure.
 /// shouldn't be used
-pub unsafe fn restore_cpu_status(status: *const CPUStatus) -> ! {
+pub unsafe fn restore_cpu_status(status: &CPUStatus) -> ! {
     unsafe {
+        set_kernel_tss_stack(status.ring0_rsp);
         restore_cpu_status_full(status);
     }
 }
@@ -436,16 +443,16 @@ fn boot_core_inner(
         debug!("setting up CPU with lapic ID: {lapic_id}");
 
         let status = add_new_cpu_local(tss_ptr, task, idle_function);
-        let status = status.as_ref();
+        let status_ref = status.as_ref();
 
         debug!(
             "CPU with lapic ID {}: jumping to {:#x}, with stack at {:#x}",
             lapic_id,
-            status.at(),
-            status.stack_at()
+            status_ref.at(),
+            status_ref.stack_at()
         );
         READY_CPUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        restore_cpu_status(status)
+        restore_cpu_status(status_ref)
     }
 }
 
@@ -459,7 +466,6 @@ extern "C" fn boot_cpu(cpu: &Cpu) -> ! {
         let phys_addr = *CURRENT_RING0_PAGE_TABLE.get();
         set_current_page_table_phys(phys_addr);
 
-        crate::serial!("waaah: {}\n", cpu.lapic_id);
         // FIXME: calibrate each CPU's TSC
         let mut _ignored = 0;
         super::setup_cpu_generic1(&mut _ignored);
@@ -479,7 +485,6 @@ pub unsafe fn init_cpus(task: &Arc<Task>, idle_function: fn() -> !) -> NonNull<C
     let cpus = (*MP_RESPONSE).cpus();
 
     for cpu in &cpus[1..] {
-        crate::serial!("cccpu: {}\n", cpu.lapic_id);
         cpu.goto_address.write(boot_cpu);
     }
 

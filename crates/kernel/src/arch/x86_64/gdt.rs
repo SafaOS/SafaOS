@@ -80,9 +80,9 @@ const FLAG_PAGELIMIT: u8 = 1 << 7;
 #[repr(C, packed)]
 pub struct TaskStateSegment {
     reserved_1: u32,
-    pub privilege_stack_table: [u64; 3],
+    privilege_stack_table: [VirtAddr; 3],
     reserved_2: u64,
-    pub interrupt_stack_table: [u64; 7],
+    interrupt_stack_table: [VirtAddr; 7],
     reserved_3: u64,
     reserved_4: u16,
     pub iomap_base: u16,
@@ -92,9 +92,9 @@ impl TaskStateSegment {
     pub const fn new() -> Self {
         Self {
             reserved_1: 0,
-            privilege_stack_table: [0u64; 3],
+            privilege_stack_table: [VirtAddr::null(); 3],
             reserved_2: 0,
-            interrupt_stack_table: [0u64; 7],
+            interrupt_stack_table: [VirtAddr::null(); 7],
             reserved_3: 0,
             reserved_4: 0,
             iomap_base: 0,
@@ -110,20 +110,28 @@ lazy_static! {
     static ref TSS: [SyncUnsafeCell<TaskStateSegment>; MAX_GDT_COUNT] = core::array::from_fn(|n| {
         let mut tss = TaskStateSegment::new();
 
-        tss.interrupt_stack_table[0] = TSS_STACKS[(n * 2) + 0].get() as u64;
-        tss.interrupt_stack_table[1] = TSS_STACKS[(n * 2) + 1].get() as u64;
-        tss.privilege_stack_table[0] = 0;
+        tss.interrupt_stack_table[0] = VirtAddr::from_ptr(TSS_STACKS[(n * 2) + 0].get());
+        tss.interrupt_stack_table[1] = VirtAddr::from_ptr(TSS_STACKS[(n * 2) + 1].get());
+        tss.privilege_stack_table[0] = VirtAddr::null();
 
         SyncUnsafeCell::new(tss)
     });
 }
 
-/// Gets the TSS addr for the current CPU
+/// Sets the TSS addr for the current CPU
 pub unsafe fn set_kernel_tss_stack(stack_end: VirtAddr) {
     unsafe {
         let cpu_local = &*arch_cpu_local_storage_ptr();
         let tss = cpu_local.tss_ptr;
-        (*tss).privilege_stack_table[0] = stack_end.into_raw() as u64;
+        (*tss).privilege_stack_table[0] = stack_end;
+    }
+}
+/// Gets the TSS addr for the current CPU
+pub unsafe fn get_kernel_tss_stack() -> VirtAddr {
+    unsafe {
+        let cpu_local = &*arch_cpu_local_storage_ptr();
+        let tss = cpu_local.tss_ptr;
+        (*tss).privilege_stack_table[0]
     }
 }
 
