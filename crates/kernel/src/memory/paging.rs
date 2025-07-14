@@ -123,6 +123,8 @@ impl PageTable {
                 self.map_to_uncached(page, frame, flags)?;
             }
         }
+
+        self.flush_cache();
         Ok(())
     }
 

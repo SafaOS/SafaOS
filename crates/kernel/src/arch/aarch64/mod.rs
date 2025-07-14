@@ -113,12 +113,6 @@ pub(super) fn set_daif(value: u64) {
 }
 
 #[inline(always)]
-pub fn interrupts_disabled() -> bool {
-    let results: u64;
-    unsafe { asm!("mrs {:x}, DAIF", out(reg) results) };
-    (results >> 6) & 0xFF == 0
-}
-#[inline(always)]
 pub unsafe fn disable_interrupts() {
     unsafe { asm!("msr DAIFSet, #0b1111") }
 }
@@ -147,7 +141,7 @@ pub unsafe fn hlt() {
 }
 
 /// Performs a TLB shootdown
-pub fn flush_cache() {
+pub unsafe fn flush_cache() {
     unsafe {
         asm!(
             "
