@@ -317,7 +317,7 @@ pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: i
 }
 
 pub fn invoke_context_switch() {
-    if SCHEDULER_INITED.load(core::sync::atomic::Ordering::Acquire) {
+    if unsafe { *SCHEDULER_INITED.get() } {
         unsafe {
             let daif = super::get_daif();
             super::disable_interrupts();
