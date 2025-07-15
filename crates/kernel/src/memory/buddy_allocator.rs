@@ -277,12 +277,13 @@ impl BuddyAllocator<'_> {
         if let Some(block) = block {
             block.free = false;
             return unsafe { block.data() };
-        } else if let Some(block) = self.expand_heap_by(size) {
-            block.free = false;
-            return unsafe { block.data() };
-        }
+        } else {
+            if self.expand_heap_by(size).is_none() {
+                return core::ptr::null_mut();
+            };
 
-        core::ptr::null_mut()
+            self.allocmut(layout)
+        }
     }
     /// unsafe because ptr had to be allocated using self
     pub unsafe fn deallocmut(&mut self, ptr: *mut u8) {
