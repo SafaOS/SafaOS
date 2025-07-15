@@ -20,7 +20,7 @@ macros = { path = "../macros" }
 int-enum = "1.1"
 heapless = { version = "0.8.0", features = ["serde"] }
 limine = "0.5.0"
-hashbrown = "0.15.2"
+hashbrown = { version = "0.15.2", features = ["nightly"] }
 
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", git = "https://github.com/ObserverUnit/srede-json-frok", default-features = false, features = [

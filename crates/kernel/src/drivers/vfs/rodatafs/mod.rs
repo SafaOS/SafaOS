@@ -11,7 +11,7 @@ use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
 use crate::{
     drivers::vfs::{FSError, FSObjectID, FSResult, FileSystem, SeekOffset},
     threading::{self, Pid},
-    utils::locks::RwLock,
+    utils::{alloc::PageVec, locks::RwLock},
 };
 use alloc::{boxed::Box, vec::Vec};
 use hashbrown::HashMap;
@@ -198,14 +198,15 @@ impl RodFSObject {
 /// then using the index we search for a child using the length of the parent collection
 /// which means doing things like creating a new file in an existing directory is impossible
 pub struct InternalStructure {
-    inner: Vec<RodFSObject>,
+    inner: PageVec<RodFSObject>,
 }
 
 impl InternalStructure {
     pub fn new() -> Self {
-        InternalStructure {
-            inner: alloc::vec![RodFSObject::new_collection("", 0)],
-        }
+        let mut inner = PageVec::with_capacity(1);
+        inner.push(RodFSObject::new_collection("", 0));
+
+        InternalStructure { inner }
     }
 
     fn get_root_node_mut(&mut self) -> &mut RodFSObject {
