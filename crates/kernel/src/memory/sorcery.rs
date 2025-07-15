@@ -18,19 +18,20 @@ use crate::{
 
 use super::paging::{MapToError, Page, PageTable};
 
-pub const HEAP: (usize, usize) = {
+pub const HEAP: (VirtAddr, VirtAddr) = {
     // assuming HHDM starts at 0xffff000000000000
     // this allows for 224 TiBs of HHDM
     // assuming it starts at 0xffff800000000000
     // this allows for 96 TiBs of HHDM meaning you don't really have to worry`
-    let end = 0xffffe00000000000;
-    // 1 TiB from end
-    (end, end + 0x100000000000)
+    let end = VirtAddr::from(0xffffe00000000000);
+    // 2 TiB from end
+    (end, end + (0x100000000000 / 8))
 };
 
-pub const LARGE_HEAP: (usize, usize) = {
+pub const LARGE_HEAP: (VirtAddr, VirtAddr) = {
     let (_, end) = HEAP;
-    (end, 0xffffffff80000000)
+    // 4 TiB from end
+    (end, end + (0x100000000000 / 4))
 };
 
 fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
