@@ -20,8 +20,8 @@ use super::{
 /// good for allocating large amounts of memory which won't be freed or reallocated much
 /// slower than [`super::buddy_allocator::BuddyAllocator`]
 pub struct PageAllocator {
-    heap_start: usize,
-    heap_end: usize,
+    heap_start: VirtAddr,
+    heap_end: VirtAddr,
     /// bitmap is used to keep track of which pages are used and which are free
     /// the number of bytes it contain should be aligned to usize bytes
     bitmap: Vec<usize>,
@@ -45,12 +45,12 @@ impl PageAllocator {
     #[inline(always)]
     fn get_addr(&self, index: usize, bit: usize) -> *mut u8 {
         let computed_addr = index * usize::BITS as usize + bit;
-        (self.heap_start + (computed_addr * PAGE_SIZE)) as *mut u8
+        (self.heap_start + (computed_addr * PAGE_SIZE)).into_ptr::<u8>()
     }
 
     #[inline(always)]
     fn get_location(&self, addr: *mut u8) -> (usize, usize) {
-        let start = addr as usize - self.heap_start;
+        let start = VirtAddr::from_ptr(addr) - self.heap_start;
         let abs_index = start / PAGE_SIZE;
 
         let index = abs_index / usize::BITS as usize;

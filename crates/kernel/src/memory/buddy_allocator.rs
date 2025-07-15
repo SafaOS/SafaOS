@@ -2,13 +2,13 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{
     debug,
-    memory::{frame_allocator, paging::MapToError},
+    memory::paging::MapToError,
     utils::locks::{LazyLock, Mutex},
 };
 
 use super::{
     VirtAddr, align_up,
-    paging::{EntryFlags, Page, current_higher_root_table},
+    paging::{EntryFlags, current_higher_root_table},
 };
 
 pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
@@ -16,8 +16,6 @@ pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
 #[derive(Debug, Clone)]
 pub struct Block {
     free: bool,
-    /// decreases header size
-    /// we dont want more then 4gb of heap space anyways we want a few mbs
     size: usize,
 }
 
@@ -71,7 +69,7 @@ pub struct BuddyAllocator<'a> {
     heap_end: VirtAddr,
 }
 
-fn align_to_power_of_2(size: usize) -> usize {
+const fn align_to_power_of_2(size: usize) -> usize {
     let mut results = 1;
     while size > results {
         results <<= 1;
@@ -79,7 +77,7 @@ fn align_to_power_of_2(size: usize) -> usize {
     results
 }
 
-fn align_down_to_power_of_2(size: usize) -> usize {
+const fn align_down_to_power_of_2(size: usize) -> usize {
     let mut results = 1;
     while size > results {
         results <<= 1;
@@ -115,31 +113,32 @@ impl BuddyAllocator<'_> {
 
     pub fn expand_heap_by<'b>(&mut self, size: usize) -> Option<&'b mut Block> {
         debug!(BuddyAllocator, "expanding the heap by {:#x}", size);
-        let start = Page::containing_address(self.heap_end);
-        let end = Page::containing_address(self.heap_end + size);
+        let actual_end = unsafe {
+            let start = self.heap_end;
+            let end = start + size;
 
-        let mut root_table = unsafe { current_higher_root_table() };
-        for page in Page::iter_pages(start, end) {
-            if root_table.get_frame(page).is_none() {
-                let frame = frame_allocator::allocate_frame()?;
-                unsafe {
-                    root_table.map_to(page, frame, EntryFlags::WRITE).ok()?;
-                }
-            }
-        }
+            current_higher_root_table()
+                .alloc_map(start, end, EntryFlags::WRITE)
+                .ok()?
+        };
 
-        debug!(BuddyAllocator, "expandition done ...");
+        debug!(
+            BuddyAllocator,
+            "expandition done end is at: {:#x}..{:#x} ...", self.heap_end, actual_end
+        );
+
+        let size = actual_end - self.heap_end;
         unsafe { Some(self.add_free(size)) }
     }
 
     pub fn create() -> Result<Self, MapToError> {
         let (possible_start, _) = super::sorcery::HEAP;
 
-        let start = align_up(possible_start, size_of::<Block>());
+        let start = align_up(possible_start.into_raw(), size_of::<Block>());
         let start = align_up(start, 2);
         let start = VirtAddr::from(start);
 
-        let diff = start.into_raw() - possible_start;
+        let diff = start.into_raw() - possible_start.into_raw();
         let size = align_down_to_power_of_2(INIT_HEAP_SIZE - diff);
         let end = start + size;
 
