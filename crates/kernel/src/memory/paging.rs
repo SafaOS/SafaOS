@@ -1,5 +1,8 @@
 pub const PAGE_SIZE: usize = 4096;
-use crate::{arch, memory::PhysAddr};
+use crate::{
+    arch,
+    memory::{PhysAddr, align_up},
+};
 use bitflags::bitflags;
 use core::{
     fmt::{Debug, LowerHex},
@@ -133,14 +136,20 @@ impl PageTable {
     /// the mapped pages are zeroed
     ///
     /// flushes the cache if successful
+    ///
+    /// returns the end virtual address aligned up to PAGE_SIZE
+    #[must_use = "the actual end address is returned"]
     pub unsafe fn alloc_map(
         &mut self,
         from: VirtAddr,
         to: VirtAddr,
         flags: EntryFlags,
-    ) -> Result<(), MapToError> {
+    ) -> Result<VirtAddr, MapToError> {
+        let end_addr = align_up(to.into_raw(), PAGE_SIZE);
+        let end_addr = VirtAddr::from(end_addr);
+
         let from_page = Page::containing_address(from);
-        let to_page = Page::containing_address(to);
+        let to_page = Page::containing_address(end_addr);
 
         let iter = Page::iter_pages(from_page, to_page);
 
@@ -158,7 +167,7 @@ impl PageTable {
         }
 
         self.flush_cache();
-        Ok(())
+        Ok(end_addr)
     }
 
     /// Deallocates and unmaps pages from `from` to `to` then flushes the cache if necessary
