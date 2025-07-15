@@ -40,10 +40,16 @@ pub enum SyscallTable {
     SysTSpawn = 29,
     SysTExit = 30,
     SysTSleep = 31,
-    /// Waits for a child process with a given PID to exit
+    /// Waits for a child process with a given PID to exit, cleans it up and returns the exit code
     SysPWait = 11,
     /// Waits for a child thread with a given TID to exit
     SysTWait = 32,
+    /// like [`SysPWait`] without the waiting part, cleans up the given process and returns the exit code
+    ///
+    /// returns [`crate::errors::ErrorStatus::InvalidPid`] if the process doesn't exist
+    ///
+    /// returns [`crate::errors::ErrorStatus::Generic`] if the process exists but hasn't exited yet
+    SysPTryCleanUp = 33,
 
     SysShutdown = 20,
     SysReboot = 21,
@@ -53,7 +59,7 @@ pub enum SyscallTable {
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const NEXT_SYSCALL_NUM: u16 = 33;
+const NEXT_SYSCALL_NUM: u16 = 34;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();

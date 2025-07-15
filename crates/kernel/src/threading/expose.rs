@@ -99,12 +99,28 @@ pub fn kthread_sleep_for_ms(ms: u64) {
     };
 }
 
+pub fn try_cleanup_process(pid: Pid) -> Result<Option<usize>, ()> {
+    let found_process =
+        super::find(|process| process.pid() == pid, |process| process.clone()).ok_or(())?;
+    if found_process.is_alive() {
+        return Ok(None);
+    }
+
+    // task is dead
+    // TODO: block multiple waits on same pid
+    let Some(task_info) = super::remove(|p| p.pid() == pid) else {
+        warn!("task with `{pid}` was already cleaned up by another operation");
+        return Err(());
+    };
+
+    Ok(Some(task_info.exit_code))
+}
+
 /// waits for `pid` to exit
 /// returns it's exit code after cleaning it up
 pub fn wait_for_task(pid: Pid) -> Option<usize> {
     // cycles through the processes one by one until it finds the process with `pid`
     // returns the exit code of the process if it's a zombie and cleans it up
-    // if it's not a zombie it will be caught by the next above loop
     let found_task = super::find(|process| process.pid() == pid, |process| process.clone())?;
 
     let this = this_thread();

@@ -36,6 +36,20 @@ fn syst_wait(tid: Cid) -> Result<(), ErrorStatus> {
     Ok(())
 }
 
+#[syscall_handler]
+fn sysp_try_cleanup(pid: Pid, dest_exit_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
+    let cleaned_up =
+        threading::expose::try_cleanup_process(pid).map_err(|()| ErrorStatus::InvalidPid)?;
+    if let Some(exit_code) = cleaned_up {
+        if let Some(dest_exit_code) = dest_exit_code {
+            *dest_exit_code = exit_code;
+        }
+        Ok(())
+    } else {
+        Err(ErrorStatus::Generic)
+    }
+}
+
 fn syspspawn_inner(
     name: Option<&str>,
     path: Path,
