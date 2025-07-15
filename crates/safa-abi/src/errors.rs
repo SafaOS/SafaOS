@@ -38,7 +38,7 @@ pub enum ErrorStatus {
     // errors sent by processes
     NotEnoughArguments = 0x16,
     OutOfMemory = 0x17,
-    /// Invaild Thread ID
+    /// Invalid Thread ID
     InvalidTid = 0x18,
 }
 
