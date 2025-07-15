@@ -2,7 +2,7 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{
     debug,
-    memory::paging::MapToError,
+    memory::paging::{MapToError, PAGE_SIZE},
     utils::locks::{LazyLock, Mutex},
 };
 
@@ -69,14 +69,6 @@ pub struct BuddyAllocator<'a> {
     heap_end: VirtAddr,
 }
 
-const fn align_to_power_of_2(size: usize) -> usize {
-    let mut results = 1;
-    while size > results {
-        results <<= 1;
-    }
-    results
-}
-
 const fn align_down_to_power_of_2(size: usize) -> usize {
     let mut results = 1;
     while size > results {
@@ -92,7 +84,7 @@ const fn align_down_to_power_of_2(size: usize) -> usize {
 
 /// returns the actual block size, aligned to power of 2 including header size
 fn actual_size(size: usize) -> usize {
-    align_to_power_of_2(size + size_of::<Block>())
+    (size + size_of::<Block>()).next_power_of_two()
 }
 
 impl BuddyAllocator<'_> {
@@ -112,6 +104,9 @@ impl BuddyAllocator<'_> {
     }
 
     pub fn expand_heap_by<'b>(&mut self, size: usize) -> Option<&'b mut Block> {
+        let size = align_up(size, PAGE_SIZE);
+        let size = size.next_power_of_two();
+
         debug!(BuddyAllocator, "expanding the heap by {:#x}", size);
         let actual_end = unsafe {
             let start = self.heap_end;
