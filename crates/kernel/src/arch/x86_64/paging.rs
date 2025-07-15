@@ -8,6 +8,7 @@ use crate::VirtAddr;
 use crate::arch::x86_64::interrupts::apic;
 use crate::arch::x86_64::pci;
 use crate::memory::paging::{EntryFlags, Page};
+use crate::memory::sorcery::{HEAP, LARGE_HEAP};
 use crate::{
     PhysAddr,
     memory::{
@@ -343,5 +344,28 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
         pci::map_pcie(table)?;
         apic::map_apic(table)?;
     }
+    // a hack to handle sharing the higher half in x86_64
+    let (heap_start, heap_end) = HEAP;
+    let (large_heap_start, large_heap_end) = LARGE_HEAP;
+
+    let flags = EntryFlags::WRITE;
+    let (_, _, _, heap_p4_index) = translate(heap_start);
+    let (_, _, _, heap_end_p4_index) = translate(heap_end);
+
+    for entry in &mut table.entries[heap_p4_index..heap_end_p4_index] {
+        entry.map(ArchEntryFlags::from(flags))?;
+        crate::serial!("entry: {entry:#x?}\n");
+    }
+
+    let (_, _, _, lheap_p4_index) = translate(large_heap_start);
+    let (_, _, _, lheap_end_p4_index) = translate(large_heap_end);
+
+    for entry in &mut table.entries[lheap_p4_index..lheap_end_p4_index] {
+        entry.map(ArchEntryFlags::from(flags))?;
+    }
+
+    crate::serial!(
+        "mapped from {heap_p4_index} to {heap_end_p4_index} and from: {lheap_p4_index} to {lheap_end_p4_index}...\n"
+    );
     Ok(())
 }
