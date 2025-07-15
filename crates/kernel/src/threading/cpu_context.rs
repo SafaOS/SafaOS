@@ -10,7 +10,7 @@ pub type Cid = u32;
 #[derive(Debug, Clone)]
 pub enum BlockedReason {
     /// The thread is sleeping until [`.0`] ms of boot time is reached
-    SleepingUntil(u64),
+    SleepingUntil(u128),
     WaitingForTask(Arc<Task>),
     WaitingForThread(Arc<Thread>),
 }
@@ -18,7 +18,7 @@ pub enum BlockedReason {
 impl BlockedReason {
     pub fn block_lifted(&self) -> bool {
         match self {
-            Self::SleepingUntil(n) => time!(ms) >= *n,
+            Self::SleepingUntil(n) => time!(ms) as u128 >= *n,
             Self::WaitingForTask(task) => !task.is_alive(),
             Self::WaitingForThread(thread) => thread.is_dead(),
         }
@@ -175,7 +175,9 @@ impl Context {
     }
 
     pub fn sleep_for_ms(&mut self, ms: u64) {
-        self.status = ContextStatus::Blocked(BlockedReason::SleepingUntil(time!(ms) + ms));
+        self.status = ContextStatus::Blocked(BlockedReason::SleepingUntil(
+            (time!(ms) as u128) + ms as u128,
+        ));
     }
 
     pub fn wait_for_task(&mut self, task: Arc<Task>) {
