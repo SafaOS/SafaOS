@@ -195,19 +195,23 @@ impl RamFSObject {
         }
     }
 
-    pub fn is_empty_collection(&self) -> bool {
+    pub fn is_non_empty_collection(&self) -> bool {
         match self.state {
             RamFSObjectState::Collection(ref items) => {
+                // collection but empty
                 if items.is_empty() {
-                    return true;
+                    return false;
                 }
                 // check if the collection contains only two items that is the pointer to the previous collection and the pointer to the current collection
                 if items.len() == 2 {
+                    // collection but empty
                     items.get("..").is_some() && items.get(".").is_some()
                 } else {
-                    false
+                    // non-empty collection
+                    true
                 }
             }
+            // not a collection
             _ => false,
         }
     }
@@ -394,14 +398,10 @@ impl RamFS {
         child_id: FSObjectID,
     ) -> FSResult<()> {
         let obj = self.fget(child_id)?;
-        // makes sure the object is a non-empty collection, this is for
+        // makes sure the object is a non-empty collection if it is a collection, this is for
         // to prevent accidental deletion of non-empty directories and to make sure the directory is deleted recursively by the software (to delete hardlinks and such)
-        if !obj.is_empty_collection() {
-            return if obj.is_collection() {
-                Err(FSError::DirectoryNotEmpty)
-            } else {
-                Err(FSError::NotADirectory)
-            };
+        if obj.is_non_empty_collection() {
+            return Err(FSError::DirectoryNotEmpty);
         }
 
         let parent = self.fget_mut(parent_id)?;
