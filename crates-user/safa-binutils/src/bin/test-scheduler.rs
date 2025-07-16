@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use safa_api::syscalls::uptime;
+use safa_api::syscalls::misc::uptime;
 
 #[inline(always)]
 fn time() -> u64 {
