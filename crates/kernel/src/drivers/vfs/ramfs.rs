@@ -205,7 +205,7 @@ impl RamFSObject {
                 // check if the collection contains only two items that is the pointer to the previous collection and the pointer to the current collection
                 if items.len() == 2 {
                     // collection but empty
-                    items.get("..").is_some() && items.get(".").is_some()
+                    !(items.get("..").is_some() && items.get(".").is_some())
                 } else {
                     // non-empty collection
                     true
