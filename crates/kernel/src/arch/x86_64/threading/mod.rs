@@ -19,7 +19,7 @@ use crate::{
         paging::{CURRENT_RING0_PAGE_TABLE, set_current_page_table_phys},
         x86_64::{
             gdt::{TSS0_PTR, TaskStateSegment, get_kernel_tss_stack, set_kernel_tss_stack},
-            registers::wrmsr,
+            registers::{rdmsr, wrmsr},
         },
     },
     debug,
@@ -86,6 +86,7 @@ bitflags! {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct CPUStatus {
+    fs_base: VirtAddr,
     ring0_rsp: VirtAddr,
     rsp: VirtAddr,
     rflags: RFLAGS,
@@ -319,6 +320,7 @@ pub extern "C" fn context_switch(
     mut capture: CPUStatus,
     frame: super::interrupts::InterruptFrame,
 ) -> ! {
+    capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
     capture.ring0_rsp = if unsafe { *SCHEDULER_INITED.get() } {
         unsafe { get_kernel_tss_stack() }
     } else {
@@ -340,9 +342,10 @@ pub extern "C" fn context_switch(
             let new_context_ref = new_context_ptr.as_ref();
 
             set_kernel_tss_stack(new_context_ref.ring0_rsp);
+            wrmsr(0xC0000100, new_context_ref.fs_base.into_raw() as u64);
+
             if address_space_changed {
-                capture = *new_context_ref;
-                restore_cpu_status_full(&capture);
+                restore_cpu_status_full(new_context_ref);
             } else {
                 restore_cpu_status_partial(new_context_ref);
             }

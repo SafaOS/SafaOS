@@ -5,7 +5,8 @@
 
 
 
-.equ RING0_RSP_OFFSET, 0x00
+.equ FS_BASE_OFFSET, 0x00
+.equ RING0_RSP_OFFSET, FS_BASE_OFFSET + 8
 .equ RSP_OFFSET, RING0_RSP_OFFSET + 8
 .equ RFLAGS_OFFSET, RSP_OFFSET + 8
 .equ SS_OFFSET, RFLAGS_OFFSET + 8
@@ -165,6 +166,8 @@ context_switch_stub:
     pushfq
     push 0 // rsp
     // ring0 rsp
+    push 0
+    // fs
     push 0
     call context_switch
     // UNREACHABLE!!!

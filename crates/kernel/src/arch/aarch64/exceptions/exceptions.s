@@ -1,4 +1,4 @@
-.equ CONTEXT_SIZE, 16 * 50
+.equ CONTEXT_SIZE, 16 * 50 + 8
 .macro EXCEPTION_VECTOR handler, save_eregs=0
 
     sub sp, sp, #CONTEXT_SIZE
@@ -55,6 +55,9 @@
     stp q28, q29, [sp, #16 * 46]
     stp q30, q31, [sp, #16 * 48]
 
+    mrs x1, tpidr_el0
+    str x1, [sp, #16 * 50]
+
 # call exception handler
     bl \handler
 # avoid the 128 byte limit
@@ -69,6 +72,9 @@ restore_frame_partial:
     ldp x1, x2, [x0, #16 * 15]
     msr elr_el1, x1
     msr spsr_el1, x2
+
+    ldr x1, [x0, #16 * 50]
+    msr tpidr_el0, x1
 
     ldp x2, x3, [x0, #16 * 1]
     ldp x4, x5, [x0, #16 * 2]
