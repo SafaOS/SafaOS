@@ -4,7 +4,10 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use crate::utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use crate::{
+    memory::AlignToPage,
+    utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
+};
 use crate::{
     memory::paging::MapToError,
     threading::{
@@ -22,7 +25,7 @@ use crate::{
     arch::threading::CPUStatus,
     debug,
     memory::{
-        align_up, frame_allocator,
+        frame_allocator,
         paging::{PAGE_SIZE, Page, PhysPageTable},
     },
     utils::{
@@ -154,7 +157,7 @@ impl AliveTask {
         let amount = amount.unsigned_abs();
 
         if (usable_bytes < amount) || (is_negative) {
-            let pages = crate::memory::align_up(amount - usable_bytes, PAGE_SIZE) / PAGE_SIZE;
+            let pages = (amount - usable_bytes).to_next_page() / PAGE_SIZE;
 
             // FIXME: not tested
             let func = if is_negative {
@@ -342,7 +345,7 @@ impl Task {
         default_priority: ContextPriority,
         userspace_task: bool,
     ) -> (Arc<Self>, Arc<Thread>) {
-        let data_break = VirtAddr::from(align_up(data_break.into_raw(), PAGE_SIZE));
+        let data_break = data_break.to_next_page();
 
         let task = Arc::new(Self {
             name,

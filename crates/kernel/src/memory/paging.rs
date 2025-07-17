@@ -1,7 +1,7 @@
 pub const PAGE_SIZE: usize = 4096;
 use crate::{
     arch,
-    memory::{PhysAddr, align_up},
+    memory::{AlignToPage, PhysAddr},
 };
 use bitflags::bitflags;
 use core::{
@@ -11,7 +11,7 @@ use core::{
 use thiserror::Error;
 
 use super::{
-    VirtAddr, align_down,
+    VirtAddr,
     frame_allocator::{self, Frame, FramePtr},
 };
 
@@ -42,9 +42,8 @@ pub struct IterPage {
 
 impl Page {
     pub const fn containing_address(address: VirtAddr) -> Self {
-        let aligned = align_down(address.into_raw(), PAGE_SIZE);
         Self {
-            start_address: VirtAddr::from(aligned),
+            start_address: address.to_previous_page(),
         }
     }
 
@@ -145,8 +144,7 @@ impl PageTable {
         to: VirtAddr,
         flags: EntryFlags,
     ) -> Result<VirtAddr, MapToError> {
-        let end_addr = align_up(to.into_raw(), PAGE_SIZE);
-        let end_addr = VirtAddr::from(end_addr);
+        let end_addr = to.to_next_page();
 
         let from_page = Page::containing_address(from);
         let to_page = Page::containing_address(end_addr);

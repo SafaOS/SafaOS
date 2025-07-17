@@ -1,11 +1,11 @@
 use crate::{
+    PhysAddr, VirtAddr,
     drivers::{interrupts::IntTrigger, pci::PCI},
     info,
     memory::{
-        align_up,
+        AlignToPage,
         paging::{EntryFlags, PAGE_SIZE},
     },
-    PhysAddr, VirtAddr,
 };
 
 use super::{cpu, paging::current_higher_root_table};
@@ -16,7 +16,7 @@ pub fn init() -> PCI {
 
     info!("initializing PCI from bus: {bus_start:#x} to bus: {bus_end:#x}");
 
-    let page_num = align_up(size, PAGE_SIZE) / PAGE_SIZE;
+    let page_num = size.to_next_page() / PAGE_SIZE;
     unsafe {
         current_higher_root_table()
             .map_contiguous_pages(

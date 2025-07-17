@@ -9,10 +9,14 @@ use alloc::vec;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::{debug, utils::locks::Mutex};
+use crate::{
+    debug,
+    memory::{AlignTo, AlignToPage},
+    utils::locks::Mutex,
+};
 
 use super::{
-    VirtAddr, align_up,
+    VirtAddr,
     paging::{EntryFlags, MapToError, PAGE_SIZE, current_higher_root_table},
 };
 
@@ -189,7 +193,7 @@ impl PageAllocator {
         let page_count = size.div_ceil(PAGE_SIZE);
 
         let page_count = if page_count > usize::BITS as usize {
-            align_up(page_count, usize::BITS as usize)
+            page_count.to_next_multiple_of(usize::BITS)
         } else {
             page_count
         };
@@ -268,7 +272,7 @@ unsafe impl Allocator for Mutex<PageAllocator> {
     ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
         unsafe {
             if old_layout.size() % PAGE_SIZE != 0 {
-                let actual_size = align_up(old_layout.size(), PAGE_SIZE);
+                let actual_size = old_layout.size().to_next_page();
                 if actual_size >= new_layout.size() {
                     let slice =
                         core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());

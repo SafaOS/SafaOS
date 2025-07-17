@@ -104,7 +104,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl Sub<$ty> for $ty {
+        impl const Sub<$ty> for $ty {
             type Output = usize;
             #[inline(always)]
             fn sub(self, rhs: $ty) -> Self::Output {
@@ -112,7 +112,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl Sub<usize> for $ty {
+        impl const Sub<usize> for $ty {
             type Output = Self;
             #[inline(always)]
             fn sub(self, rhs: usize) -> Self::Output {
@@ -137,6 +137,28 @@ macro_rules! impl_addr_ty {
         impl DerefMut for $ty {
             fn deref_mut(&mut self) -> &mut Self::Target {
                 &mut self.0
+            }
+        }
+
+        impl const AlignTo<usize> for $ty {
+            #[inline(always)]
+            fn to_next_multiple_of(self, alignment: usize) -> Self {
+                Self::from(self.into_raw().to_next_multiple_of(alignment))
+            }
+            #[inline(always)]
+            fn to_previous_multiple_of(self, alignment: usize) -> Self {
+                Self::from(self.into_raw().to_previous_multiple_of(alignment))
+            }
+        }
+
+        impl const AlignTo<$ty> for $ty {
+            #[inline(always)]
+            fn to_next_multiple_of(self, alignment: Self) -> Self {
+                self.to_next_multiple_of(alignment.into_raw())
+            }
+            #[inline(always)]
+            fn to_previous_multiple_of(self, alignment: Self) -> Self {
+                self.to_previous_multiple_of(alignment.into_raw())
             }
         }
     };
@@ -189,15 +211,69 @@ impl<T> From<*mut T> for VirtAddr {
     }
 }
 
-#[inline(always)]
-pub const fn align_up(address: usize, alignment: usize) -> usize {
-    (address + alignment - 1) & !(alignment - 1)
+#[const_trait]
+pub trait AlignTo<Other>: Sized {
+    /// Aligns (rounds) `self` to the next multiple of `alignment` aka align up
+    ///
+    /// for example: 1.to_next_multiple_of(2) == 2
+    fn to_next_multiple_of(self, alignment: Other) -> Self;
+    /// Aligns (rounds) `self` to the previous multiple of `alignment` aka align down
+    ///
+    /// for example: 3.to_previous_multiple_of(2) == 2
+    fn to_previous_multiple_of(self, alignment: Other) -> Self;
 }
 
-#[inline(always)]
-pub const fn align_down(x: usize, alignment: usize) -> usize {
-    x & !(alignment - 1)
+#[const_trait]
+pub trait AlignToPage: const AlignTo<usize> {
+    #[inline(always)]
+    /// Aligns (rounds) `self` to the next multiple of [`PAGE_SIZE`]
+    ///
+    /// for example: 0x100.to_next_page() == 0x1000 (4096)
+    fn to_next_page(self) -> Self {
+        self.to_next_multiple_of(PAGE_SIZE)
+    }
+    #[inline(always)]
+    /// Aligns (rounds) `self` to the previous multiple of [`PAGE_SIZE`]
+    ///
+    /// for example: 0x2010.to_previous_page() == 0x2000 (4096*2)
+    fn to_previous_page(self) -> Self {
+        self.to_previous_multiple_of(PAGE_SIZE)
+    }
 }
+
+macro_rules! impl_align_common {
+    ($ty: ty, $from: ty) => {
+        impl const AlignTo<$from> for $ty {
+            #[inline(always)]
+            fn to_next_multiple_of(self, alignment: $from) -> Self {
+                let alignment = alignment as $ty;
+                (self + alignment - 1) & !(alignment - 1)
+            }
+            #[inline(always)]
+            fn to_previous_multiple_of(self, alignment: $from) -> Self {
+                let alignment = alignment as $ty;
+                self & !(alignment - 1)
+            }
+        }
+    };
+
+    ($ty: ty) => {
+        impl_align_common!($ty, $ty);
+    };
+}
+
+impl_align_common!(usize);
+impl<T> const AlignToPage for T where T: const AlignTo<usize> {}
+
+impl_align_common!(usize, u64);
+impl_align_common!(usize, u32);
+impl_align_common!(usize, u16);
+impl_align_common!(u64);
+impl_align_common!(u64, u32);
+impl_align_common!(u64, u16);
+impl_align_common!(u32);
+impl_align_common!(u32, u16);
+impl_align_common!(u16);
 
 #[inline(always)]
 pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8]) {

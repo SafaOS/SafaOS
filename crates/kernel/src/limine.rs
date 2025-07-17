@@ -22,7 +22,7 @@ use limine::response::MpResponse;
 
 use crate::drivers::framebuffer::FrameBufferInfo;
 use crate::drivers::framebuffer::PixelFormat;
-use crate::memory::align_up;
+use crate::memory::AlignTo;
 use crate::utils::ustar::TarArchiveIter;
 
 #[used]
@@ -123,7 +123,7 @@ fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
         _ => panic!("unknown limine framebuffer format"),
     };
 
-    let bytes_per_pixel = align_up(first.bpp() as usize, 8) / 8;
+    let bytes_per_pixel = (first.bpp().to_next_multiple_of(8) / 8) as usize;
     let stride = first.pitch() as usize / bytes_per_pixel;
     let height = first.height() as usize;
 

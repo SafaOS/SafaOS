@@ -2,12 +2,12 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{
     debug,
-    memory::paging::{MapToError, PAGE_SIZE},
+    memory::{AlignTo, AlignToPage, paging::MapToError},
     utils::locks::{LazyLock, Mutex},
 };
 
 use super::{
-    VirtAddr, align_up,
+    VirtAddr,
     paging::{EntryFlags, current_higher_root_table},
 };
 
@@ -104,7 +104,7 @@ impl BuddyAllocator<'_> {
     }
 
     pub fn expand_heap_by<'b>(&mut self, size: usize) -> Option<&'b mut Block> {
-        let size = align_up(size, PAGE_SIZE);
+        let size = size.to_next_page();
         let size = size.next_power_of_two();
 
         debug!(BuddyAllocator, "expanding the heap by {:#x}", size);
@@ -129,11 +129,10 @@ impl BuddyAllocator<'_> {
     pub fn create() -> Result<Self, MapToError> {
         let (possible_start, _) = super::sorcery::HEAP;
 
-        let start = align_up(possible_start.into_raw(), size_of::<Block>());
-        let start = align_up(start, 2);
-        let start = VirtAddr::from(start);
+        let start = possible_start.to_next_multiple_of(size_of::<Block>());
+        let start = start.to_next_multiple_of(2);
 
-        let diff = start.into_raw() - possible_start.into_raw();
+        let diff = start - possible_start;
         let size = align_down_to_power_of_2(INIT_HEAP_SIZE - diff);
         let end = start + size;
 

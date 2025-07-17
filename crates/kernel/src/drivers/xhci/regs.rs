@@ -9,7 +9,7 @@ use crate::{
         },
     },
     memory::{
-        align_up,
+        AlignTo,
         frame_allocator::{self, Frame},
         paging::PAGE_SIZE,
     },
@@ -852,7 +852,9 @@ impl<'s> XHCIRegisters<'s> {
             // DCBAA entries must be 64 byte aligned
             let (scratchpad_buffers, scratchpad_buffers_addr) = allocate_buffers_frame::<Frame>(
                 self.buffers_frame,
-                align_up((dcbaa_phys_addr + dcbaa_slice.len()).into_raw(), 64),
+                (dcbaa_phys_addr + dcbaa_slice.len())
+                    .to_next_multiple_of(64)
+                    .into_raw(),
                 caps.max_scratchpad_buffers(),
             );
 

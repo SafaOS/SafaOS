@@ -13,7 +13,7 @@ use crate::{
     },
     debug,
     limine::{self, HHDM},
-    memory::{align_up, frame_allocator},
+    memory::{AlignToPage, frame_allocator},
 };
 
 use super::paging::{MapToError, Page, PageTable};
@@ -64,7 +64,8 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
     for entry in limine::mmap_request().entries() {
         let phys_addr = PhysAddr::from(entry.base as usize);
         let size_bytes = entry.length as usize;
-        let size = align_up(size_bytes, PAGE_SIZE);
+        let size = size_bytes.to_next_page();
+
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
             let virt_addr = phys_addr.into_virt();
             let page_num = size / PAGE_SIZE;
