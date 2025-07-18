@@ -82,7 +82,7 @@ pub unsafe fn thread_sleep_for_ms(ms: u64) {
     let curr_time = time!(ms);
 
     let current = super::this_thread();
-    unsafe { current.context().sleep_for_ms(ms) };
+    unsafe { current.sleep_for_ms(ms) };
 
     while curr_time + ms > time!(ms) {
         thread_yield();
@@ -124,7 +124,7 @@ pub fn wait_for_task(pid: Pid) -> Option<usize> {
     let found_task = super::find(|process| process.pid() == pid, |process| process.clone())?;
 
     let this = this_thread();
-    unsafe { this.context().wait_for_task(found_task.clone()) };
+    unsafe { this.wait_for_task(found_task.clone()) };
 
     while found_task.is_alive() {
         thread_yield();
@@ -152,7 +152,7 @@ pub fn wait_for_thread(cid: Cid) -> Option<()> {
         .cloned()?;
 
     unsafe {
-        this_thread.context().wait_for_thread(thread.clone());
+        this_thread.wait_for_thread(thread.clone());
     }
 
     while !thread.is_dead() {

@@ -5,11 +5,11 @@ use core::{
 };
 
 use crate::{
-    memory::AlignToPage,
+    memory::{AlignToPage, proc_mem_allocator::ProcessMemAllocator},
     utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use crate::{
-    memory::paging::MapToError,
+    memory::{paging::MapToError, proc_mem_allocator::TrackedAllocation},
     threading::{
         cpu_context::{Cid, ContextPriority, Thread},
         this_thread,
@@ -278,6 +278,11 @@ impl TaskState {
     }
 }
 
+const PROCESS_AREA_START_ADDR: VirtAddr = VirtAddr::from(0x00007A0000000000);
+const PROCESS_AREA_SIZE: usize = 0x50000000000;
+const DEFAULT_STACK_SIZE: usize = 8 * PAGE_SIZE;
+const GUARD_PAGES_COUNT: usize = 2;
+
 pub struct Task {
     name: Name,
     /// constant
@@ -292,6 +297,7 @@ pub struct Task {
 
     next_cid: AtomicU32,
     default_priority: ContextPriority,
+    allocator: Mutex<ProcessMemAllocator>,
 
     pub(super) threads: Mutex<Vec<Arc<Thread>>>,
     pub context_count: AtomicU32,
@@ -331,21 +337,73 @@ impl Task {
         }
     }
 
+    fn allocate_stack_inner(
+        allocator: &mut ProcessMemAllocator,
+    ) -> Result<TrackedAllocation, MapToError> {
+        allocator.allocate_tracked_guraded(DEFAULT_STACK_SIZE, GUARD_PAGES_COUNT)
+    }
+
+    fn allocate_stack(&self) -> Result<TrackedAllocation, MapToError> {
+        Self::allocate_stack_inner(&mut *self.allocator.lock())
+    }
+
     /// Creates a new task returning a combination of the task and the main thread
-    /// # Panics
-    /// if `cwd` or `name` have a length greater than 128 or 64 bytes respectively
-    pub fn new(
+    pub fn create(
         name: Name,
         pid: Pid,
         ppid: Pid,
+        entry_point: VirtAddr,
         cwd: Box<PathBuf>,
+        env: &[&[u8]],
+        args: &[&str],
+        structures: AbiStructures,
         root_page_table: PhysPageTable,
-        status: CPUStatus,
         data_break: VirtAddr,
         default_priority: ContextPriority,
         userspace_task: bool,
-    ) -> (Arc<Self>, Arc<Thread>) {
+    ) -> Result<(Arc<Self>, Arc<Thread>), MapToError> {
         let data_break = data_break.to_next_page();
+        let mut root_page_table = root_page_table;
+
+        let mut proc_mem_allocator = ProcessMemAllocator::new(
+            &mut *root_page_table,
+            PROCESS_AREA_START_ADDR,
+            PROCESS_AREA_SIZE,
+        );
+
+        let envc = env.len();
+        let (_, _, envv_start) = proc_mem_allocator.allocate_filled_with_slices(env, 0x10)?;
+
+        let argc = args.len();
+        let (_, _, argv_start) = proc_mem_allocator
+            .allocate_filled_with_slices(unsafe { core::mem::transmute(args) }, 0x10)?;
+
+        let (abi_structures_start, _) = proc_mem_allocator.allocate_filled_with(
+            &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) }[..],
+            align_of::<AbiStructures>(),
+        )?;
+
+        let entry_args = [
+            argc,
+            argv_start.into_raw(),
+            envc,
+            envv_start.into_raw(),
+            abi_structures_start.into_raw(),
+        ];
+
+        let user_stack_tracker = Self::allocate_stack_inner(&mut proc_mem_allocator)?;
+        let kernel_stack_tracker = Self::allocate_stack_inner(&mut proc_mem_allocator)?;
+
+        let context = unsafe {
+            CPUStatus::create_root(
+                &mut root_page_table,
+                entry_point,
+                entry_args,
+                user_stack_tracker.end(),
+                kernel_stack_tracker.end(),
+                userspace_task,
+            )?
+        };
 
         let task = Arc::new(Self {
             name,
@@ -369,13 +427,21 @@ impl Task {
                 data_break,
                 cwd,
             })),
+            allocator: Mutex::new(proc_mem_allocator),
             userspace_task,
         });
 
-        let thread = Arc::new(Self::create_thread_from_status(&task, 0, status, None));
+        let thread = Arc::new(Self::create_thread_from_status(
+            &task,
+            0,
+            context,
+            None,
+            user_stack_tracker,
+            kernel_stack_tracker,
+        ));
         task.threads.lock().push(thread.clone());
 
-        (task, thread)
+        Ok((task, thread))
     }
 
     /// Creates a new thread from a CPU status giving it a `cid` and everything
@@ -384,12 +450,16 @@ impl Task {
         cid: Cid,
         cpu_status: CPUStatus,
         priority: Option<ContextPriority>,
+        user_stack: TrackedAllocation,
+        kernel_stack: TrackedAllocation,
     ) -> Thread {
         Thread::new(
             cid,
             cpu_status,
             task,
             priority.unwrap_or(task.default_priority),
+            user_stack,
+            kernel_stack,
         )
     }
 
@@ -427,10 +497,15 @@ impl Task {
         let state = write_guard
             .alive_mut()
             .expect("tried to create a thread in a task that is not alive");
+
+        let user_stack_tracker = task.allocate_stack()?;
+        let kernel_stack_tracker = task.allocate_stack()?;
         let page_table = &mut state.root_page_table;
 
         let cpu_status = unsafe {
             CPUStatus::create_child(
+                user_stack_tracker.end(),
+                kernel_stack_tracker.end(),
                 page_table,
                 entry_point,
                 context_id,
@@ -439,7 +514,14 @@ impl Task {
             )?
         };
 
-        let thread = Self::create_thread_from_status(task, context_id, cpu_status, priority);
+        let thread = Self::create_thread_from_status(
+            task,
+            context_id,
+            cpu_status,
+            priority,
+            user_stack_tracker,
+            kernel_stack_tracker,
+        );
         task.context_count.fetch_add(1, Ordering::Relaxed);
 
         Ok(thread)
@@ -462,21 +544,21 @@ impl Task {
         let mut page_table = PhysPageTable::create()?;
         let data_break = elf.load_exec(&mut page_table)?;
 
-        let context = unsafe {
-            CPUStatus::create_root(&mut page_table, args, env, structures, entry_point, true)?
-        };
-
-        Ok(Self::new(
+        Self::create(
             name,
             pid,
             ppid,
+            entry_point,
             cwd,
+            env,
+            args,
+            structures,
             page_table,
-            context,
             data_break,
             default_priority,
             true,
-        ))
+        )
+        .map_err(|e| e.into())
     }
 
     pub fn name(&self) -> &Name {
@@ -510,7 +592,6 @@ impl Task {
 
         for thread in &*threads {
             let cid = thread.cid();
-            let context = unsafe { thread.context() };
             // we don't have to wait for self to exit
             if killing_self && this_cid == cid {
                 continue;
@@ -519,7 +600,7 @@ impl Task {
             thread.mark_dead(true);
 
             // wait for the thread to exit
-            while context.status().is_running() {
+            while thread.status().is_running() {
                 super::expose::thread_yield();
                 core::hint::spin_loop();
             }

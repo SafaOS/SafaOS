@@ -242,14 +242,9 @@ impl PageTable {
         let level_1_table = level_2_table[level_2_index].map(flags)?;
 
         let entry = &mut level_1_table[level_1_index];
-        // TODO: stress test this
-        debug_assert!(
-            entry.frame().is_none(),
-            "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {page:?}",
-            entry,
-            entry.frame(),
-            frame,
-        );
+        if entry.frame().is_some() {
+            return Err(MapToError::AlreadyMapped);
+        }
 
         *entry = Entry::new(flags, frame.start_address());
         Ok(())

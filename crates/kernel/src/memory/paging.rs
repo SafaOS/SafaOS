@@ -17,7 +17,7 @@ use super::{
 
 pub use crate::arch::paging::{PageTable, current_higher_root_table, current_lower_root_table};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Page {
     start_address: VirtAddr,
 }
@@ -51,6 +51,13 @@ impl Page {
         self.start_address
     }
 
+    /// Returns the page next to "after" `self`
+    pub const fn next(&self) -> Self {
+        Self {
+            start_address: self.start_address + PAGE_SIZE,
+        }
+    }
+
     /// creates an iterator'able struct
     /// requires that start.start_address is smaller then end.start_address
     pub fn iter_pages(start: Page, end: Page) -> IterPage {
@@ -62,10 +69,10 @@ impl Page {
 impl Iterator for IterPage {
     type Item = Page;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.start.start_address < self.end.start_address {
+        if self.start < self.end {
             let page = self.start;
 
-            self.start.start_address += PAGE_SIZE;
+            self.start = self.start.next();
             Some(page)
         } else {
             None
@@ -74,7 +81,7 @@ impl Iterator for IterPage {
 }
 
 impl PageTable {
-    fn flush_cache(&mut self) {
+    pub fn flush_cache(&mut self) {
         unsafe {
             arch::flush_cache();
         }
@@ -100,6 +107,24 @@ impl PageTable {
         unsafe {
             self.unmap_uncached(page);
             self.flush_cache();
+        }
+    }
+
+    pub unsafe fn try_alloc_map_single_uncached(
+        &mut self,
+        page: Page,
+        flags: EntryFlags,
+    ) -> Result<bool, MapToError> {
+        let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+        if let Err(e) = unsafe { self.map_to_uncached(page, frame, flags) } {
+            if e != MapToError::AlreadyMapped {
+                return Err(e);
+            }
+
+            frame_allocator::deallocate_frame(frame);
+            Ok(false)
+        } else {
+            Ok(true)
         }
     }
 
@@ -184,10 +209,12 @@ impl PageTable {
     }
 }
 
-#[derive(Debug, Clone, Copy, Error)]
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum MapToError {
     #[error("frame allocator: out of memory")]
     FrameAllocationFailed,
+    #[error("fatal: attempt to map an already mapped region")]
+    AlreadyMapped,
 }
 
 bitflags! {

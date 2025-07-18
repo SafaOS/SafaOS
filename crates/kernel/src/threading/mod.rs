@@ -15,7 +15,7 @@ use core::sync::atomic::AtomicUsize;
 
 use alloc::sync::Arc;
 use lazy_static::lazy_static;
-use safa_utils::{abi::raw::processes::AbiStructures, make_path};
+use safa_utils::make_path;
 
 use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};
 use crate::threading::expose::thread_yield;
@@ -111,31 +111,25 @@ impl Scheduler {
         unsafe {
             crate::arch::disable_interrupts();
         }
-        let mut page_table = unsafe { PhysPageTable::from_current() };
-        let context = unsafe {
-            CPUStatus::create_root(
-                &mut page_table,
-                &[],
-                &[],
-                AbiStructures::default(),
-                VirtAddr::from(main_function as usize),
-                false,
-            )
-            .unwrap()
-        };
+
+        let page_table = unsafe { PhysPageTable::from_current() };
         let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
-        let (task, root_thread) = Task::new(
+        let (task, root_thread) = Task::create(
             Name::try_from(name).expect("initial process name too long"),
             0,
             0,
+            VirtAddr::from(main_function as usize),
             cwd,
+            &[],
+            &[],
+            unsafe { core::mem::zeroed() },
             page_table,
-            context,
             VirtAddr::null(),
             ContextPriority::Medium,
             false,
-        );
+        )
+        .expect("failed to create Eve");
 
         unsafe {
             crate::arch::disable_interrupts();
@@ -166,14 +160,16 @@ impl Scheduler {
         unsafe {
             let current_thread = &*current_thread_ptr;
             let current_cid = current_thread.cid();
-            let current_context = current_thread.context();
+            let current_context = current_thread
+                .context()
+                .expect("context is None before the thread is removed");
             let current_task = current_thread.task();
             let current_pid = current_task.pid();
 
             current_context.set_cpu_status(current_status);
 
-            if current_context.status().is_running() {
-                current_context.set_status(ContextStatus::Runnable);
+            if current_thread.status().is_running() {
+                current_thread.set_status(ContextStatus::Runnable);
             }
 
             if !current_task.is_alive() {
@@ -223,14 +219,14 @@ impl Scheduler {
                         continue;
                     }
 
-                    let context = thread.context();
-                    let status = context.status();
+                    let status = thread.status();
 
                     macro_rules! choose_context {
                         () => {{
-                            context.set_status(ContextStatus::Running);
+                            thread.set_status(ContextStatus::Running);
+                            let priority = thread.priority();
 
-                            let priority = context.priority();
+                            let context = thread.context_unchecked();
                             let cpu_status = context.cpu_status();
                             *current_thread_ptr = thread.clone();
                             *current_thread_node = next_node;

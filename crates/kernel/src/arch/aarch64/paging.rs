@@ -289,14 +289,9 @@ impl PageTable {
         let l3 = l2[l2_index].map()?;
         let entry = &mut l3[l3_index];
 
-        // TODO: stress test this
-        debug_assert!(
-            entry.frame().is_none(),
-            "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with {page:?}",
-            entry,
-            entry.frame(),
-            frame,
-        );
+        if entry.frame().is_some() {
+            return Err(MapToError::AlreadyMapped);
+        }
 
         entry.set(flags, frame.start_address());
         Ok(())

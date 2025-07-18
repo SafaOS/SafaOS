@@ -1,17 +1,5 @@
 pub const STACK_SIZE: usize = PAGE_SIZE * 8;
 
-pub const STACK0_START: VirtAddr = VirtAddr::from(0x00007A3000000000);
-pub const STACK0_END: VirtAddr = STACK0_START + STACK_SIZE;
-pub const GUARD_PAGES_COUNT: usize = 1;
-
-const RING0_STACK0_START: VirtAddr = VirtAddr::from(0x00007A0000000000);
-const RING0_STACK0_END: VirtAddr = RING0_STACK0_START + STACK_SIZE;
-
-pub const ENVIRONMENT_START: VirtAddr = VirtAddr::from(0x00007E0000000000);
-pub const ARGV_START: VirtAddr = ENVIRONMENT_START + 0xA000000000;
-pub const ENVIRONMENT_VARIABLES_START: VirtAddr = ENVIRONMENT_START + 0xE000000000;
-
-pub const ABI_STRUCTURES_START: VirtAddr = ENVIRONMENT_START + 0x1000000000;
 use crate::{
     PhysAddr,
     arch::{
@@ -24,7 +12,6 @@ use crate::{
     },
     debug,
     limine::MP_RESPONSE,
-    memory::{map_byte_slices, map_str_slices},
     threading::{CPULocalStorage, SCHEDULER_INITED, cpu_context, task::Task},
     utils::locks::Mutex,
 };
@@ -42,10 +29,7 @@ use limine::mp::Cpu;
 
 use crate::{
     VirtAddr,
-    memory::{
-        copy_to_userspace,
-        paging::{EntryFlags, MapToError, PAGE_SIZE, PhysPageTable},
-    },
+    memory::paging::{MapToError, PAGE_SIZE, PhysPageTable},
     threading::swtch,
 };
 
@@ -133,7 +117,7 @@ pub struct CPUStatus {
     xmm0: [u8; 16],
 }
 
-use safa_utils::abi::raw::processes::{AbiStructures, ContextPriority};
+use safa_utils::abi::raw::processes::ContextPriority;
 
 const fn make_usermode_regs(is_userspace: bool) -> (u64, u64, RFLAGS) {
     if is_userspace {
@@ -153,40 +137,6 @@ const fn make_usermode_regs(is_userspace: bool) -> (u64, u64, RFLAGS) {
     }
 }
 
-unsafe fn allocate_generic_stack_for_context(
-    stack_generic_start: VirtAddr,
-    page_table: &mut PhysPageTable,
-    context_id: cpu_context::Cid,
-) -> Result<VirtAddr, MapToError> {
-    let guard_pages_size = GUARD_PAGES_COUNT * PAGE_SIZE;
-    let stack_start = stack_generic_start + (context_id as usize * (STACK_SIZE + guard_pages_size));
-    let stack_end = stack_start + STACK_SIZE;
-
-    unsafe {
-        page_table.alloc_map(
-            stack_start,
-            stack_end,
-            EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-        )?;
-    }
-
-    Ok(stack_end)
-}
-
-unsafe fn allocate_user_stack_for_context(
-    page_table: &mut PhysPageTable,
-    context_id: cpu_context::Cid,
-) -> Result<VirtAddr, MapToError> {
-    unsafe { allocate_generic_stack_for_context(STACK0_START, page_table, context_id) }
-}
-
-unsafe fn allocate_kernel_stack_for_context(
-    page_table: &mut PhysPageTable,
-    context_id: cpu_context::Cid,
-) -> Result<VirtAddr, MapToError> {
-    unsafe { allocate_generic_stack_for_context(RING0_STACK0_START, page_table, context_id) }
-}
-
 impl CPUStatus {
     pub fn at(&self) -> VirtAddr {
         self.rip
@@ -200,70 +150,36 @@ impl CPUStatus {
     /// argument `userspace` determines if the process is in ring0 or not
     /// # Safety
     /// The caller must ensure `page_table` is not freed, as long as [`Self`] is alive otherwise it will cause UB
-    pub unsafe fn create_root(
+    pub unsafe fn create_root<const ARGS_COUNT: usize>(
         page_table: &mut PhysPageTable,
-        argv: &[&str],
-        env: &[&[u8]],
-        structures: AbiStructures,
         entry_point: VirtAddr,
+        entry_point_args: [usize; ARGS_COUNT],
+        user_stack_end: VirtAddr,
+        kernel_stack_end: VirtAddr,
         userspace: bool,
     ) -> Result<Self, MapToError> {
-        unsafe {
-            // allocate the stack
-            page_table.alloc_map(
-                STACK0_START,
-                STACK0_END,
-                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-            )?;
-
-            // allocate the syscall stack
-            page_table.alloc_map(
-                RING0_STACK0_START,
-                RING0_STACK0_END,
-                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-            )?;
-        }
-
-        let argc = argv.len();
-        let envc = env.len();
-
-        let argv_ptr = map_str_slices(page_table, argv, ARGV_START)?;
-        let argv_ptr = argv_ptr
-            .map(|p| p.as_ptr())
-            .unwrap_or(core::ptr::null_mut());
-
-        let env_ptr = map_byte_slices(page_table, env, ENVIRONMENT_VARIABLES_START)?;
-        let env_ptr = env_ptr.map(|p| p.as_ptr()).unwrap_or(core::ptr::null_mut());
-
-        // ABI structures are structures that are passed to tasks by the kernel
-        // currently only stdio is passed
-        let structures_bytes: &[u8] =
-            &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) };
-
-        unsafe {
-            page_table.alloc_map(
-                ABI_STRUCTURES_START,
-                ABI_STRUCTURES_START + PAGE_SIZE,
-                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-            )?;
-            copy_to_userspace(page_table, ABI_STRUCTURES_START.into(), structures_bytes);
-        }
-
-        let abi_structures_ptr = ABI_STRUCTURES_START.into_ptr::<AbiStructures>();
+        const { assert!(ARGS_COUNT <= 6) }
 
         let (cs, ss, rflags) = make_usermode_regs(userspace);
 
+        macro_rules! entry_point_arg {
+            ($index: literal) => {
+                entry_point_args.get($index).copied().unwrap_or(0) as u64
+            };
+        }
+
         Ok(Self {
-            ring0_rsp: RING0_STACK0_END,
+            ring0_rsp: kernel_stack_end,
             rflags,
             rip: entry_point,
-            rdi: argc as u64,
-            rsi: argv_ptr as u64,
-            rdx: envc as u64,
-            rcx: env_ptr as u64,
-            r8: abi_structures_ptr as u64,
+            rdi: entry_point_arg!(0),
+            rsi: entry_point_arg!(1),
+            rdx: entry_point_arg!(2),
+            rcx: entry_point_arg!(3),
+            r8: entry_point_arg!(4),
+            r9: entry_point_arg!(5),
             cr3: page_table.phys_addr(),
-            rsp: STACK0_END,
+            rsp: user_stack_end,
             cs,
             ss,
             ..Default::default()
@@ -272,31 +188,28 @@ impl CPUStatus {
 
     /// Creates a child CPU Status Instance, that is status of a thread child of thread 0
     pub unsafe fn create_child(
+        user_stack_end: VirtAddr,
+        kernel_stack_end: VirtAddr,
         page_table: &mut PhysPageTable,
         entry_point: VirtAddr,
         context_id: cpu_context::Cid,
         arguments_ptr: *const (),
         userspace: bool,
     ) -> Result<Self, MapToError> {
-        unsafe {
-            let user_stack_end = allocate_user_stack_for_context(page_table, context_id)?;
-            let kernel_stack_end = allocate_kernel_stack_for_context(page_table, context_id)?;
+        let (cs, ss, rflags) = make_usermode_regs(userspace);
 
-            let (cs, ss, rflags) = make_usermode_regs(userspace);
-
-            Ok(Self {
-                ring0_rsp: kernel_stack_end,
-                rflags,
-                rip: entry_point,
-                rdi: context_id as u64,
-                rsi: arguments_ptr as u64,
-                cr3: page_table.phys_addr(),
-                rsp: user_stack_end,
-                cs,
-                ss,
-                ..Default::default()
-            })
-        }
+        Ok(Self {
+            ring0_rsp: kernel_stack_end,
+            rflags,
+            rip: entry_point,
+            rdi: context_id as u64,
+            rsi: arguments_ptr as u64,
+            cr3: page_table.phys_addr(),
+            rsp: user_stack_end,
+            cs,
+            ss,
+            ..Default::default()
+        })
     }
 }
 
@@ -403,7 +316,7 @@ unsafe fn create_cpu_local(
         Some(ContextPriority::Low),
     )?;
 
-    let status = unsafe { thread.context().cpu_status() };
+    let status = unsafe { thread.context_unchecked().cpu_status() };
 
     let cpu_local = CPULocalStorage::new(thread);
     let arch_cpu_local_boxed = Box::new(ArchCPULocalStorage {

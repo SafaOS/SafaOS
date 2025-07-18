@@ -2,7 +2,10 @@
 
 use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
 
-use crate::{arch::threading::CPUStatus, debug, threading::task::Task, time};
+use crate::{
+    arch::threading::CPUStatus, debug, memory::proc_mem_allocator::TrackedAllocation,
+    threading::task::Task, time,
+};
 
 /// Context ID, a unique identifier for a thread.
 pub type Cid = u32;
@@ -74,7 +77,11 @@ impl ThreadNode {
 
 #[derive(Debug)]
 pub struct Thread {
-    context: UnsafeCell<Context>,
+    id: Cid,
+    priority: ContextPriority,
+    status: UnsafeCell<ContextStatus>,
+    context: UnsafeCell<Option<Context>>,
+
     is_dead: AtomicBool,
     is_removed: AtomicBool,
     parent_task: Arc<Task>,
@@ -86,25 +93,38 @@ impl Thread {
         cpu_status: CPUStatus,
         parent_task: &Arc<Task>,
         priority: ContextPriority,
+        user_stack: TrackedAllocation,
+        kernel_stack: TrackedAllocation,
     ) -> Self {
         Self {
-            context: UnsafeCell::new(Context::new(cid, cpu_status, priority)),
+            id: cid,
+            priority,
+            status: UnsafeCell::new(ContextStatus::Runnable),
+            context: UnsafeCell::new(Some(Context::new(cpu_status, user_stack, kernel_stack))),
             is_dead: AtomicBool::new(false),
             is_removed: AtomicBool::new(false),
             parent_task: parent_task.clone(),
         }
     }
 
+    pub const fn priority(&self) -> ContextPriority {
+        self.priority
+    }
+
     pub const fn task(&self) -> &Arc<Task> {
         &self.parent_task
     }
 
-    pub const unsafe fn context(&self) -> &mut Context {
-        unsafe { &mut *self.context.get() }
+    pub const unsafe fn context(&self) -> Option<&mut Context> {
+        unsafe { &mut *self.context.get() }.as_mut()
+    }
+
+    pub const unsafe fn context_unchecked(&self) -> &mut Context {
+        unsafe { self.context().unwrap_unchecked() }
     }
 
     pub const fn cid(&self) -> Cid {
-        unsafe { self.context().id }
+        self.id
     }
 
     pub fn is_dead(&self) -> bool {
@@ -116,6 +136,9 @@ impl Thread {
     }
 
     pub fn mark_removed(&self) {
+        unsafe {
+            *self.context.get() = None;
+        }
         self.is_removed
             .store(true, core::sync::atomic::Ordering::Release);
     }
@@ -149,45 +172,52 @@ impl Thread {
             task.kill(exit_code, None);
         }
     }
+
+    pub const fn status(&self) -> &ContextStatus {
+        unsafe { &*self.status.get() }
+    }
+
+    /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
+    pub unsafe fn set_status(&self, status: ContextStatus) {
+        unsafe {
+            *self.status.get() = status;
+        }
+    }
+
+    /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
+    pub unsafe fn sleep_for_ms(&self, ms: u64) {
+        unsafe {
+            self.set_status(ContextStatus::Blocked(BlockedReason::SleepingUntil(
+                (time!(ms) as u128) + ms as u128,
+            )));
+        }
+    }
+
+    /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
+    pub unsafe fn wait_for_task(&self, task: Arc<Task>) {
+        unsafe {
+            self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForTask(task)));
+        }
+    }
+
+    /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
+    pub unsafe fn wait_for_thread(&self, thread: Arc<Thread>) {
+        unsafe {
+            self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForThread(
+                thread,
+            )));
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Context {
-    id: Cid,
-
-    priority: ContextPriority,
-
-    status: ContextStatus,
     cpu_status: CPUStatus,
+    _user_stack: TrackedAllocation,
+    _kernel_stack: TrackedAllocation,
 }
 
 impl Context {
-    pub const fn priority(&self) -> ContextPriority {
-        self.priority
-    }
-
-    pub const fn status(&self) -> &ContextStatus {
-        &self.status
-    }
-
-    pub fn set_status(&mut self, status: ContextStatus) {
-        self.status = status;
-    }
-
-    pub fn sleep_for_ms(&mut self, ms: u64) {
-        self.status = ContextStatus::Blocked(BlockedReason::SleepingUntil(
-            (time!(ms) as u128) + ms as u128,
-        ));
-    }
-
-    pub fn wait_for_task(&mut self, task: Arc<Task>) {
-        self.status = ContextStatus::Blocked(BlockedReason::WaitingForTask(task));
-    }
-
-    pub fn wait_for_thread(&mut self, thread: Arc<Thread>) {
-        self.status = ContextStatus::Blocked(BlockedReason::WaitingForThread(thread));
-    }
-
     pub const fn set_cpu_status(&mut self, status: CPUStatus) {
         self.cpu_status = status;
     }
@@ -196,12 +226,15 @@ impl Context {
         unsafe { core::ptr::NonNull::new_unchecked(&mut self.cpu_status) }
     }
 
-    pub(super) fn new(id: Cid, cpu_status: CPUStatus, priority: ContextPriority) -> Self {
+    pub(super) fn new(
+        cpu_status: CPUStatus,
+        user_stack: TrackedAllocation,
+        kernel_stack: TrackedAllocation,
+    ) -> Self {
         Context {
-            status: ContextStatus::Runnable,
-            id,
+            _user_stack: user_stack,
+            _kernel_stack: kernel_stack,
             cpu_status,
-            priority,
         }
     }
 }
