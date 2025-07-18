@@ -128,6 +128,7 @@ impl Scheduler {
             VirtAddr::null(),
             ContextPriority::Medium,
             false,
+            None,
         )
         .expect("failed to create Eve");
 

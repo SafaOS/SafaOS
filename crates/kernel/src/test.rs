@@ -143,6 +143,7 @@ fn userspace_test_script() {
         SpawnFlags::empty(),
         ContextPriority::Medium,
         AbiStructures { stdio },
+        None,
     )
     .unwrap();
     // thread yields, so works even when interrupts are disabled

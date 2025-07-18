@@ -268,10 +268,22 @@ fn spawn<T: Readable>(
     flags: SpawnFlags,
     priority: ContextPriority,
     structures: AbiStructures,
+    custom_stack_size: Option<usize>,
 ) -> Result<Pid, SpawnError> {
     spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let elf = Elf::new(reader)?;
-        let process = Process::from_elf(name, 0, ppid, cwd, elf, argv, env, priority, structures)?;
+        let process = Process::from_elf(
+            name,
+            0,
+            ppid,
+            cwd,
+            elf,
+            argv,
+            env,
+            priority,
+            structures,
+            custom_stack_size,
+        )?;
         Ok(process)
     })
 }
@@ -285,6 +297,7 @@ pub fn pspawn(
     flags: SpawnFlags,
     priority: ContextPriority,
     structures: AbiStructures,
+    custom_stack_size: Option<usize>,
 ) -> Result<Pid, FSError> {
     let file = File::open(path)?;
 
@@ -292,7 +305,17 @@ pub fn pspawn(
         return Err(FSError::NotAFile);
     }
 
-    spawn(name, &file, argv, env, flags, priority, structures).map_err(|_| FSError::NotExecutable)
+    spawn(
+        name,
+        &file,
+        argv,
+        env,
+        flags,
+        priority,
+        structures,
+        custom_stack_size,
+    )
+    .map_err(|_| FSError::NotExecutable)
 }
 
 /// Spawns a userspace function in a new thread
@@ -303,9 +326,16 @@ pub fn thread_spawn(
     argument_ptr: VirtAddr,
     priority: Option<ContextPriority>,
     cpu: Option<usize>,
+    custom_stack_size: Option<usize>,
 ) -> Result<Cid, MapToError> {
     let this = this_process();
-    let (thread, cid) = Process::add_thread_to_process(&this, entry_point, argument_ptr, priority)?;
+    let (thread, cid) = Process::add_thread_to_process(
+        &this,
+        entry_point,
+        argument_ptr,
+        priority,
+        custom_stack_size,
+    )?;
     super::add_thread(thread, cpu);
     Ok(cid)
 }
@@ -324,6 +354,7 @@ pub fn kernel_thread_spawn<T: 'static>(
         VirtAddr::from(arg as *const T as usize),
         priority,
         cpu,
+        None,
     )
 }
 

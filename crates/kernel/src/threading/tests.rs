@@ -18,6 +18,7 @@ fn spawn_test() {
         SpawnFlags::empty(),
         ContextPriority::Medium,
         AbiStructures::default(),
+        None,
     )
     .unwrap();
     let ret = wait_for_process(pid);

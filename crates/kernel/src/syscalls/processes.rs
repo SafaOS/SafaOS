@@ -58,6 +58,7 @@ fn syspspawn_inner(
     flags: SpawnFlags,
     priority: ContextPriority,
     stdio: Option<ProcessStdio>,
+    custom_stack_size: Option<usize>,
 ) -> Result<Pid, ErrorStatus> {
     let name = match name {
         Some(raw) => Name::try_from(raw).map_err(|()| ErrorStatus::StrTooLong)?,
@@ -78,6 +79,7 @@ fn syspspawn_inner(
         AbiStructures {
             stdio: stdio.unwrap_or_default(),
         },
+        custom_stack_size,
     )?;
     Ok(results)
 }
@@ -138,6 +140,7 @@ fn syspspawn(
             SpawnFlags,
             Option<ProcessStdio>,
             Option<ContextPriority>,
+            Option<usize>,
         ),
         ErrorStatus,
     > {
@@ -157,10 +160,24 @@ fn syspspawn(
             None
         };
 
-        Ok((name, argv, env, this.flags.into(), stdio.copied(), priority))
+        let custom_stack_size: Option<usize> = if this.revision >= 3 {
+            this.custom_stack_size.into()
+        } else {
+            None
+        };
+
+        Ok((
+            name,
+            argv,
+            env,
+            this.flags.into(),
+            stdio.copied(),
+            priority,
+            custom_stack_size,
+        ))
     }
 
-    let (name, argv, env, flags, stdio, priority) = as_rust(config)?;
+    let (name, argv, env, flags, stdio, priority, custom_stack_size) = as_rust(config)?;
 
     let results = syspspawn_inner(
         name,
@@ -170,6 +187,7 @@ fn syspspawn(
         flags,
         priority.unwrap_or(ContextPriority::Medium),
         stdio,
+        custom_stack_size,
     )?;
     if let Some(dest_pid) = dest_pid {
         *dest_pid = results;
@@ -183,11 +201,17 @@ fn sys_tspawn(
     config: &TSpawnConfig,
     target_cid: Option<&mut Cid>,
 ) -> Result<(), ErrorStatus> {
-    let (argument_ptr, priority, cpu) = config.into_rust();
+    let (argument_ptr, priority, cpu, custom_stack_size) = config.into_rust();
     let argument_ptr = VirtAddr::from_ptr(argument_ptr);
 
-    let thread_cid = threading::expose::thread_spawn(entry_point, argument_ptr, priority, cpu)
-        .map_err(|_| ErrorStatus::MMapError)?;
+    let thread_cid = threading::expose::thread_spawn(
+        entry_point,
+        argument_ptr,
+        priority,
+        cpu,
+        custom_stack_size,
+    )
+    .map_err(|_| ErrorStatus::MMapError)?;
     if let Some(target_cid) = target_cid {
         *target_cid = thread_cid;
     }

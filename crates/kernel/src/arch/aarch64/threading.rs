@@ -245,6 +245,7 @@ unsafe fn create_cpu_local(
         VirtAddr::from(idle_function as usize),
         VirtAddr::null(),
         Some(ContextPriority::Low),
+        None,
     )?;
 
     let status = unsafe { thread.context_unchecked().cpu_status() };

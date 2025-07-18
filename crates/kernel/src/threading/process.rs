@@ -339,12 +339,19 @@ impl Process {
 
     fn allocate_stack_inner(
         allocator: &mut ProcessMemAllocator,
+        custom_stack_size: Option<usize>,
     ) -> Result<TrackedAllocation, MapToError> {
-        allocator.allocate_tracked_guraded(DEFAULT_STACK_SIZE, GUARD_PAGES_COUNT)
+        allocator.allocate_tracked_guraded(
+            custom_stack_size.unwrap_or(DEFAULT_STACK_SIZE),
+            GUARD_PAGES_COUNT,
+        )
     }
 
-    fn allocate_stack(&self) -> Result<TrackedAllocation, MapToError> {
-        Self::allocate_stack_inner(&mut *self.allocator.lock())
+    fn allocate_stack(
+        &self,
+        custom_stack_size: Option<usize>,
+    ) -> Result<TrackedAllocation, MapToError> {
+        Self::allocate_stack_inner(&mut *self.allocator.lock(), custom_stack_size)
     }
 
     /// Creates a new process returning a combination of the process and the main thread
@@ -361,6 +368,7 @@ impl Process {
         data_break: VirtAddr,
         default_priority: ContextPriority,
         userspace_process: bool,
+        custom_stack_size: Option<usize>,
     ) -> Result<(Arc<Self>, Arc<Thread>), MapToError> {
         let data_break = data_break.to_next_page();
         let mut root_page_table = root_page_table;
@@ -391,8 +399,10 @@ impl Process {
             abi_structures_start.into_raw(),
         ];
 
-        let user_stack_tracker = Self::allocate_stack_inner(&mut proc_mem_allocator)?;
-        let kernel_stack_tracker = Self::allocate_stack_inner(&mut proc_mem_allocator)?;
+        let user_stack_tracker =
+            Self::allocate_stack_inner(&mut proc_mem_allocator, custom_stack_size)?;
+        let kernel_stack_tracker =
+            Self::allocate_stack_inner(&mut proc_mem_allocator, custom_stack_size)?;
 
         let context = unsafe {
             CPUStatus::create_root(
@@ -470,6 +480,7 @@ impl Process {
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
+        custom_stack_size: Option<usize>,
     ) -> Result<(Arc<Thread>, Cid), MapToError> {
         let context_id = process.next_cid.fetch_add(1, Ordering::SeqCst);
         let thread = Self::create_thread_from_process_owned(
@@ -478,6 +489,7 @@ impl Process {
             entry_point,
             argument_ptr,
             priority,
+            custom_stack_size,
         )
         .map(|thread| Arc::new(thread))?;
         process.threads.lock().push(thread.clone());
@@ -492,14 +504,15 @@ impl Process {
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
+        custom_stack_size: Option<usize>,
     ) -> Result<Thread, MapToError> {
         let mut write_guard = process.state_mut();
         let state = write_guard
             .alive_mut()
             .expect("tried to create a thread in a process that is not alive");
 
-        let user_stack_tracker = process.allocate_stack()?;
-        let kernel_stack_tracker = process.allocate_stack()?;
+        let user_stack_tracker = process.allocate_stack(custom_stack_size)?;
+        let kernel_stack_tracker = process.allocate_stack(custom_stack_size)?;
         let page_table = &mut state.root_page_table;
 
         let cpu_status = unsafe {
@@ -539,6 +552,7 @@ impl Process {
         env: &[&[u8]],
         default_priority: ContextPriority,
         structures: AbiStructures,
+        custom_stack_size: Option<usize>,
     ) -> Result<(Arc<Self>, Arc<Thread>), ElfError> {
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
@@ -557,6 +571,7 @@ impl Process {
             data_break,
             default_priority,
             true,
+            custom_stack_size,
         )
         .map_err(|e| e.into())
     }
