@@ -12,7 +12,7 @@ use crate::{
     },
     debug,
     limine::MP_RESPONSE,
-    threading::{CPULocalStorage, SCHEDULER_INITED, cpu_context, task::Task},
+    threading::{CPULocalStorage, SCHEDULER_INITED, cpu_context, process::Process},
     utils::locks::Mutex,
 };
 use core::{
@@ -284,7 +284,7 @@ pub unsafe fn restore_cpu_status(status: &CPUStatus) -> ! {
 }
 
 static CPU_LOCALS: Mutex<Vec<&ArchCPULocalStorage>> = Mutex::new(Vec::new());
-static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Task>, fn() -> !)>> =
+static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Process>, fn() -> !)>> =
     SyncUnsafeCell::new(MaybeUninit::uninit());
 static READY_CPUS: AtomicUsize = AtomicUsize::new(1);
 
@@ -298,19 +298,19 @@ unsafe fn set_gs(value: VirtAddr) {
     }
 }
 
-/// Creates a cpu local storage from a given task and an idle function
-/// creates and adds a thread to the given task that is the idle thread for the caller CPU
+/// Creates a cpu local storage from a given process and an idle function
+/// creates and adds a thread to the given process that is the idle thread for the caller CPU
 ///
 /// unsafe because the caller is responsible for the memory which was allocated using a Box
 unsafe fn create_cpu_local(
     tss_ptr: *mut TaskStateSegment,
-    task: &Arc<Task>,
+    process: &Arc<Process>,
     idle_function: fn() -> !,
 ) -> Result<(&'static ArchCPULocalStorage, NonNull<CPUStatus>), MapToError> {
     assert!(!tss_ptr.is_null());
 
-    let (thread, _) = Task::add_thread_to_task(
-        task,
+    let (thread, _) = Process::add_thread_to_process(
+        process,
         VirtAddr::from(idle_function as usize),
         VirtAddr::null(),
         Some(ContextPriority::Low),
@@ -332,11 +332,11 @@ unsafe fn create_cpu_local(
 
 unsafe fn add_new_cpu_local(
     tss_ptr: *mut TaskStateSegment,
-    task: &Arc<Task>,
+    process: &Arc<Process>,
     idle_function: fn() -> !,
 ) -> NonNull<CPUStatus> {
     let (cpu_local, status) = unsafe {
-        create_cpu_local(tss_ptr, task, idle_function)
+        create_cpu_local(tss_ptr, process, idle_function)
             .expect("failed to create a CPU local for a CPU")
     };
     unsafe {
@@ -352,13 +352,13 @@ unsafe fn add_new_cpu_local(
 fn boot_core_inner(
     tss_ptr: *mut TaskStateSegment,
     lapic_id: u8,
-    task: &Arc<Task>,
+    process: &Arc<Process>,
     idle_function: fn() -> !,
 ) -> ! {
     unsafe {
         debug!("setting up CPU with lapic ID: {lapic_id}");
 
-        let status = add_new_cpu_local(tss_ptr, task, idle_function);
+        let status = add_new_cpu_local(tss_ptr, process, idle_function);
         let status_ref = status.as_ref();
 
         debug!(
@@ -386,16 +386,16 @@ extern "C" fn boot_cpu(cpu: &Cpu) -> ! {
         let mut _ignored = 0;
         super::setup_cpu_generic1(&mut _ignored);
 
-        let (task, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
-        boot_core_inner(tss_ptr, cpu.lapic_id as u8, task, *idle_function)
+        let (process, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
+        boot_core_inner(tss_ptr, cpu.lapic_id as u8, process, *idle_function)
     }
 }
 
-pub unsafe fn init_cpus(task: &Arc<Task>, idle_function: fn() -> !) -> NonNull<CPUStatus> {
+pub unsafe fn init_cpus(process: &Arc<Process>, idle_function: fn() -> !) -> NonNull<CPUStatus> {
     let jmp_to = unsafe {
         // the current CPU should take local 0
-        *BOOT_CORE_ARGS.get() = MaybeUninit::new((task.clone(), idle_function));
-        add_new_cpu_local(*TSS0_PTR as *mut TaskStateSegment, task, idle_function)
+        *BOOT_CORE_ARGS.get() = MaybeUninit::new((process.clone(), idle_function));
+        add_new_cpu_local(*TSS0_PTR as *mut TaskStateSegment, process, idle_function)
     };
 
     let cpus = (*MP_RESPONSE).cpus();

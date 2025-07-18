@@ -6,11 +6,11 @@ use crate::{
     info, sleep,
     threading::{
         cpu_context::ContextPriority,
-        expose::{SpawnFlags, pspawn, wait_for_task},
+        expose::{SpawnFlags, pspawn, wait_for_process},
     },
 };
 use safa_utils::{
-    abi::raw::processes::{AbiStructures, TaskStdio},
+    abi::raw::processes::{AbiStructures, ProcessStdio},
     make_path,
     types::Name,
 };
@@ -133,7 +133,7 @@ fn userspace_test_script() {
     use crate::drivers::vfs::expose::File;
 
     let stdio = File::open(make_path!("dev", "/ss")).unwrap();
-    let stdio = TaskStdio::new(Some(stdio.fd()), Some(stdio.fd()), Some(stdio.fd()));
+    let stdio = ProcessStdio::new(Some(stdio.fd()), Some(stdio.fd()), Some(stdio.fd()));
 
     let pid = pspawn(
         Name::try_from("Tester").unwrap(),
@@ -146,7 +146,7 @@ fn userspace_test_script() {
     )
     .unwrap();
     // thread yields, so works even when interrupts are disabled
-    let ret = wait_for_task(pid);
+    let ret = wait_for_process(pid);
 
     assert_eq!(ret, Some(0));
 }

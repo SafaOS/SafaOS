@@ -40,7 +40,7 @@ use super::{
     resources::{Resource, ResourceManager},
 };
 #[derive(Debug)]
-pub struct AliveTask {
+pub struct AliveProcess {
     root_page_table: ManuallyDrop<PhysPageTable>,
     resources: ResourceManager,
 
@@ -51,7 +51,7 @@ pub struct AliveTask {
     cwd: Box<PathBuf>,
 }
 #[derive(Debug)]
-pub struct ZombieTask {
+pub struct ZombieProcess {
     exit_code: usize,
     killed_by: Pid,
 
@@ -63,7 +63,7 @@ pub struct ZombieTask {
     root_page_table: ManuallyDrop<PhysPageTable>,
 }
 
-impl AliveTask {
+impl AliveProcess {
     pub fn resource_manager(&self) -> &ResourceManager {
         &self.resources
     }
@@ -183,9 +183,9 @@ impl AliveTask {
     /// Makes `self` a zombie
     /// # Safety
     ///  unsafe because `self` becomes invalid after this call
-    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieTask {
+    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieProcess {
         unsafe {
-            ZombieTask {
+            ZombieProcess {
                 root_page_table: ManuallyDrop::new(ManuallyDrop::take(&mut self.root_page_table)),
                 exit_code,
                 killed_by,
@@ -198,36 +198,36 @@ impl AliveTask {
     }
 }
 
-impl ZombieTask {
+impl ZombieProcess {
     pub fn cwd<'s>(&'s self) -> Path<'s> {
         self.cwd.as_path()
     }
 }
 #[derive(Debug)]
-pub enum TaskState {
-    Alive(AliveTask),
-    Zombie(ZombieTask),
+pub enum ProcessState {
+    Alive(AliveProcess),
+    Zombie(ZombieProcess),
 }
 
-impl TaskState {
-    fn zombie_mut(&mut self) -> Option<&mut ZombieTask> {
+impl ProcessState {
+    fn zombie_mut(&mut self) -> Option<&mut ZombieProcess> {
         match self {
-            TaskState::Zombie(zombie) => Some(zombie),
-            TaskState::Alive { .. } => None,
+            ProcessState::Zombie(zombie) => Some(zombie),
+            ProcessState::Alive { .. } => None,
         }
     }
 
-    fn alive(&self) -> Option<&AliveTask> {
+    fn alive(&self) -> Option<&AliveProcess> {
         match self {
-            TaskState::Alive(alive) => Some(alive),
-            TaskState::Zombie { .. } => None,
+            ProcessState::Alive(alive) => Some(alive),
+            ProcessState::Zombie { .. } => None,
         }
     }
 
-    fn alive_mut(&mut self) -> Option<&mut AliveTask> {
+    fn alive_mut(&mut self) -> Option<&mut AliveProcess> {
         match self {
-            TaskState::Alive(alive) => Some(alive),
-            TaskState::Zombie { .. } => None,
+            ProcessState::Alive(alive) => Some(alive),
+            ProcessState::Zombie { .. } => None,
         }
     }
 
@@ -241,8 +241,8 @@ impl TaskState {
 
     pub fn cwd<'s>(&'s self) -> Path<'s> {
         match self {
-            TaskState::Alive(alive) => alive.cwd(),
-            TaskState::Zombie(zombie) => zombie.cwd(),
+            ProcessState::Alive(alive) => alive.cwd(),
+            ProcessState::Zombie(zombie) => zombie.cwd(),
         }
     }
 
@@ -274,7 +274,7 @@ impl TaskState {
             return;
         };
 
-        *self = TaskState::Zombie(unsafe { alive.die_mut(exit_code, killed_by) });
+        *self = ProcessState::Zombie(unsafe { alive.die_mut(exit_code, killed_by) });
     }
 }
 
@@ -283,17 +283,17 @@ const PROCESS_AREA_SIZE: usize = 0x50000000000;
 const DEFAULT_STACK_SIZE: usize = 8 * PAGE_SIZE;
 const GUARD_PAGES_COUNT: usize = 2;
 
-pub struct Task {
+pub struct Process {
     name: Name,
     /// constant
     pid: UnsafeCell<Pid>,
-    /// Task may change it's parent pid
+    /// process may change it's parent pid
     ppid: AtomicU32,
-    state: RwLock<TaskState>,
+    state: RwLock<ProcessState>,
     is_alive: AtomicBool,
 
     pub schedule_cleanup: AtomicBool,
-    userspace_task: bool,
+    userspace_process: bool,
 
     next_cid: AtomicU32,
     default_priority: ContextPriority,
@@ -303,9 +303,9 @@ pub struct Task {
     pub context_count: AtomicU32,
 }
 
-impl core::fmt::Debug for Task {
+impl core::fmt::Debug for Process {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Task")
+        f.debug_struct("process")
             .field("name", &self.name)
             .field("state", &self.state)
             .field("pid", &self.pid)
@@ -315,10 +315,10 @@ impl core::fmt::Debug for Task {
     }
 }
 
-unsafe impl Send for Task {}
-unsafe impl Sync for Task {}
+unsafe impl Send for Process {}
+unsafe impl Sync for Process {}
 
-impl Task {
+impl Process {
     pub const fn pid(&self) -> Pid {
         unsafe { *self.pid.get() }
     }
@@ -347,7 +347,7 @@ impl Task {
         Self::allocate_stack_inner(&mut *self.allocator.lock())
     }
 
-    /// Creates a new task returning a combination of the task and the main thread
+    /// Creates a new process returning a combination of the process and the main thread
     pub fn create(
         name: Name,
         pid: Pid,
@@ -360,7 +360,7 @@ impl Task {
         root_page_table: PhysPageTable,
         data_break: VirtAddr,
         default_priority: ContextPriority,
-        userspace_task: bool,
+        userspace_process: bool,
     ) -> Result<(Arc<Self>, Arc<Thread>), MapToError> {
         let data_break = data_break.to_next_page();
         let mut root_page_table = root_page_table;
@@ -401,11 +401,11 @@ impl Task {
                 entry_args,
                 user_stack_tracker.end(),
                 kernel_stack_tracker.end(),
-                userspace_task,
+                userspace_process,
             )?
         };
 
-        let task = Arc::new(Self {
+        let process = Arc::new(Self {
             name,
             pid: UnsafeCell::new(pid),
 
@@ -419,7 +419,7 @@ impl Task {
             context_count: AtomicU32::new(1),
             default_priority,
 
-            state: RwLock::new(TaskState::Alive(AliveTask {
+            state: RwLock::new(ProcessState::Alive(AliveProcess {
                 root_page_table: ManuallyDrop::new(root_page_table),
                 resources: ResourceManager::new(),
                 data_pages: 0,
@@ -428,25 +428,25 @@ impl Task {
                 cwd,
             })),
             allocator: Mutex::new(proc_mem_allocator),
-            userspace_task,
+            userspace_process,
         });
 
         let thread = Arc::new(Self::create_thread_from_status(
-            &task,
+            &process,
             0,
             context,
             None,
             user_stack_tracker,
             kernel_stack_tracker,
         ));
-        task.threads.lock().push(thread.clone());
+        process.threads.lock().push(thread.clone());
 
-        Ok((task, thread))
+        Ok((process, thread))
     }
 
     /// Creates a new thread from a CPU status giving it a `cid` and everything
     fn create_thread_from_status(
-        task: &Arc<Task>,
+        process: &Arc<Process>,
         cid: Cid,
         cpu_status: CPUStatus,
         priority: Option<ContextPriority>,
@@ -456,50 +456,50 @@ impl Task {
         Thread::new(
             cid,
             cpu_status,
-            task,
-            priority.unwrap_or(task.default_priority),
+            process,
+            priority.unwrap_or(process.default_priority),
             user_stack,
             kernel_stack,
         )
     }
 
     /// Creates a new thread from a CPU status giving it a `cid` and everything
-    /// adds to the task's context count so it tracks this thread
-    pub fn add_thread_to_task(
-        task: &Arc<Task>,
+    /// adds to the process's context count so it tracks this thread
+    pub fn add_thread_to_process(
+        process: &Arc<Process>,
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
     ) -> Result<(Arc<Thread>, Cid), MapToError> {
-        let context_id = task.next_cid.fetch_add(1, Ordering::SeqCst);
-        let thread = Self::create_thread_from_task_owned(
-            task,
+        let context_id = process.next_cid.fetch_add(1, Ordering::SeqCst);
+        let thread = Self::create_thread_from_process_owned(
+            process,
             context_id,
             entry_point,
             argument_ptr,
             priority,
         )
         .map(|thread| Arc::new(thread))?;
-        task.threads.lock().push(thread.clone());
+        process.threads.lock().push(thread.clone());
         Ok((thread, context_id))
     }
 
-    /// Creates a new thread for a given task
-    /// doesn't add to the task's thread list so the thread is owned by the caller
-    pub fn create_thread_from_task_owned(
-        task: &Arc<Task>,
+    /// Creates a new thread for a given process
+    /// doesn't add to the process's thread list so the thread is owned by the caller
+    pub fn create_thread_from_process_owned(
+        process: &Arc<Process>,
         context_id: Cid,
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
     ) -> Result<Thread, MapToError> {
-        let mut write_guard = task.state_mut();
+        let mut write_guard = process.state_mut();
         let state = write_guard
             .alive_mut()
-            .expect("tried to create a thread in a task that is not alive");
+            .expect("tried to create a thread in a process that is not alive");
 
-        let user_stack_tracker = task.allocate_stack()?;
-        let kernel_stack_tracker = task.allocate_stack()?;
+        let user_stack_tracker = process.allocate_stack()?;
+        let kernel_stack_tracker = process.allocate_stack()?;
         let page_table = &mut state.root_page_table;
 
         let cpu_status = unsafe {
@@ -510,25 +510,25 @@ impl Task {
                 entry_point,
                 context_id,
                 argument_ptr.into_ptr::<()>(),
-                task.userspace_task,
+                process.userspace_process,
             )?
         };
 
         let thread = Self::create_thread_from_status(
-            task,
+            process,
             context_id,
             cpu_status,
             priority,
             user_stack_tracker,
             kernel_stack_tracker,
         );
-        task.context_count.fetch_add(1, Ordering::Relaxed);
+        process.context_count.fetch_add(1, Ordering::Relaxed);
 
         Ok(thread)
     }
 
-    /// Creates a new task from an elf
-    /// that task is assumed to be in the userspace
+    /// Creates a new process from an elf
+    /// that process is assumed to be in the userspace
     pub fn from_elf<T: Readable>(
         name: Name,
         pid: Pid,
@@ -565,16 +565,16 @@ impl Task {
         &self.name
     }
 
-    pub fn state<'s>(&'s self) -> RwLockReadGuard<'s, TaskState> {
+    pub fn state<'s>(&'s self) -> RwLockReadGuard<'s, ProcessState> {
         self.state.read()
     }
 
-    pub fn state_mut<'s>(&'s self) -> RwLockWriteGuard<'s, TaskState> {
+    pub fn state_mut<'s>(&'s self) -> RwLockWriteGuard<'s, ProcessState> {
         self.state.write()
     }
 
-    /// kills the task
-    /// if `killed_by` is `None` the task will be killed by itself
+    /// kills the process
+    /// if `killed_by` is `None` the process will be killed by itself
     pub fn kill(&self, exit_code: usize, killed_by: Option<Pid>) {
         let pid = self.pid();
         let killed_by = killed_by.unwrap_or(pid);
@@ -587,7 +587,7 @@ impl Task {
         let this_thread = this_thread();
         let this_cid = this_thread.cid();
 
-        let this_pid = this_thread.task().pid();
+        let this_pid = this_thread.process().pid();
         let killing_self = this_pid == pid;
 
         for thread in &*threads {
@@ -607,15 +607,15 @@ impl Task {
         }
 
         debug!(
-            Task,
-            "Task {} ({}) TERMINATED with code {} by {}",
+            Process,
+            "Process {} ({}) TERMINATED with code {} by {}",
             pid,
             self.name(),
             exit_code,
             killed_by
         );
 
-        // for some reason a thread yield may happen here sow e want to make sure everything is dropped before the task is unswitchable to
+        // for some reason a thread yield may happen here sow e want to make sure everything is dropped before the process is unswitchable to
         // i actually have no idea why a thread yield would happen here...
         drop(state);
         drop(threads);
@@ -623,7 +623,7 @@ impl Task {
         this_thread.mark_dead(true);
     }
 
-    pub(super) fn cleanup(&self) -> (TaskInfo, Option<PhysPageTable>) {
+    pub(super) fn cleanup(&self) -> (ProcessInfo, Option<PhysPageTable>) {
         let mut page_table = None;
 
         if self
@@ -634,12 +634,12 @@ impl Task {
             let mut state = self.state_mut();
             let zombie = state
                 .zombie_mut()
-                .expect("attempt to cleanup an alive task");
+                .expect("attempt to cleanup an alive process");
 
             page_table = Some(unsafe { ManuallyDrop::take(&mut zombie.root_page_table) });
         }
 
-        (TaskInfo::from(self), page_table)
+        (ProcessInfo::from(self), page_table)
     }
     fn at(&self) -> VirtAddr {
         VirtAddr::null()
@@ -656,7 +656,7 @@ impl Task {
 
 #[derive(Serialize, Debug, Clone)]
 #[repr(C)]
-pub struct TaskInfo {
+pub struct ProcessInfo {
     name: Name,
 
     pub ppid: Pid,
@@ -673,21 +673,21 @@ pub struct TaskInfo {
     pub is_alive: bool,
 }
 
-impl From<&Task> for TaskInfo {
-    fn from(task: &Task) -> Self {
-        let at = task.at();
-        let stack_addr = task.stack_at();
+impl From<&Process> for ProcessInfo {
+    fn from(process: &Process) -> Self {
+        let at = process.at();
+        let stack_addr = process.stack_at();
 
-        let state = task.state();
+        let state = process.state();
 
         let (exit_code, data_start, data_break, killed_by, last_resource_id) = match &*state {
-            TaskState::Alive(AliveTask {
+            ProcessState::Alive(AliveProcess {
                 data_start,
                 data_break,
                 resources,
                 ..
             }) => (0, *data_start, *data_break, 0, resources.next_ri()),
-            TaskState::Zombie(ZombieTask {
+            ProcessState::Zombie(ZombieProcess {
                 data_start,
                 data_break,
                 exit_code,
@@ -703,13 +703,13 @@ impl From<&Task> for TaskInfo {
             ),
         };
 
-        let is_alive = task.is_alive();
-        let ppid = task.ppid.load(core::sync::atomic::Ordering::Relaxed);
-        let name = task.name().clone();
+        let is_alive = process.is_alive();
+        let ppid = process.ppid.load(core::sync::atomic::Ordering::Relaxed);
+        let name = process.name().clone();
 
         Self {
             ppid,
-            pid: task.pid(),
+            pid: process.pid(),
             name,
             last_resource_id,
             exit_code,

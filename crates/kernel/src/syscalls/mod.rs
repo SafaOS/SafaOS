@@ -86,7 +86,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut Pid)
             }
             SyscallTable::SysTSpawn => processes::sys_tspawn_raw(a, b as *const _, c as *mut Cid),
-            SyscallTable::SysPExit => threading::expose::task_exit(a),
+            SyscallTable::SysPExit => threading::expose::process_exit(a),
             SyscallTable::SysTExit => threading::expose::thread_exit(a),
             SyscallTable::SysTYield => Ok(threading::expose::thread_yield()),
             SyscallTable::SysTSleep => {

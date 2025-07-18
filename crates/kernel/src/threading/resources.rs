@@ -141,30 +141,30 @@ pub fn get_resource<DO, R>(ri: usize, then: DO) -> Option<R>
 where
     DO: FnOnce(MutexGuard<Resource>) -> R,
 {
-    let this = super::this_task();
+    let this = super::this_process();
     let state = this.state();
 
     state
         .resource_manager()
-        .expect("tried to get a resource in a dead task (process)")
+        .expect("tried to get a resource in a dead process (process)")
         .get(ri)
         .map(then)
 }
 
 /// adds a resource to the current process
 pub fn add_resource(resource: Resource) -> usize {
-    let this = super::this_task();
+    let this = super::this_process();
     let mut state = this.state_mut();
 
     state
         .resource_manager_mut()
-        .expect("tried to add a resource in a dead task (process)")
+        .expect("tried to add a resource in a dead process (process)")
         .add_resource(resource)
 }
 
 pub fn duplicate_resource(ri: usize) -> usize {
-    let current_task = super::this_task();
-    let mut state = current_task.state_mut();
+    let current_process = super::this_process();
+    let mut state = current_process.state_mut();
     let manager = state.resource_manager_mut().unwrap();
 
     let resource = manager.get_mut(ri).unwrap();
@@ -174,11 +174,11 @@ pub fn duplicate_resource(ri: usize) -> usize {
 
 /// removes a resource from the current process with `ri`
 pub fn remove_resource(ri: usize) -> Option<()> {
-    let current_task = super::this_task();
-    let mut current = current_task.state_mut();
+    let current_process = super::this_process();
+    let mut current = current_process.state_mut();
 
     current
         .resource_manager_mut()
-        .expect("tried to remove a resource in a dead task")
+        .expect("tried to remove a resource in a dead process")
         .remove_resource(ri)
 }

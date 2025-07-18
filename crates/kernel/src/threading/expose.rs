@@ -8,7 +8,7 @@ use crate::{
     threading::{
         SCHEDULER_INITED,
         cpu_context::{Cid, ContextPriority, Thread},
-        this_task, this_thread,
+        this_process, this_thread,
     },
     time,
     utils::types::Name,
@@ -35,16 +35,16 @@ use crate::{
 
 use super::{
     Pid,
-    task::{Task, TaskInfo},
+    process::{Process, ProcessInfo},
 };
 
 #[unsafe(no_mangle)]
-pub fn task_exit(code: usize) -> ! {
+pub fn process_exit(code: usize) -> ! {
     unsafe {
         disable_interrupts();
     }
-    let current_task = super::this_task();
-    current_task.kill(code, None);
+    let current_process = super::this_process();
+    current_process.kill(code, None);
 
     loop {
         thread_yield();
@@ -106,45 +106,45 @@ pub fn try_cleanup_process(pid: Pid) -> Result<Option<usize>, ()> {
         return Ok(None);
     }
 
-    // task is dead
+    // process is dead
     // TODO: block multiple waits on same pid
-    let Some(task_info) = super::remove(|p| p.pid() == pid) else {
-        warn!("task with `{pid}` was already cleaned up by another operation");
+    let Some(process_info) = super::remove(|p| p.pid() == pid) else {
+        warn!("process with `{pid}` was already cleaned up by another operation");
         return Err(());
     };
 
-    Ok(Some(task_info.exit_code))
+    Ok(Some(process_info.exit_code))
 }
 
 /// waits for `pid` to exit
 /// returns it's exit code after cleaning it up
-pub fn wait_for_task(pid: Pid) -> Option<usize> {
+pub fn wait_for_process(pid: Pid) -> Option<usize> {
     // cycles through the processes one by one until it finds the process with `pid`
     // returns the exit code of the process if it's a zombie and cleans it up
-    let found_task = super::find(|process| process.pid() == pid, |process| process.clone())?;
+    let found_proc = super::find(|process| process.pid() == pid, |process| process.clone())?;
 
     let this = this_thread();
-    unsafe { this.wait_for_task(found_task.clone()) };
+    unsafe { this.wait_for_process(found_proc.clone()) };
 
-    while found_task.is_alive() {
+    while found_proc.is_alive() {
         thread_yield();
     }
-    // task is dead
+    // process is dead
     // TODO: block multiple waits on same pid
-    let Some(task_info) = super::remove(|p| p.pid() == pid) else {
-        warn!("task with `{pid}` was already cleaned up by another wait operation");
+    let Some(process_info) = super::remove(|p| p.pid() == pid) else {
+        warn!("process with `{pid}` was already cleaned up by another wait operation");
         return None;
     };
 
-    Some(task_info.exit_code)
+    Some(process_info.exit_code)
 }
 
 /// Waits for thread with id `cid` to exit
 /// threads don't have an exit code
 pub fn wait_for_thread(cid: Cid) -> Option<()> {
     let this_thread = this_thread();
-    let this_task = this_thread.task();
-    let thread = this_task
+    let this_process = this_thread.process();
+    let thread = this_process
         .threads
         .lock()
         .iter()
@@ -163,8 +163,8 @@ pub fn wait_for_thread(cid: Cid) -> Option<()> {
 }
 
 #[unsafe(no_mangle)]
-pub fn getinfo(pid: Pid) -> Option<TaskInfo> {
-    super::find(|p| p.pid() == pid, |t| TaskInfo::from(&**t))
+pub fn getinfo(pid: Pid) -> Option<ProcessInfo> {
+    super::find(|p| p.pid() == pid, |t| ProcessInfo::from(&**t))
 }
 
 bitflags! {
@@ -197,10 +197,14 @@ fn spawn_inner(
     name: Name,
     flags: SpawnFlags,
     structures: AbiStructures,
-    create_task: impl FnOnce(Name, Pid, Box<PathBuf>) -> Result<(Arc<Task>, Arc<Thread>), SpawnError>,
+    create_process: impl FnOnce(
+        Name,
+        Pid,
+        Box<PathBuf>,
+    ) -> Result<(Arc<Process>, Arc<Thread>), SpawnError>,
 ) -> Result<Pid, SpawnError> {
-    let this_task = this_task();
-    let this_state = this_task.state();
+    let this_process = this_process();
+    let this_state = this_process.state();
 
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
         this_state.cwd()
@@ -208,20 +212,20 @@ fn spawn_inner(
         make_path!("ram", "")
     };
 
-    let current_task = super::this_task();
-    let current_pid = current_task.pid();
+    let current_process = super::this_process();
+    let current_pid = current_process.pid();
 
     let cwd = Box::new(cwd.into_owned().unwrap());
-    let (task, root_thread) = create_task(name, current_pid, cwd)?;
+    let (process, root_thread) = create_process(name, current_pid, cwd)?;
 
     let provide_resources = || {
-        let mut state = task.state_mut();
-        let Some(task_resources) = state.resource_manager_mut() else {
+        let mut state = process.state_mut();
+        let Some(process_resources) = state.resource_manager_mut() else {
             unreachable!();
         };
 
         drop(this_state);
-        let mut this_state = this_task.state_mut();
+        let mut this_state = this_process.state_mut();
 
         let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
             this_state.clone_resources()
@@ -246,13 +250,13 @@ fn spawn_inner(
             this_state.clone_specific_resources(&resources)?
         };
 
-        task_resources.overwrite_resources(clone);
+        process_resources.overwrite_resources(clone);
         Ok(())
     };
 
     provide_resources().map_err(|()| FSError::InvalidResource)?;
 
-    let pid = super::add(task, root_thread);
+    let pid = super::add(process, root_thread);
     Ok(pid)
 }
 
@@ -267,8 +271,8 @@ fn spawn<T: Readable>(
 ) -> Result<Pid, SpawnError> {
     spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
         let elf = Elf::new(reader)?;
-        let task = Task::from_elf(name, 0, ppid, cwd, elf, argv, env, priority, structures)?;
-        Ok(task)
+        let process = Process::from_elf(name, 0, ppid, cwd, elf, argv, env, priority, structures)?;
+        Ok(process)
     })
 }
 
@@ -300,8 +304,8 @@ pub fn thread_spawn(
     priority: Option<ContextPriority>,
     cpu: Option<usize>,
 ) -> Result<Cid, MapToError> {
-    let this = this_task();
-    let (thread, cid) = Task::add_thread_to_task(&this, entry_point, argument_ptr, priority)?;
+    let this = this_process();
+    let (thread, cid) = Process::add_thread_to_process(&this, entry_point, argument_ptr, priority)?;
     super::add_thread(thread, cpu);
     Ok(cid)
 }
@@ -329,8 +333,8 @@ pub fn kernel_thread_spawn<T: 'static>(
 pub fn chdir(new_dir: Path) -> FSResult<()> {
     VFS_STRUCT.read().verify_path_dir(new_dir)?;
 
-    let task = this_task();
-    let mut state = task.state_mut();
+    let process = this_process();
+    let mut state = process.state_mut();
     let cwd = state.cwd_mut();
 
     if new_dir.is_absolute() {
@@ -383,11 +387,14 @@ fn terminate(process_pid: Pid, terminator_pid: Pid) {
 #[unsafe(no_mangle)]
 /// can only Err if pid doesn't belong to process
 pub fn pkill(pid: Pid) -> Result<(), ()> {
-    let current_task = super::this_task();
-    let current_pid = current_task.pid();
+    let current_process = super::this_process();
+    let current_pid = current_process.pid();
 
-    let (process_ppid, process_pid) =
-        super::find(|p| p.pid() == pid, |task| (task.ppid(), task.pid())).ok_or(())?;
+    let (process_ppid, process_pid) = super::find(
+        |p| p.pid() == pid,
+        |process| (process.ppid(), process.pid()),
+    )
+    .ok_or(())?;
 
     if can_terminate(process_ppid, process_pid, current_pid) {
         terminate(process_pid, current_pid);
@@ -401,7 +408,7 @@ pub fn pkill(pid: Pid) -> Result<(), ()> {
 /// returns the new program break ptr
 /// on fail returns null
 pub fn sbrk(amount: isize) -> Result<*mut u8, ErrorStatus> {
-    let current_task = super::this_task();
-    let mut state = current_task.state_mut();
+    let current_process = super::this_process();
+    let mut state = current_process.state_mut();
     state.extend_data_by(amount).ok_or(ErrorStatus::OutOfMemory)
 }

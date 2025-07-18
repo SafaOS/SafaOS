@@ -2,7 +2,7 @@ use safa_utils::abi::{
     self,
     raw::{
         RawSlice, RawSliceMut,
-        processes::{AbiStructures, ContextPriority, PSpawnConfig, TSpawnConfig, TaskStdio},
+        processes::{AbiStructures, ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig},
     },
 };
 
@@ -23,7 +23,7 @@ use macros::syscall_handler;
 
 #[syscall_handler]
 fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let code = threading::expose::wait_for_task(pid).ok_or(ErrorStatus::InvalidPid)?;
+    let code = threading::expose::wait_for_process(pid).ok_or(ErrorStatus::InvalidPid)?;
     if let Some(dest_code) = dest_code {
         *dest_code = code;
     }
@@ -57,7 +57,7 @@ fn syspspawn_inner(
     env: &[&[u8]],
     flags: SpawnFlags,
     priority: ContextPriority,
-    stdio: Option<TaskStdio>,
+    stdio: Option<ProcessStdio>,
 ) -> Result<Pid, ErrorStatus> {
     let name = match name {
         Some(raw) => Name::try_from(raw).map_err(|()| ErrorStatus::StrTooLong)?,
@@ -136,7 +136,7 @@ fn syspspawn(
             &[&str],
             &[&[u8]],
             SpawnFlags,
-            Option<TaskStdio>,
+            Option<ProcessStdio>,
             Option<ContextPriority>,
         ),
         ErrorStatus,
@@ -145,7 +145,7 @@ fn syspspawn(
         let argv = into_args_slice(&this.argv)?;
         let env = into_bytes_slice(&this.env)?;
 
-        let stdio: Option<&abi::raw::processes::TaskStdio> = if this.revision >= 1 {
+        let stdio: Option<&abi::raw::processes::ProcessStdio> = if this.revision >= 1 {
             Option::make(this.stdio)?
         } else {
             None

@@ -2,7 +2,7 @@ use safa_utils::{abi::raw::processes::AbiStructures, make_path, types::Name};
 
 use crate::threading::{
     cpu_context::ContextPriority,
-    expose::{SpawnFlags, pspawn, wait_for_task},
+    expose::{SpawnFlags, pspawn, wait_for_process},
 };
 
 #[test_case]
@@ -20,7 +20,7 @@ fn spawn_test() {
         AbiStructures::default(),
     )
     .unwrap();
-    let ret = wait_for_task(pid);
+    let ret = wait_for_process(pid);
 
     assert_eq!(ret, Some(1));
     unsafe {

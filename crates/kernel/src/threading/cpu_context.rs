@@ -4,7 +4,7 @@ use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
 
 use crate::{
     arch::threading::CPUStatus, debug, memory::proc_mem_allocator::TrackedAllocation,
-    threading::task::Task, time,
+    threading::process::Process, time,
 };
 
 /// Context ID, a unique identifier for a thread.
@@ -14,7 +14,7 @@ pub type Cid = u32;
 pub enum BlockedReason {
     /// The thread is sleeping until [`.0`] ms of boot time is reached
     SleepingUntil(u128),
-    WaitingForTask(Arc<Task>),
+    WaitingForProcess(Arc<Process>),
     WaitingForThread(Arc<Thread>),
 }
 
@@ -22,7 +22,7 @@ impl BlockedReason {
     pub fn block_lifted(&self) -> bool {
         match self {
             Self::SleepingUntil(n) => time!(ms) as u128 >= *n,
-            Self::WaitingForTask(task) => !task.is_alive(),
+            Self::WaitingForProcess(process) => !process.is_alive(),
             Self::WaitingForThread(thread) => thread.is_dead(),
         }
     }
@@ -84,14 +84,14 @@ pub struct Thread {
 
     is_dead: AtomicBool,
     is_removed: AtomicBool,
-    parent_task: Arc<Task>,
+    parent_process: Arc<Process>,
 }
 
 impl Thread {
     pub fn new(
         cid: Cid,
         cpu_status: CPUStatus,
-        parent_task: &Arc<Task>,
+        parent_process: &Arc<Process>,
         priority: ContextPriority,
         user_stack: TrackedAllocation,
         kernel_stack: TrackedAllocation,
@@ -103,7 +103,7 @@ impl Thread {
             context: UnsafeCell::new(Some(Context::new(cpu_status, user_stack, kernel_stack))),
             is_dead: AtomicBool::new(false),
             is_removed: AtomicBool::new(false),
-            parent_task: parent_task.clone(),
+            parent_process: parent_process.clone(),
         }
     }
 
@@ -111,8 +111,8 @@ impl Thread {
         self.priority
     }
 
-    pub const fn task(&self) -> &Arc<Task> {
-        &self.parent_task
+    pub const fn process(&self) -> &Arc<Process> {
+        &self.parent_process
     }
 
     pub const unsafe fn context(&self) -> Option<&mut Context> {
@@ -143,33 +143,33 @@ impl Thread {
             .store(true, core::sync::atomic::Ordering::Release);
     }
 
-    pub fn mark_dead(&self, task_dead: bool) {
+    pub fn mark_dead(&self, process_dead: bool) {
         self.is_dead
             .store(true, core::sync::atomic::Ordering::SeqCst);
 
         debug!(
-            Task,
-            "Task {} ({}) THREAD EXITED thread CID: {}, task dead: {task_dead}",
-            self.task().pid(),
-            self.task().name(),
+            Process,
+            "Thread {} ({}) THREAD EXITED thread CID: {}, process dead: {process_dead}",
+            self.process().pid(),
+            self.process().name(),
             self.cid(),
         );
     }
 
     pub fn kill_thread(&self, exit_code: usize) {
-        let task = &self.parent_task;
-        let _state = task.state_mut();
+        let process = &self.parent_process;
+        let _state = process.state_mut();
 
-        let task_dead = task
+        let process_dead = process
             .context_count
             .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
             <= 1;
 
-        self.mark_dead(task_dead);
+        self.mark_dead(process_dead);
 
-        if task_dead {
+        if process_dead {
             drop(_state);
-            task.kill(exit_code, None);
+            process.kill(exit_code, None);
         }
     }
 
@@ -194,9 +194,11 @@ impl Thread {
     }
 
     /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
-    pub unsafe fn wait_for_task(&self, task: Arc<Task>) {
+    pub unsafe fn wait_for_process(&self, process: Arc<Process>) {
         unsafe {
-            self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForTask(task)));
+            self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForProcess(
+                process,
+            )));
         }
     }
 

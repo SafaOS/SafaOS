@@ -12,16 +12,16 @@ use crate::{drivers::vfs, serial};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use safa_utils::{
-    abi::raw::processes::{AbiStructures, TaskStdio},
+    abi::raw::processes::{AbiStructures, ProcessStdio},
     make_path,
 };
 use spin::Lazy;
 
-pub(super) static KERNEL_STDIO: Lazy<TaskStdio> = Lazy::new(|| {
+pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
     let stdin = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
     let stdout = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
     let stderr = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
-    TaskStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
+    ProcessStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
 });
 
 #[allow(unused)]

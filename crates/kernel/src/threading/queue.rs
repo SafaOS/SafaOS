@@ -2,7 +2,7 @@ use core::{marker::PhantomData, ptr::NonNull};
 
 use alloc::{boxed::Box, sync::Arc};
 
-use crate::threading::task::Task;
+use crate::threading::process::Process;
 
 struct Node<T> {
     inner: T,
@@ -114,9 +114,9 @@ impl<T> SchedulerQueue<T> {
 unsafe impl<T: Send> Send for SchedulerQueue<T> {}
 unsafe impl<T: Sync> Sync for SchedulerQueue<T> {}
 
-pub type TaskQueue = SchedulerQueue<Arc<Task>>;
+pub type ProcessQueue = SchedulerQueue<Arc<Process>>;
 
-impl TaskQueue {}
+impl ProcessQueue {}
 
 pub(super) struct SchedulerQueueIter<'a, T: 'a> {
     queue: PhantomData<&'a SchedulerQueue<T>>,

@@ -4,7 +4,7 @@ mod generic_file;
 mod init_system;
 mod kernelinfo;
 mod meminfo;
-mod tasks;
+mod processes;
 mod usbinfo;
 
 use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
@@ -21,21 +21,21 @@ type OpaqueRodFSObjID = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-struct TaskObjID {
+struct ProcessObjID {
     inner_obj_id: OpaqueRodFSObjID,
-    task_pid: Pid,
+    process_pid: Pid,
 }
 
-impl TaskObjID {
-    pub const fn new(inner_obj_id: OpaqueRodFSObjID, task_pid: Pid) -> Self {
-        TaskObjID {
+impl ProcessObjID {
+    pub const fn new(inner_obj_id: OpaqueRodFSObjID, process_pid: Pid) -> Self {
+        ProcessObjID {
             inner_obj_id,
-            task_pid,
+            process_pid,
         }
     }
 
-    pub const fn task_pid(&self) -> Pid {
-        self.task_pid
+    pub const fn process_pid(&self) -> Pid {
+        self.process_pid
     }
 
     pub const fn opaque_id(&self) -> OpaqueRodFSObjID {
@@ -44,35 +44,35 @@ impl TaskObjID {
 
     pub const fn from_obj_id(id: FSObjectID) -> Self {
         let bit_offset = size_of::<FSObjectID>() * 8 - 1;
-        let task_mask = 1 << bit_offset;
-        let id = id & !(task_mask);
+        let process_mask = 1 << bit_offset;
+        let id = id & !(process_mask);
 
         unsafe { core::mem::transmute(id) }
     }
 
     pub const fn to_obj_id(&self) -> FSObjectID {
         let bit_offset = size_of::<FSObjectID>() * 8 - 1;
-        let task_mask = 1 << bit_offset;
+        let process_mask = 1 << bit_offset;
 
-        unsafe { core::mem::transmute::<TaskObjID, FSObjectID>(*self) | task_mask }
+        unsafe { core::mem::transmute::<ProcessObjID, FSObjectID>(*self) | process_mask }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Represents the identifier of a proc file system object.
-/// either a task directory or any other object.
+/// either a process directory or any other object.
 enum RodFSObjID {
-    TaskID(TaskObjID),
+    ProcessID(ProcessObjID),
     OtherID(OpaqueRodFSObjID),
 }
 
 impl RodFSObjID {
     pub const fn from_obj_id(id: FSObjectID) -> Self {
         let bit_offset = size_of::<FSObjectID>() * 8 - 1;
-        let task_mask = 1 << bit_offset;
-        if id & task_mask != 0 {
-            let task_id = TaskObjID::from_obj_id(id);
-            RodFSObjID::TaskID(task_id)
+        let process_mask = 1 << bit_offset;
+        if id & process_mask != 0 {
+            let process_id = ProcessObjID::from_obj_id(id);
+            RodFSObjID::ProcessID(process_id)
         } else {
             RodFSObjID::OtherID(id as u32)
         }
@@ -80,14 +80,14 @@ impl RodFSObjID {
 
     pub const fn to_obj_id(&self) -> FSObjectID {
         match self {
-            RodFSObjID::TaskID(id) => id.to_obj_id(),
+            RodFSObjID::ProcessID(id) => id.to_obj_id(),
             RodFSObjID::OtherID(id) => *id as usize,
         }
     }
 
     pub const fn opaque_id(&self) -> OpaqueRodFSObjID {
         match self {
-            RodFSObjID::TaskID(id) => id.opaque_id(),
+            RodFSObjID::ProcessID(id) => id.opaque_id(),
             RodFSObjID::OtherID(id) => *id,
         }
     }
@@ -243,21 +243,21 @@ impl InternalStructure {
     fn generate_from_kernel() -> (Self, OpaqueRodFSObjID) {
         let init_state = const { init_system::get_init_state() };
         let mut results = Self::generate_from_init_state(init_state);
-        let tasks_collection_id = results.append_child(RodFSObject::Collection {
-            name: "tasks",
+        let processes_collection_id = results.append_child(RodFSObject::Collection {
+            name: "proc",
             size: 0,
         });
-        (results, tasks_collection_id)
+        (results, processes_collection_id)
     }
 
-    fn generate_from_task(task_pid: Pid) -> Self {
-        let init_state = init_system::task_init_system(task_pid);
+    fn generate_from_process(process_pid: Pid) -> Self {
+        let init_state = init_system::process_init_system(process_pid);
         Self::generate_from_init_state(init_state)
     }
 
-    fn try_generate_from_task(task_pid: Pid) -> Option<Self> {
-        match threading::find(|task| task.pid() == task_pid, |_| ()) {
-            Some(_) => Some(Self::generate_from_task(task_pid)),
+    fn try_generate_from_process(process_pid: Pid) -> Option<Self> {
+        match threading::find(|process| process.pid() == process_pid, |_| ()) {
+            Some(_) => Some(Self::generate_from_process(process_pid)),
             _ => None,
         }
     }
@@ -321,41 +321,42 @@ impl InternalStructure {
 
 pub struct RodFS {
     internal_structure: InternalStructure,
-    /// tasks however are given special treatment as they are not part of the internal system, same search mechanism is used for tasks as well
-    tasks_cache: HashMap<u32, InternalStructure>,
-    tasks_collection_id: OpaqueRodFSObjID,
+    /// processes however are given special treatment as they are not part of the internal system, same search mechanism is used for processes as well
+    processes_cache: HashMap<u32, InternalStructure>,
+    processes_collection_id: OpaqueRodFSObjID,
 }
 
 impl RodFS {
     pub fn create() -> Self {
-        let (internal_structure, tasks_collection_id) = InternalStructure::generate_from_kernel();
+        let (internal_structure, processes_collection_id) =
+            InternalStructure::generate_from_kernel();
         RodFS {
             internal_structure,
-            tasks_cache: HashMap::new(),
-            tasks_collection_id,
+            processes_cache: HashMap::new(),
+            processes_collection_id,
         }
     }
 
-    const fn tasks_collection_id(&self) -> RodFSObjID {
-        RodFSObjID::OtherID(self.tasks_collection_id)
+    const fn processes_collection_id(&self) -> RodFSObjID {
+        RodFSObjID::OtherID(self.processes_collection_id)
     }
 
     fn get_internal(&mut self, obj_id: RodFSObjID) -> Option<&mut InternalStructure> {
         match obj_id {
             RodFSObjID::OtherID(_) => Some(&mut self.internal_structure),
-            RodFSObjID::TaskID(task_obj_id) => {
-                let task_pid = task_obj_id.task_pid();
+            RodFSObjID::ProcessID(process_obj_id) => {
+                let process_pid = process_obj_id.process_pid();
                 // TODO: there is a better solution but the borrow checker is not happy with it, even tho it looks working to me
                 // i might be sleepy or something, check after bumping nightly
-                if self.tasks_cache.contains_key(&task_pid) {
-                    return self.tasks_cache.get_mut(&task_pid);
+                if self.processes_cache.contains_key(&process_pid) {
+                    return self.processes_cache.get_mut(&process_pid);
                 }
 
-                self.tasks_cache.insert(
-                    task_pid,
-                    InternalStructure::try_generate_from_task(task_pid)?,
+                self.processes_cache.insert(
+                    process_pid,
+                    InternalStructure::try_generate_from_process(process_pid)?,
                 );
-                self.tasks_cache.get_mut(&task_pid)
+                self.processes_cache.get_mut(&process_pid)
             }
         }
     }
@@ -372,18 +373,18 @@ impl RodFS {
     }
 
     fn search_indx(&mut self, parent_id: RodFSObjID, name: &str) -> FSResult<RodFSObjID> {
-        if parent_id == self.tasks_collection_id() {
+        if parent_id == self.processes_collection_id() {
             if name == "self" {
-                let curr_task = threading::this_task();
+                let curr_process = threading::this_process();
 
-                let pid = curr_task.pid();
-                let task_obj_id = TaskObjID::new(0, pid);
-                return Ok(RodFSObjID::TaskID(task_obj_id));
+                let pid = curr_process.pid();
+                let process_obj_id = ProcessObjID::new(0, pid);
+                return Ok(RodFSObjID::ProcessID(process_obj_id));
             }
 
             if let Ok(pid) = name.parse::<u32>() {
-                let task_obj_id = TaskObjID::new(0, pid);
-                return Ok(RodFSObjID::TaskID(task_obj_id));
+                let process_obj_id = ProcessObjID::new(0, pid);
+                return Ok(RodFSObjID::ProcessID(process_obj_id));
             }
         }
 
@@ -394,9 +395,12 @@ impl RodFS {
 
         match parent_id {
             RodFSObjID::OtherID(_) => Ok(RodFSObjID::OtherID(opaque_id)),
-            RodFSObjID::TaskID(task_obj_id) => {
-                let task_pid = task_obj_id.task_pid();
-                Ok(RodFSObjID::TaskID(TaskObjID::new(opaque_id, task_pid)))
+            RodFSObjID::ProcessID(process_obj_id) => {
+                let process_pid = process_obj_id.process_pid();
+                Ok(RodFSObjID::ProcessID(ProcessObjID::new(
+                    opaque_id,
+                    process_pid,
+                )))
             }
         }
     }
@@ -404,12 +408,12 @@ impl RodFS {
     fn cleanup(&mut self, obj_id: RodFSObjID) {
         match obj_id {
             RodFSObjID::OtherID(_) => {}
-            RodFSObjID::TaskID(task_obj_id) => {
-                let task_pid = task_obj_id.task_pid();
-                // if the task is not found, it means the task has been terminated
-                // remove the task from the cache
-                if threading::find(|task| task.pid() == task_pid, |_| ()).is_none() {
-                    self.tasks_cache.remove(&task_pid);
+            RodFSObjID::ProcessID(process_obj_id) => {
+                let process_pid = process_obj_id.process_pid();
+                // if the process is not found, it means the process has been terminated
+                // remove the process from the cache
+                if threading::find(|process| process.pid() == process_pid, |_| ()).is_none() {
+                    self.processes_cache.remove(&process_pid);
                 }
             }
         }
@@ -486,12 +490,12 @@ impl FileSystem for RwLock<RodFS> {
         }
 
         // FIXME: Could be made simpler
-        if obj_id == write_guard.tasks_collection_id() {
+        if obj_id == write_guard.processes_collection_id() {
             use core::fmt::Write;
 
             let mut pid_fmt_buf = heapless::String::<20>::new();
-            threading::for_each(|task| {
-                _ = write!(pid_fmt_buf, "{}", task.pid());
+            threading::for_each(|process| {
+                _ = write!(pid_fmt_buf, "{}", process.pid());
                 let attrs = FileAttr::new(FSObjectType::Directory, 0);
 
                 let direntry = DirEntry::new(&pid_fmt_buf, attrs);

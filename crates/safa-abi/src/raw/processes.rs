@@ -4,22 +4,22 @@ use super::{Optional, RawSlice, RawSliceMut};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-/// ABI structures are structures that are passed to tasks by the parent task
+/// ABI structures are structures that are passed to processes by the parent process
 /// for now only stdio file descriptors are passed
 /// you get a pointer to them in the `r8` register at _start (the 5th argument)
 pub struct AbiStructures {
-    pub stdio: TaskStdio,
+    pub stdio: ProcessStdio,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-pub struct TaskStdio {
+pub struct ProcessStdio {
     pub stdout: Optional<usize>,
     pub stdin: Optional<usize>,
     pub stderr: Optional<usize>,
 }
 
-impl TaskStdio {
+impl ProcessStdio {
     pub fn new(stdout: Option<usize>, stdin: Option<usize>, stderr: Option<usize>) -> Self {
         Self {
             stdout: stdout.into(),
@@ -76,7 +76,7 @@ pub struct PSpawnConfig {
     pub name: RawSlice<u8>,
     pub argv: RawSliceMut<RawSlice<u8>>,
     pub flags: SpawnFlags,
-    pub stdio: *const TaskStdio,
+    pub stdio: *const ProcessStdio,
     pub env: RawSliceMut<RawSlice<u8>>,
     pub priority: Optional<ContextPriority>,
 }
@@ -87,7 +87,7 @@ impl PSpawnConfig {
         argv: *mut [&[u8]],
         env: *mut [&[u8]],
         flags: SpawnFlags,
-        stdio: &TaskStdio,
+        stdio: &ProcessStdio,
         priority: Option<ContextPriority>,
     ) -> Self {
         let name = unsafe { RawSlice::from_slice(name.as_bytes()) };
@@ -100,7 +100,7 @@ impl PSpawnConfig {
             argv,
             env,
             flags,
-            stdio: stdio as *const TaskStdio,
+            stdio: stdio as *const ProcessStdio,
             priority: priority.into(),
         }
     }

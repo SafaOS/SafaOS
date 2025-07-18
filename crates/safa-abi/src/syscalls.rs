@@ -34,9 +34,9 @@ pub enum SyscallTable {
     SysGetCWD = 15,
     SysSbrk = 18,
 
-    /// Spawns a process (task)
+    /// Spawns a process (process)
     SysPSpawn = 19,
-    /// Spawns a thread (context) inside the current process (task) with the given entry point
+    /// Spawns a thread (context) inside the current process (process) with the given entry point
     SysTSpawn = 29,
     SysTExit = 30,
     SysTSleep = 31,

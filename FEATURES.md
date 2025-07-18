@@ -17,7 +17,7 @@ Some useful libraries that were ported to `SafaOS`:
 - [X] x86_64
 - [X] AArch64 (incomplete only qemu virt #24)
 
-## Userspace & Tasks
+## Userspace & processes
 Overview of what processes can currently do:
 - [X] ring3
 - [X] ELF-loader

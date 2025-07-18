@@ -1,12 +1,12 @@
 pub mod cpu_context;
 pub mod expose;
+pub mod process;
 pub mod queue;
 pub mod resources;
-pub mod task;
 #[cfg(test)]
 mod tests;
 
-/// Process ID, a unique identifier for a process (task)
+/// Process ID, a unique identifier for a process (process)
 pub type Pid = u32;
 
 use core::cell::{SyncUnsafeCell, UnsafeCell};
@@ -19,13 +19,13 @@ use safa_utils::make_path;
 
 use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};
 use crate::threading::expose::thread_yield;
-use crate::threading::queue::TaskQueue;
+use crate::threading::queue::ProcessQueue;
 use crate::utils::locks::{RwLock, SpinMutex};
 use crate::utils::types::Name;
 use crate::{VirtAddr, arch};
 use alloc::boxed::Box;
+use process::{Process, ProcessInfo};
 use slab::Slab;
-use task::{Task, TaskInfo};
 
 use crate::{
     arch::threading::{CPUStatus, restore_cpu_status},
@@ -90,7 +90,7 @@ unsafe fn timeslices_sub_finished() -> bool {
 }
 
 pub struct Scheduler {
-    tasks_queue: TaskQueue,
+    processes_queue: ProcessQueue,
     pids: Slab<()>,
 }
 
@@ -100,7 +100,7 @@ unsafe impl Sync for Scheduler {}
 impl Scheduler {
     pub const fn new() -> Self {
         Self {
-            tasks_queue: TaskQueue::new(),
+            processes_queue: ProcessQueue::new(),
             pids: Slab::new(),
         }
     }
@@ -115,7 +115,7 @@ impl Scheduler {
         let page_table = unsafe { PhysPageTable::from_current() };
         let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
-        let (task, root_thread) = Task::create(
+        let (process, root_thread) = Process::create(
             Name::try_from(name).expect("initial process name too long"),
             0,
             0,
@@ -133,9 +133,9 @@ impl Scheduler {
 
         unsafe {
             crate::arch::disable_interrupts();
-            let status = arch::threading::init_cpus(&task, idle_function);
+            let status = arch::threading::init_cpus(&process, idle_function);
             let status_ref = status.as_ref();
-            self::add(task, root_thread);
+            self::add(process, root_thread);
             *SCHEDULER_INITED.get() = true;
 
             debug!(
@@ -148,7 +148,7 @@ impl Scheduler {
         }
     }
 
-    /// context switches into next task, takes current context outputs new context
+    /// context switches into next process, takes current context outputs new context
     /// returns the new context and a boolean indicating if the address space has changed
     /// if the address space has changed, please copy the context to somewhere accessible first
     pub unsafe fn switch(
@@ -163,8 +163,8 @@ impl Scheduler {
             let current_context = current_thread
                 .context()
                 .expect("context is None before the thread is removed");
-            let current_task = current_thread.task();
-            let current_pid = current_task.pid();
+            let current_process = current_thread.process();
+            let current_pid = current_process.pid();
 
             current_context.set_cpu_status(current_status);
 
@@ -172,8 +172,8 @@ impl Scheduler {
                 current_thread.set_status(ContextStatus::Runnable);
             }
 
-            if !current_task.is_alive() {
-                current_task
+            if !current_process.is_alive() {
+                current_process
                     .schedule_cleanup
                     .store(true, core::sync::atomic::Ordering::SeqCst);
             }
@@ -193,10 +193,10 @@ impl Scheduler {
                 {
                     let thread = next_node.thread();
                     let thread_cid = thread.cid();
-                    let task = thread.task();
+                    let process = thread.process();
 
-                    let task_pid = task.pid();
-                    let address_space_changed = task_pid != current_pid;
+                    let process_pid = process.pid();
+                    let address_space_changed = process_pid != current_pid;
 
                     if thread.is_dead() {
                         debug_assert!(!thread.is_removed());
@@ -249,18 +249,18 @@ impl Scheduler {
         }
     }
 
-    /// appends a task to the end of the scheduler taskes list
-    /// returns the pid of the added task
-    fn add_task(&mut self, task: Arc<Task>, root_thread: Arc<Thread>) -> Pid {
+    /// appends a process to the end of the scheduler processes list
+    /// returns the pid of the added process
+    fn add_process(&mut self, process: Arc<Process>, root_thread: Arc<Thread>) -> Pid {
         let pid = self.pids.insert(()) as Pid;
-        unsafe { task.set_pid(pid) };
+        unsafe { process.set_pid(pid) };
 
-        self.tasks_queue.push_back(task.clone());
+        self.processes_queue.push_back(process.clone());
         self.add_thread(root_thread, None);
 
-        let name = task.name();
+        let name = process.name();
 
-        debug!(Scheduler, "Task {} ({}) ADDED", pid, name);
+        debug!(Scheduler, "Process {} ({}) PROCESS ADDED", pid, name);
         pid
     }
 
@@ -299,7 +299,7 @@ impl Scheduler {
         let (root_thread, _) = &mut *queue_lock;
 
         let cid = thread.cid();
-        let pid = thread.task().pid();
+        let pid = thread.process().pid();
 
         ThreadNode::push_front(root_thread, thread);
         cpu_local
@@ -308,40 +308,42 @@ impl Scheduler {
 
         debug!(
             Scheduler,
-            "Thread {cid} added for Task {pid}, CPU: {cpu_index}"
+            "Thread {cid} added for process {pid}, CPU: {cpu_index}"
         );
     }
 
-    /// finds a task where executing `condition` on returns true and returns it
-    fn find<C>(&self, condition: C) -> Option<&Arc<Task>>
+    /// finds a process where executing `condition` on returns true and returns it
+    fn find<C>(&self, condition: C) -> Option<&Arc<Process>>
     where
-        C: Fn(&Task) -> bool,
+        C: Fn(&Process) -> bool,
     {
-        for task in self.tasks_queue.iter() {
-            if condition(task) {
-                return Some(&task);
+        for process in self.processes_queue.iter() {
+            if condition(process) {
+                return Some(&process);
             }
         }
 
         None
     }
 
-    /// iterates through all taskes and executes `then` on each of them
-    /// executed on all taskes
+    /// iterates through all processes and executes `then` on each of them
+    /// executed on all processes
     pub fn for_each<T>(&self, mut then: T)
     where
-        T: FnMut(&Task),
+        T: FnMut(&Process),
     {
-        for task in self.tasks_queue.iter() {
-            then(task);
+        for process in self.processes_queue.iter() {
+            then(process);
         }
     }
 
-    /// attempt to remove a task where executing `condition` on returns true, returns the removed task info
-    pub fn remove(&mut self, condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
-        let task = self.tasks_queue.remove_where(|task| condition(task))?;
+    /// attempt to remove a process where executing `condition` on returns true, returns the removed process info
+    pub fn remove(&mut self, condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
+        let process = self
+            .processes_queue
+            .remove_where(|process| condition(process))?;
 
-        for thread in &*task.threads.lock() {
+        for thread in &*process.threads.lock() {
             assert!(thread.is_dead());
             // wait for thread to exit before removing
             // will be removed on context switch at some point
@@ -354,7 +356,7 @@ impl Scheduler {
             }
         }
 
-        let (info, page_table) = task.cleanup();
+        let (info, page_table) = process.cleanup();
         drop(page_table);
 
         self.pids.remove(info.pid as usize);
@@ -372,7 +374,7 @@ pub(super) unsafe fn before_thread_yield() {
 }
 
 #[inline(always)]
-/// performs a context switch using the scheduler, switching to the next task context
+/// performs a context switch using the scheduler, switching to the next process context
 /// to be used
 /// returns the new context and a boolean indicating if the address space has changed
 /// if the address space has changed, please copy the context to somewhere accessible first
@@ -409,42 +411,42 @@ lazy_static! {
     static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 }
 
-/// Returns a static reference to the current task
+/// Returns a static reference to the current process
 /// # Safety
-/// Safe because the current Task is always alive as long as there is code executing
-pub fn this_task() -> Arc<Task> {
-    this_thread().task().clone()
+/// Safe because the current process is always alive as long as there is code executing
+pub fn this_process() -> Arc<Process> {
+    this_thread().process().clone()
 }
 
-/// Returns a static reference to the current task
+/// Returns a static reference to the current process
 /// # Safety
 /// Safe because the current Thread is always alive as long as there is code executing
 pub fn this_thread() -> Arc<Thread> {
     CPULocalStorage::get().current_thread()
 }
 
-/// acquires lock on scheduler and finds a task where executing `condition` on returns true and returns the result of `map` on that task
+/// acquires lock on scheduler and finds a process where executing `condition` on returns true and returns the result of `map` on that process
 pub fn find<C, M, R>(condition: C, map: M) -> Option<R>
 where
-    C: Fn(&Task) -> bool,
-    M: FnMut(&Arc<Task>) -> R,
+    C: Fn(&Process) -> bool,
+    M: FnMut(&Arc<Process>) -> R,
 {
     let schd = SCHEDULER.read();
     schd.find(condition).map(map)
 }
 
 /// acquires lock on scheduler
-/// executes `then` on each task
+/// executes `then` on each process
 pub fn for_each<T>(then: T)
 where
-    T: FnMut(&Task),
+    T: FnMut(&Process),
 {
     SCHEDULER.read().for_each(then)
 }
 
-/// acquires lock on scheduler and adds a task to it
-fn add(task: Arc<Task>, root_thread: Arc<Thread>) -> Pid {
-    SCHEDULER.write().add_task(task, root_thread)
+/// acquires lock on scheduler and adds a process to it
+fn add(process: Arc<Process>, root_thread: Arc<Thread>) -> Pid {
+    SCHEDULER.write().add_process(process, root_thread)
 }
 
 /// acquires lock on scheduler and adds a thread to it
@@ -452,8 +454,8 @@ fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
     SCHEDULER.write().add_thread(thread, cpu)
 }
 
-/// returns the result of `then` if a task was found
-/// acquires lock on scheduler and removes a task from it where `condition` on the task returns true
-fn remove(condition: impl Fn(&Task) -> bool) -> Option<TaskInfo> {
+/// returns the result of `then` if a process was found
+/// acquires lock on scheduler and removes a process from it where `condition` on the process returns true
+fn remove(condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
     SCHEDULER.write().remove(condition)
 }
