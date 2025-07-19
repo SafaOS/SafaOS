@@ -9,11 +9,7 @@ use crate::{
         expose::{SpawnFlags, pspawn, wait_for_process},
     },
 };
-use safa_utils::{
-    abi::raw::processes::{AbiStructures, ProcessStdio},
-    make_path,
-    types::Name,
-};
+use safa_utils::{abi::raw::processes::ProcessStdio, make_path, types::Name};
 
 #[macro_export]
 macro_rules! test_log {
@@ -142,7 +138,7 @@ fn userspace_test_script() {
         &[],
         SpawnFlags::empty(),
         ContextPriority::Medium,
-        AbiStructures { stdio },
+        stdio,
         None,
     )
     .unwrap();

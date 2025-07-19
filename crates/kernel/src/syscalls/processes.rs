@@ -2,7 +2,7 @@ use safa_utils::abi::{
     self,
     raw::{
         RawSlice, RawSliceMut,
-        processes::{AbiStructures, ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig},
+        processes::{ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig},
     },
 };
 
@@ -76,9 +76,7 @@ fn syspspawn_inner(
         env,
         flags,
         priority,
-        AbiStructures {
-            stdio: stdio.unwrap_or_default(),
-        },
+        stdio.unwrap_or_default(),
         custom_stack_size,
     )?;
     Ok(results)

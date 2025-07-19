@@ -37,6 +37,10 @@ impl TrackedAllocation {
     pub const fn end(&self) -> VirtAddr {
         self.end_addr
     }
+
+    pub const fn start(&self) -> VirtAddr {
+        self.start_addr
+    }
 }
 
 impl Drop for TrackedAllocation {

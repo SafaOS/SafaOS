@@ -8,12 +8,12 @@ use spin::once::Once;
 use thiserror::Error;
 
 use crate::{
+    VirtAddr,
     memory::{
         copy_to_userspace, frame_allocator,
-        paging::{EntryFlags, MapToError, Page, PageTable, PAGE_SIZE},
+        paging::{EntryFlags, MapToError, PAGE_SIZE, Page, PageTable},
     },
     utils::errors::{ErrorStatus, IntoErr},
-    VirtAddr,
 };
 
 use super::io::Readable;
@@ -196,6 +196,7 @@ pub struct ProgramType(u32);
 impl ProgramType {
     pub const NULL: Self = Self(0);
     pub const LOAD: Self = Self(1);
+    pub const TLS: Self = Self(7);
 }
 
 bitflags! {
@@ -468,17 +469,25 @@ impl<'a, T: Readable> Elf<'a, T> {
     }
 
     /// loads an executable ELF, maps, and copies it to `page_table`.
-    /// returns the program break on success.
-    pub fn load_exec(&self, page_table: &mut PageTable) -> Result<VirtAddr, ElfError> {
+    /// # Returns
+    /// - Ok((program_break, None)) if successful and there is no TLS (Thread Local Storage)
+    /// - Ok((program_break, Some((master_tls_start_addr, master_tls_size, master_tls_alignment))) if successful and there happens to be TLS
+    /// - Err([`ElfError::NotAnExecutable`]) if elf header isn't an [`ElfType::EXE`]
+    pub fn load_exec(
+        &self,
+        page_table: &mut PageTable,
+    ) -> Result<(VirtAddr, Option<(VirtAddr, usize, usize)>), ElfError> {
         if self.header.kind != ElfType::EXE {
             return Err(ElfError::NotAnExecutable);
         }
 
         let mut program_break = VirtAddr::null();
+        let mut master_tls = None;
+
         let mut buf = [0u8; PAGE_SIZE];
 
         for header in self.get_programs() {
-            if header.ptype != ProgramType::LOAD {
+            if header.ptype != ProgramType::LOAD && header.ptype != ProgramType::TLS {
                 continue;
             }
 
@@ -496,8 +505,11 @@ impl<'a, T: Readable> Elf<'a, T> {
                 entry_flags |= EntryFlags::WRITE;
             }
 
+            let size_in_mem = header.memz;
+            let alignment_in_mem = header.align;
+
             let start_addr = VirtAddr::from(header.vaddr);
-            let end_addr = start_addr + header.memz + PAGE_SIZE;
+            let end_addr = start_addr + size_in_mem + PAGE_SIZE;
 
             let start_page = Page::containing_address(start_addr);
             let end_page = Page::containing_address(end_addr);
@@ -541,7 +553,11 @@ impl<'a, T: Readable> Elf<'a, T> {
                 }
             }
             program_break = end_addr;
+
+            if header.ptype == ProgramType::TLS {
+                master_tls = Some((start_addr, size_in_mem, alignment_in_mem));
+            }
         }
-        Ok(program_break)
+        Ok((program_break, master_tls))
     }
 }

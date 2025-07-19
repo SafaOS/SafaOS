@@ -274,6 +274,67 @@ impl_align_common!(u32);
 impl_align_common!(u32, u16);
 impl_align_common!(u16);
 
+/// Copies from an address in a given page table to another address in the same page table
+#[inline(always)]
+pub fn userspace_copy_within(
+    page_table: &mut PageTable,
+    src_addr: VirtAddr,
+    dest_addr: VirtAddr,
+    size: usize,
+) {
+    let end_src_addr = src_addr + size;
+    let end_dest_addr = dest_addr + size;
+
+    let src_iter = Page::iter_pages(
+        Page::containing_address(src_addr),
+        Page::containing_address(end_src_addr + PAGE_SIZE),
+    );
+
+    let dest_iter = Page::iter_pages(
+        Page::containing_address(dest_addr),
+        Page::containing_address(end_dest_addr + PAGE_SIZE),
+    );
+
+    let pages_iter = src_iter.zip(dest_iter);
+    let phys_addr_iter = pages_iter.map(|(src_page, dest_page)| {
+        let src_frame = page_table
+            .get_frame(src_page)
+            .expect("attempt to copy from an unmapped page");
+        let dest_frame = page_table
+            .get_frame(dest_page)
+            .expect("attempt to copy to an unmapped page");
+
+        let (diff, to_copy) = if src_page.virt_addr() == src_addr.to_previous_page() {
+            (
+                src_addr - src_page.virt_addr(),
+                src_addr - src_addr.to_next_page(),
+            )
+        } else if src_page.virt_addr() == end_src_addr.to_previous_page() {
+            (0, src_page.virt_addr() - end_src_addr)
+        } else {
+            (0, PAGE_SIZE)
+        };
+
+        let src_phys_addr = src_frame.phys_addr() + diff;
+        let dest_phys_addr = dest_frame.phys_addr() + diff;
+
+        (src_phys_addr, dest_phys_addr, to_copy)
+    });
+    let pointers = phys_addr_iter.map(|(src, dest, size)| {
+        (
+            src.into_virt().into_ptr::<u8>() as *const u8,
+            dest.into_virt().into_ptr::<u8>(),
+            size,
+        )
+    });
+
+    for (src, dest, size) in pointers {
+        unsafe {
+            dest.copy_from(src, size);
+        }
+    }
+}
+
 #[inline(always)]
 pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8]) {
     let pages_required = obj.len().div_ceil(PAGE_SIZE) + 1;

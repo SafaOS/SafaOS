@@ -154,6 +154,7 @@ impl CPUStatus {
         page_table: &mut PhysPageTable,
         entry_point: VirtAddr,
         entry_point_args: [usize; ARGS_COUNT],
+        tls_addr: VirtAddr,
         user_stack_end: VirtAddr,
         kernel_stack_end: VirtAddr,
         userspace: bool,
@@ -169,6 +170,7 @@ impl CPUStatus {
         }
 
         Ok(Self {
+            fs_base: tls_addr,
             ring0_rsp: kernel_stack_end,
             rflags,
             rip: entry_point,
@@ -188,6 +190,7 @@ impl CPUStatus {
 
     /// Creates a child CPU Status Instance, that is status of a thread child of thread 0
     pub unsafe fn create_child(
+        tls_addr: VirtAddr,
         user_stack_end: VirtAddr,
         kernel_stack_end: VirtAddr,
         page_table: &mut PhysPageTable,
@@ -199,6 +202,7 @@ impl CPUStatus {
         let (cs, ss, rflags) = make_usermode_regs(userspace);
 
         Ok(Self {
+            fs_base: tls_addr,
             ring0_rsp: kernel_stack_end,
             rflags,
             rip: entry_point,

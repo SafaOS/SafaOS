@@ -41,9 +41,9 @@ impl Debug for ResourceManager {
 }
 
 impl ResourceManager {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         ResourceManager {
-            resources: Vec::with_capacity(2),
+            resources: Vec::new(),
             next_ri: 0,
         }
     }

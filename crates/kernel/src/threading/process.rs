@@ -1,11 +1,15 @@
 use core::{
-    cell::UnsafeCell,
     mem::ManuallyDrop,
+    ptr::NonNull,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use crate::{
-    memory::{AlignToPage, proc_mem_allocator::ProcessMemAllocator},
+    arch::paging::PageTable,
+    memory::{
+        AlignTo, AlignToPage, copy_to_userspace, proc_mem_allocator::ProcessMemAllocator,
+        userspace_copy_within,
+    },
     utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use crate::{
@@ -17,7 +21,7 @@ use crate::{
     utils::types::Name,
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use safa_utils::abi::raw::processes::AbiStructures;
+use safa_utils::abi::raw::processes::{AbiStructures, ProcessStdio, UThreadLocalInfo};
 use serde::Serialize;
 
 use crate::{
@@ -47,7 +51,7 @@ pub struct AliveProcess {
     data_pages: usize,
     data_start: VirtAddr,
     data_break: VirtAddr,
-
+    master_tls: Option<(VirtAddr, usize, usize)>,
     cwd: Box<PathBuf>,
 }
 #[derive(Debug)]
@@ -286,7 +290,7 @@ const GUARD_PAGES_COUNT: usize = 2;
 pub struct Process {
     name: Name,
     /// constant
-    pid: UnsafeCell<Pid>,
+    pid: Pid,
     /// process may change it's parent pid
     ppid: AtomicU32,
     state: RwLock<ProcessState>,
@@ -320,7 +324,7 @@ unsafe impl Sync for Process {}
 
 impl Process {
     pub const fn pid(&self) -> Pid {
-        unsafe { *self.pid.get() }
+        self.pid
     }
 
     pub fn ppid(&self) -> Pid {
@@ -331,10 +335,59 @@ impl Process {
         &self.ppid
     }
 
-    pub(super) const unsafe fn set_pid(&self, pid: Pid) {
-        unsafe {
-            self.pid.get().write(pid);
-        }
+    #[inline]
+    fn allocate_thread_local(&self) -> Result<Option<(VirtAddr, TrackedAllocation)>, MapToError> {
+        let mut state = self.state_mut();
+        let alive_state = state
+            .alive_mut()
+            .expect("attempt to allocate a new thread local for a thread that isn't alive");
+
+        let page_table = &mut alive_state.root_page_table;
+        let master_tls = alive_state.master_tls;
+        let mut allocator = self.allocator.lock();
+
+        Self::allocate_thread_local_inner(page_table, &mut *allocator, master_tls)
+    }
+
+    #[inline]
+    fn allocate_thread_local_inner(
+        page_table: &mut PageTable,
+        allocator: &mut ProcessMemAllocator,
+        master_tls: Option<(VirtAddr, usize, usize)>,
+    ) -> Result<Option<(VirtAddr, TrackedAllocation)>, MapToError> {
+        let Some((master_tls_addr, tls_og_size, tls_alignment)) = master_tls else {
+            return Ok(None);
+        };
+
+        let align = tls_alignment.max(align_of::<UThreadLocalInfo>());
+        let tls_size = tls_og_size.to_next_multiple_of(align);
+
+        let size = size_of::<UThreadLocalInfo>() + tls_size;
+        let tracker = allocator.allocate_tracked_guraded(size, 0)?;
+
+        let allocated_start = tracker.start();
+
+        let (uthread_addr, tls_addr) = if align >= tls_alignment {
+            (
+                allocated_start,
+                allocated_start + size_of::<UThreadLocalInfo>(),
+            )
+        } else {
+            (allocated_start + tls_size, allocated_start)
+        };
+
+        let uthread_info = UThreadLocalInfo {
+            uthread_ptr: unsafe { NonNull::new_unchecked(uthread_addr.into_ptr()) },
+            thread_local_storage_ptr: tls_addr.into_ptr(),
+            thread_local_storage_size: tls_og_size,
+        };
+
+        let uthread_bytes: [u8; size_of::<UThreadLocalInfo>()] =
+            unsafe { core::mem::transmute(uthread_info) };
+        copy_to_userspace(page_table, uthread_addr, &uthread_bytes);
+        userspace_copy_within(page_table, master_tls_addr, tls_addr, tls_og_size);
+
+        Ok(Some((uthread_addr, tracker)))
     }
 
     fn allocate_stack_inner(
@@ -354,6 +407,45 @@ impl Process {
         Self::allocate_stack_inner(&mut *self.allocator.lock(), custom_stack_size)
     }
 
+    const fn new(
+        name: Name,
+        pid: Pid,
+        ppid: Pid,
+        default_priority: ContextPriority,
+        root_page_table: PhysPageTable,
+        cwd: Box<PathBuf>,
+        data_break: VirtAddr,
+        master_tls: Option<(VirtAddr, usize, usize)>,
+        allocator: ProcessMemAllocator,
+        userspace_process: bool,
+    ) -> Self {
+        Self {
+            name,
+            pid,
+
+            ppid: AtomicU32::new(ppid),
+            is_alive: AtomicBool::new(true),
+            schedule_cleanup: AtomicBool::new(false),
+
+            threads: Mutex::new(Vec::new()),
+
+            next_cid: AtomicU32::new(1),
+            context_count: AtomicU32::new(1),
+            default_priority,
+
+            state: RwLock::new(ProcessState::Alive(AliveProcess {
+                root_page_table: ManuallyDrop::new(root_page_table),
+                resources: ResourceManager::new(),
+                master_tls,
+                data_pages: 0,
+                data_start: data_break,
+                data_break,
+                cwd,
+            })),
+            allocator: Mutex::new(allocator),
+            userspace_process,
+        }
+    }
     /// Creates a new process returning a combination of the process and the main thread
     pub fn create(
         name: Name,
@@ -363,9 +455,10 @@ impl Process {
         cwd: Box<PathBuf>,
         env: &[&[u8]],
         args: &[&str],
-        structures: AbiStructures,
+        stdio: ProcessStdio,
         root_page_table: PhysPageTable,
         data_break: VirtAddr,
+        master_tls: Option<(VirtAddr, usize, usize)>,
         default_priority: ContextPriority,
         userspace_process: bool,
         custom_stack_size: Option<usize>,
@@ -386,6 +479,7 @@ impl Process {
         let (_, _, argv_start) = proc_mem_allocator
             .allocate_filled_with_slices(unsafe { core::mem::transmute(args) }, 0x10)?;
 
+        let structures = AbiStructures::new(stdio, pid);
         let (abi_structures_start, _) = proc_mem_allocator.allocate_filled_with(
             &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) }[..],
             align_of::<AbiStructures>(),
@@ -399,55 +493,57 @@ impl Process {
             abi_structures_start.into_raw(),
         ];
 
+        let mut to_track = heapless::Vec::new();
+
         let user_stack_tracker =
             Self::allocate_stack_inner(&mut proc_mem_allocator, custom_stack_size)?;
         let kernel_stack_tracker =
             Self::allocate_stack_inner(&mut proc_mem_allocator, custom_stack_size)?;
+
+        let tls = Self::allocate_thread_local_inner(
+            &mut root_page_table,
+            &mut proc_mem_allocator,
+            master_tls,
+        )?;
+
+        let (tls_addr, tls_tracker) = match tls {
+            Some((tls_addr, tracker)) => (tls_addr, Some(tracker)),
+            None => (VirtAddr::null(), None),
+        };
 
         let context = unsafe {
             CPUStatus::create_root(
                 &mut root_page_table,
                 entry_point,
                 entry_args,
+                tls_addr,
                 user_stack_tracker.end(),
                 kernel_stack_tracker.end(),
                 userspace_process,
             )?
         };
 
-        let process = Arc::new(Self {
+        to_track.push(user_stack_tracker).unwrap();
+        to_track.push(kernel_stack_tracker).unwrap();
+        if let Some(tracker) = tls_tracker {
+            to_track.push(tracker).unwrap();
+        }
+
+        let process = Arc::new(Self::new(
             name,
-            pid: UnsafeCell::new(pid),
-
-            ppid: AtomicU32::new(ppid),
-            is_alive: AtomicBool::new(true),
-            schedule_cleanup: AtomicBool::new(false),
-
-            threads: Mutex::new(Vec::new()),
-
-            next_cid: AtomicU32::new(1),
-            context_count: AtomicU32::new(1),
+            pid,
+            ppid,
             default_priority,
-
-            state: RwLock::new(ProcessState::Alive(AliveProcess {
-                root_page_table: ManuallyDrop::new(root_page_table),
-                resources: ResourceManager::new(),
-                data_pages: 0,
-                data_start: data_break,
-                data_break,
-                cwd,
-            })),
-            allocator: Mutex::new(proc_mem_allocator),
+            root_page_table,
+            cwd,
+            data_break,
+            master_tls,
+            proc_mem_allocator,
             userspace_process,
-        });
+        ));
 
         let thread = Arc::new(Self::create_thread_from_status(
-            &process,
-            0,
-            context,
-            None,
-            user_stack_tracker,
-            kernel_stack_tracker,
+            &process, 0, context, None, to_track,
         ));
         process.threads.lock().push(thread.clone());
 
@@ -460,16 +556,14 @@ impl Process {
         cid: Cid,
         cpu_status: CPUStatus,
         priority: Option<ContextPriority>,
-        user_stack: TrackedAllocation,
-        kernel_stack: TrackedAllocation,
+        tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
     ) -> Thread {
         Thread::new(
             cid,
             cpu_status,
             process,
             priority.unwrap_or(process.default_priority),
-            user_stack,
-            kernel_stack,
+            tracked_allocations,
         )
     }
 
@@ -506,17 +600,24 @@ impl Process {
         priority: Option<ContextPriority>,
         custom_stack_size: Option<usize>,
     ) -> Result<Thread, MapToError> {
+        let user_stack_tracker = process.allocate_stack(custom_stack_size)?;
+        let kernel_stack_tracker = process.allocate_stack(custom_stack_size)?;
+        let tls = process.allocate_thread_local()?;
+
+        let (tls_addr, tls_tracker) = match tls {
+            Some((tls_addr, tracker)) => (tls_addr, Some(tracker)),
+            None => (VirtAddr::null(), None),
+        };
+
         let mut write_guard = process.state_mut();
         let state = write_guard
             .alive_mut()
             .expect("tried to create a thread in a process that is not alive");
-
-        let user_stack_tracker = process.allocate_stack(custom_stack_size)?;
-        let kernel_stack_tracker = process.allocate_stack(custom_stack_size)?;
         let page_table = &mut state.root_page_table;
 
         let cpu_status = unsafe {
             CPUStatus::create_child(
+                tls_addr,
                 user_stack_tracker.end(),
                 kernel_stack_tracker.end(),
                 page_table,
@@ -527,14 +628,15 @@ impl Process {
             )?
         };
 
-        let thread = Self::create_thread_from_status(
-            process,
-            context_id,
-            cpu_status,
-            priority,
-            user_stack_tracker,
-            kernel_stack_tracker,
-        );
+        let mut to_track = heapless::Vec::new();
+        to_track.push(user_stack_tracker).unwrap();
+        to_track.push(kernel_stack_tracker).unwrap();
+        if let Some(tracker) = tls_tracker {
+            to_track.push(tracker).unwrap();
+        }
+
+        let thread =
+            Self::create_thread_from_status(process, context_id, cpu_status, priority, to_track);
         process.context_count.fetch_add(1, Ordering::Relaxed);
 
         Ok(thread)
@@ -551,12 +653,12 @@ impl Process {
         args: &[&str],
         env: &[&[u8]],
         default_priority: ContextPriority,
-        structures: AbiStructures,
+        stdio: ProcessStdio,
         custom_stack_size: Option<usize>,
     ) -> Result<(Arc<Self>, Arc<Thread>), ElfError> {
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
-        let data_break = elf.load_exec(&mut page_table)?;
+        let (data_break, master_tls) = elf.load_exec(&mut page_table)?;
 
         Self::create(
             name,
@@ -566,9 +668,10 @@ impl Process {
             cwd,
             env,
             args,
-            structures,
+            stdio,
             page_table,
             data_break,
+            master_tls,
             default_priority,
             true,
             custom_stack_size,

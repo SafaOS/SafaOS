@@ -114,6 +114,7 @@ impl CPUStatus {
         page_table: &mut PhysPageTable,
         entry_point: VirtAddr,
         entry_point_args: [usize; ARGS_COUNT],
+        tls_addr: VirtAddr,
         user_stack_end: VirtAddr,
         kernel_stack_end: VirtAddr,
         userspace: bool,
@@ -131,6 +132,7 @@ impl CPUStatus {
             ttbr0: page_table.phys_addr(),
             frame: InterruptFrame {
                 general_registers,
+                tpidr_el0: Reg(tls_addr.into_raw() as u64),
                 sp: Reg(kernel_stack_end.into_raw() as u64),
                 elr: Reg(entry_point),
                 lr: Reg(entry_point),
@@ -146,6 +148,7 @@ impl CPUStatus {
 
     /// Creates a child CPU Status Instance, that is status of a thread child of thread 0
     pub unsafe fn create_child(
+        tls_addr: VirtAddr,
         user_stack_end: VirtAddr,
         kernel_stack_end: VirtAddr,
         page_table: &mut PhysPageTable,
@@ -166,6 +169,7 @@ impl CPUStatus {
             sp_el0: el0_stack_end,
             frame: InterruptFrame {
                 general_registers,
+                tpidr_el0: Reg(tls_addr.into_raw() as u64),
                 sp: Reg(el1_stack_end.into_raw() as u64),
                 elr: Reg(entry_point.into_raw() as u64),
                 lr: Reg(entry_point.into_raw() as u64),

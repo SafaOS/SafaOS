@@ -1,4 +1,4 @@
-use safa_utils::{abi::raw::processes::AbiStructures, make_path, types::Name};
+use safa_utils::{abi::raw::processes::ProcessStdio, make_path, types::Name};
 
 use crate::threading::{
     cpu_context::ContextPriority,
@@ -17,7 +17,7 @@ fn spawn_test() {
         &[],
         SpawnFlags::empty(),
         ContextPriority::Medium,
-        AbiStructures::default(),
+        ProcessStdio::default(),
         None,
     )
     .unwrap();

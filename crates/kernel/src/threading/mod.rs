@@ -115,10 +115,11 @@ impl Scheduler {
         let page_table = unsafe { PhysPageTable::from_current() };
         let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
+        let pid = SCHEDULER.write().add_pid();
         let (process, root_thread) = Process::create(
             Name::try_from(name).expect("initial process name too long"),
-            0,
-            0,
+            pid,
+            pid,
             VirtAddr::from(main_function as usize),
             cwd,
             &[],
@@ -126,6 +127,7 @@ impl Scheduler {
             unsafe { core::mem::zeroed() },
             page_table,
             VirtAddr::null(),
+            None,
             ContextPriority::Medium,
             false,
             None,
@@ -250,11 +252,14 @@ impl Scheduler {
         }
     }
 
+    fn add_pid(&mut self) -> Pid {
+        self.pids.insert(()) as Pid
+    }
+
     /// appends a process to the end of the scheduler processes list
     /// returns the pid of the added process
     fn add_process(&mut self, process: Arc<Process>, root_thread: Arc<Thread>) -> Pid {
-        let pid = self.pids.insert(()) as Pid;
-        unsafe { process.set_pid(pid) };
+        let pid = process.pid();
 
         self.processes_queue.push_back(process.clone());
         self.add_thread(root_thread, None);

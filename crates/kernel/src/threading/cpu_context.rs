@@ -93,14 +93,13 @@ impl Thread {
         cpu_status: CPUStatus,
         parent_process: &Arc<Process>,
         priority: ContextPriority,
-        user_stack: TrackedAllocation,
-        kernel_stack: TrackedAllocation,
+        tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
     ) -> Self {
         Self {
             id: cid,
             priority,
             status: UnsafeCell::new(ContextStatus::Runnable),
-            context: UnsafeCell::new(Some(Context::new(cpu_status, user_stack, kernel_stack))),
+            context: UnsafeCell::new(Some(Context::new(cpu_status, tracked_allocations))),
             is_dead: AtomicBool::new(false),
             is_removed: AtomicBool::new(false),
             parent_process: parent_process.clone(),
@@ -215,8 +214,7 @@ impl Thread {
 #[derive(Debug)]
 pub struct Context {
     cpu_status: CPUStatus,
-    _user_stack: TrackedAllocation,
-    _kernel_stack: TrackedAllocation,
+    _tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
 }
 
 impl Context {
@@ -230,13 +228,11 @@ impl Context {
 
     pub(super) fn new(
         cpu_status: CPUStatus,
-        user_stack: TrackedAllocation,
-        kernel_stack: TrackedAllocation,
+        tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
     ) -> Self {
         Context {
-            _user_stack: user_stack,
-            _kernel_stack: kernel_stack,
             cpu_status,
+            _tracked_allocations: tracked_allocations,
         }
     }
 }

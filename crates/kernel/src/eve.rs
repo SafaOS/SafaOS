@@ -11,10 +11,7 @@ use crate::{debug, logging};
 use crate::{drivers::vfs, serial};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
-use safa_utils::{
-    abi::raw::processes::{AbiStructures, ProcessStdio},
-    make_path,
-};
+use safa_utils::{abi::raw::processes::ProcessStdio, make_path};
 use spin::Lazy;
 
 pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
@@ -22,11 +19,6 @@ pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
     let stdout = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
     let stderr = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
     ProcessStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
-});
-
-#[allow(unused)]
-static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructures {
-    stdio: *KERNEL_STDIO,
 });
 
 lazy_static! {
@@ -81,7 +73,7 @@ pub fn main() -> ! {
             &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
             SpawnFlags::empty(),
             ContextPriority::Medium,
-            *KERNEL_ABI_STRUCTURES,
+            *KERNEL_STDIO,
             None,
         )
         .unwrap();

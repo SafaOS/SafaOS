@@ -17,7 +17,7 @@ use crate::{
 use alloc::boxed::Box;
 use bitflags::bitflags;
 use safa_utils::{
-    abi::raw::{self, processes::AbiStructures},
+    abi::raw::{self, processes::ProcessStdio},
     make_path,
     path::PathBuf,
 };
@@ -196,9 +196,10 @@ pub enum SpawnError {
 fn spawn_inner(
     name: Name,
     flags: SpawnFlags,
-    structures: AbiStructures,
+    stdio: ProcessStdio,
     create_process: impl FnOnce(
         Name,
+        Pid,
         Pid,
         Box<PathBuf>,
     ) -> Result<(Arc<Process>, Arc<Thread>), SpawnError>,
@@ -214,9 +215,10 @@ fn spawn_inner(
 
     let current_process = super::this_process();
     let current_pid = current_process.pid();
+    let new_pid = super::SCHEDULER.write().add_pid();
 
     let cwd = Box::new(cwd.into_owned().unwrap());
-    let (process, root_thread) = create_process(name, current_pid, cwd)?;
+    let (process, root_thread) = create_process(name, current_pid, new_pid, cwd)?;
 
     let provide_resources = || {
         let mut state = process.state_mut();
@@ -232,15 +234,15 @@ fn spawn_inner(
         } else {
             // clone only necessary resources
             let mut resources = heapless::Vec::<usize, 3>::new();
-            if let Some(stdin) = structures.stdio.stdin.into() {
+            if let Some(stdin) = stdio.stdin.into() {
                 _ = resources.push(stdin);
             }
 
-            if let Some(stdout) = structures.stdio.stdout.into() {
+            if let Some(stdout) = stdio.stdout.into() {
                 _ = resources.push(stdout);
             }
 
-            if let Some(stderr) = structures.stdio.stderr.into() {
+            if let Some(stderr) = stdio.stderr.into() {
                 _ = resources.push(stderr);
             }
 
@@ -267,21 +269,21 @@ fn spawn<T: Readable>(
     env: &[&[u8]],
     flags: SpawnFlags,
     priority: ContextPriority,
-    structures: AbiStructures,
+    stdio: ProcessStdio,
     custom_stack_size: Option<usize>,
 ) -> Result<Pid, SpawnError> {
-    spawn_inner(name, flags, structures, |name: Name, ppid, cwd| {
+    spawn_inner(name, flags, stdio, |name: Name, ppid, pid, cwd| {
         let elf = Elf::new(reader)?;
         let process = Process::from_elf(
             name,
-            0,
+            pid,
             ppid,
             cwd,
             elf,
             argv,
             env,
             priority,
-            structures,
+            stdio,
             custom_stack_size,
         )?;
         Ok(process)
@@ -296,7 +298,7 @@ pub fn pspawn(
     env: &[&[u8]],
     flags: SpawnFlags,
     priority: ContextPriority,
-    structures: AbiStructures,
+    stdio: ProcessStdio,
     custom_stack_size: Option<usize>,
 ) -> Result<Pid, FSError> {
     let file = File::open(path)?;
@@ -312,7 +314,7 @@ pub fn pspawn(
         env,
         flags,
         priority,
-        structures,
+        stdio,
         custom_stack_size,
     )
     .map_err(|_| FSError::NotExecutable)

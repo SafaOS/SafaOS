@@ -1,14 +1,38 @@
-use core::ops::BitOr;
+use core::{ops::BitOr, ptr::NonNull};
 
 use super::{Optional, RawSlice, RawSliceMut};
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// Describes information about a thread local storage, passed to the thread in the userspace
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct UThreadLocalInfo {
+    /// A pointer to this structure in the address space the thread belongs to
+    /// neccassary in x86_64 (because it sucks)
+    pub uthread_ptr: NonNull<Self>,
+    /// A pointer to the thread local storage beginning, can be null if there is no TLS
+    pub thread_local_storage_ptr: *const (),
+    /// The size of the thread local storage area
+    pub thread_local_storage_size: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 /// ABI structures are structures that are passed to processes by the parent process
 /// for now only stdio file descriptors are passed
 /// you get a pointer to them in the `r8` register at _start (the 5th argument)
 pub struct AbiStructures {
     pub stdio: ProcessStdio,
+    /// The PID of the parent process of this thread
+    pub parent_process_pid: u32,
+}
+
+impl AbiStructures {
+    pub fn new(stdio: ProcessStdio, parent_pid: u32) -> Self {
+        Self {
+            stdio,
+            parent_process_pid: parent_pid,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
