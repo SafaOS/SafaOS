@@ -305,12 +305,14 @@ pub fn userspace_copy_within(
             .expect("attempt to copy to an unmapped page");
 
         let (diff, to_copy) = if src_page.virt_addr() == src_addr.to_previous_page() {
-            (
-                src_addr - src_page.virt_addr(),
-                src_addr - src_addr.to_next_page(),
-            )
+            let offset_wthin = src_addr - src_page.virt_addr();
+            let to_next_page = PAGE_SIZE - offset_wthin;
+            let to_end = end_src_addr - src_addr;
+            let to_copy = core::cmp::min(to_next_page, to_end);
+
+            (offset_wthin, to_copy)
         } else if src_page.virt_addr() == end_src_addr.to_previous_page() {
-            (0, src_page.virt_addr() - end_src_addr)
+            (0, end_src_addr - src_page.virt_addr())
         } else {
             (0, PAGE_SIZE)
         };
