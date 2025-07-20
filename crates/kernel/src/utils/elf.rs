@@ -7,6 +7,7 @@ use macros::display_consts;
 use spin::once::Once;
 use thiserror::Error;
 
+use crate::error;
 use crate::{
     VirtAddr,
     memory::{
@@ -107,6 +108,7 @@ pub enum ElfError {
     NotAnElf,
     NotAnExecutable,
     MapToError,
+    Corrupted,
 }
 
 impl Display for ElfError {
@@ -118,6 +120,7 @@ impl Display for ElfError {
 impl IntoErr for ElfError {
     fn into_err(self) -> ErrorStatus {
         match self {
+            Self::Corrupted => ErrorStatus::Corrupted,
             Self::NotAnExecutable | Self::NotAnElf => ErrorStatus::NotExecutable,
             Self::MapToError => ErrorStatus::MMapError,
             Self::UnsupportedKind
@@ -555,6 +558,12 @@ impl<'a, T: Readable> Elf<'a, T> {
             program_break = end_addr;
 
             if header.ptype == ProgramType::TLS {
+                if alignment_in_mem < 8 {
+                    error!(
+                        "ELF TLS alignment is {alignment_in_mem:#x}, expected at least 0x8, returning Err(ElfError::Corrupted) because I don't know how to handle it yet"
+                    );
+                    return Err(ElfError::Corrupted);
+                }
                 master_tls = Some((start_addr, size_in_mem, alignment_in_mem));
             }
         }
