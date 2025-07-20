@@ -7,7 +7,7 @@ use core::{
 use crate::{
     arch::paging::PageTable,
     memory::{
-        AlignTo, AlignToPage, copy_to_userspace, proc_mem_allocator::ProcessMemAllocator,
+        AlignToPage, copy_to_userspace, proc_mem_allocator::ProcessMemAllocator,
         userspace_copy_within,
     },
     utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
