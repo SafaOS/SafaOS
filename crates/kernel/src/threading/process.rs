@@ -355,37 +355,28 @@ impl Process {
         allocator: &mut ProcessMemAllocator,
         master_tls: Option<(VirtAddr, usize, usize)>,
     ) -> Result<Option<(VirtAddr, TrackedAllocation)>, MapToError> {
-        let Some((master_tls_addr, tls_og_size, tls_alignment)) = master_tls else {
+        let Some((master_tls_addr, tls_size, tls_alignment)) = master_tls else {
             return Ok(None);
         };
-
-        let align = tls_alignment.max(align_of::<UThreadLocalInfo>());
-        let tls_size = tls_og_size.to_next_multiple_of(align);
+        assert!(tls_alignment >= align_of::<UThreadLocalInfo>());
 
         let size = size_of::<UThreadLocalInfo>() + tls_size;
-        let tracker = allocator.allocate_tracked_guraded(size, 0)?;
+        let tracker = allocator.allocate_tracked_guraded(size, tls_alignment, 0)?;
 
         let allocated_start = tracker.start();
 
-        let (uthread_addr, tls_addr) = if align >= tls_alignment {
-            (
-                allocated_start,
-                allocated_start + size_of::<UThreadLocalInfo>(),
-            )
-        } else {
-            (allocated_start + tls_size, allocated_start)
-        };
+        let (uthread_addr, tls_addr) = (allocated_start + tls_size, allocated_start);
 
         let uthread_info = UThreadLocalInfo {
             uthread_ptr: unsafe { NonNull::new_unchecked(uthread_addr.into_ptr()) },
             thread_local_storage_ptr: tls_addr.into_ptr(),
-            thread_local_storage_size: tls_og_size,
+            thread_local_storage_size: tls_size,
         };
 
         let uthread_bytes: [u8; size_of::<UThreadLocalInfo>()] =
             unsafe { core::mem::transmute(uthread_info) };
         copy_to_userspace(page_table, uthread_addr, &uthread_bytes);
-        userspace_copy_within(page_table, master_tls_addr, tls_addr, tls_og_size);
+        userspace_copy_within(page_table, master_tls_addr, tls_addr, tls_size);
 
         Ok(Some((uthread_addr, tracker)))
     }
@@ -396,6 +387,7 @@ impl Process {
     ) -> Result<TrackedAllocation, MapToError> {
         allocator.allocate_tracked_guraded(
             custom_stack_size.unwrap_or(DEFAULT_STACK_SIZE),
+            PAGE_SIZE,
             GUARD_PAGES_COUNT,
         )
     }

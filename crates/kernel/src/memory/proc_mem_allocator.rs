@@ -99,16 +99,18 @@ impl ProcessMemAllocator {
     }
 
     /// Allocates a "tracked" area with the size `size and N `guard_pages_count` of unmapped memory before the start (because the allocator grows downwards)
-    /// tracked allocations are always page aligned
+    /// tracked allocations are always page aligned (alignment is aligned to PAGE_SIZE)
     ///
     /// the area is freed as soon as it is dropped, the area depends on the page table this allocator borrows a pointer to, so it lives as long as this page table lives
     /// the area is meant to be used by the same address space it was allocated for this means it should live as long as it maximumly, so it is safe since no one else would use this
     pub fn allocate_tracked_guraded(
         &mut self,
         size: usize,
+        alignment: usize,
         guard_pages_count: usize,
     ) -> Result<TrackedAllocation, MapToError> {
-        let (start_addr, end_addr) = self.allocate_inner(size, PAGE_SIZE, guard_pages_count)?;
+        let align = alignment.to_next_multiple_of(PAGE_SIZE);
+        let (start_addr, end_addr) = self.allocate_inner(size, align, guard_pages_count)?;
         self.next_allocation_end -= guard_pages_count * PAGE_SIZE;
 
         Ok(TrackedAllocation {
