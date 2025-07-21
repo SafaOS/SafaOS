@@ -50,6 +50,10 @@ pub enum SyscallTable {
     ///
     /// returns [`crate::errors::ErrorStatus::Generic`] if the process exists but hasn't exited yet
     SysPTryCleanUp = 33,
+    /// Performs a WAIT(addr, val) on the current thread, also takes a timeout
+    SysTFutWait = 34,
+    /// Performs a WAKE(addr, n) on the current thread, wakes n threads waiting on the given address
+    SysTFutWake = 35,
 
     SysShutdown = 20,
     SysReboot = 21,
@@ -59,7 +63,7 @@ pub enum SyscallTable {
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const NEXT_SYSCALL_NUM: u16 = 34;
+const NEXT_SYSCALL_NUM: u16 = 36;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();

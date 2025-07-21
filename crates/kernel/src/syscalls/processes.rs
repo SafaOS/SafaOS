@@ -22,6 +22,22 @@ use super::SyscallFFI;
 use macros::syscall_handler;
 
 #[syscall_handler]
+fn syst_fut_wait(addr: &mut u32, val: u32, timeout_ms: u64, wait_results: Option<&mut bool>) {
+    let results = unsafe { threading::expose::wait_for_futex(addr, val, timeout_ms) };
+    if let Some(wait_results) = wait_results {
+        *wait_results = results;
+    }
+}
+
+#[syscall_handler]
+fn syst_fut_wake(addr: &mut u32, n: usize, wake_results: Option<&mut usize>) {
+    let num_threads = threading::expose::wake_futex(addr, n);
+    if let Some(wake_results) = wake_results {
+        *wake_results = num_threads;
+    }
+}
+
+#[syscall_handler]
 fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
     let code = threading::expose::wait_for_process(pid).ok_or(ErrorStatus::InvalidPid)?;
     if let Some(dest_code) = dest_code {

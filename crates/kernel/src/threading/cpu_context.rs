@@ -221,6 +221,15 @@ impl Thread {
             thread,
         )));
     }
+
+    /// Should only be called by the current thread
+    pub fn wait_for_futex(&self, addr: *mut u32, with_value: u32, timeout_ms: u64) {
+        self.set_status(ContextStatus::Blocked(BlockedReason::WaitOnFutex {
+            addr,
+            value: with_value,
+            timeout_wake_at: time!(ms) as u128 + timeout_ms as u128,
+        }));
+    }
 }
 
 #[derive(Debug)]

@@ -151,6 +151,40 @@ pub fn wait_for_thread(cid: Cid) -> Option<()> {
     Some(())
 }
 
+/// performs a WAIT for a futex to be unlocked
+///
+/// Waits for the value at `addr` to not be equal to `with_value`, returns true if the value was not equal to `with_value` at the time of the return
+///
+/// Doesn't wake up except when signaled by a WAKE operation and value isn't equal to `with_value` or if the timeout is reached.
+///
+/// # Safety
+/// The caller must ensure that the address `addr` is valid and points to a valid futex.
+pub unsafe fn wait_for_futex(addr: *mut u32, with_value: u32, timeout_ms: u64) -> bool {
+    if unsafe { *addr != with_value } {
+        return true;
+    }
+
+    let this_thread = this_thread();
+    this_thread.wait_for_futex(addr, with_value, timeout_ms);
+
+    thread_yield();
+    unsafe { *addr != with_value }
+}
+
+/// Attempts to wake up `n` threads waiting on the futex at `target_addr`.
+/// Returns the number of threads that were successfully woken up.
+///
+/// # Safety
+/// Safe because addr is only accessed if any other thread is waiting on it.
+pub fn wake_futex(addr: *mut u32, num_threads: usize) -> usize {
+    if num_threads == 0 {
+        return 0;
+    }
+
+    let this_process = this_process();
+    this_process.wake_n_futexs(addr, num_threads)
+}
+
 #[unsafe(no_mangle)]
 pub fn getinfo(pid: Pid) -> Option<ProcessInfo> {
     super::find(|p| p.pid() == pid, |t| ProcessInfo::from(&**t))

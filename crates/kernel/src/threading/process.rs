@@ -752,9 +752,11 @@ impl Process {
         (ProcessInfo::from(self), page_table)
     }
 
-    pub(super) fn wake_n_futexs(&self, target_addr: *mut u32, n: usize) {
+    /// Attempts to wake up `n` threads waiting on the futex at `target_addr`.
+    /// Returns the number of threads that were successfully woken up.
+    pub(super) fn wake_n_futexs(&self, target_addr: *mut u32, n: usize) -> usize {
         if n == 0 {
-            return;
+            return 0;
         }
 
         let mut count = 0;
@@ -768,6 +770,8 @@ impl Process {
                 }
             }
         }
+
+        return count;
     }
 
     fn at(&self) -> VirtAddr {
