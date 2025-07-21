@@ -4,7 +4,7 @@ use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
 
 use crate::{
     arch::threading::CPUStatus, debug, memory::proc_mem_allocator::TrackedAllocation,
-    threading::process::Process, time,
+    threading::process::Process, time, utils::locks::SpinMutex,
 };
 
 /// Context ID, a unique identifier for a thread.
@@ -16,6 +16,11 @@ pub enum BlockedReason {
     SleepingUntil(u128),
     WaitingForProcess(Arc<Process>),
     WaitingForThread(Arc<Thread>),
+    WaitOnFutex {
+        addr: *mut u32,
+        value: u32,
+        timeout_wake_at: u128,
+    },
 }
 
 impl BlockedReason {
@@ -24,6 +29,9 @@ impl BlockedReason {
             Self::SleepingUntil(n) => time!(ms) as u128 >= *n,
             Self::WaitingForProcess(process) => !process.is_alive(),
             Self::WaitingForThread(thread) => thread.is_dead(),
+            Self::WaitOnFutex {
+                timeout_wake_at, ..
+            } => time!(ms) as u128 >= *timeout_wake_at,
         }
     }
 }
@@ -39,6 +47,18 @@ impl ContextStatus {
     pub const fn is_running(&self) -> bool {
         match self {
             Self::Running => true,
+            _ => false,
+        }
+    }
+
+    pub fn try_lift_futex(&mut self, target_addr: *mut u32) -> bool {
+        match *self {
+            Self::Blocked(BlockedReason::WaitOnFutex { addr, value, .. })
+                if target_addr == addr && unsafe { *addr != value } =>
+            {
+                *self = Self::Runnable;
+                true
+            }
             _ => false,
         }
     }
@@ -79,7 +99,7 @@ impl ThreadNode {
 pub struct Thread {
     id: Cid,
     priority: ContextPriority,
-    status: UnsafeCell<ContextStatus>,
+    status: SpinMutex<ContextStatus>,
     context: UnsafeCell<Option<Context>>,
 
     is_dead: AtomicBool,
@@ -98,7 +118,7 @@ impl Thread {
         Self {
             id: cid,
             priority,
-            status: UnsafeCell::new(ContextStatus::Runnable),
+            status: SpinMutex::new(ContextStatus::Runnable),
             context: UnsafeCell::new(Some(Context::new(cpu_status, tracked_allocations))),
             is_dead: AtomicBool::new(false),
             is_removed: AtomicBool::new(false),
@@ -148,10 +168,10 @@ impl Thread {
 
         debug!(
             Process,
-            "Thread {} ({}) THREAD EXITED thread CID: {}, process dead: {process_dead}",
+            "Thread {}:{} ({}) THREAD EXITED, process dead: {process_dead}",
             self.process().pid(),
-            self.process().name(),
             self.cid(),
+            self.process().name(),
         );
     }
 
@@ -172,42 +192,34 @@ impl Thread {
         }
     }
 
-    pub const fn status(&self) -> &ContextStatus {
-        unsafe { &*self.status.get() }
+    pub fn status_mut<'a>(&'a self) -> spin::MutexGuard<'a, ContextStatus> {
+        self.status.lock()
     }
 
-    /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
-    pub unsafe fn set_status(&self, status: ContextStatus) {
-        unsafe {
-            *self.status.get() = status;
-        }
+    /// Should only be called by the current thread or the scheduler or on a sleeping thread
+    pub fn set_status(&self, status: ContextStatus) {
+        *self.status.lock() = status;
     }
 
-    /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
-    pub unsafe fn sleep_for_ms(&self, ms: u64) {
-        unsafe {
-            self.set_status(ContextStatus::Blocked(BlockedReason::SleepingUntil(
-                (time!(ms) as u128) + ms as u128,
-            )));
-        }
+    /// Should only be called by the current thread
+    pub fn sleep_for_ms(&self, ms: u64) {
+        self.set_status(ContextStatus::Blocked(BlockedReason::SleepingUntil(
+            (time!(ms) as u128) + ms as u128,
+        )));
     }
 
-    /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
-    pub unsafe fn wait_for_process(&self, process: Arc<Process>) {
-        unsafe {
-            self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForProcess(
-                process,
-            )));
-        }
+    /// Should only be called by the current thread
+    pub fn wait_for_process(&self, process: Arc<Process>) {
+        self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForProcess(
+            process,
+        )));
     }
 
-    /// ONLY SHOULD BE CALLED BY THE CURRENT THREAD
-    pub unsafe fn wait_for_thread(&self, thread: Arc<Thread>) {
-        unsafe {
-            self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForThread(
-                thread,
-            )));
-        }
+    /// Should only be called by the current thread
+    pub fn wait_for_thread(&self, thread: Arc<Thread>) {
+        self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForThread(
+            thread,
+        )));
     }
 }
 

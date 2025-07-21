@@ -3,11 +3,11 @@ pub const STACK_SIZE: usize = PAGE_SIZE * 8;
 use crate::{
     PhysAddr,
     arch::{
-        disable_interrupts,
         paging::{CURRENT_RING0_PAGE_TABLE, set_current_page_table_phys},
+        without_interrupts,
         x86_64::{
             gdt::{TSS0_PTR, TaskStateSegment, get_kernel_tss_stack, set_kernel_tss_stack},
-            registers::{rdmsr, wrmsr},
+            registers::{RFLAGS, rdmsr, wrmsr},
         },
     },
     debug,
@@ -24,7 +24,6 @@ use core::{
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use bitflags::bitflags;
 use limine::mp::Cpu;
 
 use crate::{
@@ -34,37 +33,6 @@ use crate::{
 };
 
 use super::gdt::{KERNEL_CODE_SEG, KERNEL_DATA_SEG, USER_CODE_SEG, USER_DATA_SEG};
-
-bitflags! {
-    #[derive(Default, Debug, Clone, Copy)]
-    #[repr(C)]
-    pub struct RFLAGS: u64 {
-        const ID = 1 << 21;
-        const VIRTUAL_INTERRUPT_PENDING = 1 << 20;
-        const VIRTUAL_INTERRUPT = 1 << 19;
-        const ALIGNMENT_CHECK = 1 << 18;
-        const VIRTUAL_8086_MODE = 1 << 17;
-
-        const RESUME_FLAG = 1 << 16;
-        const NESTED_TASK = 1 << 14;
-
-        const IOPL_HIGH = 1 << 13;
-        const IOPL_LOW = 1 << 12;
-
-        const OVERFLOW_FLAG = 1 << 11;
-        const DIRECTION_FLAG = 1 << 10;
-
-        const INTERRUPT_FLAG = 1 << 9;
-        const TRAP_FLAG = 1 << 8;
-
-        const SIGN_FLAG = 1 << 7;
-        const ZERO_FLAG = 1 << 6;
-        const AUXILIARY_CARRY_FLAG = 1 << 4;
-
-        const PARITY_FLAG = 1 << 2;
-        const CARRY_FLAG = 1;
-    }
-}
 
 /// The CPU Status for each thread (registers)
 #[derive(Debug, Clone, Copy, Default)]
@@ -378,22 +346,21 @@ fn boot_core_inner(
 }
 
 extern "C" fn boot_cpu(cpu: &Cpu) -> ! {
-    unsafe {
-        disable_interrupts();
-    }
-    let tss_ptr = super::setup_cpu_generic0();
+    without_interrupts(|| {
+        let tss_ptr = super::setup_cpu_generic0();
 
-    unsafe {
-        let phys_addr = *CURRENT_RING0_PAGE_TABLE.get();
-        set_current_page_table_phys(phys_addr);
+        unsafe {
+            let phys_addr = *CURRENT_RING0_PAGE_TABLE.get();
+            set_current_page_table_phys(phys_addr);
 
-        // FIXME: calibrate each CPU's TSC
-        let mut _ignored = 0;
-        super::setup_cpu_generic1(&mut _ignored);
+            // FIXME: calibrate each CPU's TSC
+            let mut _ignored = 0;
+            super::setup_cpu_generic1(&mut _ignored);
 
-        let (process, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
-        boot_core_inner(tss_ptr, cpu.lapic_id as u8, process, *idle_function)
-    }
+            let (process, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
+            boot_core_inner(tss_ptr, cpu.lapic_id as u8, process, *idle_function)
+        }
+    })
 }
 
 pub unsafe fn init_cpus(process: &Arc<Process>, idle_function: fn() -> !) -> NonNull<CPUStatus> {

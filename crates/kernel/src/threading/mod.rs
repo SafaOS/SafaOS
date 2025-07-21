@@ -17,6 +17,7 @@ use alloc::sync::Arc;
 use lazy_static::lazy_static;
 use safa_utils::make_path;
 
+use crate::arch::without_interrupts;
 use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};
 use crate::threading::expose::thread_yield;
 use crate::threading::queue::ProcessQueue;
@@ -108,47 +109,44 @@ impl Scheduler {
     /// inits the scheduler
     pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &str) -> ! {
         debug!(Scheduler, "initing ...");
-        unsafe {
-            crate::arch::disable_interrupts();
-        }
+        without_interrupts(|| {
+            let page_table = unsafe { PhysPageTable::from_current() };
+            let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
-        let page_table = unsafe { PhysPageTable::from_current() };
-        let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
+            let pid = SCHEDULER.write().add_pid();
+            let (process, root_thread) = Process::create(
+                Name::try_from(name).expect("initial process name too long"),
+                pid,
+                pid,
+                VirtAddr::from(main_function as usize),
+                cwd,
+                &[],
+                &[],
+                unsafe { core::mem::zeroed() },
+                page_table,
+                VirtAddr::null(),
+                None,
+                ContextPriority::Medium,
+                false,
+                None,
+            )
+            .expect("failed to create Eve");
 
-        let pid = SCHEDULER.write().add_pid();
-        let (process, root_thread) = Process::create(
-            Name::try_from(name).expect("initial process name too long"),
-            pid,
-            pid,
-            VirtAddr::from(main_function as usize),
-            cwd,
-            &[],
-            &[],
-            unsafe { core::mem::zeroed() },
-            page_table,
-            VirtAddr::null(),
-            None,
-            ContextPriority::Medium,
-            false,
-            None,
-        )
-        .expect("failed to create Eve");
+            unsafe {
+                let status = arch::threading::init_cpus(&process, idle_function);
+                let status_ref = status.as_ref();
+                self::add(process, root_thread);
+                *SCHEDULER_INITED.get() = true;
 
-        unsafe {
-            crate::arch::disable_interrupts();
-            let status = arch::threading::init_cpus(&process, idle_function);
-            let status_ref = status.as_ref();
-            self::add(process, root_thread);
-            *SCHEDULER_INITED.get() = true;
-
-            debug!(
-                Scheduler,
-                "INITED, jumping to: {:#x} with stack: {:#x} ...",
-                status_ref.at(),
-                status_ref.stack_at()
-            );
-            restore_cpu_status(status_ref)
-        }
+                debug!(
+                    Scheduler,
+                    "INITED, jumping to: {:#x} with stack: {:#x} ...",
+                    status_ref.at(),
+                    status_ref.stack_at()
+                );
+                restore_cpu_status(status_ref)
+            }
+        })
     }
 
     /// context switches into next process, takes current context outputs new context
@@ -171,9 +169,11 @@ impl Scheduler {
 
             current_context.set_cpu_status(current_status);
 
-            if current_thread.status().is_running() {
-                current_thread.set_status(ContextStatus::Runnable);
+            let mut status = current_thread.status_mut();
+            if status.is_running() {
+                *status = ContextStatus::Runnable;
             }
+            drop(status);
 
             if !current_process.is_alive() {
                 current_process
@@ -222,22 +222,23 @@ impl Scheduler {
                         continue;
                     }
 
-                    let status = thread.status();
+                    let mut status = thread.status_mut();
 
                     macro_rules! choose_context {
                         () => {{
-                            thread.set_status(ContextStatus::Running);
+                            *status = ContextStatus::Running;
                             let priority = thread.priority();
 
                             let context = thread.context_unchecked();
                             let cpu_status = context.cpu_status();
                             *current_thread_ptr = thread.clone();
+                            drop(status);
                             *current_thread_node = next_node;
                             (cpu_status, priority, address_space_changed)
                         }};
                     }
 
-                    match status {
+                    match &*status {
                         ContextStatus::Runnable => return choose_context!(),
                         ContextStatus::Blocked(reason) if reason.block_lifted() => {
                             return choose_context!();
@@ -246,6 +247,7 @@ impl Scheduler {
                         ContextStatus::Running => unreachable!(),
                     }
 
+                    drop(status);
                     current_node = next_node;
                 }
             }
@@ -301,16 +303,21 @@ impl Scheduler {
             (cpu_local, index)
         };
 
-        let mut queue_lock = cpu_local.thread_node_queue.lock();
-        let (root_thread, _) = &mut *queue_lock;
-
         let cid = thread.cid();
         let pid = thread.process().pid();
 
-        ThreadNode::push_front(root_thread, thread);
-        cpu_local
-            .threads_count
-            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        without_interrupts(
+            /* lock scheduler without interrupts enabled so we don't lock ourself */
+            move || {
+                let mut queue_lock = cpu_local.thread_node_queue.lock();
+                let (root_thread, _) = &mut *queue_lock;
+
+                ThreadNode::push_front(root_thread, thread);
+                cpu_local
+                    .threads_count
+                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            },
+        );
 
         debug!(
             Scheduler,
@@ -397,7 +404,7 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
 
     let local = CPULocalStorage::get();
 
-    let mut queue_lock = local.thread_node_queue.try_lock()?;
+    let mut queue_lock = local.thread_node_queue.lock();
     let (root_thread_node, current_thread_node_ptr) = &mut *queue_lock;
 
     unsafe {

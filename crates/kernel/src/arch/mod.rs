@@ -23,9 +23,7 @@ pub mod threading {
     };
 }
 
-pub use arch::{
-    disable_interrupts, enable_interrupts, flush_cache, halt_all, hlt, init_phase1, init_phase2,
-};
+pub use arch::{flush_cache, halt_all, hlt, init_phase1, init_phase2, without_interrupts};
 
 pub mod power {
     pub use super::arch::power::{reboot, shutdown};

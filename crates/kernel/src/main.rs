@@ -149,55 +149,54 @@ use core::sync::atomic::AtomicUsize;
 
 use crate::arch::registers::CPUID;
 use crate::arch::serial::SERIAL;
+use crate::arch::without_interrupts;
 
 static PANCIKED: AtomicUsize = AtomicUsize::new(0);
 const MAX_PANICK_COUNT: usize = 3;
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let stack = unsafe { logging::StackTrace::current() };
-    unsafe {
-        arch::disable_interrupts();
-    }
+    without_interrupts(|| {
+        unsafe {
+            arch::halt_all();
+        }
 
-    unsafe {
-        arch::halt_all();
-    }
+        static _PANICK_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = _PANICK_LOCK.lock();
 
-    static _PANICK_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = _PANICK_LOCK.lock();
+        if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Release) >= MAX_PANICK_COUNT {
+            unsafe {
+                SERIAL.force_unlock();
+            }
+            error!(
+                "\n\x1B[31mkernel panic within a panic:\n{info}, cpu: {}\n\x1B[0mno stack trace",
+                CPUID::get()
+            );
+            khalt()
+        }
 
-    if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Release) >= MAX_PANICK_COUNT {
         unsafe {
             SERIAL.force_unlock();
+            if !logging::QUITE_PANIC {
+                FRAMEBUFFER_TERMINAL.force_unlock_write();
+                FRAMEBUFFER_TERMINAL.write().clear();
+            }
         }
-        error!(
-            "\n\x1B[31mkernel panic within a panic:\n{info}, cpu: {}\n\x1B[0mno stack trace",
-            CPUID::get()
+
+        panic_println!(
+            "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
+            info.message(),
+            info.location().unwrap(),
+            CPUID::get(),
         );
-        khalt()
-    }
+        panic_println!("{}", stack);
 
-    unsafe {
-        SERIAL.force_unlock();
-        if !logging::QUITE_PANIC {
-            FRAMEBUFFER_TERMINAL.force_unlock_write();
-            FRAMEBUFFER_TERMINAL.write().clear();
-        }
-    }
-
-    panic_println!(
-        "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
-        info.message(),
-        info.location().unwrap(),
-        CPUID::get(),
-    );
-    panic_println!("{}", stack);
-
-    drop(_guard);
-    #[cfg(test)]
-    arch::power::shutdown();
-    #[cfg(not(test))]
-    khalt();
+        drop(_guard);
+        #[cfg(test)]
+        arch::power::shutdown();
+        #[cfg(not(test))]
+        khalt();
+    })
 }
 
 #[unsafe(no_mangle)]

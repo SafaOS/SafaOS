@@ -114,6 +114,24 @@ pub unsafe fn disable_interrupts() {
     unsafe { asm!("msr DAIFSet, #0b1111") }
 }
 
+/// Executes a function without interrupts enabled
+/// once done the interrupts status are restored (if they were disabled they'd stay disabled, if they were enabled they'd stay enabled)
+/// returns whatever the function returns
+///
+/// # Safety
+/// Safe because it restores the interrupts status once done.
+pub fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
+    let daif = get_daif();
+    unsafe {
+        disable_interrupts();
+    }
+
+    let result = f();
+
+    set_daif(daif);
+    result
+}
+
 #[inline(always)]
 pub unsafe fn enable_interrupts() {
     unsafe { asm!("msr DAIFClr, #0b1111") }

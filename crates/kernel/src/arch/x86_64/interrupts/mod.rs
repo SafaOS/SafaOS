@@ -7,9 +7,9 @@ use core::{arch::asm, fmt::Display};
 use handlers::IDT;
 use idt::IDTDesc;
 
+use crate::arch::x86_64::registers::RFLAGS;
 use crate::{KERNEL_ELF, VirtAddr};
 
-use super::threading::RFLAGS;
 use crate::drivers::interrupts::IRQInfo;
 
 #[derive(Debug, Clone)]

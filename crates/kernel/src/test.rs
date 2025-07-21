@@ -1,7 +1,7 @@
 use core::any::type_name;
 
 use crate::{
-    arch::power::shutdown,
+    arch::{power::shutdown, without_interrupts},
     eve::KERNEL_STDIO,
     info, sleep,
     threading::{
@@ -100,16 +100,12 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     let first_log_ms = crate::time!(ms);
 
     for test in tests_iter {
-        unsafe {
-            crate::arch::disable_interrupts();
-        }
-        test_log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
-        let last_log = crate::time!(us);
-        test.run();
-        ok!(last_log);
-        unsafe {
-            crate::arch::enable_interrupts();
-        }
+        without_interrupts(|| {
+            test_log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
+            let last_log = crate::time!(us);
+            test.run();
+            ok!(last_log);
+        })
     }
     info!(
         "finished running tests in {}ms",

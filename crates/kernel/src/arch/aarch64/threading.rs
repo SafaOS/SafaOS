@@ -16,8 +16,8 @@ use crate::{
     PhysAddr, VirtAddr,
     arch::{
         aarch64::registers::MPIDR,
-        disable_interrupts,
         paging::{CURRENT_HIGHER_HALF_TABLE, set_current_higher_page_table_phys},
+        without_interrupts,
     },
     debug,
     limine::MP_RESPONSE,
@@ -296,19 +296,18 @@ fn boot_core_inner(process: &Arc<Process>, idle_function: fn() -> !) -> ! {
 }
 
 extern "C" fn boot_cpu(_: &Cpu) -> ! {
-    unsafe {
-        disable_interrupts();
-    }
-    super::setup_cpu_generic0();
+    without_interrupts(|| {
+        super::setup_cpu_generic0();
 
-    unsafe {
-        let ttbr1_el1 = *CURRENT_HIGHER_HALF_TABLE.get();
-        set_current_higher_page_table_phys(ttbr1_el1);
-        super::setup_cpu_generic1();
+        unsafe {
+            let ttbr1_el1 = *CURRENT_HIGHER_HALF_TABLE.get();
+            set_current_higher_page_table_phys(ttbr1_el1);
+            super::setup_cpu_generic1();
 
-        let (process, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
-        boot_core_inner(process, *idle_function)
-    }
+            let (process, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
+            boot_core_inner(process, *idle_function)
+        }
+    })
 }
 
 static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Process>, fn() -> !)>> =

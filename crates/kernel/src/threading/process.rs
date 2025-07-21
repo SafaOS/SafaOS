@@ -710,7 +710,7 @@ impl Process {
             thread.mark_dead(true);
 
             // wait for the thread to exit
-            while thread.status().is_running() {
+            while thread.status_mut().is_running() {
                 super::expose::thread_yield();
                 core::hint::spin_loop();
             }
@@ -751,6 +751,25 @@ impl Process {
 
         (ProcessInfo::from(self), page_table)
     }
+
+    pub(super) fn wake_n_futexs(&self, target_addr: *mut u32, n: usize) {
+        if n == 0 {
+            return;
+        }
+
+        let mut count = 0;
+
+        for thread in &*self.threads.lock() {
+            let mut status = thread.status_mut();
+            if status.try_lift_futex(target_addr) {
+                count += 1;
+                if count >= n {
+                    break;
+                }
+            }
+        }
+    }
+
     fn at(&self) -> VirtAddr {
         VirtAddr::null()
     }

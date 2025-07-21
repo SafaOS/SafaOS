@@ -20,6 +20,7 @@ use crate::{
     arch::x86_64::{
         gdt::TaskStateSegment,
         interrupts::handlers::{FLUSH_CACHE_ALL_ID, HALT_ALL_HANDLER_ID},
+        registers::RFLAGS,
         utils::TICKS_PER_MS,
     },
     info, sleep,
@@ -112,13 +113,35 @@ pub fn init_phase2() {
     apic::enable_apic_keyboard();
 }
 
+/// Executes a function without interrupts enabled
+/// once done the interrupts status are restored (if they were disabled they'd stay disabled, if they were enabled they'd stay enabled)
+/// returns whatever the function returns
+///
+/// # Safety
+/// Safe because it restores the interrupts status once done.
+pub fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
+    unsafe {
+        let interrupts_were_enabled = RFLAGS::read().interrupts_enabled();
+        if interrupts_were_enabled {
+            disable_interrupts();
+        }
+
+        let result = f();
+
+        if interrupts_were_enabled {
+            enable_interrupts();
+        } /* otherwise keep disabled */
+        result
+    }
+}
+
 #[inline(always)]
-pub unsafe fn disable_interrupts() {
+unsafe fn disable_interrupts() {
     unsafe { core::arch::asm!("cli") }
 }
 
 #[inline(always)]
-pub unsafe fn enable_interrupts() {
+unsafe fn enable_interrupts() {
     unsafe { core::arch::asm!("sti") }
 }
 

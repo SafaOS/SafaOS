@@ -3,7 +3,7 @@ use core::sync::atomic::Ordering;
 
 use crate::{
     VirtAddr,
-    arch::{disable_interrupts, enable_interrupts},
+    arch::without_interrupts,
     memory::paging::MapToError,
     threading::{
         SCHEDULER_INITED,
@@ -40,27 +40,25 @@ use super::{
 
 #[unsafe(no_mangle)]
 pub fn process_exit(code: usize) -> ! {
-    unsafe {
-        disable_interrupts();
-    }
-    let current_process = super::this_process();
-    current_process.kill(code, None);
+    without_interrupts(|| {
+        let current_process = super::this_process();
+        current_process.kill(code, None);
 
-    loop {
-        thread_yield();
-    }
+        loop {
+            thread_yield();
+        }
+    })
 }
 
 pub fn thread_exit(code: usize) -> ! {
-    unsafe {
-        disable_interrupts();
-    }
-    let current = super::this_thread();
-    current.kill_thread(code);
+    without_interrupts(|| {
+        let current = super::this_thread();
+        current.kill_thread(code);
 
-    loop {
-        thread_yield();
-    }
+        loop {
+            thread_yield();
+        }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -82,7 +80,7 @@ pub unsafe fn thread_sleep_for_ms(ms: u64) {
     let curr_time = time!(ms);
 
     let current = super::this_thread();
-    unsafe { current.sleep_for_ms(ms) };
+    current.sleep_for_ms(ms);
 
     while curr_time + ms > time!(ms) {
         thread_yield();
@@ -92,11 +90,7 @@ pub unsafe fn thread_sleep_for_ms(ms: u64) {
 /// Sleeps the current kernel thread for `ms` milliseconds.
 /// safe because interrupts are properly managed in this function, expect interrupts to be enabled after calling this function
 pub fn kthread_sleep_for_ms(ms: u64) {
-    unsafe {
-        disable_interrupts();
-        thread_sleep_for_ms(ms);
-        enable_interrupts();
-    };
+    without_interrupts(|| unsafe { thread_sleep_for_ms(ms) })
 }
 
 pub fn try_cleanup_process(pid: Pid) -> Result<Option<usize>, ()> {
@@ -124,7 +118,7 @@ pub fn wait_for_process(pid: Pid) -> Option<usize> {
     let found_proc = super::find(|process| process.pid() == pid, |process| process.clone())?;
 
     let this = this_thread();
-    unsafe { this.wait_for_process(found_proc.clone()) };
+    this.wait_for_process(found_proc.clone());
 
     while found_proc.is_alive() {
         thread_yield();
@@ -151,9 +145,7 @@ pub fn wait_for_thread(cid: Cid) -> Option<()> {
         .find(|thread| thread.cid() == cid)
         .cloned()?;
 
-    unsafe {
-        this_thread.wait_for_thread(thread.clone());
-    }
+    this_thread.wait_for_thread(thread.clone());
 
     while !thread.is_dead() {
         thread_yield();
