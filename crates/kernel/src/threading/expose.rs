@@ -44,9 +44,8 @@ pub fn process_exit(code: usize) -> ! {
         let current_process = super::this_process();
         current_process.kill(code, None);
 
-        loop {
-            thread_yield();
-        }
+        thread_yield();
+        unreachable!("process didn't exit")
     })
 }
 
@@ -55,9 +54,8 @@ pub fn thread_exit(code: usize) -> ! {
         let current = super::this_thread();
         current.kill_thread(code);
 
-        loop {
-            thread_yield();
-        }
+        thread_yield();
+        unreachable!("thread didn't exit")
     })
 }
 
@@ -81,10 +79,8 @@ pub unsafe fn thread_sleep_for_ms(ms: u64) {
 
     let current = super::this_thread();
     current.sleep_for_ms(ms);
-
-    while curr_time + ms > time!(ms) {
-        thread_yield();
-    }
+    thread_yield();
+    assert!(curr_time + ms <= time!(ms), "thread didn't sleep");
 }
 
 /// Sleeps the current kernel thread for `ms` milliseconds.
@@ -120,9 +116,11 @@ pub fn wait_for_process(pid: Pid) -> Option<usize> {
     let this = this_thread();
     this.wait_for_process(found_proc.clone());
 
-    while found_proc.is_alive() {
-        thread_yield();
-    }
+    thread_yield();
+    assert!(
+        !found_proc.is_alive(),
+        "Thread didn't wait for process to exit"
+    );
     // process is dead
     // TODO: block multiple waits on same pid
     let Some(process_info) = super::remove(|p| p.pid() == pid) else {
@@ -147,9 +145,8 @@ pub fn wait_for_thread(cid: Cid) -> Option<()> {
 
     this_thread.wait_for_thread(thread.clone());
 
-    while !thread.is_dead() {
-        thread_yield();
-    }
+    thread_yield();
+    assert!(thread.is_dead(), "Thread didn't wait for thread to exit");
 
     Some(())
 }
