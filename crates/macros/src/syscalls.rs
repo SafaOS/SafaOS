@@ -27,6 +27,10 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
     let inputs = func.sig.inputs.clone();
 
     let func_name = func.sig.ident.to_string();
+    let func_return = func.sig.output.clone();
+    let returns_nothing = matches!(func_return, syn::ReturnType::Default);
+    let never_returns =
+        matches!(func_return, syn::ReturnType::Type(_, ty) if matches!(&*ty, syn::Type::Never(_)));
 
     let generated_name = format!("{}_raw", func_name);
     let generated_name = syn::Ident::new(&generated_name, Span::mixed_site());
@@ -55,13 +59,33 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
             syn::FnArg::Receiver(_) => panic!("Cannot use receiver arguments in syscall handlers"),
         }
     }
+    if returns_nothing {
+        quote! {
+                #func
 
-    quote! {
-        #func
+                pub fn #generated_name(#(#generated_inputs),*) -> Result<(), ErrorStatus> {
+                    #(#generated_body)*
+                    #func_name(#(#input_idents),*);
+                    Ok(())
+                }
+        }
+    } else if never_returns {
+        quote! {
+                #func
 
-        pub fn #generated_name(#(#generated_inputs),*) -> Result<(), ErrorStatus> {
-            #(#generated_body)*
-            #func_name(#(#input_idents),*).map_err(|err| err.into())
+                pub fn #generated_name(#(#generated_inputs),*) -> ! {
+                    #(#generated_body)*
+                    #func_name(#(#input_idents),*)
+                }
+        }
+    } else {
+        quote! {
+                #func
+
+                pub fn #generated_name(#(#generated_inputs),*) -> Result<(), ErrorStatus> {
+                    #(#generated_body)*
+                    #func_name(#(#input_idents),*).map_err(|err| err.into())
+                }
         }
     }
     .into()
