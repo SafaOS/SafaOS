@@ -4,20 +4,23 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
+use crate::serial;
 use crate::thread::{self, ContextPriority, Tid};
 use crate::utils::alloc::PageString;
 use crate::utils::path::make_path;
-use crate::{debug, logging, process};
-use crate::{drivers::vfs, serial};
+use crate::{debug, fs, logging, process};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
+use safa_abi::raw::io::OpenOptions;
 use safa_abi::raw::processes::ProcessStdio;
 use spin::Lazy;
 
 pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
-    let stdin = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
-    let stdout = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
-    let stderr = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
+    let stdin =
+        fs::FileRef::open_with_options(make_path!("dev", "tty"), OpenOptions::READ).unwrap();
+    let stdout =
+        fs::FileRef::open_with_options(make_path!("dev", "tty"), OpenOptions::WRITE).unwrap();
+    let stderr = stdout.dup();
     ProcessStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
 });
 

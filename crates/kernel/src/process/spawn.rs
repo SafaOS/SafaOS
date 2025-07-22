@@ -9,7 +9,8 @@ use safa_abi::raw::{
 use thiserror::Error;
 
 use crate::{
-    drivers::vfs::{FSError, expose::File},
+    drivers::vfs::FSError,
+    fs::File,
     memory::paging::MapToError,
     process::{self, Pid, Process},
     scheduler,
@@ -158,7 +159,7 @@ pub fn pspawn(
     stdio: ProcessStdio,
     custom_stack_size: Option<usize>,
 ) -> Result<Pid, FSError> {
-    let file = File::open(path)?;
+    let file = File::open_all(path)?;
 
     if file.kind() != FSObjectType::File {
         return Err(FSError::NotAFile);

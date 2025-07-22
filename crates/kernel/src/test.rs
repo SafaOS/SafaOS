@@ -8,6 +8,7 @@ use crate::{
     eve::KERNEL_STDIO,
     info, sleep,
 };
+use safa_abi::raw::io::OpenOptions;
 use safa_abi::raw::processes::ProcessStdio;
 
 #[macro_export]
@@ -121,10 +122,12 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
 // always runs last because it is given the lowest priority (`[TestPiritory::Lowest`] because it is in this module)
 #[test_case]
 fn userspace_test_script() {
-    use crate::drivers::vfs::expose::File;
+    use crate::fs::File;
 
-    let stdio = File::open(make_path!("dev", "/ss")).unwrap();
-    let stdio = ProcessStdio::new(Some(stdio.fd()), Some(stdio.fd()), Some(stdio.fd()));
+    let stdin = File::open_with_options(make_path!("dev", "/ss"), OpenOptions::READ).unwrap();
+    let stdout = File::open_with_options(make_path!("dev", "/ss"), OpenOptions::WRITE).unwrap();
+
+    let stdio = ProcessStdio::new(Some(stdin.fd()), Some(stdout.fd()), Some(stdout.fd()));
 
     let pid = pspawn(
         Name::try_from("Tester").unwrap(),

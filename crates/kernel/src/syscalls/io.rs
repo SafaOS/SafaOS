@@ -1,14 +1,15 @@
 use super::SyscallFFI;
 use crate::{
-    drivers::vfs::{
-        self, CtlArgs, FSResult,
-        expose::{DirEntry, DirIterRef, FileAttr, FileRef},
-    },
+    drivers::vfs::{CtlArgs, FSResult},
+    fs::{self, DirIterRef, FileRef},
     utils::path::Path,
 };
 
 use macros::syscall_handler;
-use safa_abi::{errors::ErrorStatus, raw::io::OpenOptions};
+use safa_abi::{
+    errors::ErrorStatus,
+    raw::io::{DirEntry, FileAttr, OpenOptions},
+};
 
 impl SyscallFFI for FileRef {
     type Args = usize;
@@ -27,7 +28,7 @@ impl SyscallFFI for DirIterRef {
 /// Opens a file or directory with all permissions
 #[syscall_handler]
 fn sysopen_all(path: Path, dest_fd: Option<&mut usize>) -> FSResult<()> {
-    let file_ref = FileRef::open(path)?;
+    let file_ref = FileRef::open_all(path)?;
     if let Some(dest_fd) = dest_fd {
         *dest_fd = file_ref.ri();
     }
@@ -51,7 +52,7 @@ fn sysopen(path: Path, options: u8, dest_fd: Option<&mut usize>) -> FSResult<()>
 /// Removes a path
 #[syscall_handler]
 fn sysremove_path(path: Path) -> FSResult<()> {
-    vfs::expose::remove(path)
+    fs::remove(path)
 }
 
 #[syscall_handler]
@@ -86,12 +87,12 @@ fn sysread(
 
 #[syscall_handler]
 fn syscreate(path: Path) -> FSResult<()> {
-    vfs::expose::create(path)
+    fs::create(path)
 }
 
 #[syscall_handler]
 fn syscreatedir(path: Path) -> FSResult<()> {
-    vfs::expose::createdir(path)
+    fs::createdir(path)
 }
 
 #[syscall_handler]
@@ -104,10 +105,7 @@ fn sysdiriter_open(dir_rd: FileRef, dest_diriter: Option<&mut usize>) -> FSResul
 }
 
 #[syscall_handler]
-fn sysdiriter_next(
-    diriter_rd: DirIterRef,
-    direntry: &mut vfs::expose::DirEntry,
-) -> Result<(), ErrorStatus> {
+fn sysdiriter_next(diriter_rd: DirIterRef, direntry: &mut DirEntry) -> Result<(), ErrorStatus> {
     let next = diriter_rd.next();
     if let Some(next) = next {
         *direntry = next;
@@ -153,7 +151,7 @@ fn sysdup(fd: FileRef, dest_fd: &mut FileRef) -> FSResult<()> {
 
 #[syscall_handler]
 fn sysget_direntry(path: Path, dest_direntry: &mut DirEntry) -> FSResult<()> {
-    *dest_direntry = vfs::expose::get_direntry(path)?;
+    *dest_direntry = fs::get_direntry(path)?;
     Ok(())
 }
 

@@ -1,17 +1,14 @@
 use safa_abi::errors::{ErrorStatus, SysResult};
+use safa_abi::raw::io::{DirEntry, FileAttr};
 
-use crate::drivers::vfs::expose::FileAttr;
+use crate::fs::{DirIter, File, FileRef};
 use crate::process::Pid;
 use crate::scheduler::resources;
 use crate::thread::Tid;
 
 use crate::time;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
-use crate::{
-    VirtAddr,
-    arch::power,
-    drivers::vfs::expose::{DirEntry, DirIter, File, FileRef},
-};
+use crate::{VirtAddr, arch::power};
 
 impl SyscallFFI for File {
     type Args = usize;

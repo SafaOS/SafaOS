@@ -28,6 +28,7 @@ mod arch;
 mod devices;
 mod drivers;
 mod eve;
+mod fs;
 mod globals;
 mod limine;
 /// Contains macros and stuff related to debugging
