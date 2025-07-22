@@ -2,7 +2,7 @@
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::{threading::expose::kthread_sleep_for_ms, utils::locks::RwLock};
+use crate::{scheduler::expose::kthread_sleep_for_ms, utils::locks::RwLock};
 
 pub trait PolledDriver: Send + Sync {
     fn thread_name(&self) -> &'static str;

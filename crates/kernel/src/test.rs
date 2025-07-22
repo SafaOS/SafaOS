@@ -5,7 +5,7 @@ use crate::{
     arch::{power::shutdown, without_interrupts},
     eve::KERNEL_STDIO,
     info, sleep,
-    threading::{
+    scheduler::{
         cpu_context::ContextPriority,
         expose::{SpawnFlags, pspawn, wait_for_process},
     },

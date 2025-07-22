@@ -6,7 +6,7 @@ use core::{
 use lock_api::{GuardSend, RawMutex, RawRwLock};
 use spin::Lazy;
 
-use crate::threading::expose::thread_yield;
+use crate::scheduler::expose::thread_yield;
 pub const SPIN_AMOUNT: u32 = 10_000;
 
 pub struct LockRawMutex(AtomicBool);

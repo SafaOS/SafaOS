@@ -5,7 +5,7 @@ use safa_abi::raw::processes::ProcessStdio;
 
 use crate::{
     arch::without_interrupts,
-    threading::{
+    scheduler::{
         cpu_context::ContextPriority,
         expose::{SpawnFlags, pspawn, wait_for_process},
     },

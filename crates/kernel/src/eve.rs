@@ -4,8 +4,8 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
-use crate::threading::cpu_context::{Cid, ContextPriority};
-use crate::threading::expose::{kernel_thread_spawn, thread_exit};
+use crate::scheduler::cpu_context::{Cid, ContextPriority};
+use crate::scheduler::expose::{kernel_thread_spawn, thread_exit};
 use crate::utils::alloc::PageString;
 use crate::utils::path::make_path;
 use crate::{debug, logging};
@@ -56,9 +56,9 @@ pub fn main() -> ! {
 
     #[cfg(not(test))]
     {
-        use crate::threading::expose::SpawnFlags;
+        use crate::scheduler::expose::SpawnFlags;
         use crate::utils::types::Name;
-        use crate::{info, sleep, threading::expose::pspawn};
+        use crate::{info, scheduler::expose::pspawn, sleep};
 
         info!(
             "kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell"
@@ -82,7 +82,7 @@ pub fn main() -> ! {
 
     #[cfg(test)]
     {
-        use crate::threading::cpu_context::ContextPriority;
+        use crate::scheduler::cpu_context::ContextPriority;
 
         fn run_tests(_cid: Cid, _arg: &()) -> ! {
             crate::kernel_testmain();

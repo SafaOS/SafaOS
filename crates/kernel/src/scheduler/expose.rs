@@ -5,7 +5,7 @@ use crate::{
     VirtAddr,
     arch::without_interrupts,
     memory::paging::MapToError,
-    threading::{
+    scheduler::{
         SCHEDULER_INITED,
         cpu_context::{Cid, ContextPriority, Thread},
         this_process, this_thread,

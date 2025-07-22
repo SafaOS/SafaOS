@@ -1,6 +1,6 @@
 use crate::{
     drivers::vfs::rodatafs::GenericRodFSFile,
-    threading::{Pid, expose::getinfo},
+    scheduler::{Pid, expose::getinfo},
     utils::alloc::PageString,
 };
 

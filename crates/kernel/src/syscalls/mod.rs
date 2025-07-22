@@ -1,8 +1,8 @@
 use safa_abi::errors::{ErrorStatus, SysResult};
 
 use crate::drivers::vfs::expose::FileAttr;
-use crate::threading::cpu_context::Cid;
-use crate::threading::{self, Pid, resources};
+use crate::scheduler::cpu_context::Cid;
+use crate::scheduler::{self, Pid, resources};
 use crate::time;
 use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{
@@ -85,11 +85,11 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut Pid)
             }
             SyscallTable::SysTSpawn => processes::sys_tspawn_raw(a, b as *const _, c as *mut Cid),
-            SyscallTable::SysPExit => threading::expose::process_exit(a),
-            SyscallTable::SysTExit => threading::expose::thread_exit(a),
-            SyscallTable::SysTYield => Ok(threading::expose::thread_yield()),
+            SyscallTable::SysPExit => scheduler::expose::process_exit(a),
+            SyscallTable::SysTExit => scheduler::expose::thread_exit(a),
+            SyscallTable::SysTYield => Ok(scheduler::expose::thread_yield()),
             SyscallTable::SysTSleep => {
-                Ok(unsafe { threading::expose::thread_sleep_for_ms(a as u64) })
+                Ok(unsafe { scheduler::expose::thread_sleep_for_ms(a as u64) })
             }
             SyscallTable::SysTFutWait => {
                 processes::syst_fut_wait_raw(a as *mut u32, b, c, d as *mut bool)

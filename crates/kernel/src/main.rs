@@ -34,9 +34,9 @@ mod limine;
 /// such as info!, debug! and StackTrace
 mod logging;
 mod memory;
+mod scheduler;
 mod syscalls;
 mod terminal;
-mod threading;
 mod utils;
 
 extern crate alloc;
@@ -48,9 +48,9 @@ use globals::*;
 
 pub use memory::PhysAddr;
 pub use memory::VirtAddr;
+use scheduler::Scheduler;
 use spin::Mutex;
 use terminal::FRAMEBUFFER_TERMINAL;
-use threading::Scheduler;
 
 #[macro_export]
 macro_rules! print {

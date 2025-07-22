@@ -2,7 +2,7 @@ use core::{marker::PhantomData, ptr::NonNull};
 
 use alloc::{boxed::Box, sync::Arc};
 
-use crate::threading::process::Process;
+use crate::scheduler::process::Process;
 
 struct Node<T> {
     inner: T,

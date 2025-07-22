@@ -18,9 +18,9 @@ use alloc::sync::Arc;
 use lazy_static::lazy_static;
 
 use crate::arch::without_interrupts;
-use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};
-use crate::threading::expose::thread_yield;
-use crate::threading::queue::ProcessQueue;
+use crate::scheduler::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};
+use crate::scheduler::expose::thread_yield;
+use crate::scheduler::queue::ProcessQueue;
 use crate::utils::locks::{RwLock, SpinMutex};
 use crate::utils::types::Name;
 use crate::{VirtAddr, arch};

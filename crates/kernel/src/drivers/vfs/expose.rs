@@ -4,7 +4,7 @@ use safa_abi::raw::io::OpenOptions;
 
 use crate::{
     drivers::vfs::SeekOffset,
-    threading::resources::{self, Resource},
+    scheduler::resources::{self, Resource},
     utils::io::{IoError, Readable},
 };
 

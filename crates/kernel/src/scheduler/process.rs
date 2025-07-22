@@ -14,7 +14,7 @@ use crate::{
 };
 use crate::{
     memory::{paging::MapToError, proc_mem_allocator::TrackedAllocation},
-    threading::{
+    scheduler::{
         cpu_context::{Cid, ContextPriority, Thread},
         this_thread,
     },

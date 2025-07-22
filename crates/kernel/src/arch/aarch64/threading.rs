@@ -22,7 +22,7 @@ use crate::{
     debug,
     limine::MP_RESPONSE,
     memory::paging::{MapToError, PhysPageTable},
-    threading::{
+    scheduler::{
         self, CPULocalStorage, SCHEDULER_INITED,
         cpu_context::{self},
         process::Process,
@@ -194,7 +194,7 @@ impl CPUStatus {
 
 pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
     let context = unsafe { CPUStatus::from_current(frame) };
-    let swtch_results = threading::swtch(context);
+    let swtch_results = scheduler::swtch(context);
     if let Some((new_context_ptr, address_space_changed)) = swtch_results {
         unsafe {
             before_switch();

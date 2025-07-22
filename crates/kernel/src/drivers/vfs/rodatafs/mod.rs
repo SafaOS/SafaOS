@@ -10,7 +10,7 @@ mod usbinfo;
 use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
 use crate::{
     drivers::vfs::{FSError, FSObjectID, FSResult, FileSystem, SeekOffset},
-    threading::{self, Pid},
+    scheduler::{self, Pid},
     utils::{alloc::PageVec, locks::RwLock},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -256,7 +256,7 @@ impl InternalStructure {
     }
 
     fn try_generate_from_process(process_pid: Pid) -> Option<Self> {
-        match threading::find(|process| process.pid() == process_pid, |_| ()) {
+        match scheduler::find(|process| process.pid() == process_pid, |_| ()) {
             Some(_) => Some(Self::generate_from_process(process_pid)),
             _ => None,
         }
@@ -375,7 +375,7 @@ impl RodFS {
     fn search_indx(&mut self, parent_id: RodFSObjID, name: &str) -> FSResult<RodFSObjID> {
         if parent_id == self.processes_collection_id() {
             if name == "self" {
-                let curr_process = threading::this_process();
+                let curr_process = scheduler::this_process();
 
                 let pid = curr_process.pid();
                 let process_obj_id = ProcessObjID::new(0, pid);
@@ -412,7 +412,7 @@ impl RodFS {
                 let process_pid = process_obj_id.process_pid();
                 // if the process is not found, it means the process has been terminated
                 // remove the process from the cache
-                if threading::find(|process| process.pid() == process_pid, |_| ()).is_none() {
+                if scheduler::find(|process| process.pid() == process_pid, |_| ()).is_none() {
                     self.processes_cache.remove(&process_pid);
                 }
             }
@@ -494,7 +494,7 @@ impl FileSystem for RwLock<RodFS> {
             use core::fmt::Write;
 
             let mut pid_fmt_buf = heapless::String::<20>::new();
-            threading::for_each(|process| {
+            scheduler::for_each(|process| {
                 _ = write!(pid_fmt_buf, "{}", process.pid());
                 let attrs = FileAttr::new(FSObjectType::Directory, 0);
 

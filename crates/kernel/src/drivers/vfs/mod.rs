@@ -8,7 +8,7 @@ use crate::{
     devices::{self, Device},
     error, limine,
     memory::{frame_allocator, paging::PAGE_SIZE},
-    threading::this_process,
+    scheduler::this_process,
     time,
     utils::{
         path::PathParts,

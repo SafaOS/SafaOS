@@ -1,6 +1,6 @@
 use core::str;
 
-use crate::{threading::expose::kthread_sleep_for_ms, utils::locks::RwLock};
+use crate::{scheduler::expose::kthread_sleep_for_ms, utils::locks::RwLock};
 use int_enum::IntEnum;
 
 use crate::{

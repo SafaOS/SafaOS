@@ -1,7 +1,7 @@
 //! This module contains the boot-time implementiation of the initialization of the procfs.
 
 use super::{eve_journal::EVEJournal, usbinfo::USBInfoFile};
-use crate::threading::Pid;
+use crate::scheduler::Pid;
 
 use super::{
     GenericRodFSFile, cpuinfo::CpuInfoFile, kernelinfo::KernelInfoFile, meminfo::MemInfoFile,

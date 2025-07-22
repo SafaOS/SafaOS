@@ -4,7 +4,7 @@ use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
 
 use crate::{
     arch::threading::CPUStatus, debug, memory::proc_mem_allocator::TrackedAllocation,
-    threading::process::Process, time, utils::locks::SpinMutex,
+    scheduler::process::Process, time, utils::locks::SpinMutex,
 };
 
 /// Context ID, a unique identifier for a thread.

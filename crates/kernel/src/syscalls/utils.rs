@@ -6,11 +6,11 @@ use macros::syscall_handler;
 use safa_abi::errors::ErrorStatus;
 
 use super::SyscallFFI;
-use crate::{VirtAddr, threading};
+use crate::{VirtAddr, scheduler};
 
 #[syscall_handler]
 fn syschdir(path: Path) -> Result<(), ErrorStatus> {
-    threading::expose::chdir(path).map_err(|err| err.into())
+    scheduler::expose::chdir(path).map_err(|err| err.into())
 }
 
 #[syscall_handler]
@@ -18,7 +18,7 @@ fn syschdir(path: Path) -> Result<(), ErrorStatus> {
 /// `dest_len` if it is not null
 /// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
 fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let this_process = threading::this_process();
+    let this_process = scheduler::this_process();
     let state = this_process.state();
     let cwd = state.cwd();
 
@@ -34,7 +34,7 @@ fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorS
 
 #[syscall_handler]
 fn syssbrk(amount: isize, results: &mut VirtAddr) -> Result<(), ErrorStatus> {
-    let res = threading::expose::sbrk(amount)?;
+    let res = scheduler::expose::sbrk(amount)?;
     *results = VirtAddr::from_ptr(res);
     Ok(())
 }
