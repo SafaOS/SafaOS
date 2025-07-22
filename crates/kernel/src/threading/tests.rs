@@ -1,4 +1,7 @@
-use safa_utils::{abi::raw::processes::ProcessStdio, make_path, types::Name};
+use crate::utils::path::make_path;
+use crate::utils::types::Name;
+
+use safa_abi::raw::processes::ProcessStdio;
 
 use crate::{
     arch::without_interrupts,

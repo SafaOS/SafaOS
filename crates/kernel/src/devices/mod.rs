@@ -10,7 +10,7 @@ use crate::{
 };
 
 use crate::utils::locks::RwLock;
-use safa_utils::{make_path, types::DriveName};
+use crate::utils::{path::make_path, types::DriveName};
 
 pub fn add_device(vfs: &VFS, device: &'static dyn Device) {
     let path = make_path!("dev", device.name());

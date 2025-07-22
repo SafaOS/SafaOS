@@ -7,11 +7,12 @@ use crate::drivers::driver_poll::{self, PolledDriver};
 use crate::threading::cpu_context::{Cid, ContextPriority};
 use crate::threading::expose::{kernel_thread_spawn, thread_exit};
 use crate::utils::alloc::PageString;
+use crate::utils::path::make_path;
 use crate::{debug, logging};
 use crate::{drivers::vfs, serial};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
-use safa_utils::{abi::raw::processes::ProcessStdio, make_path};
+use safa_abi::raw::processes::ProcessStdio;
 use spin::Lazy;
 
 pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
@@ -56,8 +57,8 @@ pub fn main() -> ! {
     #[cfg(not(test))]
     {
         use crate::threading::expose::SpawnFlags;
+        use crate::utils::types::Name;
         use crate::{info, sleep, threading::expose::pspawn};
-        use safa_utils::types::Name;
 
         info!(
             "kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell"

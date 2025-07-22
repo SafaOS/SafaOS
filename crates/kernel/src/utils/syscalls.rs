@@ -1,4 +1,5 @@
-use super::{errors::ErrorStatus, path::Path};
+use super::path::Path;
+use safa_abi::errors::ErrorStatus;
 
 /// Safely converts FFI [`Self::Args`] into [`Self`] for being passed to a syscall
 pub trait SyscallFFI: Sized {

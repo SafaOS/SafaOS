@@ -1,7 +1,10 @@
-use safa_utils::{make_path, path::Path, types::DriveName};
+use crate::utils::{
+    path::{Path, make_path},
+    types::DriveName,
+};
 
 use crate::{
-    drivers::vfs::{ramfs::RamFS, FSError, FSObjectDescriptor, FileSystem, SeekOffset, VFS},
+    drivers::vfs::{FSError, FSObjectDescriptor, FileSystem, SeekOffset, VFS, ramfs::RamFS},
     time,
     utils::locks::RwLock,
 };

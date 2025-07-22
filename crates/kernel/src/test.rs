@@ -1,5 +1,6 @@
 use core::any::type_name;
 
+use crate::utils::{path::make_path, types::Name};
 use crate::{
     arch::{power::shutdown, without_interrupts},
     eve::KERNEL_STDIO,
@@ -9,7 +10,7 @@ use crate::{
         expose::{SpawnFlags, pspawn, wait_for_process},
     },
 };
-use safa_utils::{abi::raw::processes::ProcessStdio, make_path, types::Name};
+use safa_abi::raw::processes::ProcessStdio;
 
 #[macro_export]
 macro_rules! test_log {

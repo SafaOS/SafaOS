@@ -15,7 +15,7 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use hashbrown::HashMap;
-use safa_utils::abi::raw::io::{DirEntry, FSObjectType, FileAttr};
+use safa_abi::raw::io::{DirEntry, FSObjectType, FileAttr};
 
 type OpaqueRodFSObjID = u32;
 
@@ -462,7 +462,7 @@ impl FileSystem for RwLock<RodFS> {
     fn resolve_path_rel(
         &self,
         parent_id: FSObjectID,
-        path: safa_utils::path::PathParts,
+        path: crate::utils::path::PathParts,
     ) -> FSResult<FSObjectID> {
         super::resolve_path_parts(parent_id, path, |_, parent_id, name| {
             let parent_obj_id = RodFSObjID::from_obj_id(parent_id);

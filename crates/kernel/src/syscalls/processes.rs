@@ -1,9 +1,6 @@
-use safa_utils::abi::{
-    self,
-    raw::{
-        RawSlice, RawSliceMut,
-        processes::{ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig},
-    },
+use safa_abi::raw::{
+    RawSlice, RawSliceMut,
+    processes::{ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig},
 };
 
 use crate::{
@@ -13,10 +10,9 @@ use crate::{
 };
 use core::fmt::Write;
 
-use crate::{
-    threading::{self, expose::SpawnFlags},
-    utils::{errors::ErrorStatus, path::Path},
-};
+use crate::threading::{self, expose::SpawnFlags};
+use crate::utils::path::Path;
+use safa_abi::errors::ErrorStatus;
 
 use super::SyscallFFI;
 use macros::syscall_handler;
@@ -162,7 +158,7 @@ fn syspspawn(
         let argv = into_args_slice(&this.argv)?;
         let env = into_bytes_slice(&this.env)?;
 
-        let stdio: Option<&abi::raw::processes::ProcessStdio> = if this.revision >= 1 {
+        let stdio: Option<&safa_abi::raw::processes::ProcessStdio> = if this.revision >= 1 {
             Option::make(this.stdio)?
         } else {
             None

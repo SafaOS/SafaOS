@@ -1,4 +1,4 @@
-use safa_utils::errors::SysResult;
+use safa_abi::errors::{ErrorStatus, SysResult};
 
 use crate::drivers::vfs::expose::FileAttr;
 use crate::threading::cpu_context::Cid;
@@ -9,7 +9,6 @@ use crate::{
     VirtAddr,
     arch::power,
     drivers::vfs::expose::{DirEntry, DirIter, File, FileRef},
-    utils::errors::ErrorStatus,
 };
 
 impl SyscallFFI for File {

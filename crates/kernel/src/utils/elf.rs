@@ -14,10 +14,10 @@ use crate::{
         copy_to_userspace, frame_allocator,
         paging::{EntryFlags, MapToError, PAGE_SIZE, Page, PageTable},
     },
-    utils::errors::{ErrorStatus, IntoErr},
 };
 
 use super::io::Readable;
+use safa_abi::errors::{ErrorStatus, IntoErr};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ElfType(u16);

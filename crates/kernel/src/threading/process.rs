@@ -21,7 +21,7 @@ use crate::{
     utils::types::Name,
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use safa_utils::abi::raw::processes::{AbiStructures, ProcessStdio, UThreadLocalInfo};
+use safa_abi::raw::processes::{AbiStructures, ProcessStdio, UThreadLocalInfo};
 use serde::Serialize;
 
 use crate::{

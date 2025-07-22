@@ -1,6 +1,6 @@
 use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
 
-use safa_utils::abi::raw::io::OpenOptions;
+use safa_abi::raw::io::OpenOptions;
 
 use crate::{
     drivers::vfs::SeekOffset,
@@ -163,7 +163,7 @@ impl FileRef {
     }
 
     pub fn ri(&self) -> usize {
-        self.0 .0
+        self.0.0
     }
 }
 
@@ -190,7 +190,7 @@ pub fn createdir(path: Path) -> FSResult<()> {
     VFS_STRUCT.read().createdir(path)
 }
 
-pub use crate::utils::abi::raw::io::{DirEntry, FileAttr};
+pub use safa_abi::raw::io::{DirEntry, FileAttr};
 
 pub fn get_direntry(path: Path) -> FSResult<DirEntry> {
     VFS_STRUCT.read().get_direntry(path)
@@ -248,7 +248,7 @@ impl DirIterRef {
     }
 
     pub fn ri(&self) -> usize {
-        self.0 .0
+        self.0.0
     }
 }
 

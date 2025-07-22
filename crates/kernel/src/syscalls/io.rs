@@ -1,14 +1,14 @@
 use super::SyscallFFI;
 use crate::{
     drivers::vfs::{
-        self,
+        self, CtlArgs, FSResult,
         expose::{DirEntry, DirIterRef, FileAttr, FileRef},
-        CtlArgs, FSResult,
     },
-    utils::{errors::ErrorStatus, path::Path},
+    utils::path::Path,
 };
+
 use macros::syscall_handler;
-use safa_utils::abi::raw::io::OpenOptions;
+use safa_abi::{errors::ErrorStatus, raw::io::OpenOptions};
 
 impl SyscallFFI for FileRef {
     type Args = usize;

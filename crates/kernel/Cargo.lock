@@ -288,20 +288,12 @@ dependencies = [
  "macros",
  "noto-sans-mono-bitmap",
  "rustc-demangle",
- "safa-utils",
+ "safa-abi",
  "serde",
  "serde_json",
  "slab",
  "spin",
  "thiserror",
-]
-
-[[package]]
-name = "safa-utils"
-version = "0.2.0"
-dependencies = [
- "heapless",
- "safa-abi",
 ]
 
 [[package]]
@@ -339,7 +331,7 @@ dependencies = [
 [[package]]
 name = "serde_json"
 version = "1.0.137"
-source = "git+https://github.com/ObserverUnit/srede-json-frok#92edb568d213dd1f67113d187c986245213621d3"
+source = "git+https://github.com/safiworks/srede-json-frok#92edb568d213dd1f67113d187c986245213621d3"
 dependencies = [
  "itoa",
  "memchr",

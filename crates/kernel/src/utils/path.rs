@@ -3,9 +3,8 @@ use core::fmt::{Display, Write};
 
 use safa_abi::consts;
 
-use crate::types::DriveName;
-
-use super::errors::{ErrorStatus, IntoErr};
+use super::types::DriveName;
+use safa_abi::errors::{ErrorStatus, IntoErr};
 
 type RawPath = heapless::String<{ consts::MAX_PATH_LENGTH }>;
 
@@ -19,19 +18,19 @@ type RawPath = heapless::String<{ consts::MAX_PATH_LENGTH }>;
 #[macro_export]
 macro_rules! make_path {
     () => {
-        use $crate::path::Path;
+        use $crate::utils::path::Path;
         Path::empty()
     };
     ($path:literal) => {
         unsafe {
-            use $crate::path::{Path, PathParts};
+            use $crate::utils::path::{Path, PathParts};
             let parts = PathParts::new($path);
             Path::from_raw_parts(None, Some(parts))
         }
     };
     ($drive:literal, $path:expr) => {
         unsafe {
-            use $crate::path::{Path, PathParts};
+            use $crate::utils::path::{Path, PathParts};
             // common mistake to put a colon at the end of the drive
             debug_assert!(!$drive.ends_with(':'));
             let parts = PathParts::new($path);
@@ -39,6 +38,9 @@ macro_rules! make_path {
         }
     };
 }
+
+pub use crate::make_path;
+
 #[derive(Debug, Clone, Copy)]
 pub enum PathError {
     InvalidPath,
@@ -118,11 +120,7 @@ impl<'a> PathParts<'a> {
 
         let name_position = inner.char_indices().rev().find_map(|(i, c)| {
             // since we are trimming the path first we can assume there is at least one char after `/`
-            if c == '/' {
-                Some(i + 1)
-            } else {
-                None
-            }
+            if c == '/' { Some(i + 1) } else { None }
         });
 
         let name_index = match name_position {
@@ -147,18 +145,6 @@ impl OwnedPathParts {
         PathParts {
             inner: self.inner.as_str(),
         }
-    }
-
-    fn append(&mut self, other: PathParts) -> Result<(), ()> {
-        match (self.inner.is_empty(), other.inner.is_empty()) {
-            (true, true) => return Ok(()),
-            (true, false) => return Ok(*self = other.into_owned()?),
-            (false, true) => return Ok(()),
-            (false, false) => (),
-        }
-
-        self.append_str(other.inner)?;
-        Ok(())
     }
 
     /// Appends a simplified version of `other` to self
@@ -207,11 +193,7 @@ impl OwnedPathParts {
             .rev()
             .find_map(|(i, c)| {
                 // since we are trimming the path first we can assume there is at least one char after `/`
-                if c == '/' {
-                    Some(i + 1)
-                } else {
-                    None
-                }
+                if c == '/' { Some(i + 1) } else { None }
             })
             .unwrap_or_default();
 
@@ -233,28 +215,6 @@ impl PathBuf {
             drive: self.drive.as_deref().map(|v| &**v),
             path: self.path.as_ref().map(|x| x.as_path_parts()),
         }
-    }
-    pub fn append(&mut self, other: Path) -> Result<(), PathError> {
-        match (&self.drive, other.drive) {
-            (None, None) | (Some(_), None) => (),
-            (None, Some(drive)) => {
-                let drive = DriveName::try_from(drive).map_err(|()| PathError::DriveNameTooLong)?;
-                self.drive = Some(drive);
-            }
-            (Some(expected), Some(got)) => {
-                if expected.as_str() != got {
-                    return Err(PathError::FailedToJoinPaths);
-                }
-            }
-        };
-
-        if let Some(other) = other.path {
-            self.path
-                .get_or_insert_default()
-                .append(other)
-                .map_err(|_| PathError::PathPartsTooLong)?;
-        }
-        Ok(())
     }
 
     /// Appends a simplified version of `other` to self
@@ -393,11 +353,6 @@ impl<'a> Path<'a> {
         };
 
         Ok(Self { drive, path: parts })
-    }
-
-    #[inline]
-    pub unsafe fn new_unchecked(path: &'a str) -> Self {
-        unsafe { Self::new(path).unwrap_unchecked() }
     }
 
     pub fn parts(&self) -> Option<PathParts<'a>> {

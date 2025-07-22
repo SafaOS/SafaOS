@@ -13,9 +13,9 @@ use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
+use crate::utils::path::make_path;
 use alloc::sync::Arc;
 use lazy_static::lazy_static;
-use safa_utils::make_path;
 
 use crate::arch::without_interrupts;
 use crate::threading::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};

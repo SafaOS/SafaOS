@@ -5,10 +5,10 @@ use crate::drivers::vfs::{CtlArgs, FSObjectID, FSObjectType, SeekOffset};
 use crate::memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc};
 use crate::utils::alloc::PageVec;
 use crate::utils::locks::RwLock;
+use crate::utils::path::PathParts;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use hashbrown::{DefaultHashBuilder, HashMap};
-use safa_utils::path::PathParts;
 
 use crate::devices::Device;
 

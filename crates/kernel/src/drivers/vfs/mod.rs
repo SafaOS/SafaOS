@@ -11,12 +11,13 @@ use crate::{
     threading::this_process,
     time,
     utils::{
-        errors::{ErrorStatus, IntoErr},
         path::PathParts,
         ustar::{self, TarArchiveIter},
     },
 };
+
 use hashbrown::HashMap;
+use safa_abi::errors::{ErrorStatus, IntoErr};
 use thiserror::Error;
 
 pub mod ramfs;
@@ -26,14 +27,14 @@ pub mod tests;
 
 use crate::utils::locks::RwLock;
 use crate::utils::path::Path;
-use alloc::{boxed::Box, sync::Arc};
-use expose::{DirEntry, FileAttr};
-use lazy_static::lazy_static;
-use safa_utils::{
-    abi::raw::io::OpenOptions,
+use crate::utils::{
     path::PathError,
     types::{DriveName, FileName},
 };
+use alloc::{boxed::Box, sync::Arc};
+use expose::{DirEntry, FileAttr};
+use lazy_static::lazy_static;
+use safa_abi::raw::io::OpenOptions;
 
 lazy_static! {
     pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
@@ -276,7 +277,7 @@ impl<'a> CtlArgs<'a> {
     }
 }
 
-pub use safa_utils::abi::raw::io::FSObjectType;
+pub use safa_abi::raw::io::FSObjectType;
 
 pub fn resolve_path_parts<F>(
     root_obj_id: FSObjectID,

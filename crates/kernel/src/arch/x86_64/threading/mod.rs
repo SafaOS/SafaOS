@@ -85,7 +85,7 @@ pub struct CPUStatus {
     xmm0: [u8; 16],
 }
 
-use safa_utils::abi::raw::processes::ContextPriority;
+use safa_abi::raw::processes::ContextPriority;
 
 const fn make_usermode_regs(is_userspace: bool) -> (u64, u64, RFLAGS) {
     if is_userspace {

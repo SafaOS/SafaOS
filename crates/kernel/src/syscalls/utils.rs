@@ -1,12 +1,12 @@
+use crate::utils::io::Cursor;
+use crate::utils::path::Path;
+
 use core::fmt::Write;
 use macros::syscall_handler;
-use safa_utils::io::Cursor;
+use safa_abi::errors::ErrorStatus;
 
 use super::SyscallFFI;
-use crate::{
-    VirtAddr, threading,
-    utils::{errors::ErrorStatus, path::Path},
-};
+use crate::{VirtAddr, threading};
 
 #[syscall_handler]
 fn syschdir(path: Path) -> Result<(), ErrorStatus> {

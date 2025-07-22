@@ -16,18 +16,19 @@ use crate::{
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
-use safa_utils::{
-    abi::raw::{self, processes::ProcessStdio},
-    make_path,
-    path::PathBuf,
+use safa_abi::{
+    self,
+    errors::ErrorStatus,
+    raw::{self, processes::ProcessStdio},
 };
+
+use crate::utils::path::{PathBuf, make_path};
 use thiserror::Error;
 
 use crate::{
     drivers::vfs::{FSError, FSObjectType, FSResult, VFS_STRUCT, expose::File},
     utils::{
         elf::{Elf, ElfError},
-        errors::ErrorStatus,
         io::Readable,
         path::Path,
     },
