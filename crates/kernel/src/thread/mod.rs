@@ -1,14 +1,21 @@
-//! Defines the CPU Context for the smallest unit of execution in the system that is a thread.
+//! Defines the current smallest unit of execution in the scheduler (a Task) that is a thread.
 
 use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
 
 use crate::{
-    arch::threading::CPUStatus, debug, memory::proc_mem_allocator::TrackedAllocation,
-    process::Process, time, utils::locks::SpinMutex,
+    arch::threading::CPUStatus,
+    debug,
+    memory::proc_mem_allocator::TrackedAllocation,
+    process::{Pid, Process},
+    scheduler::CPULocalStorage,
+    time,
+    utils::locks::SpinMutex,
 };
 
-/// Context ID, a unique identifier for a thread.
-pub type Cid = u32;
+pub mod current;
+
+/// Thread ID, a unique identifier for a thread.
+pub type Tid = u32;
 
 #[derive(Debug, Clone)]
 pub enum BlockedReason {
@@ -71,7 +78,7 @@ pub use safa_abi::raw::processes::ContextPriority;
 /// A node representing a Thread in a thread queue
 pub struct ThreadNode {
     inner: Arc<Thread>,
-    pub(super) next: Option<Box<ThreadNode>>,
+    pub next: Option<Box<ThreadNode>>,
 }
 
 impl ThreadNode {
@@ -97,7 +104,7 @@ impl ThreadNode {
 
 #[derive(Debug)]
 pub struct Thread {
-    id: Cid,
+    id: Tid,
     priority: ContextPriority,
     status: SpinMutex<ContextStatus>,
     context: UnsafeCell<Option<Context>>,
@@ -109,7 +116,7 @@ pub struct Thread {
 
 impl Thread {
     pub fn new(
-        cid: Cid,
+        cid: Tid,
         cpu_status: CPUStatus,
         parent_process: &Arc<Process>,
         priority: ContextPriority,
@@ -142,7 +149,7 @@ impl Thread {
         unsafe { self.context().unwrap_unchecked() }
     }
 
-    pub const fn cid(&self) -> Cid {
+    pub const fn tid(&self) -> Tid {
         self.id
     }
 
@@ -170,7 +177,7 @@ impl Thread {
             Process,
             "Thread {}:{} ({}) THREAD EXITED, process dead: {process_dead}",
             self.process().pid(),
-            self.cid(),
+            self.tid(),
             self.process().name(),
         );
     }
@@ -256,4 +263,16 @@ impl Context {
             _tracked_allocations: tracked_allocations,
         }
     }
+}
+
+/// Returns the current thread, that is the thread executing this code right now.
+pub fn current() -> Arc<Thread> {
+    CPULocalStorage::get().current_thread()
+}
+
+/// Returns the current process ID, that is the ID of the process executing this code right now.
+///
+/// faster than [`current()`]`.process().pid()`
+pub fn current_pid() -> Pid {
+    CPULocalStorage::get().current_thread_ref().process().pid()
 }

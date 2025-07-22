@@ -4,8 +4,7 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
-use crate::scheduler::cpu_context::{Cid, ContextPriority};
-use crate::scheduler::expose::thread_exit;
+use crate::thread::{self, ContextPriority, Tid};
 use crate::utils::alloc::PageString;
 use crate::utils::path::make_path;
 use crate::{debug, logging, process};
@@ -27,9 +26,9 @@ lazy_static! {
         SyncUnsafeCell::new(driver_poll::take_poll());
 }
 
-fn poll_driver_thread(cid: Cid, driver: &&dyn PolledDriver) -> ! {
+fn poll_driver_thread(tid: Tid, driver: &&dyn PolledDriver) -> ! {
     debug!(
-        "polling driver in thread: {}, thread CID: {cid}",
+        "polling driver in thread: {}, thread TID: {tid}",
         driver.thread_name()
     );
     driver.poll_function()
@@ -82,9 +81,9 @@ pub fn main() -> ! {
 
     #[cfg(test)]
     {
-        use crate::scheduler::cpu_context::ContextPriority;
+        use crate::thread::ContextPriority;
 
-        fn run_tests(_cid: Cid, _arg: &()) -> ! {
+        fn run_tests(_tid: Tid, _arg: &()) -> ! {
             crate::kernel_testmain();
             unreachable!()
         }
@@ -93,7 +92,7 @@ pub fn main() -> ! {
             .expect("failed to spawn Test Thread");
     }
 
-    thread_exit(0)
+    thread::current::exit(0)
 }
 
 pub fn idle_function() -> ! {

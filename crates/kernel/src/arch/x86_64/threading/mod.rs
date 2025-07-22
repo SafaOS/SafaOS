@@ -13,7 +13,8 @@ use crate::{
     debug,
     limine::MP_RESPONSE,
     process::Process,
-    scheduler::{CPULocalStorage, SCHEDULER_INITED, cpu_context},
+    scheduler::{CPULocalStorage, SCHEDULER_INITED},
+    thread::Tid,
     utils::locks::Mutex,
 };
 use core::{
@@ -164,7 +165,7 @@ impl CPUStatus {
         kernel_stack_end: VirtAddr,
         page_table: &mut PhysPageTable,
         entry_point: VirtAddr,
-        context_id: cpu_context::Cid,
+        thread_id: Tid,
         arguments_ptr: *const (),
         userspace: bool,
     ) -> Result<Self, MapToError> {
@@ -175,7 +176,7 @@ impl CPUStatus {
             ring0_rsp: kernel_stack_end,
             rflags,
             rip: entry_point,
-            rdi: context_id as u64,
+            rdi: thread_id as u64,
             rsi: arguments_ptr as u64,
             cr3: page_table.phys_addr(),
             rsp: user_stack_end,

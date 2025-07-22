@@ -6,7 +6,7 @@ use macros::syscall_handler;
 use safa_abi::errors::ErrorStatus;
 
 use super::SyscallFFI;
-use crate::{VirtAddr, scheduler};
+use crate::VirtAddr;
 
 #[syscall_handler]
 fn syschdir(path: Path) -> Result<(), ErrorStatus> {
@@ -18,7 +18,7 @@ fn syschdir(path: Path) -> Result<(), ErrorStatus> {
 /// `dest_len` if it is not null
 /// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
 fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let this_process = scheduler::this_process();
+    let this_process = process::current();
     let state = this_process.state();
     let cwd = state.cwd();
 

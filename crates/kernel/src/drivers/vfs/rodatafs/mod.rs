@@ -10,7 +10,7 @@ mod usbinfo;
 use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
 use crate::{
     drivers::vfs::{FSError, FSObjectID, FSResult, FileSystem, SeekOffset},
-    process::Pid,
+    process::{self, Pid},
     scheduler,
     utils::{alloc::PageVec, locks::RwLock},
 };
@@ -376,10 +376,8 @@ impl RodFS {
     fn search_indx(&mut self, parent_id: RodFSObjID, name: &str) -> FSResult<RodFSObjID> {
         if parent_id == self.processes_collection_id() {
             if name == "self" {
-                let curr_process = scheduler::this_process();
-
-                let pid = curr_process.pid();
-                let process_obj_id = ProcessObjID::new(0, pid);
+                let curr_pid = process::current_pid();
+                let process_obj_id = ProcessObjID::new(0, curr_pid);
                 return Ok(RodFSObjID::ProcessID(process_obj_id));
             }
 

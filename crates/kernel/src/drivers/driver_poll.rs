@@ -2,7 +2,7 @@
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::{scheduler::expose::kthread_sleep_for_ms, utils::locks::RwLock};
+use crate::{thread, utils::locks::RwLock};
 
 pub trait PolledDriver: Send + Sync {
     fn thread_name(&self) -> &'static str;
@@ -17,7 +17,7 @@ pub trait PolledDriver: Send + Sync {
         let sleep_ms = self.run_every_ms();
         loop {
             self.poll();
-            kthread_sleep_for_ms(sleep_ms);
+            thread::current::sleep_for_ms(sleep_ms);
         }
     }
 }

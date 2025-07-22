@@ -1,5 +1,3 @@
-pub mod cpu_context;
-pub mod expose;
 pub mod queue;
 pub mod resources;
 #[cfg(test)]
@@ -9,13 +7,12 @@ use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
+use crate::thread::{self, ContextPriority, ContextStatus, Thread, ThreadNode};
 use crate::utils::path::make_path;
 use alloc::sync::Arc;
 
 use crate::arch::without_interrupts;
 use crate::process::{Pid, Process, ProcessInfo};
-use crate::scheduler::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};
-use crate::scheduler::expose::thread_yield;
 use crate::scheduler::queue::ProcessQueue;
 use crate::utils::locks::{RwLock, SpinMutex};
 use crate::utils::types::Name;
@@ -54,6 +51,10 @@ impl CPULocalStorage {
     pub fn current_thread(&self) -> Arc<Thread> {
         // safe because the current thread is only ever read by the current thread and modifieded by context switch
         unsafe { (*self.current_thread.get()).clone() }
+    }
+    /// Get a reference to the current thread
+    pub fn current_thread_ref(&self) -> &Arc<Thread> {
+        unsafe { &*self.current_thread.get() }
     }
 }
 
@@ -155,7 +156,7 @@ impl Scheduler {
     ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
         unsafe {
             let current_thread = &*current_thread_ptr;
-            let current_cid = current_thread.cid();
+            let current_tid = current_thread.tid();
             let current_context = current_thread
                 .context()
                 .expect("context is None before the thread is removed");
@@ -190,7 +191,7 @@ impl Scheduler {
 
                 {
                     let thread = next_node.thread();
-                    let thread_cid = thread.cid();
+                    let thread_tid = thread.tid();
                     let process = thread.process();
 
                     let process_pid = process.pid();
@@ -199,8 +200,8 @@ impl Scheduler {
                     if thread.is_dead() {
                         debug_assert!(!thread.is_removed());
 
-                        // same cid, same thread, another thread must be the one to mark removal
-                        if !address_space_changed && thread_cid == current_cid {
+                        // same tid, same thread, another thread must be the one to mark removal
+                        if !address_space_changed && thread_tid == current_tid {
                             current_node = next_node;
                         } else {
                             thread.mark_removed();
@@ -298,7 +299,7 @@ impl Scheduler {
             (cpu_local, index)
         };
 
-        let cid = thread.cid();
+        let cid = thread.tid();
         let pid = thread.process().pid();
 
         without_interrupts(
@@ -358,7 +359,7 @@ impl Scheduler {
             while !thread.is_removed() {
                 // --> thread is removed on thread yield by the scheduler as a part of the thread list iteration
                 // one thread yield should be enough
-                thread_yield();
+                thread::current::yield_now();
                 // however maybe the thread list is in another CPU...
                 core::hint::spin_loop();
             }
@@ -417,20 +418,6 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
 
 pub static SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 
-/// Returns a static reference to the current process
-/// # Safety
-/// Safe because the current process is always alive as long as there is code executing
-pub fn this_process() -> Arc<Process> {
-    this_thread().process().clone()
-}
-
-/// Returns a static reference to the current process
-/// # Safety
-/// Safe because the current Thread is always alive as long as there is code executing
-pub fn this_thread() -> Arc<Thread> {
-    CPULocalStorage::get().current_thread()
-}
-
 /// acquires lock on scheduler and finds a process where executing `condition` on returns true and returns the result of `map` on that process
 pub fn find<C, M, R>(condition: C, map: M) -> Option<R>
 where
@@ -462,6 +449,6 @@ pub fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
 
 /// returns the result of `then` if a process was found
 /// acquires lock on scheduler and removes a process from it where `condition` on the process returns true
-fn remove(condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
+pub fn remove(condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
     SCHEDULER.write().remove(condition)
 }

@@ -4,19 +4,19 @@ use safa_abi::raw::{
 };
 
 use crate::process::{self, Pid, spawn::SpawnFlags};
-use crate::{VirtAddr, scheduler::cpu_context::Cid, utils::types::Name};
+use crate::{VirtAddr, utils::types::Name};
 use core::fmt::Write;
 
-use crate::scheduler::{self};
 use crate::utils::path::Path;
 use safa_abi::errors::ErrorStatus;
 
 use super::SyscallFFI;
+use crate::thread::{self, Tid};
 use macros::syscall_handler;
 
 #[syscall_handler]
 fn syst_fut_wait(addr: &mut u32, val: u32, timeout_ms: u64, wait_results: Option<&mut bool>) {
-    let results = unsafe { scheduler::expose::wait_for_futex(addr, val, timeout_ms) };
+    let results = unsafe { thread::current::wait_for_futex(addr, val, timeout_ms) };
     if let Some(wait_results) = wait_results {
         *wait_results = results;
     }
@@ -24,7 +24,7 @@ fn syst_fut_wait(addr: &mut u32, val: u32, timeout_ms: u64, wait_results: Option
 
 #[syscall_handler]
 fn syst_fut_wake(addr: &mut u32, n: usize, wake_results: Option<&mut usize>) {
-    let num_threads = scheduler::expose::wake_futex(addr, n);
+    let num_threads = process::current::wake_futex(addr, n);
     if let Some(wake_results) = wake_results {
         *wake_results = num_threads;
     }
@@ -32,7 +32,7 @@ fn syst_fut_wake(addr: &mut u32, n: usize, wake_results: Option<&mut usize>) {
 
 #[syscall_handler]
 fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let code = scheduler::expose::wait_for_process(pid).ok_or(ErrorStatus::InvalidPid)?;
+    let code = thread::current::wait_for_process(pid).ok_or(ErrorStatus::InvalidPid)?;
     if let Some(dest_code) = dest_code {
         *dest_code = code;
     }
@@ -40,15 +40,14 @@ fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus>
 }
 
 #[syscall_handler]
-fn syst_wait(tid: Cid) -> Result<(), ErrorStatus> {
-    scheduler::expose::wait_for_thread(tid).ok_or(ErrorStatus::InvalidTid)?;
+fn syst_wait(tid: Tid) -> Result<(), ErrorStatus> {
+    thread::current::wait_for_thread(tid).ok_or(ErrorStatus::InvalidTid)?;
     Ok(())
 }
 
 #[syscall_handler]
 fn sysp_try_cleanup(pid: Pid, dest_exit_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let cleaned_up =
-        scheduler::expose::try_cleanup_process(pid).map_err(|()| ErrorStatus::InvalidPid)?;
+    let cleaned_up = process::current::try_cleanup_process(pid)?;
     if let Some(exit_code) = cleaned_up {
         if let Some(dest_exit_code) = dest_exit_code {
             *dest_exit_code = exit_code;
@@ -206,16 +205,16 @@ fn syspspawn(
 fn sys_tspawn(
     entry_point: VirtAddr,
     config: &TSpawnConfig,
-    target_cid: Option<&mut Cid>,
+    target_tid: Option<&mut Tid>,
 ) -> Result<(), ErrorStatus> {
     let (argument_ptr, priority, cpu, custom_stack_size) = config.into_rust();
     let argument_ptr = VirtAddr::from_ptr(argument_ptr);
 
-    let thread_cid =
+    let thread_tid =
         process::current::thread_spawn(entry_point, argument_ptr, priority, cpu, custom_stack_size)
             .map_err(|_| ErrorStatus::MMapError)?;
-    if let Some(target_cid) = target_cid {
-        *target_cid = thread_cid;
+    if let Some(target_tid) = target_tid {
+        *target_tid = thread_tid;
     }
     Ok(())
 }

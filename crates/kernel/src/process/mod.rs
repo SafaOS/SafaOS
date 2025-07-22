@@ -11,19 +11,18 @@ use crate::{
         userspace_copy_within,
     },
     scheduler,
+    thread::{self, Tid},
     utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
+
 use crate::{
     memory::{paging::MapToError, proc_mem_allocator::TrackedAllocation},
-    scheduler::{
-        cpu_context::{Cid, ContextPriority, Thread},
-        this_thread,
-    },
     utils::types::Name,
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use safa_abi::raw::processes::{AbiStructures, ProcessStdio, UThreadLocalInfo};
 use serde::Serialize;
+use thread::{ContextPriority, Thread};
 
 use crate::{
     VirtAddr,
@@ -310,7 +309,7 @@ pub struct Process {
     pub schedule_cleanup: AtomicBool,
     userspace_process: bool,
 
-    next_cid: AtomicU32,
+    next_tid: AtomicU32,
     default_priority: ContextPriority,
     allocator: Mutex<ProcessMemAllocator>,
 
@@ -340,10 +339,6 @@ impl Process {
 
     pub fn ppid(&self) -> Pid {
         self.ppid.load(Ordering::Relaxed)
-    }
-
-    pub fn ppid_atomic(&self) -> &AtomicU32 {
-        &self.ppid
     }
 
     #[inline]
@@ -432,7 +427,7 @@ impl Process {
 
             threads: Mutex::new(Vec::new()),
 
-            next_cid: AtomicU32::new(1),
+            next_tid: AtomicU32::new(1),
             context_count: AtomicU32::new(1),
             default_priority,
 
@@ -556,13 +551,13 @@ impl Process {
     /// Creates a new thread from a CPU status giving it a `cid` and everything
     fn create_thread_from_status(
         process: &Arc<Process>,
-        cid: Cid,
+        tid: Tid,
         cpu_status: CPUStatus,
         priority: Option<ContextPriority>,
         tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
     ) -> Thread {
         Thread::new(
-            cid,
+            tid,
             cpu_status,
             process,
             priority.unwrap_or(process.default_priority),
@@ -578,8 +573,8 @@ impl Process {
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
         custom_stack_size: Option<usize>,
-    ) -> Result<(Arc<Thread>, Cid), MapToError> {
-        let context_id = process.next_cid.fetch_add(1, Ordering::SeqCst);
+    ) -> Result<(Arc<Thread>, Tid), MapToError> {
+        let context_id = process.next_tid.fetch_add(1, Ordering::SeqCst);
         let thread = Self::create_thread_from_process_owned(
             process,
             context_id,
@@ -597,7 +592,7 @@ impl Process {
     /// doesn't add to the process's thread list so the thread is owned by the caller
     pub fn create_thread_from_process_owned(
         process: &Arc<Process>,
-        context_id: Cid,
+        context_id: Tid,
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
@@ -705,16 +700,16 @@ impl Process {
 
         state.die(exit_code, killed_by);
 
-        let this_thread = this_thread();
-        let this_cid = this_thread.cid();
+        let current_thread = thread::current();
+        let current_tid = current_thread.tid();
+        let current_pid = current_thread.process().pid();
 
-        let this_pid = this_thread.process().pid();
-        let killing_self = this_pid == pid;
+        let killing_self = current_pid == pid;
 
         for thread in &*threads {
-            let cid = thread.cid();
+            let tid = thread.tid();
             // we don't have to wait for self to exit
-            if killing_self && this_cid == cid {
+            if killing_self && current_tid == tid {
                 continue;
             }
 
@@ -722,7 +717,7 @@ impl Process {
 
             // wait for the thread to exit
             while thread.status_mut().is_running() {
-                scheduler::expose::thread_yield();
+                thread::current::yield_now();
                 core::hint::spin_loop();
             }
         }
@@ -741,7 +736,7 @@ impl Process {
         drop(state);
         drop(threads);
         self.is_alive.store(false, Ordering::Release);
-        this_thread.mark_dead(true);
+        current_thread.mark_dead(true);
     }
 
     pub(super) fn cleanup(&self) -> (ProcessInfo, Option<PhysPageTable>) {
@@ -800,7 +795,12 @@ impl Process {
 
 /// Returns the current process. (The process that is a parent of the current thread)
 pub fn current() -> Arc<Process> {
-    crate::scheduler::this_thread().process().clone()
+    thread::current().process().clone()
+}
+
+/// Fast, cheaper access to the current process's pid
+pub fn current_pid() -> Pid {
+    thread::current_pid()
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -871,4 +871,9 @@ impl From<&Process> for ProcessInfo {
             is_alive,
         }
     }
+}
+
+/// Returns [`ProcessInfo`] for the process with the given PID.
+pub fn getinfo(pid: Pid) -> Option<ProcessInfo> {
+    scheduler::find(|p| p.pid() == pid, |t| ProcessInfo::from(&**t))
 }

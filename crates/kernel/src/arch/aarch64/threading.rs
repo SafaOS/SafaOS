@@ -23,10 +23,8 @@ use crate::{
     limine::MP_RESPONSE,
     memory::paging::{MapToError, PhysPageTable},
     process::Process,
-    scheduler::{
-        self, CPULocalStorage, SCHEDULER_INITED,
-        cpu_context::{self},
-    },
+    scheduler::{self, CPULocalStorage, SCHEDULER_INITED},
+    thread::Tid,
     utils::locks::Mutex,
 };
 
@@ -153,7 +151,7 @@ impl CPUStatus {
         kernel_stack_end: VirtAddr,
         page_table: &mut PhysPageTable,
         entry_point: VirtAddr,
-        context_id: cpu_context::Cid,
+        thread_id: Tid,
         arguments_ptr: *const (),
         userspace: bool,
     ) -> Result<Self, MapToError> {
@@ -161,7 +159,7 @@ impl CPUStatus {
         let el1_stack_end = kernel_stack_end;
 
         let mut general_registers = [Reg::default(); 29];
-        general_registers[0] = Reg(context_id as u64);
+        general_registers[0] = Reg(thread_id as u64);
         general_registers[1] = Reg(arguments_ptr as u64);
 
         Ok(Self {

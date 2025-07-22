@@ -1,6 +1,6 @@
 use core::str;
 
-use crate::{scheduler::expose::kthread_sleep_for_ms, utils::locks::RwLock};
+use crate::{thread, utils::locks::RwLock};
 use int_enum::IntEnum;
 
 use crate::{
@@ -42,7 +42,7 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
             tty.enable_input();
             // TODO: add thread sleep
             drop(tty);
-            kthread_sleep_for_ms(10);
+            thread::current::sleep_for_ms(10)
         }
     }
 

@@ -8,8 +8,7 @@ use crate::{
     devices::{self, Device},
     error, limine,
     memory::{frame_allocator, paging::PAGE_SIZE},
-    scheduler::this_process,
-    time,
+    process, time,
     utils::{
         path::PathParts,
         ustar::{self, TarArchiveIter},
@@ -555,9 +554,11 @@ impl VFS {
             self.resolve_abs_path(path)
         } else {
             let relative_parts = path.parts().unwrap_or_default();
-            let process = this_process();
+
+            let process = process::current();
             let state = process.state();
             let cwd = state.cwd();
+
             self.resolve_relative_path(cwd, relative_parts)
         }
     }

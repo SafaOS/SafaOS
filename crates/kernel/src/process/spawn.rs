@@ -12,7 +12,8 @@ use crate::{
     drivers::vfs::{FSError, expose::File},
     memory::paging::MapToError,
     process::{self, Pid, Process},
-    scheduler::{self, SCHEDULER, cpu_context::Thread},
+    scheduler::{self, SCHEDULER},
+    thread::Thread,
     utils::{
         elf::{Elf, ElfError},
         io::Readable,

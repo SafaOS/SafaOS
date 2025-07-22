@@ -6,7 +6,8 @@ use core::{
 use lock_api::{GuardSend, RawMutex, RawRwLock};
 use spin::Lazy;
 
-use crate::scheduler::expose::thread_yield;
+use crate::thread;
+
 pub const SPIN_AMOUNT: u32 = 10_000;
 
 pub struct LockRawMutex(AtomicBool);
@@ -18,7 +19,7 @@ fn lock_loop<T>(this: &T, try_lock: impl Fn(&T) -> bool) {
         core::hint::spin_loop();
         spin_count += 1;
         if spin_count > SPIN_AMOUNT {
-            thread_yield();
+            thread::current::yield_now();
             spin_count = 0;
         }
     }

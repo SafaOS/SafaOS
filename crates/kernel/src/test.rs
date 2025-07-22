@@ -1,13 +1,12 @@
 use core::any::type_name;
 
 use crate::process::spawn::{SpawnFlags, pspawn};
+use crate::thread::ContextPriority;
 use crate::utils::{path::make_path, types::Name};
 use crate::{
     arch::{power::shutdown, without_interrupts},
     eve::KERNEL_STDIO,
-    info,
-    scheduler::{cpu_context::ContextPriority, expose::wait_for_process},
-    sleep,
+    info, sleep,
 };
 use safa_abi::raw::processes::ProcessStdio;
 
@@ -139,7 +138,7 @@ fn userspace_test_script() {
     )
     .unwrap();
     // thread yields, so works even when interrupts are disabled
-    let ret = wait_for_process(pid);
+    let ret = crate::thread::current::wait_for_process(pid);
 
     assert_eq!(ret, Some(0));
 }

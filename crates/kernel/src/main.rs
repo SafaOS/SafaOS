@@ -38,6 +38,7 @@ mod process;
 mod scheduler;
 mod syscalls;
 mod terminal;
+mod thread;
 mod utils;
 
 extern crate alloc;

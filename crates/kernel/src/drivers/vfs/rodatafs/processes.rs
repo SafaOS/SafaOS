@@ -1,8 +1,6 @@
-use crate::{
-    drivers::vfs::rodatafs::GenericRodFSFile, scheduler::expose::getinfo, utils::alloc::PageString,
-};
+use crate::{drivers::vfs::rodatafs::GenericRodFSFile, utils::alloc::PageString};
 
-use crate::process::Pid;
+use crate::process::{self, Pid};
 pub struct ProcessInfoFile;
 
 impl ProcessInfoFile {
@@ -12,7 +10,7 @@ impl ProcessInfoFile {
 
     pub fn fetch(file: &mut GenericRodFSFile) -> Option<PageString> {
         let mut str = PageString::with_capacity(1024);
-        let process_info = getinfo(file.id as Pid).unwrap();
+        let process_info = process::getinfo(file.id as Pid).unwrap();
 
         serde_json::to_writer_pretty(&mut str, &process_info)
             .ok()
