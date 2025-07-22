@@ -1,13 +1,9 @@
 pub mod cpu_context;
 pub mod expose;
-pub mod process;
 pub mod queue;
 pub mod resources;
 #[cfg(test)]
 mod tests;
-
-/// Process ID, a unique identifier for a process (process)
-pub type Pid = u32;
 
 use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::ptr::NonNull;
@@ -15,9 +11,9 @@ use core::sync::atomic::AtomicUsize;
 
 use crate::utils::path::make_path;
 use alloc::sync::Arc;
-use lazy_static::lazy_static;
 
 use crate::arch::without_interrupts;
+use crate::process::{Pid, Process, ProcessInfo};
 use crate::scheduler::cpu_context::{ContextPriority, ContextStatus, Thread, ThreadNode};
 use crate::scheduler::expose::thread_yield;
 use crate::scheduler::queue::ProcessQueue;
@@ -25,7 +21,6 @@ use crate::utils::locks::{RwLock, SpinMutex};
 use crate::utils::types::Name;
 use crate::{VirtAddr, arch};
 use alloc::boxed::Box;
-use process::{Process, ProcessInfo};
 use slab::Slab;
 
 use crate::{
@@ -135,7 +130,7 @@ impl Scheduler {
             unsafe {
                 let status = arch::threading::init_cpus(&process, idle_function);
                 let status_ref = status.as_ref();
-                self::add(process, root_thread);
+                self::add_process(process, root_thread);
                 *SCHEDULER_INITED.get() = true;
 
                 debug!(
@@ -254,7 +249,7 @@ impl Scheduler {
         }
     }
 
-    fn add_pid(&mut self) -> Pid {
+    pub fn add_pid(&mut self) -> Pid {
         self.pids.insert(()) as Pid
     }
 
@@ -420,9 +415,7 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
     }
 }
 
-lazy_static! {
-    static ref SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
-}
+pub static SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 
 /// Returns a static reference to the current process
 /// # Safety
@@ -458,12 +451,12 @@ where
 }
 
 /// acquires lock on scheduler and adds a process to it
-fn add(process: Arc<Process>, root_thread: Arc<Thread>) -> Pid {
+pub fn add_process(process: Arc<Process>, root_thread: Arc<Thread>) -> Pid {
     SCHEDULER.write().add_process(process, root_thread)
 }
 
 /// acquires lock on scheduler and adds a thread to it
-fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
+pub fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
     SCHEDULER.write().add_thread(thread, cpu)
 }
 

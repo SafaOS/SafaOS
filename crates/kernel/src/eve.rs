@@ -5,10 +5,10 @@ use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
 use crate::scheduler::cpu_context::{Cid, ContextPriority};
-use crate::scheduler::expose::{kernel_thread_spawn, thread_exit};
+use crate::scheduler::expose::thread_exit;
 use crate::utils::alloc::PageString;
 use crate::utils::path::make_path;
-use crate::{debug, logging};
+use crate::{debug, logging, process};
 use crate::{drivers::vfs, serial};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
@@ -45,7 +45,7 @@ pub fn main() -> ! {
 
     // FIXME: use threads
     for poll_driver in unsafe { &*POLLING.get() } {
-        kernel_thread_spawn(
+        process::current::kernel_thread_spawn(
             poll_driver_thread,
             poll_driver,
             Some(ContextPriority::High),
@@ -56,9 +56,9 @@ pub fn main() -> ! {
 
     #[cfg(not(test))]
     {
-        use crate::scheduler::expose::SpawnFlags;
+        use crate::process::spawn::{SpawnFlags, pspawn};
         use crate::utils::types::Name;
-        use crate::{info, scheduler::expose::pspawn, sleep};
+        use crate::{info, sleep};
 
         info!(
             "kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell"
@@ -89,7 +89,7 @@ pub fn main() -> ! {
             unreachable!()
         }
 
-        kernel_thread_spawn(run_tests, &(), Some(ContextPriority::Medium), None)
+        process::current::kernel_thread_spawn(run_tests, &(), Some(ContextPriority::Medium), None)
             .expect("failed to spawn Test Thread");
     }
 

@@ -3,14 +3,11 @@ use safa_abi::raw::{
     processes::{ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig},
 };
 
-use crate::{
-    VirtAddr,
-    scheduler::{Pid, cpu_context::Cid},
-    utils::types::Name,
-};
+use crate::process::{self, Pid, spawn::SpawnFlags};
+use crate::{VirtAddr, scheduler::cpu_context::Cid, utils::types::Name};
 use core::fmt::Write;
 
-use crate::scheduler::{self, expose::SpawnFlags};
+use crate::scheduler::{self};
 use crate::utils::path::Path;
 use safa_abi::errors::ErrorStatus;
 
@@ -81,7 +78,7 @@ fn syspspawn_inner(
         }
     };
 
-    let results = scheduler::expose::pspawn(
+    let results = process::spawn::pspawn(
         name,
         path,
         argv,
@@ -214,14 +211,9 @@ fn sys_tspawn(
     let (argument_ptr, priority, cpu, custom_stack_size) = config.into_rust();
     let argument_ptr = VirtAddr::from_ptr(argument_ptr);
 
-    let thread_cid = scheduler::expose::thread_spawn(
-        entry_point,
-        argument_ptr,
-        priority,
-        cpu,
-        custom_stack_size,
-    )
-    .map_err(|_| ErrorStatus::MMapError)?;
+    let thread_cid =
+        process::current::thread_spawn(entry_point, argument_ptr, priority, cpu, custom_stack_size)
+            .map_err(|_| ErrorStatus::MMapError)?;
     if let Some(target_cid) = target_cid {
         *target_cid = thread_cid;
     }

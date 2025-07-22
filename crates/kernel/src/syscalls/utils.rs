@@ -1,5 +1,5 @@
-use crate::utils::io::Cursor;
 use crate::utils::path::Path;
+use crate::{process, utils::io::Cursor};
 
 use core::fmt::Write;
 use macros::syscall_handler;
@@ -10,7 +10,7 @@ use crate::{VirtAddr, scheduler};
 
 #[syscall_handler]
 fn syschdir(path: Path) -> Result<(), ErrorStatus> {
-    scheduler::expose::chdir(path).map_err(|err| err.into())
+    process::current::chdir(path).map_err(|err| err.into())
 }
 
 #[syscall_handler]
@@ -34,7 +34,7 @@ fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorS
 
 #[syscall_handler]
 fn syssbrk(amount: isize, results: &mut VirtAddr) -> Result<(), ErrorStatus> {
-    let res = scheduler::expose::sbrk(amount)?;
+    let res = process::current::extend_data_break(amount)?;
     *results = VirtAddr::from_ptr(res);
     Ok(())
 }

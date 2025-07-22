@@ -22,10 +22,10 @@ use crate::{
     debug,
     limine::MP_RESPONSE,
     memory::paging::{MapToError, PhysPageTable},
+    process::Process,
     scheduler::{
         self, CPULocalStorage, SCHEDULER_INITED,
         cpu_context::{self},
-        process::Process,
     },
     utils::locks::Mutex,
 };

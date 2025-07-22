@@ -10,6 +10,7 @@ use crate::{
         AlignToPage, copy_to_userspace, proc_mem_allocator::ProcessMemAllocator,
         userspace_copy_within,
     },
+    scheduler,
     utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use crate::{
@@ -39,10 +40,14 @@ use crate::{
     },
 };
 
-use super::{
-    Pid,
-    resources::{Resource, ResourceManager},
-};
+use crate::scheduler::resources::{Resource, ResourceManager};
+
+pub mod current;
+pub mod spawn;
+
+/// Process ID, a unique identifier for a process (process)
+pub type Pid = u32;
+
 #[derive(Debug)]
 pub struct AliveProcess {
     root_page_table: ManuallyDrop<PhysPageTable>,
@@ -84,7 +89,10 @@ impl AliveProcess {
         self.resources.clone_resources()
     }
 
-    /// Clones only the resources in `resources` of `self`, panicks if self isn't alive
+    /// Clones only the resources in `resources` of `self`
+    ///
+    /// # Returns
+    /// A vector of cloned resources, or an error if any resource fails to clone because it doesn't exist
     pub fn clone_specific_resources(
         &mut self,
         resources: &[usize],
@@ -251,6 +259,9 @@ impl ProcessState {
     }
 
     /// Clones the resources of `self`, panicks if self isn't alive
+    ///
+    /// # Returns
+    /// A vector of cloned resources, or an error if any resource fails to clone because it doesn't exist
     pub fn clone_resources(&mut self) -> Vec<Mutex<Resource>> {
         self.alive_mut().unwrap().clone_resources()
     }
@@ -711,7 +722,7 @@ impl Process {
 
             // wait for the thread to exit
             while thread.status_mut().is_running() {
-                super::expose::thread_yield();
+                scheduler::expose::thread_yield();
                 core::hint::spin_loop();
             }
         }
@@ -785,6 +796,11 @@ impl Process {
     pub(super) fn is_alive(&self) -> bool {
         self.is_alive.load(core::sync::atomic::Ordering::Acquire)
     }
+}
+
+/// Returns the current process. (The process that is a parent of the current thread)
+pub fn current() -> Arc<Process> {
+    crate::scheduler::this_thread().process().clone()
 }
 
 #[derive(Serialize, Debug, Clone)]

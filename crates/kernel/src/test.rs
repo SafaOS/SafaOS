@@ -1,14 +1,13 @@
 use core::any::type_name;
 
+use crate::process::spawn::{SpawnFlags, pspawn};
 use crate::utils::{path::make_path, types::Name};
 use crate::{
     arch::{power::shutdown, without_interrupts},
     eve::KERNEL_STDIO,
-    info, sleep,
-    scheduler::{
-        cpu_context::ContextPriority,
-        expose::{SpawnFlags, pspawn, wait_for_process},
-    },
+    info,
+    scheduler::{cpu_context::ContextPriority, expose::wait_for_process},
+    sleep,
 };
 use safa_abi::raw::processes::ProcessStdio;
 

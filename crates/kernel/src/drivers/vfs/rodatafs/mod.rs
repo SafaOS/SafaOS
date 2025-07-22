@@ -10,7 +10,8 @@ mod usbinfo;
 use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
 use crate::{
     drivers::vfs::{FSError, FSObjectID, FSResult, FileSystem, SeekOffset},
-    scheduler::{self, Pid},
+    process::Pid,
+    scheduler,
     utils::{alloc::PageVec, locks::RwLock},
 };
 use alloc::{boxed::Box, vec::Vec};

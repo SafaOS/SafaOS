@@ -34,6 +34,7 @@ mod limine;
 /// such as info!, debug! and StackTrace
 mod logging;
 mod memory;
+mod process;
 mod scheduler;
 mod syscalls;
 mod terminal;

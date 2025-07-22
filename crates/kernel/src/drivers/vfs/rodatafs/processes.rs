@@ -1,9 +1,8 @@
 use crate::{
-    drivers::vfs::rodatafs::GenericRodFSFile,
-    scheduler::{Pid, expose::getinfo},
-    utils::alloc::PageString,
+    drivers::vfs::rodatafs::GenericRodFSFile, scheduler::expose::getinfo, utils::alloc::PageString,
 };
 
+use crate::process::Pid;
 pub struct ProcessInfoFile;
 
 impl ProcessInfoFile {

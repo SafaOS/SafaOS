@@ -12,7 +12,8 @@ use crate::{
     },
     debug,
     limine::MP_RESPONSE,
-    threading::{CPULocalStorage, SCHEDULER_INITED, cpu_context, process::Process},
+    process::Process,
+    scheduler::{CPULocalStorage, SCHEDULER_INITED, cpu_context},
     utils::locks::Mutex,
 };
 use core::{
@@ -29,7 +30,7 @@ use limine::mp::Cpu;
 use crate::{
     VirtAddr,
     memory::paging::{MapToError, PAGE_SIZE, PhysPageTable},
-    threading::swtch,
+    scheduler::swtch,
 };
 
 use super::gdt::{KERNEL_CODE_SEG, KERNEL_DATA_SEG, USER_CODE_SEG, USER_DATA_SEG};
