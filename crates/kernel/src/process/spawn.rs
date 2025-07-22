@@ -12,7 +12,7 @@ use crate::{
     drivers::vfs::{FSError, expose::File},
     memory::paging::MapToError,
     process::{self, Pid, Process},
-    scheduler::{self, SCHEDULER},
+    scheduler,
     thread::Thread,
     utils::{
         elf::{Elf, ElfError},
@@ -70,7 +70,7 @@ fn spawn_inner(
         path::make_path!("ram", "")
     };
 
-    let new_pid = SCHEDULER.write().add_pid();
+    let new_pid = scheduler::add_pid();
 
     let cwd = Box::new(cwd.into_owned().unwrap());
     let (new_process, root_thread) = create_process(name, current_pid, new_pid, cwd)?;

@@ -86,7 +86,7 @@ unsafe fn timeslices_sub_finished() -> bool {
     }
 }
 
-pub struct Scheduler {
+struct Scheduler {
     processes_queue: ProcessQueue,
     pids: Slab<()>,
 }
@@ -99,154 +99,6 @@ impl Scheduler {
         Self {
             processes_queue: ProcessQueue::new(),
             pids: Slab::new(),
-        }
-    }
-
-    /// inits the scheduler
-    pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &str) -> ! {
-        debug!(Scheduler, "initing ...");
-        without_interrupts(|| {
-            let page_table = unsafe { PhysPageTable::from_current() };
-            let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
-
-            let pid = SCHEDULER.write().add_pid();
-            let (process, root_thread) = Process::create(
-                Name::try_from(name).expect("initial process name too long"),
-                pid,
-                pid,
-                VirtAddr::from(main_function as usize),
-                cwd,
-                &[],
-                &[],
-                unsafe { core::mem::zeroed() },
-                page_table,
-                VirtAddr::null(),
-                None,
-                ContextPriority::Medium,
-                false,
-                None,
-            )
-            .expect("failed to create Eve");
-
-            unsafe {
-                let status = arch::threading::init_cpus(&process, idle_function);
-                let status_ref = status.as_ref();
-                self::add_process(process, root_thread);
-                *SCHEDULER_INITED.get() = true;
-
-                debug!(
-                    Scheduler,
-                    "INITED, jumping to: {:#x} with stack: {:#x} ...",
-                    status_ref.at(),
-                    status_ref.stack_at()
-                );
-                restore_cpu_status(status_ref)
-            }
-        })
-    }
-
-    /// context switches into next process, takes current context outputs new context
-    /// returns the new context and a boolean indicating if the address space has changed
-    /// if the address space has changed, please copy the context to somewhere accessible first
-    pub unsafe fn switch(
-        root_thread_node: &mut ThreadNode,
-        current_thread_node: &mut *mut ThreadNode,
-        current_thread_ptr: *mut Arc<Thread>,
-        current_status: CPUStatus,
-    ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
-        unsafe {
-            let current_thread = &*current_thread_ptr;
-            let current_tid = current_thread.tid();
-            let current_context = current_thread
-                .context()
-                .expect("context is None before the thread is removed");
-            let current_process = current_thread.process();
-            let current_pid = current_process.pid();
-
-            current_context.set_cpu_status(current_status);
-
-            let mut status = current_thread.status_mut();
-            if status.is_running() {
-                *status = ContextStatus::Runnable;
-            }
-            drop(status);
-
-            if !current_process.is_alive() {
-                current_process
-                    .schedule_cleanup
-                    .store(true, core::sync::atomic::Ordering::SeqCst);
-            }
-
-            let mut current_node = *current_thread_node;
-            // FIXME: a lil bit unsafe
-            loop {
-                let (
-                    next_node,
-                    next_is_head, /* BECAREFUL head should be treated specially, especially when muttating */
-                ) = (*current_node)
-                    .next
-                    .as_deref_mut()
-                    .map(|n| (n, false))
-                    .unwrap_or((root_thread_node, true));
-
-                {
-                    let thread = next_node.thread();
-                    let thread_tid = thread.tid();
-                    let process = thread.process();
-
-                    let process_pid = process.pid();
-                    let address_space_changed = process_pid != current_pid;
-
-                    if thread.is_dead() {
-                        debug_assert!(!thread.is_removed());
-
-                        // same tid, same thread, another thread must be the one to mark removal
-                        if !address_space_changed && thread_tid == current_tid {
-                            current_node = next_node;
-                        } else {
-                            thread.mark_removed();
-                            let next = next_node.next.take();
-                            if next_is_head {
-                                *root_thread_node =
-                                    /* all references to the node become invalid here... */
-                                    *next.expect("no more threads to use as the head of the queue");
-                            } else {
-                                (*current_node).next = next;
-                            }
-                        }
-
-                        continue;
-                    }
-
-                    let mut status = thread.status_mut();
-
-                    macro_rules! choose_context {
-                        () => {{
-                            *status = ContextStatus::Running;
-                            let priority = thread.priority();
-
-                            let context = thread.context_unchecked();
-                            let cpu_status = context.cpu_status();
-                            *current_thread_ptr = thread.clone();
-                            drop(status);
-                            *current_thread_node = next_node;
-                            (cpu_status, priority, address_space_changed)
-                        }};
-                    }
-
-                    match &*status {
-                        ContextStatus::Runnable => return choose_context!(),
-                        ContextStatus::Blocked(reason) if reason.block_lifted() => {
-                            return choose_context!();
-                        }
-                        ContextStatus::Blocked(_) => {}
-                        ContextStatus::Running => unreachable!(),
-                    }
-
-                    drop(status);
-                    current_node = next_node;
-                }
-            }
         }
     }
 
@@ -382,6 +234,110 @@ pub(super) unsafe fn before_thread_yield() {
     }
 }
 
+/// context switches into next process, takes current context outputs new context
+/// returns the new context and a boolean indicating if the address space has changed
+unsafe fn switch_inner(
+    root_thread_node: &mut ThreadNode,
+    current_thread_node: &mut *mut ThreadNode,
+    current_thread_ptr: *mut Arc<Thread>,
+    current_status: CPUStatus,
+) -> (NonNull<CPUStatus>, ContextPriority, bool) {
+    unsafe {
+        let current_thread = &*current_thread_ptr;
+        let current_tid = current_thread.tid();
+        let current_context = current_thread
+            .context()
+            .expect("context is None before the thread is removed");
+        let current_process = current_thread.process();
+        let current_pid = current_process.pid();
+
+        current_context.set_cpu_status(current_status);
+
+        let mut status = current_thread.status_mut();
+        if status.is_running() {
+            *status = ContextStatus::Runnable;
+        }
+        drop(status);
+
+        if !current_process.is_alive() {
+            current_process
+                .schedule_cleanup
+                .store(true, core::sync::atomic::Ordering::SeqCst);
+        }
+
+        let mut current_node = *current_thread_node;
+        // FIXME: a lil bit unsafe
+        loop {
+            let (
+                next_node,
+                next_is_head, /* BECAREFUL head should be treated specially, especially when muttating */
+            ) = (*current_node)
+                .next
+                .as_deref_mut()
+                .map(|n| (n, false))
+                .unwrap_or((root_thread_node, true));
+
+            {
+                let thread = next_node.thread();
+                let thread_tid = thread.tid();
+                let process = thread.process();
+
+                let process_pid = process.pid();
+                let address_space_changed = process_pid != current_pid;
+
+                if thread.is_dead() {
+                    debug_assert!(!thread.is_removed());
+
+                    // same tid, same thread, another thread must be the one to mark removal
+                    if !address_space_changed && thread_tid == current_tid {
+                        current_node = next_node;
+                    } else {
+                        thread.mark_removed();
+                        let next = next_node.next.take();
+                        if next_is_head {
+                            *root_thread_node =
+                                    /* all references to the node become invalid here... */
+                                    *next.expect("no more threads to use as the head of the queue");
+                        } else {
+                            (*current_node).next = next;
+                        }
+                    }
+
+                    continue;
+                }
+
+                let mut status = thread.status_mut();
+
+                macro_rules! choose_context {
+                    () => {{
+                        *status = ContextStatus::Running;
+                        let priority = thread.priority();
+
+                        let context = thread.context_unchecked();
+                        let cpu_status = context.cpu_status();
+                        *current_thread_ptr = thread.clone();
+                        drop(status);
+                        *current_thread_node = next_node;
+                        (cpu_status, priority, address_space_changed)
+                    }};
+                }
+
+                match &*status {
+                    ContextStatus::Runnable => return choose_context!(),
+                    ContextStatus::Blocked(reason) if reason.block_lifted() => {
+                        return choose_context!();
+                    }
+                    ContextStatus::Blocked(_) => {}
+                    ContextStatus::Running => unreachable!(),
+                }
+
+                drop(status);
+                current_node = next_node;
+            }
+        }
+    }
+}
+
 #[inline(always)]
 /// performs a context switch using the scheduler, switching to the next process context
 /// to be used
@@ -404,7 +360,7 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
     let (root_thread_node, current_thread_node_ptr) = &mut *queue_lock;
 
     unsafe {
-        let (cpu_status, priority, address_space_changed) = Scheduler::switch(
+        let (cpu_status, priority, address_space_changed) = switch_inner(
             &mut **root_thread_node,
             current_thread_node_ptr,
             local.current_thread.get(),
@@ -416,39 +372,89 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
     }
 }
 
-pub static SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
+static PROCESS_LIST: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 
-/// acquires lock on scheduler and finds a process where executing `condition` on returns true and returns the result of `map` on that process
+/// acquires lock on the process list and finds a process where executing `condition` on returns true and returns the result of `map` on that process
 pub fn find<C, M, R>(condition: C, map: M) -> Option<R>
 where
     C: Fn(&Process) -> bool,
     M: FnMut(&Arc<Process>) -> R,
 {
-    let schd = SCHEDULER.read();
+    let schd = PROCESS_LIST.read();
     schd.find(condition).map(map)
 }
 
-/// acquires lock on scheduler
+/// acquires lock on the process list
 /// executes `then` on each process
 pub fn for_each<T>(then: T)
 where
     T: FnMut(&Process),
 {
-    SCHEDULER.read().for_each(then)
+    PROCESS_LIST.read().for_each(then)
 }
 
-/// acquires lock on scheduler and adds a process to it
+/// acquires lock on the process list and adds a process to it
 pub fn add_process(process: Arc<Process>, root_thread: Arc<Thread>) -> Pid {
-    SCHEDULER.write().add_process(process, root_thread)
+    PROCESS_LIST.write().add_process(process, root_thread)
 }
 
-/// acquires lock on scheduler and adds a thread to it
+/// acquires lock on the process list and adds a thread to it
 pub fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
-    SCHEDULER.write().add_thread(thread, cpu)
+    PROCESS_LIST.write().add_thread(thread, cpu)
 }
 
 /// returns the result of `then` if a process was found
-/// acquires lock on scheduler and removes a process from it where `condition` on the process returns true
+/// acquires lock on the process list and removes a process from it where `condition` on the process returns true
 pub fn remove(condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
-    SCHEDULER.write().remove(condition)
+    PROCESS_LIST.write().remove(condition)
+}
+
+/// Adds a new claimed pid to the process list and returns the pid
+///
+/// the returned pid is guaranteed to be unique and not in use by any other process
+pub fn add_pid() -> Pid {
+    PROCESS_LIST.write().add_pid()
+}
+
+/// inits the scheduler
+pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &str) -> ! {
+    debug!(Scheduler, "initing ...");
+    without_interrupts(|| {
+        let page_table = unsafe { PhysPageTable::from_current() };
+        let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
+
+        let pid = add_pid();
+        let (process, root_thread) = Process::create(
+            Name::try_from(name).expect("initial process name too long"),
+            pid,
+            pid,
+            VirtAddr::from(main_function as usize),
+            cwd,
+            &[],
+            &[],
+            unsafe { core::mem::zeroed() },
+            page_table,
+            VirtAddr::null(),
+            None,
+            ContextPriority::Medium,
+            false,
+            None,
+        )
+        .expect("failed to create Eve");
+
+        unsafe {
+            let status = arch::threading::init_cpus(&process, idle_function);
+            let status_ref = status.as_ref();
+            self::add_process(process, root_thread);
+            *SCHEDULER_INITED.get() = true;
+
+            debug!(
+                Scheduler,
+                "INITED, jumping to: {:#x} with stack: {:#x} ...",
+                status_ref.at(),
+                status_ref.stack_at()
+            );
+            restore_cpu_status(status_ref)
+        }
+    })
 }

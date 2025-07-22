@@ -50,7 +50,6 @@ use globals::*;
 
 pub use memory::PhysAddr;
 pub use memory::VirtAddr;
-use scheduler::Scheduler;
 use spin::Mutex;
 use terminal::FRAMEBUFFER_TERMINAL;
 
@@ -212,9 +211,8 @@ extern "C" fn kstart() -> ! {
     drivers::pci::init();
 
     unsafe {
-        debug!(Scheduler, "Eve starting...");
         logging::BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
-        Scheduler::init(eve::main, eve::idle_function, "Eve");
+        scheduler::init(eve::main, eve::idle_function, "Eve");
     }
 
     #[allow(unreachable_code)]
