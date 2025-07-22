@@ -10,7 +10,7 @@ use core::fmt::Write;
 use crate::utils::path::Path;
 use safa_abi::errors::ErrorStatus;
 
-use super::SyscallFFI;
+use super::ffi::SyscallFFI;
 use crate::thread::{self, Tid};
 use macros::syscall_handler;
 

@@ -1,4 +1,9 @@
-use super::path::Path;
+use crate::{
+    VirtAddr,
+    fs::{DirIter, File},
+};
+
+use crate::utils::path::Path;
 use safa_abi::errors::ErrorStatus;
 
 /// Safely converts FFI [`Self::Args`] into [`Self`] for being passed to a syscall
@@ -161,4 +166,23 @@ impl_ffi_int!(i32);
 impl_ffi_int!(u64);
 impl_ffi_int!(i64);
 
-pub use safa_abi::syscalls::*;
+impl SyscallFFI for File {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        File::from_fd(args).ok_or(ErrorStatus::InvalidResource)
+    }
+}
+
+impl SyscallFFI for DirIter {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        DirIter::from_ri(args).ok_or(ErrorStatus::InvalidResource)
+    }
+}
+
+impl SyscallFFI for VirtAddr {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        Ok(VirtAddr::from(args))
+    }
+}

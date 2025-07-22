@@ -1,36 +1,17 @@
 use safa_abi::errors::{ErrorStatus, SysResult};
 use safa_abi::raw::io::{DirEntry, FileAttr};
+use safa_abi::syscalls::SyscallTable;
 
-use crate::fs::{DirIter, File, FileRef};
+use crate::fs::{DirIter, FileRef};
 use crate::process::Pid;
 use crate::scheduler::resources;
+use crate::syscalls::ffi::SyscallFFI;
 use crate::thread::Tid;
 
 use crate::time;
-use crate::utils::syscalls::{SyscallFFI, SyscallTable};
 use crate::{VirtAddr, arch::power};
 
-impl SyscallFFI for File {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        File::from_fd(args).ok_or(ErrorStatus::InvalidResource)
-    }
-}
-
-impl SyscallFFI for DirIter {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIter::from_ri(args).ok_or(ErrorStatus::InvalidResource)
-    }
-}
-
-impl SyscallFFI for VirtAddr {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        Ok(VirtAddr::from(args))
-    }
-}
-
+mod ffi;
 mod io;
 mod processes;
 mod utils;

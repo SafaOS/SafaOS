@@ -12,6 +12,5 @@ pub mod elf;
 pub mod io;
 pub mod locks;
 pub mod path;
-pub mod syscalls;
 pub mod types;
 pub mod ustar;

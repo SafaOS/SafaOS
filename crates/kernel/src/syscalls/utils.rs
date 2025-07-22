@@ -5,7 +5,7 @@ use core::fmt::Write;
 use macros::syscall_handler;
 use safa_abi::errors::ErrorStatus;
 
-use super::SyscallFFI;
+use super::ffi::SyscallFFI;
 use crate::VirtAddr;
 
 #[syscall_handler]

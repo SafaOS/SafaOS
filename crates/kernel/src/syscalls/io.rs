@@ -1,4 +1,4 @@
-use super::SyscallFFI;
+use super::ffi::SyscallFFI;
 use crate::{
     drivers::vfs::{CtlArgs, FSResult},
     fs::{self, DirIterRef, FileRef},
