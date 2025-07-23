@@ -59,7 +59,7 @@ impl<'a, T> RawSlice<'a, T> {
         Some(if self.len == 0 {
             &[]
         } else {
-            core::slice::from_raw_parts(self.ptr, self.len)
+            unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
         })
     }
 }
@@ -117,7 +117,7 @@ impl<'a, T> RawSliceMut<'a, T> {
         Some(if self.len == 0 {
             &mut []
         } else {
-            core::slice::from_raw_parts_mut(self.ptr, self.len)
+            unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
         })
     }
 }
