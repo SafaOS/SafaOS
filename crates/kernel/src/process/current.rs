@@ -100,7 +100,7 @@ pub fn wake_futex(addr: *mut u32, num_threads: usize) -> usize {
 }
 
 use safa_abi::errors::ErrorStatus;
-use safa_abi::raw::processes::ContextPriority;
+use safa_abi::process::ContextPriority;
 
 /// extends program break by `amount`
 /// returns the new program break ptr

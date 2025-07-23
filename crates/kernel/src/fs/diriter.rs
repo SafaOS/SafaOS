@@ -1,6 +1,6 @@
 use core::{mem::ManuallyDrop, ops::Deref};
 
-use safa_abi::raw::io::DirEntry;
+use safa_abi::fs::DirEntry;
 
 use crate::{
     drivers::vfs::CollectionIterDescriptor,

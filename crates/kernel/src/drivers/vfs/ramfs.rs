@@ -8,7 +8,7 @@ use crate::utils::path::PathParts;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use hashbrown::{DefaultHashBuilder, HashMap};
-use safa_abi::raw::io::{DirEntry, FileAttr};
+use safa_abi::fs::{DirEntry, FileAttr};
 
 use crate::devices::Device;
 
@@ -514,7 +514,7 @@ impl FileSystem for RwLock<RamFS> {
         Ok(children.into_boxed_slice())
     }
 
-    fn attrs_of(&self, id: FSObjectID) -> safa_abi::raw::io::FileAttr {
+    fn attrs_of(&self, id: FSObjectID) -> safa_abi::fs::FileAttr {
         let read_guard = self.read();
         let obj = read_guard.fget(id).expect("Object not found in the ramfs");
         obj.attrs()

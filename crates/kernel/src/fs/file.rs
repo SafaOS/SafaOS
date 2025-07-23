@@ -1,6 +1,6 @@
 use core::{mem::ManuallyDrop, ops::Deref};
 
-use safa_abi::raw::io::{FSObjectType, FileAttr, OpenOptions};
+use safa_abi::fs::{FSObjectType, FileAttr, OpenOptions};
 
 use crate::{
     drivers::vfs::{CtlArgs, FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},

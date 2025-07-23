@@ -15,7 +15,7 @@ use crate::{
 use hashbrown::HashMap;
 use safa_abi::{
     errors::{ErrorStatus, IntoErr},
-    raw::io::{DirEntry, FileAttr},
+    fs::{DirEntry, FileAttr},
 };
 use thiserror::Error;
 
@@ -33,7 +33,7 @@ use crate::utils::{
 };
 use alloc::{boxed::Box, sync::Arc};
 use lazy_static::lazy_static;
-use safa_abi::raw::io::OpenOptions;
+use safa_abi::fs::OpenOptions;
 
 lazy_static! {
     pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
@@ -276,7 +276,7 @@ impl<'a> CtlArgs<'a> {
     }
 }
 
-pub use safa_abi::raw::io::FSObjectType;
+pub use safa_abi::fs::FSObjectType;
 
 pub fn resolve_path_parts<F>(
     root_obj_id: FSObjectID,

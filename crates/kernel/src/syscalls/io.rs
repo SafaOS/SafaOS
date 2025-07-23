@@ -8,7 +8,7 @@ use crate::{
 use macros::syscall_handler;
 use safa_abi::{
     errors::ErrorStatus,
-    raw::io::{DirEntry, FileAttr, OpenOptions},
+    fs::{DirEntry, FileAttr, OpenOptions},
 };
 
 impl SyscallFFI for FileRef {

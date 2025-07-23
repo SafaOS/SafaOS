@@ -1,6 +1,7 @@
+//! Process & Thread related ABI structures
 use core::{ops::BitOr, ptr::NonNull};
 
-use super::{Optional, RawSlice, RawSliceMut};
+use crate::ffi::{Optional, RawSlice, RawSliceMut};
 
 /// Describes information about a thread local storage, passed to the thread in the userspace
 #[derive(Debug, Clone)]
@@ -91,45 +92,44 @@ impl ContextPriority {
 
 /// configuration for the spawn syscall
 #[repr(C)]
-pub struct PSpawnConfig {
+pub struct PSpawnConfig<'a> {
     /// config version for compatibility
     /// added in kernel version 0.2.1 and therefore breaking compatibility with any program compiled for version below 0.2.1
     /// revision 1: added env
     /// revision 2: added priority (v0.4.0)
     /// revision 3: added custom stack size (v0.4.0)
     pub revision: u8,
-    pub name: RawSlice<u8>,
-    pub argv: RawSliceMut<RawSlice<u8>>,
+    pub name: RawSlice<'a, u8>,
+    pub argv: RawSliceMut<'a, RawSlice<'a, u8>>,
     pub flags: SpawnFlags,
+    _reserved: [u8; 7],
     pub stdio: *const ProcessStdio,
     /// revision 1 and above
-    pub env: RawSliceMut<RawSlice<u8>>,
+    pub env: RawSliceMut<'a, RawSlice<'a, u8>>,
     /// revision 2 and above
     pub priority: Optional<ContextPriority>,
     /// revision 3 and above
     pub custom_stack_size: Optional<usize>,
 }
 
-impl PSpawnConfig {
+impl<'a> PSpawnConfig<'a> {
+    #[inline]
     pub fn new(
-        name: &str,
-        argv: *mut [&[u8]],
-        env: *mut [&[u8]],
+        name: RawSlice<'a, u8>,
+        argv: RawSliceMut<'a, RawSlice<'a, u8>>,
+        env: RawSliceMut<'a, RawSlice<'a, u8>>,
         flags: SpawnFlags,
-        stdio: &ProcessStdio,
-        priority: Option<ContextPriority>,
-        custom_stack_size: Option<usize>,
+        stdio: &'a ProcessStdio,
+        priority: Optional<ContextPriority>,
+        custom_stack_size: Optional<usize>,
     ) -> Self {
-        let name = unsafe { RawSlice::from_slice(name.as_bytes()) };
-        let argv = unsafe { RawSliceMut::from_slices(argv) };
-        let env = unsafe { RawSliceMut::from_slices(env) };
-
         Self {
             revision: 3,
             name,
             argv,
             env,
             flags,
+            _reserved: [0; 7],
             stdio: stdio as *const ProcessStdio,
             priority: priority.into(),
             custom_stack_size: custom_stack_size.into(),

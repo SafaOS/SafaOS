@@ -4,7 +4,7 @@ use crate::thread::{self, ContextPriority};
 use crate::utils::types::Name;
 use crate::{process, utils::path::make_path};
 
-use safa_abi::raw::processes::ProcessStdio;
+use safa_abi::process::ProcessStdio;
 
 #[test_case]
 fn spawn_test() {

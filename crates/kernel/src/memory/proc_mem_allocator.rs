@@ -3,7 +3,7 @@
 
 use core::hint::unlikely;
 
-use safa_abi::raw::RawSlice;
+use safa_abi::ffi::RawSlice;
 
 use crate::{
     VirtAddr,

@@ -16,7 +16,7 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use hashbrown::HashMap;
-use safa_abi::raw::io::{DirEntry, FSObjectType, FileAttr};
+use safa_abi::fs::{DirEntry, FSObjectType, FileAttr};
 
 type OpaqueRodFSObjID = u32;
 

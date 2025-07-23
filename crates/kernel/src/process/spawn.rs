@@ -1,10 +1,9 @@
 //! This module contains functions related to creating (spawn)ing new processes.
 use alloc::{boxed::Box, sync::Arc};
 use bitflags::bitflags;
-use safa_abi::raw::{
-    self,
-    io::FSObjectType,
-    processes::{ContextPriority, ProcessStdio},
+use safa_abi::{
+    fs::FSObjectType,
+    process::{ContextPriority, ProcessStdio},
 };
 use thiserror::Error;
 
@@ -31,14 +30,13 @@ bitflags! {
     }
 }
 
-impl From<raw::processes::SpawnFlags> for SpawnFlags {
-    fn from(value: raw::processes::SpawnFlags) -> Self {
+impl From<safa_abi::process::SpawnFlags> for SpawnFlags {
+    fn from(value: safa_abi::process::SpawnFlags) -> Self {
         unsafe { Self::from_bits_retain(core::mem::transmute(value)) }
     }
 }
 
 #[derive(Debug, Clone, Error)]
-
 pub enum SpawnError {
     #[error("failed to map memory: {0}")]
     MapToError(#[from] MapToError),

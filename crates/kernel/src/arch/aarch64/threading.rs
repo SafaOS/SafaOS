@@ -8,7 +8,7 @@ use core::{
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use limine::mp::Cpu;
-use safa_abi::raw::processes::ContextPriority;
+use safa_abi::process::ContextPriority;
 
 #[cfg(debug_assertions)]
 use crate::sleep_until;

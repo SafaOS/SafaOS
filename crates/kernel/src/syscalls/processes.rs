@@ -1,7 +1,5 @@
-use safa_abi::raw::{
-    RawSlice, RawSliceMut,
-    processes::{ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig},
-};
+use safa_abi::ffi::{RawSlice, RawSliceMut};
+use safa_abi::process::{ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig};
 
 use crate::process::{self, Pid, spawn::SpawnFlags};
 use crate::{VirtAddr, utils::types::Name};
@@ -136,13 +134,13 @@ fn syspspawn(
     config: &PSpawnConfig,
     dest_pid: Option<&mut Pid>,
 ) -> Result<(), ErrorStatus> {
-    fn as_rust(
-        this: &PSpawnConfig,
+    fn as_rust<'a>(
+        this: &PSpawnConfig<'a>,
     ) -> Result<
         (
-            Option<&str>,
-            &[&str],
-            &[&[u8]],
+            Option<&'a str>,
+            &'a [&'a str],
+            &'a [&'a [u8]],
             SpawnFlags,
             Option<ProcessStdio>,
             Option<ContextPriority>,
@@ -154,7 +152,7 @@ fn syspspawn(
         let argv = into_args_slice(&this.argv)?;
         let env = into_bytes_slice(&this.env)?;
 
-        let stdio: Option<&safa_abi::raw::processes::ProcessStdio> = if this.revision >= 1 {
+        let stdio: Option<&safa_abi::process::ProcessStdio> = if this.revision >= 1 {
             Option::make(this.stdio)?
         } else {
             None

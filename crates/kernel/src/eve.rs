@@ -11,8 +11,8 @@ use crate::utils::path::make_path;
 use crate::{debug, fs, logging, process};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
-use safa_abi::raw::io::OpenOptions;
-use safa_abi::raw::processes::ProcessStdio;
+use safa_abi::fs::OpenOptions;
+use safa_abi::process::ProcessStdio;
 use spin::Lazy;
 
 pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {

@@ -72,7 +72,7 @@ impl ContextStatus {
 }
 
 use alloc::{boxed::Box, sync::Arc};
-pub use safa_abi::raw::processes::ContextPriority;
+pub use safa_abi::process::ContextPriority;
 
 #[derive(Debug, Clone)]
 /// A node representing a Thread in a thread queue

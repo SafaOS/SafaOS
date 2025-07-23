@@ -1,5 +1,5 @@
 use safa_abi::errors::{ErrorStatus, SysResult};
-use safa_abi::raw::io::{DirEntry, FileAttr};
+use safa_abi::fs::{DirEntry, FileAttr};
 use safa_abi::syscalls::SyscallTable;
 
 use crate::fs::{DirIter, FileRef};

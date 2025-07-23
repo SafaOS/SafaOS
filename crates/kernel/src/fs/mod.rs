@@ -14,7 +14,7 @@ pub use file::*;
 mod diriter;
 pub use diriter::*;
 
-use safa_abi::raw::io::DirEntry;
+use safa_abi::fs::DirEntry;
 
 /// Get directory entry information for the specified path.
 pub fn get_direntry(path: Path) -> FSResult<DirEntry> {

@@ -8,8 +8,8 @@ use crate::{
     eve::KERNEL_STDIO,
     info, sleep,
 };
-use safa_abi::raw::io::OpenOptions;
-use safa_abi::raw::processes::ProcessStdio;
+use safa_abi::fs::OpenOptions;
+use safa_abi::process::ProcessStdio;
 
 #[macro_export]
 macro_rules! test_log {
