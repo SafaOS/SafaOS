@@ -477,7 +477,7 @@ impl Process {
         let (_, _, argv_start) = proc_mem_allocator
             .allocate_filled_with_slices(unsafe { core::mem::transmute(args) }, 0x10)?;
 
-        let structures = AbiStructures::new(stdio, pid);
+        let structures = AbiStructures::new(stdio, pid, crate::arch::available_cpus());
         let (abi_structures_start, _) = proc_mem_allocator.allocate_filled_with(
             &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) }[..],
             align_of::<AbiStructures>(),

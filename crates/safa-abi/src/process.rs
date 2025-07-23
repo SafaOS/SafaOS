@@ -25,11 +25,14 @@ pub struct AbiStructures {
     pub stdio: ProcessStdio,
     /// The PID of the parent process of this thread
     pub parent_process_pid: u32,
+    /// The number of available CPUs for this process (currently the number of available CPUs in the system)
+    pub available_cpus: u32,
 }
 
 impl AbiStructures {
-    pub fn new(stdio: ProcessStdio, parent_pid: u32) -> Self {
+    pub fn new(stdio: ProcessStdio, parent_pid: u32, available_cpus: u32) -> Self {
         Self {
+            available_cpus,
             stdio,
             parent_process_pid: parent_pid,
         }

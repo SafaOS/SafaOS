@@ -51,3 +51,16 @@ pub mod interrupts {
 }
 
 pub use arch::paging;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref CPU_COUNT: u32 = {
+        use crate::limine::MP_RESPONSE;
+        (MP_RESPONSE.cpus().len()) as u32
+    };
+}
+/// Returns the number of available CPUs
+#[inline]
+pub fn available_cpus() -> u32 {
+    *CPU_COUNT
+}
