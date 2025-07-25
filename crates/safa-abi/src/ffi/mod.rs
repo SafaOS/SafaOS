@@ -2,6 +2,7 @@
 //!
 //! for example exports [`RawSlice<T>`] which is an FFI safe alternative to `&[T]`
 
+pub mod num;
 pub mod option;
 pub mod ptr;
 pub mod slice;

@@ -1,5 +1,6 @@
 use core::{
     mem::ManuallyDrop,
+    num::NonZero,
     ptr::NonNull,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
@@ -7,7 +8,7 @@ use core::{
 use crate::{
     arch::paging::PageTable,
     memory::{
-        AlignToPage, copy_to_userspace, proc_mem_allocator::ProcessMemAllocator,
+        AlignTo, AlignToPage, copy_to_userspace, proc_mem_allocator::ProcessMemAllocator,
         userspace_copy_within,
     },
     scheduler,
@@ -391,10 +392,13 @@ impl Process {
 
     fn allocate_stack_inner(
         allocator: &mut ProcessMemAllocator,
-        custom_stack_size: Option<usize>,
+        custom_stack_size: Option<NonZero<usize>>,
     ) -> Result<TrackedAllocation, MapToError> {
         allocator.allocate_tracked_guraded(
-            custom_stack_size.unwrap_or(DEFAULT_STACK_SIZE),
+            custom_stack_size
+                .map(|v| v.get())
+                .unwrap_or(DEFAULT_STACK_SIZE)
+                .to_next_multiple_of(0x10usize),
             PAGE_SIZE,
             GUARD_PAGES_COUNT,
         )
@@ -402,7 +406,7 @@ impl Process {
 
     fn allocate_stack(
         &self,
-        custom_stack_size: Option<usize>,
+        custom_stack_size: Option<NonZero<usize>>,
     ) -> Result<TrackedAllocation, MapToError> {
         Self::allocate_stack_inner(&mut *self.allocator.lock(), custom_stack_size)
     }
@@ -461,7 +465,7 @@ impl Process {
         master_tls: Option<(VirtAddr, usize, usize)>,
         default_priority: ContextPriority,
         userspace_process: bool,
-        custom_stack_size: Option<usize>,
+        custom_stack_size: Option<NonZero<usize>>,
     ) -> Result<(Arc<Self>, Arc<Thread>), MapToError> {
         let data_break = data_break.to_next_page();
         let mut root_page_table = root_page_table;
@@ -574,7 +578,7 @@ impl Process {
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
-        custom_stack_size: Option<usize>,
+        custom_stack_size: Option<NonZero<usize>>,
     ) -> Result<(Arc<Thread>, Tid), MapToError> {
         let context_id = process.next_tid.fetch_add(1, Ordering::SeqCst);
         let thread = Self::create_thread_from_process_owned(
@@ -598,7 +602,7 @@ impl Process {
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
-        custom_stack_size: Option<usize>,
+        custom_stack_size: Option<NonZero<usize>>,
     ) -> Result<Thread, MapToError> {
         let user_stack_tracker = process.allocate_stack(custom_stack_size)?;
         let kernel_stack_tracker = process.allocate_stack(custom_stack_size)?;
@@ -654,7 +658,7 @@ impl Process {
         env: &[&[u8]],
         default_priority: ContextPriority,
         stdio: ProcessStdio,
-        custom_stack_size: Option<usize>,
+        custom_stack_size: Option<NonZero<usize>>,
     ) -> Result<(Arc<Self>, Arc<Thread>), ElfError> {
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;

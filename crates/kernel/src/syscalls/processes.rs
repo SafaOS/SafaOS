@@ -4,6 +4,7 @@ use crate::process::spawn::PSpawnConfig;
 use crate::process::{self, Pid, spawn::SpawnFlags};
 use crate::{VirtAddr, utils::types::Name};
 use core::fmt::Write;
+use core::num::NonZero;
 
 use crate::utils::path::Path;
 use safa_abi::errors::ErrorStatus;
@@ -64,7 +65,7 @@ fn syspspawn_inner(
     flags: SpawnFlags,
     priority: ContextPriority,
     stdio: Option<ProcessStdio>,
-    custom_stack_size: Option<usize>,
+    custom_stack_size: Option<NonZero<usize>>,
 ) -> Result<Pid, ErrorStatus> {
     let name = match name {
         Some(raw) => Name::try_from(raw).map_err(|()| ErrorStatus::StrTooLong)?,
@@ -124,7 +125,7 @@ struct TSpawnConfig {
     argument_ptr: VirtAddr,
     priority: Option<ContextPriority>,
     cpu: Option<u8>,
-    custom_stack_size: Option<usize>,
+    custom_stack_size: Option<NonZero<usize>>,
 }
 
 impl TryFrom<&RawTSpawnConfig> for TSpawnConfig {

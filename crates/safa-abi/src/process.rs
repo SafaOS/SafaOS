@@ -1,6 +1,8 @@
 //! Process & Thread related ABI structures
+use core::num::NonZero;
 use core::{ops::BitOr, ptr::NonNull};
 
+use crate::ffi::num::ShouldNotBeZero;
 use crate::ffi::option::{COption, OptZero};
 use crate::ffi::ptr::FFINonNull;
 use crate::ffi::slice::Slice;
@@ -105,29 +107,32 @@ pub struct RawPSpawnConfig {
     /// revision 2: added priority (v0.4.0)
     /// revision 3: added custom stack size (v0.4.0)
     pub revision: u8,
+    _reserved: [u8; 7],
     pub name: OptZero<Str>,
     pub argv: OptZero<Slice<Str>>,
     pub flags: SpawnFlags,
-    _reserved: [u8; 7],
+    _reserved1: [u8; 7],
     pub stdio: OptZero<FFINonNull<ProcessStdio>>,
     /// revision 1 and above
     pub env: OptZero<Slice<Slice<u8>>>,
     /// revision 2 and above
     pub priority: COption<ContextPriority>,
+    _reserved2: [u8; 6],
     /// revision 3 and above
-    pub custom_stack_size: COption<usize>,
+    pub custom_stack_size: OptZero<ShouldNotBeZero<usize>>,
 }
 
 impl RawPSpawnConfig {
-    #[inline]
-    pub fn new(
+    /// Creates a new process spawn configuration with the latest revision from raw FFI values
+    #[inline(always)]
+    pub const fn new_from_raw(
         name: OptZero<Str>,
         argv: OptZero<Slice<Str>>,
         env: OptZero<Slice<Slice<u8>>>,
         flags: SpawnFlags,
         stdio: OptZero<FFINonNull<ProcessStdio>>,
         priority: COption<ContextPriority>,
-        custom_stack_size: COption<usize>,
+        custom_stack_size: OptZero<ShouldNotBeZero<usize>>,
     ) -> Self {
         Self {
             revision: 3,
@@ -135,11 +140,44 @@ impl RawPSpawnConfig {
             argv,
             env,
             flags,
-            _reserved: [0; 7],
             stdio,
-            priority: priority.into(),
-            custom_stack_size: custom_stack_size.into(),
+            priority,
+            custom_stack_size,
+            _reserved2: [0; 6],
+            _reserved1: [0; 7],
+            _reserved: [0; 7],
         }
+    }
+
+    #[inline]
+    /// Construct a new process spawn configuration from the given rust parameters.
+    ///
+    /// # Safety
+    /// The given parameters must live as long as the returned value is alive, because currently this doesn't have any lifetime bounds.
+    ///
+    /// `argv` and `envv` may be reused to store their FFI representations,
+    /// even though nothing should change because the layout matches the rust representation, it is still not exactly guaranteed
+    /// but this should be resolved through this [RFC](https://github.com/rust-lang/rfcs/pull/3775)
+    pub unsafe fn new<'a>(
+        name: Option<&'a str>,
+        argv: Option<&'a mut [*mut str]>,
+        envv: Option<&'a mut [*mut [u8]]>,
+        flags: SpawnFlags,
+        stdio: Option<&'a ProcessStdio>,
+        priority: Option<ContextPriority>,
+        custom_stack_size: Option<NonZero<usize>>,
+    ) -> Self {
+        Self::new_from_raw(
+            OptZero::from_option(name.map(|s| Str::from_str(s))),
+            OptZero::from_option(argv.map(|v| unsafe { Slice::from_str_slices_mut(v) })),
+            OptZero::from_option(envv.map(|v| unsafe { Slice::from_slices_ptr_mut(v) })),
+            flags,
+            OptZero::from_option(
+                stdio.map(|v| unsafe { FFINonNull::new_unchecked(v as *const _ as *mut _) }),
+            ),
+            priority.into(),
+            OptZero::from_option(custom_stack_size.map(|v| v.into())),
+        )
     }
 }
 
@@ -149,30 +187,52 @@ impl RawPSpawnConfig {
 pub struct RawTSpawnConfig {
     /// revision 1: added custom stack size
     pub revision: u32,
-    __reserved: u32,
+    _reserved: u32,
     pub argument_ptr: *const (),
     pub priority: COption<ContextPriority>,
     /// The index of the CPU to append to, if it is None the kernel will choose one, use `0` for the boot CPU
     pub cpu: COption<u8>,
+    _reserved1: u32,
     /// revision 1 and above
-    pub custom_stack_size: COption<usize>,
+    pub custom_stack_size: OptZero<ShouldNotBeZero<usize>>,
 }
 
 impl RawTSpawnConfig {
+    #[inline(always)]
+    /// Creates a new thread spawn configuration with the latest revision from raw FFI values
+    pub const fn new_from_raw(
+        argument_ptr: *const (),
+        priority: COption<ContextPriority>,
+        cpu: COption<u8>,
+        custom_stack_size: OptZero<ShouldNotBeZero<usize>>,
+    ) -> Self {
+        Self {
+            revision: 1,
+            _reserved1: 0,
+            _reserved: 0,
+            argument_ptr,
+            priority,
+            cpu,
+            custom_stack_size,
+        }
+    }
+
+    #[inline]
     /// Create a new thread spawn configuration with the latest revision
     pub fn new(
         argument_ptr: *const (),
         priority: Option<ContextPriority>,
         cpu: Option<u8>,
-        custom_stack_size: Option<usize>,
+        custom_stack_size: Option<NonZero<usize>>,
     ) -> Self {
-        Self {
-            revision: 1,
-            __reserved: 0,
+        Self::new_from_raw(
             argument_ptr,
-            priority: priority.into(),
-            cpu: cpu.into(),
-            custom_stack_size: custom_stack_size.into(),
-        }
+            priority.into(),
+            cpu.into(),
+            match custom_stack_size {
+                Some(size) => OptZero::some(unsafe { ShouldNotBeZero::new_unchecked(size.get()) }),
+                None => OptZero::none(),
+            },
+        )
     }
 }

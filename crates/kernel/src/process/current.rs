@@ -1,5 +1,7 @@
 //! This module contains functions related to the current process.
 
+use core::num::NonZero;
+
 use crate::arch::without_interrupts;
 use crate::memory::paging::MapToError;
 use crate::process::{Pid, Process};
@@ -24,7 +26,7 @@ pub fn thread_spawn(
     argument_ptr: VirtAddr,
     priority: Option<ContextPriority>,
     cpu: Option<usize>,
-    custom_stack_size: Option<usize>,
+    custom_stack_size: Option<NonZero<usize>>,
 ) -> Result<Tid, MapToError> {
     let this = process::current();
     let (thread, cid) = Process::add_thread_to_process(

@@ -1,4 +1,6 @@
 //! This module contains functions related to creating (spawn)ing new processes.
+use core::num::NonZero;
+
 use alloc::{boxed::Box, sync::Arc};
 use bitflags::bitflags;
 use safa_abi::{
@@ -126,7 +128,7 @@ fn spawn<T: Readable>(
     flags: SpawnFlags,
     priority: ContextPriority,
     stdio: ProcessStdio,
-    custom_stack_size: Option<usize>,
+    custom_stack_size: Option<NonZero<usize>>,
 ) -> Result<Pid, SpawnError> {
     spawn_inner(name, flags, stdio, |name: Name, ppid, pid, cwd| {
         let elf = Elf::new(reader)?;
@@ -155,7 +157,7 @@ pub fn pspawn(
     flags: SpawnFlags,
     priority: ContextPriority,
     stdio: ProcessStdio,
-    custom_stack_size: Option<usize>,
+    custom_stack_size: Option<NonZero<usize>>,
 ) -> Result<Pid, FSError> {
     let file = File::open_all(path)?;
 
@@ -186,7 +188,7 @@ pub struct PSpawnConfig<'a> {
     stdio: Option<ProcessStdio>,
 
     priority: Option<ContextPriority>,
-    custom_stack_size: Option<usize>,
+    custom_stack_size: Option<NonZero<usize>>,
     flags: SpawnFlags,
 }
 
@@ -211,7 +213,7 @@ impl<'a> TryFrom<&'a RawPSpawnConfig> for PSpawnConfig<'a> {
             None
         };
 
-        let custom_stack_size: Option<usize> = if value.revision >= 3 {
+        let custom_stack_size: Option<NonZero<usize>> = if value.revision >= 3 {
             value.custom_stack_size.into()
         } else {
             None
@@ -258,7 +260,7 @@ impl<'a> PSpawnConfig<'a> {
         self.priority
     }
 
-    pub const fn custom_stack_size(&self) -> Option<usize> {
+    pub const fn custom_stack_size(&self) -> Option<NonZero<usize>> {
         self.custom_stack_size
     }
 

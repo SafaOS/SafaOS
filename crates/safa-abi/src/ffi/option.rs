@@ -29,7 +29,9 @@ impl<T> From<COption<T>> for Option<T> {
     }
 }
 
-/// Represents an optional value, wraps an FFI type that SHOULD be non zeroable, and provides a safe way to handle zero values as None
+/// Represents an Option where a zero value is considered None.
+///
+/// Wraps an FFI type that SHOULD be non zeroable, and provides a safe way to handle zero values as None
 ///
 /// The reason why i used "SHOULD" is because that type may be zeroed if passed from a foreign callsite so extra handling is required, this type makes it safe for it to be zeroed.
 #[derive(Clone, Copy, Hash, Default)]
