@@ -1,4 +1,5 @@
-use safa_abi::process::{ContextPriority, ProcessStdio, RawPSpawnConfig, RawTSpawnConfig};
+use crate::thread::ContextPriority;
+use safa_abi::process::{ProcessStdio, RawContextPriority, RawPSpawnConfig, RawTSpawnConfig};
 
 use crate::process::spawn::PSpawnConfig;
 use crate::process::{self, Pid, spawn::SpawnFlags};
@@ -111,7 +112,7 @@ fn syspspawn(
         argv,
         env,
         flags,
-        priority.unwrap_or(ContextPriority::Medium),
+        priority,
         stdio,
         custom_stack_size,
     )?;
@@ -132,7 +133,13 @@ impl TryFrom<&RawTSpawnConfig> for TSpawnConfig {
     type Error = ErrorStatus;
     fn try_from(value: &RawTSpawnConfig) -> Result<Self, Self::Error> {
         let argument_ptr = VirtAddr::from_ptr(value.argument_ptr);
-        let priority = value.priority.into();
+        let priority = match value.priority {
+            RawContextPriority::Default => None,
+            RawContextPriority::Medium => Some(ContextPriority::Medium),
+            RawContextPriority::Low => Some(ContextPriority::Low),
+            RawContextPriority::High => Some(ContextPriority::High),
+        };
+
         let cpu = value.cpu.into();
         let custom_stack_size = if value.revision >= 1 {
             value.custom_stack_size.into()

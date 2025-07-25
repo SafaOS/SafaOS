@@ -6,9 +6,9 @@ use core::{
     sync::atomic::AtomicUsize,
 };
 
+use crate::thread::ContextPriority;
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use limine::mp::Cpu;
-use safa_abi::process::ContextPriority;
 
 #[cfg(debug_assertions)]
 use crate::sleep_until;

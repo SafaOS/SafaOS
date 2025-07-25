@@ -5,7 +5,7 @@ use alloc::{boxed::Box, sync::Arc};
 use bitflags::bitflags;
 use safa_abi::{
     fs::FSObjectType,
-    process::{ContextPriority, ProcessStdio, RawPSpawnConfig},
+    process::{ProcessStdio, RawPSpawnConfig},
 };
 use thiserror::Error;
 
@@ -15,7 +15,7 @@ use crate::{
     memory::paging::MapToError,
     process::{self, Pid, Process},
     scheduler,
-    thread::Thread,
+    thread::{ContextPriority, Thread},
     utils::{
         elf::{Elf, ElfError},
         io::Readable,
@@ -187,7 +187,7 @@ pub struct PSpawnConfig<'a> {
     envv: Option<&'a [&'a [u8]]>,
     stdio: Option<ProcessStdio>,
 
-    priority: Option<ContextPriority>,
+    priority: ContextPriority,
     custom_stack_size: Option<NonZero<usize>>,
     flags: SpawnFlags,
 }
@@ -207,10 +207,10 @@ impl<'a> TryFrom<&'a RawPSpawnConfig> for PSpawnConfig<'a> {
             None
         };
 
-        let priority: Option<ContextPriority> = if value.revision >= 2 {
+        let priority: ContextPriority = if value.revision >= 2 {
             value.priority.into()
         } else {
-            None
+            ContextPriority::Medium
         };
 
         let custom_stack_size: Option<NonZero<usize>> = if value.revision >= 3 {
@@ -256,7 +256,7 @@ impl<'a> PSpawnConfig<'a> {
         self.stdio.as_ref()
     }
 
-    pub const fn priority(&self) -> Option<ContextPriority> {
+    pub const fn priority(&self) -> ContextPriority {
         self.priority
     }
 

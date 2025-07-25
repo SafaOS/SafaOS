@@ -17,6 +17,35 @@ pub mod current;
 /// Thread ID, a unique identifier for a thread.
 pub type Tid = u32;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ContextPriority {
+    Low,
+    Medium,
+    High,
+}
+
+impl ContextPriority {
+    /// Returns the number of timeslices a thread with this priority should be given.
+    pub const fn timeslices(&self) -> u32 {
+        match self {
+            Self::Low => 1,
+            Self::Medium => 3,
+            Self::High => 5,
+        }
+    }
+}
+
+impl From<RawContextPriority> for ContextPriority {
+    fn from(value: RawContextPriority) -> Self {
+        match value {
+            RawContextPriority::Default => Self::Medium,
+            RawContextPriority::High => Self::High,
+            RawContextPriority::Medium => Self::Medium,
+            RawContextPriority::Low => Self::Low,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum BlockedReason {
     /// The thread is sleeping until [`.0`] ms of boot time is reached
@@ -72,7 +101,7 @@ impl ContextStatus {
 }
 
 use alloc::{boxed::Box, sync::Arc};
-pub use safa_abi::process::ContextPriority;
+use safa_abi::process::RawContextPriority;
 
 #[derive(Debug, Clone)]
 /// A node representing a Thread in a thread queue

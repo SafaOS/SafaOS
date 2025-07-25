@@ -81,21 +81,15 @@ impl BitOr for SpawnFlags {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextPriority {
-    Low,
-    Medium,
-    High,
-}
-
-impl ContextPriority {
-    /// Returns the number of timeslices a thread with this priority should be given.
-    pub const fn timeslices(&self) -> u32 {
-        match self {
-            Self::Low => 1,
-            Self::Medium => 3,
-            Self::High => 5,
-        }
-    }
+pub enum RawContextPriority {
+    /// Default priority, used when no custom priority is specified, the behaviour is not clearly defined if you choose this priority, but it should be the default,
+    /// currently the kernel will use the Medium priority if this was passed to the SysPSpawn syscall, later on it could inherit the priority of the parent process
+    ///
+    /// Incase of the SysTSpawn syscall, the kernel will inherit the priority of the parent process
+    Default = 0,
+    Low = 1,
+    Medium = 2,
+    High = 3,
 }
 
 /// configuration for the spawn syscall
@@ -116,8 +110,8 @@ pub struct RawPSpawnConfig {
     /// revision 1 and above
     pub env: OptZero<Slice<Slice<u8>>>,
     /// revision 2 and above
-    pub priority: COption<ContextPriority>,
-    _reserved2: [u8; 6],
+    pub priority: RawContextPriority,
+    _reserved2: [u8; 7],
     /// revision 3 and above
     pub custom_stack_size: OptZero<ShouldNotBeZero<usize>>,
 }
@@ -131,7 +125,7 @@ impl RawPSpawnConfig {
         env: OptZero<Slice<Slice<u8>>>,
         flags: SpawnFlags,
         stdio: OptZero<FFINonNull<ProcessStdio>>,
-        priority: COption<ContextPriority>,
+        priority: RawContextPriority,
         custom_stack_size: OptZero<ShouldNotBeZero<usize>>,
     ) -> Self {
         Self {
@@ -143,7 +137,7 @@ impl RawPSpawnConfig {
             stdio,
             priority,
             custom_stack_size,
-            _reserved2: [0; 6],
+            _reserved2: [0; 7],
             _reserved1: [0; 7],
             _reserved: [0; 7],
         }
@@ -164,7 +158,7 @@ impl RawPSpawnConfig {
         envv: Option<&'a mut [*mut [u8]]>,
         flags: SpawnFlags,
         stdio: Option<&'a ProcessStdio>,
-        priority: Option<ContextPriority>,
+        priority: RawContextPriority,
         custom_stack_size: Option<NonZero<usize>>,
     ) -> Self {
         Self::new_from_raw(
@@ -175,7 +169,7 @@ impl RawPSpawnConfig {
             OptZero::from_option(
                 stdio.map(|v| unsafe { FFINonNull::new_unchecked(v as *const _ as *mut _) }),
             ),
-            priority.into(),
+            priority,
             OptZero::from_option(custom_stack_size.map(|v| v.into())),
         )
     }
@@ -189,10 +183,10 @@ pub struct RawTSpawnConfig {
     pub revision: u32,
     _reserved: u32,
     pub argument_ptr: *const (),
-    pub priority: COption<ContextPriority>,
+    pub priority: RawContextPriority,
     /// The index of the CPU to append to, if it is None the kernel will choose one, use `0` for the boot CPU
     pub cpu: COption<u8>,
-    _reserved1: u32,
+    _reserved1: [u8; 5],
     /// revision 1 and above
     pub custom_stack_size: OptZero<ShouldNotBeZero<usize>>,
 }
@@ -202,7 +196,7 @@ impl RawTSpawnConfig {
     /// Creates a new thread spawn configuration with the latest revision from raw FFI values
     pub const fn new_from_raw(
         argument_ptr: *const (),
-        priority: COption<ContextPriority>,
+        priority: RawContextPriority,
         cpu: COption<u8>,
         custom_stack_size: OptZero<ShouldNotBeZero<usize>>,
     ) -> Self {
@@ -221,7 +215,7 @@ impl RawTSpawnConfig {
     /// Create a new thread spawn configuration with the latest revision
     pub fn new(
         argument_ptr: *const (),
-        priority: Option<ContextPriority>,
+        priority: RawContextPriority,
         cpu: Option<u8>,
         custom_stack_size: Option<NonZero<usize>>,
     ) -> Self {
