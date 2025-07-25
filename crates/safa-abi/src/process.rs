@@ -202,7 +202,7 @@ impl RawTSpawnConfig {
     ) -> Self {
         Self {
             revision: 1,
-            _reserved1: 0,
+            _reserved1: [0; 5],
             _reserved: 0,
             argument_ptr,
             priority,
