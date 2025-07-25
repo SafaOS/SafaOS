@@ -9,6 +9,7 @@ pub mod display;
 pub mod dtb;
 pub mod either;
 pub mod elf;
+pub mod ffi;
 pub mod io;
 pub mod locks;
 pub mod path;

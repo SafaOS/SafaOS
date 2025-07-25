@@ -11,7 +11,7 @@ use crate::thread::Tid;
 use crate::time;
 use crate::{VirtAddr, arch::power};
 
-mod ffi;
+pub mod ffi;
 mod io;
 mod processes;
 mod utils;

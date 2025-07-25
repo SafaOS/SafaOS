@@ -1,7 +1,10 @@
 //! Process & Thread related ABI structures
 use core::{ops::BitOr, ptr::NonNull};
 
-use crate::ffi::{Optional, RawSlice, RawSliceMut};
+use crate::ffi::option::{COption, OptZero};
+use crate::ffi::ptr::FFINonNull;
+use crate::ffi::slice::Slice;
+use crate::ffi::str::Str;
 
 /// Describes information about a thread local storage, passed to the thread in the userspace
 #[derive(Debug, Clone)]
@@ -42,9 +45,9 @@ impl AbiStructures {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct ProcessStdio {
-    pub stdout: Optional<usize>,
-    pub stdin: Optional<usize>,
-    pub stderr: Optional<usize>,
+    pub stdout: COption<usize>,
+    pub stdin: COption<usize>,
+    pub stderr: COption<usize>,
 }
 
 impl ProcessStdio {
@@ -95,36 +98,36 @@ impl ContextPriority {
 
 /// configuration for the spawn syscall
 #[repr(C)]
-pub struct PSpawnConfig<'a> {
+pub struct RawPSpawnConfig {
     /// config version for compatibility
     /// added in kernel version 0.2.1 and therefore breaking compatibility with any program compiled for version below 0.2.1
     /// revision 1: added env
     /// revision 2: added priority (v0.4.0)
     /// revision 3: added custom stack size (v0.4.0)
     pub revision: u8,
-    pub name: RawSlice<'a, u8>,
-    pub argv: RawSliceMut<'a, RawSlice<'a, u8>>,
+    pub name: OptZero<Str>,
+    pub argv: OptZero<Slice<Str>>,
     pub flags: SpawnFlags,
     _reserved: [u8; 7],
-    pub stdio: *const ProcessStdio,
+    pub stdio: OptZero<FFINonNull<ProcessStdio>>,
     /// revision 1 and above
-    pub env: RawSliceMut<'a, RawSlice<'a, u8>>,
+    pub env: OptZero<Slice<Slice<u8>>>,
     /// revision 2 and above
-    pub priority: Optional<ContextPriority>,
+    pub priority: COption<ContextPriority>,
     /// revision 3 and above
-    pub custom_stack_size: Optional<usize>,
+    pub custom_stack_size: COption<usize>,
 }
 
-impl<'a> PSpawnConfig<'a> {
+impl RawPSpawnConfig {
     #[inline]
     pub fn new(
-        name: RawSlice<'a, u8>,
-        argv: RawSliceMut<'a, RawSlice<'a, u8>>,
-        env: RawSliceMut<'a, RawSlice<'a, u8>>,
+        name: OptZero<Str>,
+        argv: OptZero<Slice<Str>>,
+        env: OptZero<Slice<Slice<u8>>>,
         flags: SpawnFlags,
-        stdio: &'a ProcessStdio,
-        priority: Optional<ContextPriority>,
-        custom_stack_size: Optional<usize>,
+        stdio: OptZero<FFINonNull<ProcessStdio>>,
+        priority: COption<ContextPriority>,
+        custom_stack_size: COption<usize>,
     ) -> Self {
         Self {
             revision: 3,
@@ -133,7 +136,7 @@ impl<'a> PSpawnConfig<'a> {
             env,
             flags,
             _reserved: [0; 7],
-            stdio: stdio as *const ProcessStdio,
+            stdio,
             priority: priority.into(),
             custom_stack_size: custom_stack_size.into(),
         }
@@ -143,47 +146,29 @@ impl<'a> PSpawnConfig<'a> {
 /// configuration for the thread spawn syscall
 /// for now it takes only a single argument pointer which is a pointer to an optional argument, that pointer is going to be passed to the thread as the second argument
 #[repr(C)]
-pub struct TSpawnConfig {
+pub struct RawTSpawnConfig {
     /// revision 1: added custom stack size
     pub revision: u32,
+    __reserved: u32,
     pub argument_ptr: *const (),
-    pub priority: Optional<ContextPriority>,
+    pub priority: COption<ContextPriority>,
     /// The index of the CPU to append to, if it is None the kernel will choose one, use `0` for the boot CPU
-    pub cpu: Optional<usize>,
+    pub cpu: COption<u8>,
     /// revision 1 and above
-    pub custom_stack_size: Optional<usize>,
+    pub custom_stack_size: COption<usize>,
 }
 
-impl TSpawnConfig {
-    pub fn into_rust(
-        &self,
-    ) -> (
-        *const (),
-        Option<ContextPriority>,
-        Option<usize>,
-        Option<usize>,
-    ) {
-        (
-            self.argument_ptr,
-            self.priority.into(),
-            self.cpu.into(),
-            if self.revision >= 1 {
-                self.custom_stack_size.into()
-            } else {
-                None
-            },
-        )
-    }
-
+impl RawTSpawnConfig {
     /// Create a new thread spawn configuration with the latest revision
     pub fn new(
         argument_ptr: *const (),
         priority: Option<ContextPriority>,
-        cpu: Option<usize>,
+        cpu: Option<u8>,
         custom_stack_size: Option<usize>,
     ) -> Self {
         Self {
             revision: 1,
+            __reserved: 0,
             argument_ptr,
             priority: priority.into(),
             cpu: cpu.into(),

@@ -292,8 +292,10 @@ impl ProcessState {
     }
 }
 
-const PROCESS_AREA_START_ADDR: VirtAddr = VirtAddr::from(0x00007A0000000000);
-const PROCESS_AREA_SIZE: usize = 0x50000000000;
+pub const PROCESS_AREA_START_ADDR: VirtAddr = VirtAddr::from(0x00007A0000000000);
+pub const PROCESS_AREA_SIZE: usize = 0x50000000000;
+pub const PROCESS_AREA_END_ADDR: VirtAddr = PROCESS_AREA_START_ADDR + PROCESS_AREA_SIZE;
+
 const DEFAULT_STACK_SIZE: usize = 8 * PAGE_SIZE;
 const GUARD_PAGES_COUNT: usize = 2;
 

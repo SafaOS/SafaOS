@@ -1,6 +1,6 @@
-use safa_abi::ffi::{RawSlice, RawSliceMut};
-use safa_abi::process::{ContextPriority, PSpawnConfig, ProcessStdio, TSpawnConfig};
+use safa_abi::process::{ContextPriority, ProcessStdio, RawPSpawnConfig, RawTSpawnConfig};
 
+use crate::process::spawn::PSpawnConfig;
 use crate::process::{self, Pid, spawn::SpawnFlags};
 use crate::{VirtAddr, utils::types::Name};
 use core::fmt::Write;
@@ -88,100 +88,21 @@ fn syspspawn_inner(
     Ok(results)
 }
 
-#[inline(always)]
-fn into_bytes_slice<'a>(
-    args_raw: &RawSliceMut<RawSlice<u8>>,
-) -> Result<&'a [&'a [u8]], ErrorStatus> {
-    if args_raw.len() == 0 {
-        return Ok(&[]);
-    }
-
-    let raw_slice: &mut [RawSlice<u8>] = SyscallFFI::make((args_raw.as_mut_ptr(), args_raw.len()))?;
-    // unsafely creates a muttable reference to `raw_slice`
-    let double_slice: &mut [&[u8]] = unsafe { &mut *(raw_slice as *const _ as *mut [&[u8]]) };
-
-    // maps every parent_slice[i] to &str
-    for (i, item) in raw_slice.iter().enumerate() {
-        double_slice[i] = <&[u8]>::make((item.as_ptr(), item.len()))?;
-    }
-
-    Ok(double_slice)
-}
-
-#[inline(always)]
-/// converts slice of raw pointers to a slice of strs which is used by pspawn as
-/// process arguments
-fn into_args_slice<'a>(args_raw: &RawSliceMut<RawSlice<u8>>) -> Result<&'a [&'a str], ErrorStatus> {
-    if args_raw.len() == 0 {
-        return Ok(&[]);
-    }
-
-    let raw_slice: &mut [RawSlice<u8>] = SyscallFFI::make((args_raw.as_mut_ptr(), args_raw.len()))?;
-    // unsafely creates a muttable reference to `raw_slice`
-    let double_slice: &mut [&str] = unsafe { &mut *(raw_slice as *const _ as *mut [&str]) };
-
-    // maps every parent_slice[i] to &str
-    for (i, item) in raw_slice.iter().enumerate() {
-        double_slice[i] = <&str>::make((item.as_ptr(), item.len()))?;
-    }
-
-    Ok(double_slice)
-}
-
 #[syscall_handler]
 fn syspspawn(
     path: Path,
-    config: &PSpawnConfig,
+    raw_config: &RawPSpawnConfig,
     dest_pid: Option<&mut Pid>,
 ) -> Result<(), ErrorStatus> {
-    fn as_rust<'a>(
-        this: &PSpawnConfig<'a>,
-    ) -> Result<
-        (
-            Option<&'a str>,
-            &'a [&'a str],
-            &'a [&'a [u8]],
-            SpawnFlags,
-            Option<ProcessStdio>,
-            Option<ContextPriority>,
-            Option<usize>,
-        ),
-        ErrorStatus,
-    > {
-        let name = Option::<&str>::make((this.name.as_ptr(), this.name.len()))?;
-        let argv = into_args_slice(&this.argv)?;
-        let env = into_bytes_slice(&this.env)?;
+    let config: PSpawnConfig = raw_config.try_into()?;
 
-        let stdio: Option<&safa_abi::process::ProcessStdio> = if this.revision >= 1 {
-            Option::make(this.stdio)?
-        } else {
-            None
-        };
-
-        let priority: Option<ContextPriority> = if this.revision >= 2 {
-            this.priority.into()
-        } else {
-            None
-        };
-
-        let custom_stack_size: Option<usize> = if this.revision >= 3 {
-            this.custom_stack_size.into()
-        } else {
-            None
-        };
-
-        Ok((
-            name,
-            argv,
-            env,
-            this.flags.into(),
-            stdio.copied(),
-            priority,
-            custom_stack_size,
-        ))
-    }
-
-    let (name, argv, env, flags, stdio, priority, custom_stack_size) = as_rust(config)?;
+    let name = config.name();
+    let argv = config.args();
+    let env = config.envv();
+    let flags = config.flags();
+    let priority = config.priority();
+    let stdio = config.stdio().map(|p| *p);
+    let custom_stack_size = config.custom_stack_size();
 
     let results = syspspawn_inner(
         name,
@@ -199,18 +120,50 @@ fn syspspawn(
     Ok(())
 }
 
+struct TSpawnConfig {
+    argument_ptr: VirtAddr,
+    priority: Option<ContextPriority>,
+    cpu: Option<u8>,
+    custom_stack_size: Option<usize>,
+}
+
+impl TryFrom<&RawTSpawnConfig> for TSpawnConfig {
+    type Error = ErrorStatus;
+    fn try_from(value: &RawTSpawnConfig) -> Result<Self, Self::Error> {
+        let argument_ptr = VirtAddr::from_ptr(value.argument_ptr);
+        let priority = value.priority.into();
+        let cpu = value.cpu.into();
+        let custom_stack_size = if value.revision >= 1 {
+            value.custom_stack_size.into()
+        } else {
+            None
+        };
+
+        Ok(TSpawnConfig {
+            argument_ptr,
+            priority,
+            cpu,
+            custom_stack_size,
+        })
+    }
+}
+
 #[syscall_handler]
 fn sys_tspawn(
     entry_point: VirtAddr,
-    config: &TSpawnConfig,
+    raw_config: &RawTSpawnConfig,
     target_tid: Option<&mut Tid>,
 ) -> Result<(), ErrorStatus> {
-    let (argument_ptr, priority, cpu, custom_stack_size) = config.into_rust();
-    let argument_ptr = VirtAddr::from_ptr(argument_ptr);
+    let config: TSpawnConfig = raw_config.try_into()?;
 
-    let thread_tid =
-        process::current::thread_spawn(entry_point, argument_ptr, priority, cpu, custom_stack_size)
-            .map_err(|_| ErrorStatus::MMapError)?;
+    let thread_tid = process::current::thread_spawn(
+        entry_point,
+        config.argument_ptr,
+        config.priority,
+        config.cpu.map(|v| v as usize /* too lazy to change */),
+        config.custom_stack_size,
+    )
+    .map_err(|_| ErrorStatus::MMapError)?;
     if let Some(target_tid) = target_tid {
         *target_tid = thread_tid;
     }

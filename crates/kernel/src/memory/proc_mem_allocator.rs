@@ -3,7 +3,7 @@
 
 use core::hint::unlikely;
 
-use safa_abi::ffi::RawSlice;
+use safa_abi::ffi::slice::Slice;
 
 use crate::{
     VirtAddr,
@@ -147,7 +147,7 @@ impl ProcessMemAllocator {
     ///
     /// - `0`..`8` (size_of::<usize>): length of `slices` encoded in native byte order
     /// - `8`..+(sum of for slice in slices slice.len() + 1): this is where the slices data actually live, null terminated for C compatibility
-    /// - previous end aligned to 0x10..+(slices.len() * 0x10): this is where `slices_fat_pointers_start_address` is, basically contains a bunch of `RawSlice<u8>`s that points to each slices raw data, (FFI Safe version of &[u8]), the length is the slice length minus the null terminator
+    /// - previous end aligned to 0x10..+(slices.len() * 0x10): this is where `slices_fat_pointers_start_address` is, basically contains a bunch of [`Slice<u8>`]s that points to each slices raw data, (FFI Safe version of &[u8]), the length is the slice length minus the null terminator
     pub fn allocate_filled_with_slices(
         &mut self,
         slices: &[&[u8]],
@@ -159,8 +159,8 @@ impl ProcessMemAllocator {
         }
 
         let size =
-            /* argv or envv themselves (aligned) */ ((slices.len() + 1) * size_of::<RawSlice<u8>>())
-            + (size_of::<usize>() /* argc or envc */ + total_len).to_next_multiple_of(size_of::<RawSlice<u8>>());
+            /* argv or envv themselves (aligned) */ ((slices.len() + 1) * size_of::<Slice<u8>>())
+            + (size_of::<usize>() /* argc or envc */ + total_len).to_next_multiple_of(size_of::<Slice<u8>>());
 
         let (start, end) = self.allocate_inner(size, alignment, 0)?;
 
@@ -183,15 +183,15 @@ impl ProcessMemAllocator {
             copy_bytes!(&[0]);
         }
 
-        copied = copied.to_next_multiple_of(size_of::<RawSlice<u8>>());
+        copied = copied.to_next_multiple_of(size_of::<Slice<u8>>());
         let pointers_start = start + copied;
         let mut current_slice_data_ptr = slices_data_area_start;
 
         for slice in slices {
             let raw_slice_fat = unsafe {
-                RawSlice::from_raw_parts(current_slice_data_ptr.into_ptr::<u8>(), slice.len())
+                Slice::from_raw_parts(current_slice_data_ptr.into_ptr::<u8>(), slice.len())
             };
-            let bytes: [u8; size_of::<RawSlice<u8>>()] =
+            let bytes: [u8; size_of::<Slice<u8>>()] =
                 unsafe { core::mem::transmute(raw_slice_fat) };
 
             copy_bytes!(&bytes);

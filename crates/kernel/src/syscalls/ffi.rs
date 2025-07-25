@@ -21,7 +21,7 @@ impl<T> SyscallFFI for Option<&T> {
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         if args.is_null() {
             Ok(None)
-        } else if !args.is_aligned() {
+        } else if !ptr_is_valid(args) {
             return Err(ErrorStatus::InvalidPtr);
         } else {
             Ok(unsafe { Some(&*args) })
@@ -37,7 +37,7 @@ impl<T> SyscallFFI for Option<&mut T> {
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         if args.is_null() {
             Ok(None)
-        } else if !args.is_aligned() {
+        } else if !ptr_is_valid(args) {
             return Err(ErrorStatus::InvalidPtr);
         } else {
             Ok(unsafe { Some(&mut *args) })
@@ -78,7 +78,7 @@ impl<T> SyscallFFI for &T {
     type Args = *const T;
 
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        if args.is_null() || !args.is_aligned() {
+        if !ptr_is_valid(args) {
             Err(ErrorStatus::InvalidPtr)
         } else {
             Ok(unsafe { &*args })
@@ -91,7 +91,7 @@ impl<T> SyscallFFI for &mut T {
     type Args = *mut T;
 
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        if args.is_null() || !args.is_aligned() {
+        if !ptr_is_valid(args) {
             Err(ErrorStatus::InvalidPtr)
         } else {
             Ok(unsafe { &mut *args })
@@ -106,7 +106,7 @@ impl<T> SyscallFFI for &[T] {
         let (ptr, len) = args;
         if ptr.is_null() {
             Ok(&[])
-        } else if !ptr.is_aligned() {
+        } else if !ptr_is_valid(ptr) {
             return Err(ErrorStatus::InvalidPtr);
         } else {
             Ok(unsafe { core::slice::from_raw_parts(ptr, len) })
@@ -120,7 +120,7 @@ impl<T> SyscallFFI for &mut [T] {
         let (ptr, len) = args;
         if ptr.is_null() {
             Ok(&mut [])
-        } else if !ptr.is_aligned() {
+        } else if !ptr_is_valid(ptr) {
             return Err(ErrorStatus::InvalidPtr);
         } else {
             Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
@@ -185,4 +185,15 @@ impl SyscallFFI for VirtAddr {
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         Ok(VirtAddr::from(args))
     }
+}
+
+/// Returns whether or not the kernel can accept this pointer
+pub fn ptr_is_allowed<T: ?Sized>(ptr: *const T) -> bool {
+    let addr = VirtAddr::from_ptr(ptr);
+    addr <= crate::process::PROCESS_AREA_END_ADDR
+}
+
+/// Returns whether or not the pointer is valid and the kernel can accept it
+pub fn ptr_is_valid<T>(ptr: *const T) -> bool {
+    !ptr.is_null() && ptr.is_aligned() && ptr_is_allowed(ptr)
 }

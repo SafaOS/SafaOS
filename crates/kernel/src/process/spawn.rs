@@ -3,7 +3,7 @@ use alloc::{boxed::Box, sync::Arc};
 use bitflags::bitflags;
 use safa_abi::{
     fs::FSObjectType,
-    process::{ContextPriority, ProcessStdio},
+    process::{ContextPriority, ProcessStdio, RawPSpawnConfig},
 };
 use thiserror::Error;
 
@@ -174,4 +174,95 @@ pub fn pspawn(
         custom_stack_size,
     )
     .map_err(|_| FSError::NotExecutable)
+}
+
+use crate::utils::ffi::ForeignTryAccept;
+use safa_abi::errors::ErrorStatus;
+
+pub struct PSpawnConfig<'a> {
+    name: Option<&'a str>,
+    args: Option<&'a [&'a str]>,
+    envv: Option<&'a [&'a [u8]]>,
+    stdio: Option<ProcessStdio>,
+
+    priority: Option<ContextPriority>,
+    custom_stack_size: Option<usize>,
+    flags: SpawnFlags,
+}
+
+impl<'a> TryFrom<&'a RawPSpawnConfig> for PSpawnConfig<'a> {
+    type Error = ErrorStatus;
+    fn try_from(value: &'a RawPSpawnConfig) -> Result<Self, Self::Error> {
+        let name: Option<&str> = value.name.try_accept()?;
+
+        let args: Option<&[&str]> = value.argv.try_accept()?;
+        let stdio: Option<&ProcessStdio> = value.stdio.try_accept()?;
+        let stdio = stdio.map(|r| *r);
+
+        let envv: Option<&[&[u8]]> = if value.revision >= 1 {
+            value.env.try_accept()?
+        } else {
+            None
+        };
+
+        let priority: Option<ContextPriority> = if value.revision >= 2 {
+            value.priority.into()
+        } else {
+            None
+        };
+
+        let custom_stack_size: Option<usize> = if value.revision >= 3 {
+            value.custom_stack_size.into()
+        } else {
+            None
+        };
+
+        let flags = value.flags.into();
+
+        Ok(Self {
+            name,
+            args,
+            envv,
+            stdio,
+            priority,
+            custom_stack_size,
+            flags,
+        })
+    }
+}
+
+impl<'a> PSpawnConfig<'a> {
+    pub const fn name(&self) -> Option<&str> {
+        self.name
+    }
+
+    pub const fn args(&self) -> &[&str] {
+        match self.args {
+            Some(args) => args,
+            None => &[],
+        }
+    }
+
+    pub const fn envv(&self) -> &[&[u8]] {
+        match self.envv {
+            Some(envv) => envv,
+            None => &[],
+        }
+    }
+
+    pub const fn stdio(&self) -> Option<&ProcessStdio> {
+        self.stdio.as_ref()
+    }
+
+    pub const fn priority(&self) -> Option<ContextPriority> {
+        self.priority
+    }
+
+    pub const fn custom_stack_size(&self) -> Option<usize> {
+        self.custom_stack_size
+    }
+
+    pub const fn flags(&self) -> SpawnFlags {
+        self.flags
+    }
 }
