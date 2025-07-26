@@ -40,6 +40,19 @@ impl Str {
     pub const fn from_str(s: &str) -> Self {
         Self(Slice::from_slice(s.as_bytes()))
     }
+
+    pub const fn as_bytes(&self) -> &Slice<u8> {
+        &self.0
+    }
+
+    pub const fn as_ptr(&self) -> *const u8 {
+        self.0.as_ptr()
+    }
+
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
     /// Attempts to convert [`Str`] into a mutable string slice &[str].
     #[inline]
     pub unsafe fn try_as_str_mut_custom<'a>(
@@ -64,6 +77,28 @@ impl Str {
             match self.try_as_str_mut_custom(custom_validate) {
                 Ok(str) => Ok(str),
                 Err(e) => Err(e),
+            }
+        }
+    }
+
+    /// Attempts to convert [`Str`] into a string slice &[`str`].
+    #[inline]
+    pub unsafe fn try_as_str<'a>(&self) -> Result<&'a str, InvalidStrError> {
+        unsafe {
+            match self.try_as_str_custom(|_| true) {
+                Ok(str) => Ok(str),
+                Err(err) => Err(err),
+            }
+        }
+    }
+
+    /// Attempts to convert [`Str`] into a mutable string slice &mut [`str`].
+    #[inline]
+    pub unsafe fn try_as_str_mut<'a>(&self) -> Result<&'a mut str, InvalidStrError> {
+        unsafe {
+            match self.try_as_str_mut_custom(|_| true) {
+                Ok(str) => Ok(str),
+                Err(err) => Err(err),
             }
         }
     }

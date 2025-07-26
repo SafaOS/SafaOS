@@ -68,6 +68,14 @@ impl<T: NotZeroable> OptZero<T> {
             true => None,
         }
     }
+
+    /// Returns the inner value whether or not it is zeroed.
+    /// # Safety
+    /// unsafe because OptZero works with the promise that it is going to handle zeroed values.
+    pub unsafe fn into_inner_unchecked(self) -> T {
+        self.0
+    }
+
     /// Maps a `OptZero` to another `OptZero` using a function.
     pub fn map<F, U>(self, f: F) -> OptZero<U>
     where

@@ -10,7 +10,7 @@ pub struct FFINonNull<T: ?Sized>(pub(crate) *mut T);
 
 impl<T: ?Sized> FFINonNull<T> {
     /// Creates a new instance of [`FFINonNull`] if the pointer is not null otherwise returns [`None`].
-    pub const unsafe fn new(ptr: *mut T) -> Option<Self> {
+    pub const fn new(ptr: *mut T) -> Option<Self> {
         if ptr.is_null() { None } else { Some(Self(ptr)) }
     }
 

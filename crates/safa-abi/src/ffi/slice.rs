@@ -118,6 +118,24 @@ impl<T> Slice<T> {
             }
         }
     }
+
+    pub unsafe fn try_as_slice_mut<'a>(&self) -> Result<&'a mut [T], InvalidSliceError> {
+        unsafe {
+            match self.try_as_slice_mut_custom(|_| true) {
+                Ok(slice) => Ok(slice),
+                Err(err) => Err(err),
+            }
+        }
+    }
+
+    pub unsafe fn try_as_slice<'a>(&self) -> Result<&'a [T], InvalidSliceError> {
+        unsafe {
+            match self.try_as_slice_custom(|_| true) {
+                Ok(slice) => Ok(slice),
+                Err(err) => Err(err),
+            }
+        }
+    }
 }
 
 impl<T> Slice<Slice<T>> {

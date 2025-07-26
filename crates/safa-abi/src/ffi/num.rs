@@ -50,6 +50,7 @@ impl_zeroable_int!(i64);
 impl_zeroable_int!(i128);
 impl_zeroable_int!(isize);
 
+#[repr(transparent)]
 /// Describes something that is valid when passed as a zero but SHOULDN'T BE a zero
 ///
 /// mainly for usage with FFI and [`OptZero`] so that if it was passed as a zero it would be treated as a None value
