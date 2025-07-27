@@ -6,6 +6,7 @@ use crate::process::{self, Pid, spawn::SpawnFlags};
 use crate::{VirtAddr, utils::types::Name};
 use core::fmt::Write;
 use core::num::NonZero;
+use core::sync::atomic::AtomicU32;
 
 use crate::utils::path::Path;
 use safa_abi::errors::ErrorStatus;
@@ -15,7 +16,7 @@ use crate::thread::{self, Tid};
 use macros::syscall_handler;
 
 #[syscall_handler]
-fn syst_fut_wait(addr: &mut u32, val: u32, timeout_ms: u64, wait_results: Option<&mut bool>) {
+fn syst_fut_wait(addr: &AtomicU32, val: u32, timeout_ms: u64, wait_results: Option<&mut bool>) {
     let results = unsafe { thread::current::wait_for_futex(addr, val, timeout_ms) };
     if let Some(wait_results) = wait_results {
         *wait_results = results;
@@ -23,7 +24,7 @@ fn syst_fut_wait(addr: &mut u32, val: u32, timeout_ms: u64, wait_results: Option
 }
 
 #[syscall_handler]
-fn syst_fut_wake(addr: &mut u32, n: usize, wake_results: Option<&mut usize>) {
+fn syst_fut_wake(addr: &AtomicU32, n: usize, wake_results: Option<&mut usize>) {
     let num_threads = process::current::wake_futex(addr, n);
     if let Some(wake_results) = wake_results {
         *wake_results = num_threads;

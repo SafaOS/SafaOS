@@ -1,6 +1,9 @@
 //! Defines the current smallest unit of execution in the scheduler (a Task) that is a thread.
 
-use core::{cell::UnsafeCell, sync::atomic::AtomicBool};
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+};
 
 use crate::{
     arch::threading::CPUStatus,
@@ -53,7 +56,7 @@ pub enum BlockedReason {
     WaitingForProcess(Arc<Process>),
     WaitingForThread(Arc<Thread>),
     WaitOnFutex {
-        addr: *mut u32,
+        addr: *const AtomicU32,
         value: u32,
         timeout_wake_at: u128,
     },
@@ -87,10 +90,10 @@ impl ContextStatus {
         }
     }
 
-    pub fn try_lift_futex(&mut self, target_addr: *mut u32) -> bool {
+    pub fn try_lift_futex(&mut self, target_addr: *const AtomicU32) -> bool {
         match *self {
             Self::Blocked(BlockedReason::WaitOnFutex { addr, value, .. })
-                if target_addr == addr && unsafe { *addr != value } =>
+                if target_addr == addr && unsafe { (*addr).load(Ordering::SeqCst) != value } =>
             {
                 *self = Self::Runnable;
                 true
@@ -259,7 +262,7 @@ impl Thread {
     }
 
     /// Should only be called by the current thread
-    pub fn wait_for_futex(&self, addr: *mut u32, with_value: u32, timeout_ms: u64) {
+    pub fn wait_for_futex(&self, addr: *const AtomicU32, with_value: u32, timeout_ms: u64) {
         self.set_status(ContextStatus::Blocked(BlockedReason::WaitOnFutex {
             addr,
             value: with_value,

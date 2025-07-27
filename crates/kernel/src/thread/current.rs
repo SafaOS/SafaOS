@@ -1,5 +1,7 @@
 //! This module defines Functions and Operations related to the current thread.
 
+use core::sync::atomic::AtomicU32;
+
 use crate::process::Pid;
 use crate::thread::Tid;
 use crate::time;
@@ -102,8 +104,8 @@ pub fn wait_for_thread(tid: Tid) -> Option<()> {
 ///
 /// # Safety
 /// The caller must ensure that the address `addr` is valid and points to a valid futex.
-pub unsafe fn wait_for_futex(addr: *mut u32, with_value: u32, timeout_ms: u64) -> bool {
-    if unsafe { *addr != with_value } {
+pub unsafe fn wait_for_futex(addr: &AtomicU32, with_value: u32, timeout_ms: u64) -> bool {
+    if addr.load(core::sync::atomic::Ordering::SeqCst) != with_value {
         return true;
     }
 
@@ -111,5 +113,5 @@ pub unsafe fn wait_for_futex(addr: *mut u32, with_value: u32, timeout_ms: u64) -
     this_thread.wait_for_futex(addr, with_value, timeout_ms);
 
     self::yield_now();
-    unsafe { *addr != with_value }
+    addr.load(core::sync::atomic::Ordering::SeqCst) != with_value
 }

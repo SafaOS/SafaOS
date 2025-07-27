@@ -1,6 +1,7 @@
 //! This module contains functions related to the current process.
 
 use core::num::NonZero;
+use core::sync::atomic::AtomicU32;
 
 use crate::arch::without_interrupts;
 use crate::memory::paging::MapToError;
@@ -92,7 +93,7 @@ pub fn try_cleanup_process(pid: Pid) -> Result<Option<usize>, ErrorStatus> {
 ///
 /// # Safety
 /// Safe because addr is only accessed if any other thread is waiting on it and has dereferenced it previously.
-pub fn wake_futex(addr: *mut u32, num_threads: usize) -> usize {
+pub fn wake_futex(addr: *const AtomicU32, num_threads: usize) -> usize {
     if num_threads == 0 {
         return 0;
     }

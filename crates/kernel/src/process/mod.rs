@@ -766,7 +766,7 @@ impl Process {
 
     /// Attempts to wake up `n` threads waiting on the futex at `target_addr`.
     /// Returns the number of threads that were successfully woken up.
-    pub(super) fn wake_n_futexs(&self, target_addr: *mut u32, n: usize) -> usize {
+    pub(super) fn wake_n_futexs(&self, target_addr: *const AtomicU32, n: usize) -> usize {
         if n == 0 {
             return 0;
         }
