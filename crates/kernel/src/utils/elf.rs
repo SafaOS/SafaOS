@@ -555,7 +555,9 @@ impl<'a, T: Readable> Elf<'a, T> {
                     file_offset += count;
                 }
             }
-            program_break = end_addr;
+            if end_addr > program_break {
+                program_break = end_addr;
+            }
 
             if header.ptype == ProgramType::TLS {
                 if alignment_in_mem < 8 {

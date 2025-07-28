@@ -102,6 +102,25 @@ impl PageTable {
         }
     }
 
+    /// maps a virtual `Page` to a new physical `Frame` filling the frame with zeros
+    /// flushes the cache if necessary
+    pub unsafe fn map_zeroed(&mut self, page: Page, flags: EntryFlags) -> Result<(), MapToError> {
+        unsafe {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+
+            if let Err(e) = self.map_to(page, frame, flags) {
+                frame_allocator::deallocate_frame(frame);
+                return Err(e);
+            }
+
+            let addr = frame.virt_addr();
+            let ptr = addr.into_ptr::<[u8; PAGE_SIZE]>();
+            ptr.write_bytes(0, 1);
+            Ok(())
+        }
+    }
+
     /// unmaps a page, flushes the cache if necessary
     pub unsafe fn unmap(&mut self, page: Page) {
         unsafe {

@@ -29,10 +29,7 @@ use crate::{
     VirtAddr,
     arch::threading::CPUStatus,
     debug,
-    memory::{
-        frame_allocator,
-        paging::{PAGE_SIZE, Page, PhysPageTable},
-    },
+    memory::paging::{PAGE_SIZE, Page, PhysPageTable},
     utils::{
         elf::{Elf, ElfError},
         io::Readable,
@@ -124,25 +121,24 @@ impl AliveProcess {
         let page_end = self.data_start + PAGE_SIZE * self.data_pages;
         let new_page = Page::containing_address(page_end);
 
-        let frame = frame_allocator::allocate_frame()?;
-
         unsafe {
-            self.root_page_table
-                .map_to(
-                    new_page,
-                    frame,
-                    EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-                )
-                .ok()?;
+            if let Err(e) = self
+                .root_page_table
+                .map_zeroed(new_page, EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE)
+            {
+                match e {
+                    MapToError::FrameAllocationFailed => {
+                        return None;
+                    }
+                    MapToError::AlreadyMapped => {
+                        panic!("attempted to extend data break beyond an already mapped territory")
+                    }
+                }
+            }
         }
 
-        let addr = frame.virt_addr();
-        let ptr = addr.into_ptr::<u8>();
-        let slice = unsafe { core::slice::from_raw_parts_mut(ptr, PAGE_SIZE) };
-
-        slice.fill(0xBB);
         self.data_pages += 1;
-        Some(addr)
+        Some(new_page.virt_addr())
     }
 
     fn page_unextend_data(&mut self) -> Option<VirtAddr> {
