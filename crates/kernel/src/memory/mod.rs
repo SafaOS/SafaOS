@@ -296,29 +296,39 @@ pub fn userspace_copy_within(
     );
 
     let pages_iter = src_iter.zip(dest_iter);
-    let phys_addr_iter = pages_iter.map(|(src_page, dest_page)| {
+    let phys_addr_iter = pages_iter.map(|(curr_src_page, curr_dest_page)| {
         let src_frame = page_table
-            .get_frame(src_page)
+            .get_frame(curr_src_page)
             .expect("attempt to copy from an unmapped page");
         let dest_frame = page_table
-            .get_frame(dest_page)
+            .get_frame(curr_dest_page)
             .expect("attempt to copy to an unmapped page");
 
-        let (diff, to_copy) = if src_page.virt_addr() == src_addr.to_previous_page() {
-            let offset_wthin = src_addr - src_page.virt_addr();
-            let to_next_page = PAGE_SIZE - offset_wthin;
-            let to_end = end_src_addr - src_addr;
-            let to_copy = core::cmp::min(to_next_page, to_end);
+        let calc_within = |curr_page: VirtAddr, start_addr: VirtAddr, end_addr: VirtAddr| {
+            if curr_page == start_addr.to_previous_page() {
+                let offset_within = start_addr - curr_page;
 
-            (offset_wthin, to_copy)
-        } else if src_page.virt_addr() == end_src_addr.to_previous_page() {
-            (0, end_src_addr - src_page.virt_addr())
-        } else {
-            (0, PAGE_SIZE)
+                let to_next_page = PAGE_SIZE - offset_within;
+
+                let to_end = end_addr - start_addr;
+
+                let to_copy = core::cmp::min(to_next_page, to_end);
+
+                (offset_within, to_copy)
+            } else if curr_page == end_addr.to_previous_page() {
+                (0, end_addr - curr_page)
+            } else {
+                (0, PAGE_SIZE)
+            }
         };
 
-        let src_phys_addr = src_frame.phys_addr() + diff;
-        let dest_phys_addr = dest_frame.phys_addr() + diff;
+        let (curr_src_diff, to_copy) =
+            calc_within(curr_src_page.virt_addr(), src_addr, end_src_addr);
+
+        let (curr_dest_diff, _) = calc_within(curr_dest_page.virt_addr(), dest_addr, end_dest_addr);
+
+        let src_phys_addr = src_frame.phys_addr() + curr_src_diff;
+        let dest_phys_addr = dest_frame.phys_addr() + curr_dest_diff;
 
         (src_phys_addr, dest_phys_addr, to_copy)
     });

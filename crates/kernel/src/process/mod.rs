@@ -387,7 +387,13 @@ impl Process {
         copy_to_userspace(page_table, uthread_addr, &uthread_bytes);
         userspace_copy_within(page_table, master_tls_addr, tls_addr, tls_size);
 
-        Ok(Some((uthread_addr, tracker)))
+        Ok(Some((
+            #[cfg(target_arch = "x86_64")]
+            uthread_addr,
+            #[cfg(target_arch = "aarch64")]
+            tls_addr,
+            tracker,
+        )))
     }
 
     fn allocate_stack_inner(
