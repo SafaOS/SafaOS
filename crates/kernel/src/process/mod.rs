@@ -21,7 +21,8 @@ use crate::{
     utils::types::Name,
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use safa_abi::process::{AbiStructures, ProcessStdio, UThreadLocalInfo};
+use cfg_if::cfg_if;
+use safa_abi::process::{AbiStructures, ProcessStdio};
 use serde::Serialize;
 use thread::{ContextPriority, Thread};
 
@@ -365,17 +366,55 @@ impl Process {
         };
         assert!(tls_alignment >= align_of::<UThreadLocalInfo>());
 
+        #[cfg(target_arch = "x86_64")]
+        #[repr(C)]
+        struct UThreadLocalInfo {
+            uthread_ptr: NonNull<u8>,
+            thread_local_storage_ptr: NonNull<u8>,
+            thread_local_storage_size: usize,
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        #[repr(C)]
+        struct UThreadLocalInfo {
+            thread_local_storage_ptr: NonNull<u8>,
+            thread_local_storage_size: usize,
+        }
+
         let size = size_of::<UThreadLocalInfo>() + tls_size;
         let tracker = allocator.allocate_tracked_guraded(size, tls_alignment, 0)?;
 
         let allocated_start = tracker.start();
 
-        let (uthread_addr, tls_addr) = (allocated_start + tls_size, allocated_start);
+        let (uthread_addr, tls_addr) = {
+            cfg_if! {
+                if #[cfg(target_arch = "x86_64")] {
+                    (allocated_start + tls_size, allocated_start)
+                } else if #[cfg(target_arch = "aarch64")] {
+                    (allocated_start, allocated_start + size_of::<UThreadLocalInfo>())
+                } else {
+                    compile_error!("TLS placement not implemented for the current architecture")
+                }
+            }
+        };
 
-        let uthread_info = UThreadLocalInfo {
-            uthread_ptr: unsafe { NonNull::new_unchecked(uthread_addr.into_ptr()) },
-            thread_local_storage_ptr: tls_addr.into_ptr(),
-            thread_local_storage_size: tls_size,
+        let uthread_info = {
+            cfg_if! {
+                if #[cfg(target_arch = "x86_64")] {
+                    UThreadLocalInfo {
+                        uthread_ptr: unsafe { NonNull::new_unchecked(uthread_addr.into_ptr()) },
+                        thread_local_storage_ptr: unsafe { NonNull::new_unchecked(tls_addr.into_ptr()) },
+                        thread_local_storage_size: tls_size,
+                    }
+                } else if #[cfg(target_arch = "aarch64")] {
+                    UThreadLocalInfo {
+                        thread_local_storage_ptr: unsafe { NonNull::new_unchecked(tls_addr.into_ptr()) },
+                        thread_local_storage_size: tls_size,
+                    }
+                } else {
+                    compile_error!("TLS placement not implemented for the current architecture")
+                }
+            }
         };
 
         let uthread_bytes: [u8; size_of::<UThreadLocalInfo>()] =
@@ -383,13 +422,7 @@ impl Process {
         copy_to_userspace(page_table, uthread_addr, &uthread_bytes);
         userspace_copy_within(page_table, master_tls_addr, tls_addr, tls_size);
 
-        Ok(Some((
-            #[cfg(target_arch = "x86_64")]
-            uthread_addr,
-            #[cfg(target_arch = "aarch64")]
-            tls_addr,
-            tracker,
-        )))
+        Ok(Some((uthread_addr, tracker)))
     }
 
     fn allocate_stack_inner(

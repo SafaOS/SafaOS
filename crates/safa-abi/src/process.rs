@@ -8,19 +8,6 @@ use crate::ffi::ptr::FFINonNull;
 use crate::ffi::slice::Slice;
 use crate::ffi::str::Str;
 
-/// Describes information about a thread local storage, passed to the thread in the userspace
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub struct UThreadLocalInfo {
-    /// A pointer to this structure in the address space the thread belongs to
-    /// neccassary in x86_64 (because it sucks)
-    pub uthread_ptr: NonNull<Self>,
-    /// A pointer to the thread local storage beginning, can be null if there is no TLS
-    pub thread_local_storage_ptr: *const (),
-    /// The size of the thread local storage area
-    pub thread_local_storage_size: usize,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 /// ABI structures are structures that are passed to processes by the parent process
