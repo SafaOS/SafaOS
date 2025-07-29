@@ -88,8 +88,14 @@ impl ProcessMemAllocator {
         while map_current <= unmapped_end_page {
             match unsafe { root_page_table.try_alloc_map_single_uncached(map_current, flags) } {
                 Err(e) => return Err(e),
-                Ok(true) => map_current = map_current.next(),
-                Ok(false) => break,
+                Ok(Some(frame)) => {
+                    unsafe {
+                        let ptr = frame.virt_addr().into_ptr::<u8>();
+                        ptr.write_bytes(0, PAGE_SIZE);
+                    }
+                    map_current = map_current.next()
+                }
+                Ok(None) => break,
             }
         }
 

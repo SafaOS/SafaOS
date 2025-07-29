@@ -129,11 +129,12 @@ impl PageTable {
         }
     }
 
+    /// Attempts to allocate a frame and map it to a page, returning the frame if successful if the page was already mapped to another frame returns Ok(None)
     pub unsafe fn try_alloc_map_single_uncached(
         &mut self,
         page: Page,
         flags: EntryFlags,
-    ) -> Result<bool, MapToError> {
+    ) -> Result<Option<Frame>, MapToError> {
         let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
         if let Err(e) = unsafe { self.map_to_uncached(page, frame, flags) } {
             if e != MapToError::AlreadyMapped {
@@ -141,9 +142,9 @@ impl PageTable {
             }
 
             frame_allocator::deallocate_frame(frame);
-            Ok(false)
+            Ok(None)
         } else {
-            Ok(true)
+            Ok(Some(frame))
         }
     }
 

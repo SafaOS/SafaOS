@@ -1,6 +1,6 @@
 //! Process & Thread related ABI structures
 use core::num::NonZero;
-use core::{ops::BitOr, ptr::NonNull};
+use core::ops::BitOr;
 
 use crate::ffi::num::ShouldNotBeZero;
 use crate::ffi::option::{COption, OptZero};

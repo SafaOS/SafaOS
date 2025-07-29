@@ -54,7 +54,7 @@ pub struct AliveProcess {
     data_pages: usize,
     data_start: VirtAddr,
     data_break: VirtAddr,
-    master_tls: Option<(VirtAddr, usize, usize)>,
+    master_tls: Option<(VirtAddr, usize, usize, usize)>,
     cwd: Box<PathBuf>,
 }
 #[derive(Debug)]
@@ -359,9 +359,9 @@ impl Process {
     fn allocate_thread_local_inner(
         page_table: &mut PageTable,
         allocator: &mut ProcessMemAllocator,
-        master_tls: Option<(VirtAddr, usize, usize)>,
+        master_tls: Option<(VirtAddr, usize, usize, usize)>,
     ) -> Result<Option<(VirtAddr, TrackedAllocation)>, MapToError> {
-        let Some((master_tls_addr, tls_size, tls_alignment)) = master_tls else {
+        let Some((master_tls_addr, tls_mem_size, tls_file_size, tls_alignment)) = master_tls else {
             return Ok(None);
         };
         assert!(tls_alignment >= align_of::<UThreadLocalInfo>());
@@ -381,7 +381,7 @@ impl Process {
             thread_local_storage_size: usize,
         }
 
-        let size = size_of::<UThreadLocalInfo>() + tls_size;
+        let size = size_of::<UThreadLocalInfo>() + tls_mem_size;
         let tracker = allocator.allocate_tracked_guraded(size, tls_alignment, 0)?;
 
         let allocated_start = tracker.start();
@@ -389,7 +389,7 @@ impl Process {
         let (uthread_addr, tls_addr) = {
             cfg_if! {
                 if #[cfg(target_arch = "x86_64")] {
-                    (allocated_start + tls_size, allocated_start)
+                    (allocated_start + tls_mem_size, allocated_start)
                 } else if #[cfg(target_arch = "aarch64")] {
                     (allocated_start, allocated_start + size_of::<UThreadLocalInfo>())
                 } else {
@@ -404,12 +404,12 @@ impl Process {
                     UThreadLocalInfo {
                         uthread_ptr: unsafe { NonNull::new_unchecked(uthread_addr.into_ptr()) },
                         thread_local_storage_ptr: unsafe { NonNull::new_unchecked(tls_addr.into_ptr()) },
-                        thread_local_storage_size: tls_size,
+                        thread_local_storage_size: tls_mem_size,
                     }
                 } else if #[cfg(target_arch = "aarch64")] {
                     UThreadLocalInfo {
                         thread_local_storage_ptr: unsafe { NonNull::new_unchecked(tls_addr.into_ptr()) },
-                        thread_local_storage_size: tls_size,
+                        thread_local_storage_size: tls_mem_size,
                     }
                 } else {
                     compile_error!("TLS placement not implemented for the current architecture")
@@ -419,8 +419,10 @@ impl Process {
 
         let uthread_bytes: [u8; size_of::<UThreadLocalInfo>()] =
             unsafe { core::mem::transmute(uthread_info) };
+
         copy_to_userspace(page_table, uthread_addr, &uthread_bytes);
-        userspace_copy_within(page_table, master_tls_addr, tls_addr, tls_size);
+        // only copy file size
+        userspace_copy_within(page_table, master_tls_addr, tls_addr, tls_file_size);
 
         Ok(Some((uthread_addr, tracker)))
     }
@@ -454,7 +456,7 @@ impl Process {
         root_page_table: PhysPageTable,
         cwd: Box<PathBuf>,
         data_break: VirtAddr,
-        master_tls: Option<(VirtAddr, usize, usize)>,
+        master_tls: Option<(VirtAddr, usize, usize, usize)>,
         allocator: ProcessMemAllocator,
         userspace_process: bool,
     ) -> Self {
@@ -497,7 +499,7 @@ impl Process {
         stdio: ProcessStdio,
         root_page_table: PhysPageTable,
         data_break: VirtAddr,
-        master_tls: Option<(VirtAddr, usize, usize)>,
+        master_tls: Option<(VirtAddr, usize, usize, usize)>,
         default_priority: ContextPriority,
         userspace_process: bool,
         custom_stack_size: Option<NonZero<usize>>,

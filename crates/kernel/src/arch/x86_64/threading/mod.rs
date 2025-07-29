@@ -253,6 +253,7 @@ pub fn invoke_context_switch() {
 pub unsafe fn restore_cpu_status(status: &CPUStatus) -> ! {
     unsafe {
         set_kernel_tss_stack(status.ring0_rsp);
+        wrmsr(0xC0000100, status.fs_base.into_raw() as u64);
         restore_cpu_status_full(status);
     }
 }

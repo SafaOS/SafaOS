@@ -479,7 +479,7 @@ impl<'a, T: Readable> Elf<'a, T> {
     pub fn load_exec(
         &self,
         page_table: &mut PageTable,
-    ) -> Result<(VirtAddr, Option<(VirtAddr, usize, usize)>), ElfError> {
+    ) -> Result<(VirtAddr, Option<(VirtAddr, usize, usize, usize)>), ElfError> {
         if self.header.kind != ElfType::EXE {
             return Err(ElfError::NotAnExecutable);
         }
@@ -566,7 +566,12 @@ impl<'a, T: Readable> Elf<'a, T> {
                     );
                     return Err(ElfError::Corrupted);
                 }
-                master_tls = Some((start_addr, size_in_mem, alignment_in_mem));
+                master_tls = Some((
+                    start_addr,
+                    size_in_mem,
+                    header.filez, /* we only want to copy filez bytes of the master TLS but allocate a memz area */
+                    alignment_in_mem,
+                ));
             }
         }
         Ok((program_break, master_tls))
