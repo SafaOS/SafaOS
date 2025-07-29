@@ -756,6 +756,10 @@ impl Process {
                 continue;
             }
 
+            if thread.is_dead() {
+                continue;
+            }
+
             thread.mark_dead(true);
 
             // wait for the thread to exit
