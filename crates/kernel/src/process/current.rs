@@ -99,7 +99,8 @@ pub fn wake_futex(addr: *const AtomicU32, num_threads: usize) -> usize {
     }
 
     let this_process = process::current();
-    this_process.wake_n_futexs(addr, num_threads)
+    let n = this_process.wake_n_futexs(addr, num_threads);
+    n
 }
 
 use crate::thread::ContextPriority;

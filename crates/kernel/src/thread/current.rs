@@ -110,8 +110,9 @@ pub unsafe fn wait_for_futex(addr: &AtomicU32, with_value: u32, timeout_ms: u64)
     }
 
     let this_thread = thread::current();
-    this_thread.wait_for_futex(addr, with_value, timeout_ms);
+    let timeout_at = this_thread.wait_for_futex(addr, with_value, timeout_ms);
 
     self::yield_now();
-    addr.load(core::sync::atomic::Ordering::SeqCst) != with_value
+    let timeouted = time!(ms) as u128 >= timeout_at;
+    !timeouted
 }

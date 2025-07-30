@@ -65,12 +65,12 @@ pub enum BlockedReason {
 impl BlockedReason {
     pub fn block_lifted(&self) -> bool {
         match self {
-            Self::SleepingUntil(n) => time!(ms) as u128 >= *n,
+            Self::SleepingUntil(n)
+            | Self::WaitOnFutex {
+                timeout_wake_at: n, ..
+            } => time!(ms) as u128 >= *n,
             Self::WaitingForProcess(process) => !process.is_alive(),
             Self::WaitingForThread(thread) => thread.is_dead(),
-            Self::WaitOnFutex {
-                timeout_wake_at, ..
-            } => time!(ms) as u128 >= *timeout_wake_at,
         }
     }
 }
@@ -216,8 +216,6 @@ impl Thread {
 
     pub fn kill_thread(&self, exit_code: usize) {
         let process = &self.parent_process;
-        let _state = process.state_mut();
-
         let process_dead = process
             .context_count
             .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
@@ -226,7 +224,6 @@ impl Thread {
         self.mark_dead(process_dead);
 
         if process_dead {
-            drop(_state);
             process.kill(exit_code, None);
         }
     }
@@ -262,12 +259,15 @@ impl Thread {
     }
 
     /// Should only be called by the current thread
-    pub fn wait_for_futex(&self, addr: *const AtomicU32, with_value: u32, timeout_ms: u64) {
+    pub fn wait_for_futex(&self, addr: *const AtomicU32, with_value: u32, timeout_ms: u64) -> u128 {
+        let timeout_at = time!(ms) as u128 + timeout_ms as u128;
         self.set_status(ContextStatus::Blocked(BlockedReason::WaitOnFutex {
             addr,
             value: with_value,
-            timeout_wake_at: time!(ms) as u128 + timeout_ms as u128,
+            timeout_wake_at: timeout_at,
         }));
+
+        timeout_at
     }
 }
 
