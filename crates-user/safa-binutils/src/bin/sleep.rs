@@ -1,4 +1,4 @@
-use safa_api::syscalls::uptime;
+use safa_api::syscalls::misc::uptime;
 
 pub fn main() {
     let mut args = std::env::args();

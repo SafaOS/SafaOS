@@ -1,5 +1,8 @@
 pub const PAGE_SIZE: usize = 4096;
-use crate::memory::PhysAddr;
+use crate::{
+    arch,
+    memory::{AlignToPage, PhysAddr},
+};
 use bitflags::bitflags;
 use core::{
     fmt::{Debug, LowerHex},
@@ -8,14 +11,13 @@ use core::{
 use thiserror::Error;
 
 use super::{
-    align_down,
-    frame_allocator::{self, Frame, FramePtr},
     VirtAddr,
+    frame_allocator::{self, Frame, FramePtr},
 };
 
-pub use crate::arch::paging::{current_higher_root_table, current_lower_root_table, PageTable};
+pub use crate::arch::paging::{PageTable, current_higher_root_table, current_lower_root_table};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Page {
     start_address: VirtAddr,
 }
@@ -40,14 +42,20 @@ pub struct IterPage {
 
 impl Page {
     pub const fn containing_address(address: VirtAddr) -> Self {
-        let aligned = align_down(address.into_raw(), PAGE_SIZE);
         Self {
-            start_address: VirtAddr::from(aligned),
+            start_address: address.to_previous_page(),
         }
     }
 
     pub const fn virt_addr(&self) -> VirtAddr {
         self.start_address
+    }
+
+    /// Returns the page next to "after" `self`
+    pub const fn next(&self) -> Self {
+        Self {
+            start_address: self.start_address + PAGE_SIZE,
+        }
     }
 
     /// creates an iterator'able struct
@@ -61,10 +69,10 @@ impl Page {
 impl Iterator for IterPage {
     type Item = Page;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.start.start_address < self.end.start_address {
+        if self.start < self.end {
             let page = self.start;
 
-            self.start.start_address += PAGE_SIZE;
+            self.start = self.start.next();
             Some(page)
         } else {
             None
@@ -73,7 +81,74 @@ impl Iterator for IterPage {
 }
 
 impl PageTable {
-    /// Map `page_num` pages starting at `start_virt_addr` to frames starting at `start_phys_addr`
+    pub fn flush_cache(&mut self) {
+        unsafe {
+            arch::flush_cache();
+        }
+    }
+
+    /// maps a virtual `Page` to physical `Frame`
+    /// flushes the cache if necessary
+    pub unsafe fn map_to(
+        &mut self,
+        page: Page,
+        frame: Frame,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        unsafe {
+            self.map_to_uncached(page, frame, flags)?;
+            self.flush_cache();
+            Ok(())
+        }
+    }
+
+    /// maps a virtual `Page` to a new physical `Frame` filling the frame with zeros
+    /// flushes the cache if necessary
+    pub unsafe fn map_zeroed(&mut self, page: Page, flags: EntryFlags) -> Result<(), MapToError> {
+        unsafe {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+
+            if let Err(e) = self.map_to(page, frame, flags) {
+                frame_allocator::deallocate_frame(frame);
+                return Err(e);
+            }
+
+            let addr = frame.virt_addr();
+            let ptr = addr.into_ptr::<[u8; PAGE_SIZE]>();
+            ptr.write_bytes(0, 1);
+            Ok(())
+        }
+    }
+
+    /// unmaps a page, flushes the cache if necessary
+    pub unsafe fn unmap(&mut self, page: Page) {
+        unsafe {
+            self.unmap_uncached(page);
+            self.flush_cache();
+        }
+    }
+
+    /// Attempts to allocate a frame and map it to a page, returning the frame if successful if the page was already mapped to another frame returns Ok(None)
+    pub unsafe fn try_alloc_map_single_uncached(
+        &mut self,
+        page: Page,
+        flags: EntryFlags,
+    ) -> Result<Option<Frame>, MapToError> {
+        let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+        if let Err(e) = unsafe { self.map_to_uncached(page, frame, flags) } {
+            if e != MapToError::AlreadyMapped {
+                return Err(e);
+            }
+
+            frame_allocator::deallocate_frame(frame);
+            Ok(None)
+        } else {
+            Ok(Some(frame))
+        }
+    }
+
+    /// Map `page_num` pages starting at `start_virt_addr` to frames starting at `start_phys_addr` and flushes cache if successful
     pub unsafe fn map_contiguous_pages(
         &mut self,
         start_virt_addr: VirtAddr,
@@ -92,17 +167,74 @@ impl PageTable {
         let iter = page_iter.zip(frame_iter);
         for (page, frame) in iter {
             unsafe {
-                self.map_to(page, frame, flags)?;
+                self.map_to_uncached(page, frame, flags)?;
             }
         }
+
+        self.flush_cache();
         Ok(())
+    }
+
+    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
+    /// returns Err if any of the frames couldn't be allocated
+    /// the mapped pages are zeroed
+    ///
+    /// flushes the cache if successful
+    ///
+    /// returns the end virtual address aligned up to PAGE_SIZE
+    #[must_use = "the actual end address is returned"]
+    pub unsafe fn alloc_map(
+        &mut self,
+        from: VirtAddr,
+        to: VirtAddr,
+        flags: EntryFlags,
+    ) -> Result<VirtAddr, MapToError> {
+        let end_addr = to.to_next_page();
+
+        let from_page = Page::containing_address(from);
+        let to_page = Page::containing_address(end_addr);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+            let virt_addr = frame.virt_addr();
+            unsafe {
+                self.map_to_uncached(page, frame, flags)?;
+            }
+
+            unsafe {
+                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
+            }
+        }
+
+        self.flush_cache();
+        Ok(end_addr)
+    }
+
+    /// Deallocates and unmaps pages from `from` to `to` then flushes the cache if necessary
+    pub unsafe fn free_unmap(&mut self, from: VirtAddr, to: VirtAddr) {
+        let from_page = Page::containing_address(from);
+        let to_page = Page::containing_address(to);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            unsafe {
+                self.unmap_uncached(page);
+            }
+        }
+        self.flush_cache();
     }
 }
 
-#[derive(Debug, Clone, Copy, Error)]
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum MapToError {
     #[error("frame allocator: out of memory")]
     FrameAllocationFailed,
+    #[error("fatal: attempt to map an already mapped region")]
+    AlreadyMapped,
 }
 
 bitflags! {
@@ -155,39 +287,11 @@ impl PhysPageTable {
 
     /// creates a new PhysPageTable from the current pml4 table
     /// takes ownership of the current lower half root page table meaning it will free it when the PhysPageTable is dropped
-    pub unsafe fn from_current() -> Self { unsafe {
-        let inner = current_lower_root_table();
-        Self { inner }
-    }}
-
-    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
-    /// returns Err if any of the frames couldn't be allocated
-    /// the mapped pages are zeroed
-    pub fn alloc_map(
-        &mut self,
-        from: VirtAddr,
-        to: VirtAddr,
-        flags: EntryFlags,
-    ) -> Result<(), MapToError> {
-        let from_page = Page::containing_address(from);
-        let to_page = Page::containing_address(to);
-
-        let iter = Page::iter_pages(from_page, to_page);
-
-        for page in iter {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-            let virt_addr = frame.virt_addr();
-            unsafe {
-                self.map_to(page, frame, flags)?;
-            }
-
-            unsafe {
-                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
-            }
+    pub unsafe fn from_current() -> Self {
+        unsafe {
+            let inner = current_lower_root_table();
+            Self { inner }
         }
-
-        Ok(())
     }
 
     pub fn phys_addr(&self) -> PhysAddr {

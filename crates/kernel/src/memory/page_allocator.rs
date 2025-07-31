@@ -9,20 +9,23 @@ use alloc::vec;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::{debug, utils::locks::Mutex};
+use crate::{
+    debug,
+    memory::{AlignTo, AlignToPage},
+    utils::locks::Mutex,
+};
 
 use super::{
-    align_up, frame_allocator,
-    paging::{current_higher_root_table, EntryFlags, MapToError, Page, PAGE_SIZE},
     VirtAddr,
+    paging::{EntryFlags, MapToError, PAGE_SIZE, current_higher_root_table},
 };
 
 /// a bitmap page allocator which allocates contiguous virtual memory pages
 /// good for allocating large amounts of memory which won't be freed or reallocated much
 /// slower than [`super::buddy_allocator::BuddyAllocator`]
 pub struct PageAllocator {
-    heap_start: usize,
-    heap_end: usize,
+    heap_start: VirtAddr,
+    heap_end: VirtAddr,
     /// bitmap is used to keep track of which pages are used and which are free
     /// the number of bytes it contain should be aligned to usize bytes
     bitmap: Vec<usize>,
@@ -46,12 +49,12 @@ impl PageAllocator {
     #[inline(always)]
     fn get_addr(&self, index: usize, bit: usize) -> *mut u8 {
         let computed_addr = index * usize::BITS as usize + bit;
-        (self.heap_start + (computed_addr * PAGE_SIZE)) as *mut u8
+        (self.heap_start + (computed_addr * PAGE_SIZE)).into_ptr::<u8>()
     }
 
     #[inline(always)]
     fn get_location(&self, addr: *mut u8) -> (usize, usize) {
-        let start = addr as usize - self.heap_start;
+        let start = VirtAddr::from_ptr(addr) - self.heap_start;
         let abs_index = start / PAGE_SIZE;
 
         let index = abs_index / usize::BITS as usize;
@@ -177,19 +180,12 @@ impl PageAllocator {
             .ok_or(MapToError::FrameAllocationFailed)?;
 
         let addr = VirtAddr::from_ptr(ptr);
-        let start_page = Page::containing_address(addr);
-        let end_page = Page::containing_address(addr + (pages * PAGE_SIZE));
 
         let mut root_table = unsafe { current_higher_root_table() };
-        for page in Page::iter_pages(start_page, end_page) {
-            unsafe {
-                root_table.map_to(
-                    page,
-                    frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
-                    EntryFlags::WRITE,
-                )?
-            }
+        unsafe {
+            root_table.alloc_map(addr, addr + (pages * PAGE_SIZE), EntryFlags::WRITE)?;
         }
+
         Ok((ptr, pages))
     }
 
@@ -197,7 +193,7 @@ impl PageAllocator {
         let page_count = size.div_ceil(PAGE_SIZE);
 
         let page_count = if page_count > usize::BITS as usize {
-            align_up(page_count, usize::BITS as usize)
+            page_count.to_next_multiple_of(usize::BITS)
         } else {
             page_count
         };
@@ -207,14 +203,9 @@ impl PageAllocator {
         let start: VirtAddr = ptr.into();
         let end = start + size;
 
-        let start = Page::containing_address(start);
-        let end = Page::containing_address(end);
-
         let mut root_table = unsafe { current_higher_root_table() };
-        for page in Page::iter_pages(start, end) {
-            unsafe {
-                root_table.unmap(page);
-            }
+        unsafe {
+            root_table.free_unmap(start, end);
         }
 
         let usizes = page_count / usize::BITS as usize;
@@ -267,44 +258,51 @@ unsafe impl Allocator for Mutex<PageAllocator> {
         }
     }
 
-    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) { unsafe {
-        self.lock().deallocmut(ptr.as_ptr(), layout.size());
-    }}
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+        unsafe {
+            self.lock().deallocmut(ptr.as_ptr(), layout.size());
+        }
+    }
 
     unsafe fn grow(
         &self,
         ptr: core::ptr::NonNull<u8>,
         old_layout: core::alloc::Layout,
         new_layout: core::alloc::Layout,
-    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> { unsafe {
-        if old_layout.size() % PAGE_SIZE != 0 {
-            let actual_size = align_up(old_layout.size(), PAGE_SIZE);
-            if actual_size >= new_layout.size() {
-                let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
-                return Ok(core::ptr::NonNull::new_unchecked(slice));
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        unsafe {
+            if old_layout.size() % PAGE_SIZE != 0 {
+                let actual_size = old_layout.size().to_next_page();
+                if actual_size >= new_layout.size() {
+                    let slice =
+                        core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
+                    return Ok(core::ptr::NonNull::new_unchecked(slice));
+                }
             }
+
+            let new_ptr = self.allocate(new_layout)?;
+            core::ptr::copy_nonoverlapping(
+                ptr.as_ptr(),
+                new_ptr.as_ptr() as *mut u8,
+                old_layout.size(),
+            );
+            self.deallocate(ptr, old_layout);
+
+            Ok(new_ptr)
         }
-
-        let new_ptr = self.allocate(new_layout)?;
-        core::ptr::copy_nonoverlapping(
-            ptr.as_ptr(),
-            new_ptr.as_ptr() as *mut u8,
-            old_layout.size(),
-        );
-        self.deallocate(ptr, old_layout);
-
-        Ok(new_ptr)
-    }}
+    }
 
     unsafe fn shrink(
         &self,
         ptr: core::ptr::NonNull<u8>,
         _: core::alloc::Layout,
         new_layout: core::alloc::Layout,
-    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> { unsafe {
-        let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
-        Ok(core::ptr::NonNull::new_unchecked(slice))
-    }}
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        unsafe {
+            let slice = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), new_layout.size());
+            Ok(core::ptr::NonNull::new_unchecked(slice))
+        }
+    }
 }
 
 lazy_static! {

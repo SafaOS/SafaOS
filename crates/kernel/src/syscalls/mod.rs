@@ -1,30 +1,19 @@
-use safa_utils::errors::SysResult;
+use core::sync::atomic::AtomicU32;
 
-use crate::drivers::vfs::expose::FileAttr;
-use crate::threading::{resources, Pid};
+use safa_abi::errors::{ErrorStatus, SysResult};
+use safa_abi::fs::{DirEntry, FileAttr};
+use safa_abi::syscalls::SyscallTable;
+
+use crate::fs::{DirIter, FileRef};
+use crate::process::Pid;
+use crate::scheduler::resources;
+use crate::syscalls::ffi::SyscallFFI;
+use crate::thread::Tid;
+
 use crate::time;
-use crate::utils::syscalls::{SyscallFFI, SyscallTable};
-use crate::{
-    arch::power,
-    drivers::vfs::expose::{DirEntry, DirIter, File, FileRef},
-    utils::errors::ErrorStatus,
-    VirtAddr,
-};
+use crate::{VirtAddr, arch::power};
 
-impl SyscallFFI for File {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        File::from_fd(args).ok_or(ErrorStatus::InvalidResource)
-    }
-}
-
-impl SyscallFFI for DirIter {
-    type Args = usize;
-    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIter::from_ri(args).ok_or(ErrorStatus::InvalidResource)
-    }
-}
-
+pub mod ffi;
 mod io;
 mod processes;
 mod utils;
@@ -47,8 +36,6 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
         let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvalidSyscall)?;
         match syscall {
             // utils
-            SyscallTable::SysExit => utils::sysexit(a),
-            SyscallTable::SysYield => Ok(utils::sysyield()),
             SyscallTable::SysSbrk => utils::syssbrk_raw(a, b as *mut VirtAddr),
             SyscallTable::SysGetCWD => utils::sysgetcwd_raw((a as *mut u8, b), c as *mut usize),
             SyscallTable::SysCHDir => utils::syschdir_raw((a as *const u8, b)),
@@ -79,7 +66,20 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysPSpawn => {
                 processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut Pid)
             }
-            SyscallTable::SysWait => processes::syswait_raw(a, b as *mut usize),
+            SyscallTable::SysTSpawn => processes::sys_tspawn_raw(a, b as *const _, c as *mut Tid),
+            SyscallTable::SysPExit => crate::process::current::exit(a),
+            SyscallTable::SysTExit => crate::thread::current::exit(a),
+            SyscallTable::SysTYield => Ok(crate::thread::current::yield_now()),
+            SyscallTable::SysTSleep => Ok(crate::thread::current::sleep_for_ms(a as u64)),
+            SyscallTable::SysTFutWait => {
+                processes::syst_fut_wait_raw(a as *const AtomicU32, b, c, d as *mut bool)
+            }
+            SyscallTable::SysTFutWake => {
+                processes::syst_fut_wake_raw(a as *const AtomicU32, b, c as *mut usize)
+            }
+            SyscallTable::SysPTryCleanUp => processes::sysp_try_cleanup_raw(a, b as *mut usize),
+            SyscallTable::SysPWait => processes::sysp_wait_raw(a, b as *mut usize),
+            SyscallTable::SysTWait => processes::syst_wait_raw(a),
             // power
             SyscallTable::SysShutdown => power::shutdown(),
             SyscallTable::SysReboot => power::reboot(),

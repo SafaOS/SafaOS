@@ -2,8 +2,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum SyscallTable {
-    SysExit = 0,
-    SysYield = 1,
+    SysPExit = 0,
+    SysTYield = 1,
     /// Opens a file or directory with all permissions
     SysOpenAll = 2,
     /// Opens a file or directory with given mode (permissions and flags)
@@ -34,8 +34,26 @@ pub enum SyscallTable {
     SysGetCWD = 15,
     SysSbrk = 18,
 
+    /// Spawns a process (process)
     SysPSpawn = 19,
-    SysWait = 11,
+    /// Spawns a thread (context) inside the current process (process) with the given entry point
+    SysTSpawn = 29,
+    SysTExit = 30,
+    SysTSleep = 31,
+    /// Waits for a child process with a given PID to exit, cleans it up and returns the exit code
+    SysPWait = 11,
+    /// Waits for a child thread with a given TID to exit
+    SysTWait = 32,
+    /// like [`SysPWait`] without the waiting part, cleans up the given process and returns the exit code
+    ///
+    /// returns [`crate::errors::ErrorStatus::InvalidPid`] if the process doesn't exist
+    ///
+    /// returns [`crate::errors::ErrorStatus::Generic`] if the process exists but hasn't exited yet
+    SysPTryCleanUp = 33,
+    /// Performs a WAIT(addr, val) on the current thread, also takes a timeout
+    SysTFutWait = 34,
+    /// Performs a WAKE(addr, n) on the current thread, wakes n threads waiting on the given address
+    SysTFutWake = 35,
 
     SysShutdown = 20,
     SysReboot = 21,
@@ -43,15 +61,14 @@ pub enum SyscallTable {
     SysUptime = 27,
 }
 
-impl SyscallTable {
-    // update when a new Syscall Num is added
-    const MAX: u16 = Self::SysRemovePath as u16;
-}
+// sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
+/// When a new syscall is added, add to this number, and use the old value as the syscall number
+const NEXT_SYSCALL_NUM: u16 = 36;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();
     fn try_from(value: u16) -> Result<Self, Self::Error> {
-        if value <= Self::MAX {
+        if value < NEXT_SYSCALL_NUM {
             Ok(unsafe { core::mem::transmute(value) })
         } else {
             Err(())

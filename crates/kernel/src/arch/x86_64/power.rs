@@ -2,27 +2,28 @@ use core::arch::asm;
 
 use crate::{arch::x86_64::gdt, println, serial};
 
-use super::{acpi, outb, outw};
+use super::{acpi, outb};
 
-const SLP_TYP_S5: u16 = 0x1C00;
-const SLP_EN: u16 = 1 << 13;
+// const SLP_TYP_S5: u16 = 0x1C00;
+// const SLP_EN: u16 = 1 << 13;
 
 pub fn shutdown() -> ! {
-    let fadt = *acpi::FADT_DESC;
+    loop {}
+    // let fadt = *acpi::FADT_DESC;
 
-    let pm1a_cnt_blk = fadt.pm1a_cnt_blk as u16;
-    let shutdown_command = SLP_TYP_S5 | SLP_EN;
-    outw(pm1a_cnt_blk, shutdown_command);
+    // let pm1a_cnt_blk = fadt.pm1a_cnt_blk as u16;
+    // let shutdown_command = SLP_TYP_S5 | SLP_EN;
+    // outw(pm1a_cnt_blk, shutdown_command);
 
-    if fadt.pm1b_cnt_blk != 0 {
-        let pm1b_cnt_blk = fadt.pm1b_cnt_blk as u16;
-        outw(pm1b_cnt_blk, shutdown_command);
-    }
+    // if fadt.pm1b_cnt_blk != 0 {
+    //     let pm1b_cnt_blk = fadt.pm1b_cnt_blk as u16;
+    //     outw(pm1b_cnt_blk, shutdown_command);
+    // }
 
-    // if failed to shutdown shutdown qemu!
-    outw(0xB004, 0x2000);
-    outw(0x604, 0x2000);
-    unreachable!()
+    // // if failed to shutdown shutdown qemu!
+    // outw(0xB004, 0x2000);
+    // outw(0x604, 0x2000);
+    // unreachable!()
 }
 
 pub fn reboot() -> ! {

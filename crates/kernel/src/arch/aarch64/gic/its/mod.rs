@@ -2,17 +2,17 @@ use bitfield_struct::bitfield;
 use lazy_static::lazy_static;
 
 use crate::{
+    VirtAddr,
     arch::aarch64::gic::{
-        its::commands::{ITSCommand, GITS_COMMAND_QUEUE},
         GICITS_BASE, GICITS_TRANSLATION_BASE, GICR_BASE,
+        its::commands::{GITS_COMMAND_QUEUE, ITSCommand},
     },
     debug,
     memory::{
-        align_up,
+        AlignToPage,
         frame_allocator::{self, SIZE_1K, SIZE_64K_PAGES},
         paging::PAGE_SIZE,
     },
-    VirtAddr,
 };
 
 pub mod commands;
@@ -444,7 +444,8 @@ pub fn allocate_itt() -> (VirtAddr, usize, u8) {
     Range + 1)* GITS_TYPER.ITT_entry_size
     */
     let size = itt_entry_size as usize * event_id_bits as usize;
-    let pages = align_up(size, PAGE_SIZE).div_ceil(PAGE_SIZE);
+    let pages = size.to_next_page() / PAGE_SIZE;
+
     let (start_frame, _) =
         frame_allocator::allocate_contiguous(1, pages).expect("failed to allocate an ITT");
 

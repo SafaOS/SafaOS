@@ -28,7 +28,7 @@ pub struct SyscallContext {
 
 #[unsafe(no_mangle)]
 #[unsafe(naked)]
-pub extern "x86-interrupt" fn syscall_base() -> ! {
+pub extern "x86-interrupt" fn syscall_base() {
     naked_asm!(
         "push rbx",
         "push rcx",

@@ -4,11 +4,13 @@
 compile_error!("abi should only be used for SafaOS or freestanding targets");
 
 pub mod errors;
-pub mod raw;
+pub mod ffi;
+pub mod fs;
+pub mod process;
 pub mod syscalls;
 
 pub mod consts {
-    /// defines the max byte length for file names and task names
+    /// defines the max byte length for file names and process names
     pub const MAX_NAME_LENGTH: usize = 128;
     /// defines the max byte length for paths
     pub const MAX_PATH_LENGTH: usize = 1024;

@@ -1,16 +1,15 @@
-use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref};
+use core::{mem::ManuallyDrop, ops::Deref};
 
-use safa_utils::abi::raw::io::OpenOptions;
+use safa_abi::fs::{FSObjectType, FileAttr, OpenOptions};
 
 use crate::{
-    drivers::vfs::SeekOffset,
-    threading::resources::{self, Resource},
-    utils::io::{IoError, Readable},
-};
-
-use super::{
-    CollectionIterDescriptor, CtlArgs, FSError, FSObjectDescriptor, FSObjectType, FSResult, Path,
-    VFS_STRUCT,
+    drivers::vfs::{CtlArgs, FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
+    fs::diriter::{DirIter, DirIterRef},
+    scheduler::resources::{self, Resource},
+    utils::{
+        io::{IoError, Readable},
+        path::Path,
+    },
 };
 
 #[derive(Debug)]
@@ -19,6 +18,7 @@ use super::{
 pub struct File(usize);
 
 impl File {
+    /// Returns the resource ID of the given file
     pub const fn fd(&self) -> usize {
         self.0
     }
@@ -39,13 +39,15 @@ impl File {
         }
     }
 
-    pub fn open(path: Path) -> FSResult<Self> {
+    /// Open a file at the given path with all permissions (read and write)
+    pub fn open_all(path: Path) -> FSResult<Self> {
         let fd = VFS_STRUCT.read().open_all(path)?;
 
         let fd_ri = resources::add_resource(Resource::File(fd));
         Ok(Self(fd_ri))
     }
 
+    /// Open a file at the given path with the specified options
     pub fn open_with_options(path: Path, options: OpenOptions) -> FSResult<Self> {
         let fd = VFS_STRUCT.read().open(path, options)?;
 
@@ -53,6 +55,7 @@ impl File {
         Ok(Self(fd_ri))
     }
 
+    /// Read data from the file at the given offset into the provided buffer
     pub fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
         let offset = if offset.is_negative() {
             SeekOffset::End((-offset) as usize)
@@ -62,6 +65,7 @@ impl File {
         self.with_fd(|fd| fd.read(offset, buffer))
     }
 
+    /// Write data to the file at the given offset from the provided buffer
     pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
         let offset = if offset.is_negative() {
             SeekOffset::End((-offset) as usize)
@@ -71,6 +75,7 @@ impl File {
         self.with_fd(|fd| fd.write(offset, buffer))
     }
 
+    /// Truncate the file to the given length
     pub fn truncate(&self, len: usize) -> FSResult<()> {
         self.with_fd(|fd| fd.truncate(len))
     }
@@ -86,24 +91,31 @@ impl File {
         .flatten()
     }
 
+    /// Open a directory iterator for the given file (assuming it is a directory otherwise returns an error), closes the resource when dropped unlike [`FileRef::diriter_open`]
     pub fn diriter_open(&self) -> FSResult<DirIter> {
         let diriter = self.with_fd(|fd| fd.open_collection_iter())?;
 
         Ok(DirIter(resources::add_resource(Resource::DirIter(diriter))))
     }
 
+    /// Sync the file
     pub fn sync(&self) -> FSResult<()> {
         self.with_fd(|fd| fd.sync())
     }
 
+    /// Return the type of the file (Directory or Device or a normal File)
     pub fn kind(&self) -> FSObjectType {
         self.with_fd(|fd| fd.kind())
     }
 
+    /// Performs a `ctl` operation on the given file (assuming it is a device)
     pub fn ctl<'a>(&'a self, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
         self.with_fd(|fd| fd.ctl(cmd, args))
     }
 
+    /// Return the size of the file
+    ///
+    /// size is undefined for directories and devices
     pub fn size(&self) -> usize {
         self.with_fd(|fd| fd.size())
     }
@@ -112,6 +124,7 @@ impl File {
         self.with_fd(|fd| fd.attrs())
     }
 
+    /// Duplicate the files resource into a new handle pointing to the same file
     pub fn dup(&self) -> Self {
         Self(resources::duplicate_resource(self.0))
     }
@@ -137,21 +150,25 @@ impl Readable for File {
 pub struct FileRef(ManuallyDrop<File>);
 
 impl FileRef {
+    /// Duplicate the files resource into a new handle pointing to the same file
     pub fn dup(&self) -> Self {
         let file = self.0.dup();
         Self(ManuallyDrop::new(file))
     }
 
-    pub fn open(path: Path) -> FSResult<Self> {
-        let file = File::open(path)?;
+    /// Open a file at the given path with all permissions (read and write), returning a new [`FileRef`] instance that isn't closed when dropped
+    pub fn open_all(path: Path) -> FSResult<Self> {
+        let file = File::open_all(path)?;
         Ok(Self(ManuallyDrop::new(file)))
     }
 
+    /// Open a file at the given path with the specified permissions, returning a new [`FileRef`] instance that isn't closed when dropped
     pub fn open_with_options(path: Path, options: OpenOptions) -> FSResult<Self> {
         let file = File::open_with_options(path, options)?;
         Ok(Self(ManuallyDrop::new(file)))
     }
 
+    /// Open a directory iterator for the given file (assuming it is a directory otherwise returns an error), doesn't close the resource when dropped unlike [`File::diriter_open`]
     pub fn diriter_open(&self) -> FSResult<DirIterRef> {
         self.0
             .diriter_open()
@@ -162,98 +179,14 @@ impl FileRef {
         Some(Self(ManuallyDrop::new(File::from_fd(fd)?)))
     }
 
+    /// Return the resource ID (equivalent to file descriptor in linux) of the file
     pub fn ri(&self) -> usize {
-        self.0 .0
+        self.0.0
     }
 }
 
 impl Deref for FileRef {
     type Target = File;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[unsafe(no_mangle)]
-pub fn create(path: Path) -> FSResult<()> {
-    VFS_STRUCT.read().createfile(path)
-}
-
-#[unsafe(no_mangle)]
-pub fn remove(path: Path) -> FSResult<()> {
-    VFS_STRUCT.read().remove_path(path)
-}
-
-#[unsafe(no_mangle)]
-pub fn createdir(path: Path) -> FSResult<()> {
-    VFS_STRUCT.read().createdir(path)
-}
-
-pub use crate::utils::abi::raw::io::{DirEntry, FileAttr};
-
-pub fn get_direntry(path: Path) -> FSResult<DirEntry> {
-    VFS_STRUCT.read().get_direntry(path)
-}
-
-/// a wrapper around a DirIterDescriptor resource which closes the diriter when dropped
-pub struct DirIter(usize);
-
-impl DirIter {
-    pub fn from_ri(ri: usize) -> Option<Self> {
-        resources::get_resource(ri, |resource| {
-            if let Resource::DirIter(_) = *resource {
-                Some(Self(ri))
-            } else {
-                None
-            }
-        })
-        .flatten()
-    }
-
-    fn with_diriter<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut CollectionIterDescriptor) -> R,
-    {
-        unsafe {
-            resources::get_resource(self.0, |mut resource| {
-                let Resource::DirIter(ref mut diriter) = *resource else {
-                    unreachable!()
-                };
-
-                f(diriter)
-            })
-            .unwrap_unchecked()
-        }
-    }
-
-    pub fn next(&self) -> Option<DirEntry> {
-        self.with_diriter(|diriter| diriter.next())
-    }
-}
-
-impl Drop for DirIter {
-    fn drop(&mut self) {
-        resources::remove_resource(self.0).unwrap();
-    }
-}
-
-/// a wrapper around [`ManuallyDrop<DirIter>`] which doesn't close the diriter when dropped
-pub struct DirIterRef(ManuallyDrop<DirIter>);
-
-impl DirIterRef {
-    pub fn get(ri: usize) -> Option<Self> {
-        let diriter = DirIter::from_ri(ri)?;
-        Some(Self(ManuallyDrop::new(diriter)))
-    }
-
-    pub fn ri(&self) -> usize {
-        self.0 .0
-    }
-}
-
-impl Deref for DirIterRef {
-    type Target = DirIter;
 
     fn deref(&self) -> &Self::Target {
         &self.0

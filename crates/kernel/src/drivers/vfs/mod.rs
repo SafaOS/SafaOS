@@ -1,6 +1,3 @@
-// TODO: write some tests?
-pub mod expose;
-
 use core::fmt::{Debug, Display};
 
 use crate::{
@@ -8,32 +5,35 @@ use crate::{
     devices::{self, Device},
     error, limine,
     memory::{frame_allocator, paging::PAGE_SIZE},
-    threading::this_state,
-    time,
+    process, time,
     utils::{
-        errors::{ErrorStatus, IntoErr},
         path::PathParts,
         ustar::{self, TarArchiveIter},
     },
 };
+
 use hashbrown::HashMap;
+use safa_abi::{
+    errors::{ErrorStatus, IntoErr},
+    fs::{DirEntry, FileAttr},
+};
 use thiserror::Error;
 
 pub mod ramfs;
 pub mod rodatafs;
+// TODO: write more tests
 #[cfg(test)]
 pub mod tests;
 
 use crate::utils::locks::RwLock;
 use crate::utils::path::Path;
-use alloc::{boxed::Box, sync::Arc};
-use expose::{DirEntry, FileAttr};
-use lazy_static::lazy_static;
-use safa_utils::{
-    abi::raw::io::OpenOptions,
+use crate::utils::{
     path::PathError,
     types::{DriveName, FileName},
 };
+use alloc::{boxed::Box, sync::Arc};
+use lazy_static::lazy_static;
+use safa_abi::fs::OpenOptions;
 
 lazy_static! {
     pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
@@ -276,7 +276,7 @@ impl<'a> CtlArgs<'a> {
     }
 }
 
-pub use safa_utils::abi::raw::io::FSObjectType;
+pub use safa_abi::fs::FSObjectType;
 
 pub fn resolve_path_parts<F>(
     root_obj_id: FSObjectID,
@@ -554,8 +554,11 @@ impl VFS {
             self.resolve_abs_path(path)
         } else {
             let relative_parts = path.parts().unwrap_or_default();
-            let state = this_state();
+
+            let process = process::current();
+            let state = process.state();
             let cwd = state.cwd();
+
             self.resolve_relative_path(cwd, relative_parts)
         }
     }
@@ -591,7 +594,12 @@ impl VFS {
             let path = PathParts::new(inode.name());
 
             if cfg!(debug_assertions) {
-                debug!(VFS, "Unpacking ({}) {path} ...", inode.kind);
+                debug!(
+                    VFS,
+                    "Unpacking ({}) {path} ({}KiB) ...",
+                    inode.kind,
+                    inode.data().len() / 1024
+                );
             }
 
             match inode.kind {
@@ -631,11 +639,11 @@ impl VFS {
         })
     }
 
-    fn open_all(&self, path: Path) -> FSResult<FSObjectDescriptor> {
+    pub fn open_all(&self, path: Path) -> FSResult<FSObjectDescriptor> {
         self.open(path, OpenOptions::READ | OpenOptions::WRITE)
     }
 
-    fn open(&self, path: Path, options: OpenOptions) -> FSResult<FSObjectDescriptor> {
+    pub fn open(&self, path: Path, options: OpenOptions) -> FSResult<FSObjectDescriptor> {
         let raw_id = self.open_raw(path, options.create_file(), options.create_dir())?;
         let descriptor = FSObjectDescriptor {
             id: raw_id,
@@ -649,18 +657,18 @@ impl VFS {
         Ok(descriptor)
     }
 
-    fn remove_path(&self, path: Path) -> FSResult<()> {
+    pub fn remove_path(&self, path: Path) -> FSResult<()> {
         let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
         let obj_id = mountpoint.resolve_path_rel(parent_obj_id, PathParts::new(name))?;
         mountpoint.remove(name, parent_obj_id, obj_id)
     }
 
-    fn createfile(&self, path: Path) -> FSResult<()> {
+    pub fn createfile(&self, path: Path) -> FSResult<()> {
         let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
         mountpoint.create_file(parent_obj_id, name).map(|_| ())
     }
 
-    fn createdir(&self, path: Path) -> FSResult<()> {
+    pub fn createdir(&self, path: Path) -> FSResult<()> {
         let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
         mountpoint.create_directory(parent_obj_id, name).map(|_| ())
     }

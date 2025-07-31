@@ -1,10 +1,10 @@
 //! This module contains the boot-time implementiation of the initialization of the procfs.
 
 use super::{eve_journal::EVEJournal, usbinfo::USBInfoFile};
-use crate::threading::Pid;
+use crate::process::Pid;
 
 use super::{
-    cpuinfo::CpuInfoFile, kernelinfo::KernelInfoFile, meminfo::MemInfoFile, GenericRodFSFile,
+    GenericRodFSFile, cpuinfo::CpuInfoFile, kernelinfo::KernelInfoFile, meminfo::MemInfoFile,
 };
 
 pub enum InitStateItem {
@@ -21,8 +21,8 @@ pub const fn get_init_state() -> [InitStateItem; 5] {
     ]
 }
 
-pub const fn task_init_system(task_pid: Pid) -> [InitStateItem; 1] {
-    [InitStateItem::File(super::tasks::TaskInfoFile::new(
-        task_pid,
+pub const fn process_init_system(process_pid: Pid) -> [InitStateItem; 1] {
+    [InitStateItem::File(super::processes::ProcessInfoFile::new(
+        process_pid,
     ))]
 }

@@ -1,13 +1,14 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::drivers::vfs::expose::{DirEntry, FileAttr};
 use crate::drivers::vfs::{CtlArgs, FSObjectID, FSObjectType, SeekOffset};
+use crate::memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc};
 use crate::utils::alloc::PageVec;
 use crate::utils::locks::RwLock;
+use crate::utils::path::PathParts;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use hashbrown::HashMap;
-use safa_utils::path::PathParts;
+use hashbrown::{DefaultHashBuilder, HashMap};
+use safa_abi::fs::{DirEntry, FileAttr};
 
 use crate::devices::Device;
 
@@ -16,10 +17,21 @@ use super::{FSError, FSResult, FileSystem};
 
 pub enum RamFSObjectState {
     Data(PageVec<u8>),
-    Collection(HashMap<FileName, FSObjectID>),
+    Collection(HashMap<FileName, FSObjectID, DefaultHashBuilder, PageAlloc>),
     StaticDevice(&'static dyn Device),
 }
 
+impl core::fmt::Debug for RamFSObjectState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Data(data) => write!(f, "Data({})", data.len()),
+            Self::Collection(items) => write!(f, "Collection({items:?})"),
+            Self::StaticDevice(device) => write!(f, "Device({})", device.name()),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct RamFSObject {
     state: RamFSObjectState,
     /// the amount of times this object is referenced by another object (a collection)
@@ -107,7 +119,7 @@ impl RamFSObject {
         }
     }
 
-    pub fn sync(&mut self) -> FSResult<()> {
+    pub fn sync(&self) -> FSResult<()> {
         match self.state {
             RamFSObjectState::Data(_) => Ok(()),
             RamFSObjectState::StaticDevice(device) => device.sync(),
@@ -183,19 +195,23 @@ impl RamFSObject {
         }
     }
 
-    pub fn is_empty_collection(&self) -> bool {
+    pub fn is_non_empty_collection(&self) -> bool {
         match self.state {
             RamFSObjectState::Collection(ref items) => {
+                // collection but empty
                 if items.is_empty() {
-                    return true;
+                    return false;
                 }
                 // check if the collection contains only two items that is the pointer to the previous collection and the pointer to the current collection
                 if items.len() == 2 {
-                    items.get("..").is_some() && items.get(".").is_some()
+                    // collection but empty
+                    !(items.get("..").is_some() && items.get(".").is_some())
                 } else {
-                    false
+                    // non-empty collection
+                    true
                 }
             }
+            // not a collection
             _ => false,
         }
     }
@@ -208,6 +224,7 @@ impl RamFSObject {
     }
 }
 
+#[derive(Debug)]
 pub struct RamFS {
     objects: HashMap<FSObjectID, RamFSObject>,
     next_id: FSObjectID,
@@ -236,7 +253,7 @@ impl RamFS {
         let id = self.next_id;
         self.next_id += 1;
 
-        let mut collection = HashMap::new();
+        let mut collection = HashMap::new_in(&*GLOBAL_PAGE_ALLOCATOR);
         // don't increase the reference count because these are going to be deleted when the directory is deleted, and the directory will be treated as empty
         let previous_dir_name = FileName::new_const("..");
         let current_dir_name = FileName::new_const(".");
@@ -273,7 +290,7 @@ impl RamFS {
 
 impl RamFS {
     pub fn create() -> Self {
-        let root_collection = HashMap::new();
+        let root_collection = HashMap::new_in(&*GLOBAL_PAGE_ALLOCATOR);
         let root_obj = RamFSObject::new(RamFSObjectState::Collection(root_collection));
         let mut objects = HashMap::new();
         objects.insert(0, root_obj);
@@ -305,8 +322,8 @@ impl RamFS {
         results
     }
 
-    fn sync(&mut self, id: FSObjectID) -> FSResult<()> {
-        let obj = self.fget_mut(id)?;
+    fn sync(&self, id: FSObjectID) -> FSResult<()> {
+        let obj = self.fget(id)?;
         let results = obj.sync();
         // FIXME: if the object is a pointer and the pointed object is deleted it could be a problem...
         results
@@ -381,14 +398,10 @@ impl RamFS {
         child_id: FSObjectID,
     ) -> FSResult<()> {
         let obj = self.fget(child_id)?;
-        // makes sure the object is a non-empty collection, this is for
+        // makes sure the object is a non-empty collection if it is a collection, this is for
         // to prevent accidental deletion of non-empty directories and to make sure the directory is deleted recursively by the software (to delete hardlinks and such)
-        if !obj.is_empty_collection() {
-            return if obj.is_collection() {
-                Err(FSError::DirectoryNotEmpty)
-            } else {
-                Err(FSError::NotADirectory)
-            };
+        if obj.is_non_empty_collection() {
+            return Err(FSError::DirectoryNotEmpty);
         }
 
         let parent = self.fget_mut(parent_id)?;
@@ -411,6 +424,10 @@ impl RamFS {
 }
 
 impl FileSystem for RwLock<RamFS> {
+    fn name(&self) -> &'static str {
+        "RamFS"
+    }
+
     fn read(&self, id: FSObjectID, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
         self.read().read(id, offset, buf)
     }
@@ -420,7 +437,7 @@ impl FileSystem for RwLock<RamFS> {
     }
 
     fn sync(&self, id: FSObjectID) -> FSResult<()> {
-        self.write().sync(id)
+        self.read().sync(id)
     }
 
     fn ctl<'a>(&'a self, id: FSObjectID, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
@@ -497,7 +514,7 @@ impl FileSystem for RwLock<RamFS> {
         Ok(children.into_boxed_slice())
     }
 
-    fn attrs_of(&self, id: FSObjectID) -> super::expose::FileAttr {
+    fn attrs_of(&self, id: FSObjectID) -> safa_abi::fs::FileAttr {
         let read_guard = self.read();
         let obj = read_guard.fget(id).expect("Object not found in the ramfs");
         obj.attrs()

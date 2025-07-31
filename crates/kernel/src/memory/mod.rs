@@ -2,16 +2,15 @@ pub mod buddy_allocator;
 pub mod frame_allocator;
 pub mod page_allocator;
 pub mod paging;
+pub mod proc_mem_allocator;
 pub mod sorcery;
 
 use core::{
     fmt::{Debug, LowerHex},
     ops::{Add, AddAssign, Deref, DerefMut, Sub, SubAssign},
-    ptr::NonNull,
 };
 
-use paging::{EntryFlags, MapToError, Page, PageTable, PhysPageTable, PAGE_SIZE};
-use safa_utils::abi::raw::RawSlice;
+use paging::{PAGE_SIZE, Page, PageTable};
 use serde::Serialize;
 
 use crate::limine::HHDM;
@@ -104,7 +103,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl Sub<$ty> for $ty {
+        impl const Sub<$ty> for $ty {
             type Output = usize;
             #[inline(always)]
             fn sub(self, rhs: $ty) -> Self::Output {
@@ -112,7 +111,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl Sub<usize> for $ty {
+        impl const Sub<usize> for $ty {
             type Output = Self;
             #[inline(always)]
             fn sub(self, rhs: usize) -> Self::Output {
@@ -139,6 +138,28 @@ macro_rules! impl_addr_ty {
                 &mut self.0
             }
         }
+
+        impl const AlignTo<usize> for $ty {
+            #[inline(always)]
+            fn to_next_multiple_of(self, alignment: usize) -> Self {
+                Self::from(self.into_raw().to_next_multiple_of(alignment))
+            }
+            #[inline(always)]
+            fn to_previous_multiple_of(self, alignment: usize) -> Self {
+                Self::from(self.into_raw().to_previous_multiple_of(alignment))
+            }
+        }
+
+        impl const AlignTo<$ty> for $ty {
+            #[inline(always)]
+            fn to_next_multiple_of(self, alignment: Self) -> Self {
+                self.to_next_multiple_of(alignment.into_raw())
+            }
+            #[inline(always)]
+            fn to_previous_multiple_of(self, alignment: Self) -> Self {
+                self.to_previous_multiple_of(alignment.into_raw())
+            }
+        }
     };
 }
 
@@ -152,7 +173,7 @@ impl VirtAddr {
     }
 
     #[inline(always)]
-    pub fn into_ptr<T>(self) -> *mut T {
+    pub const fn into_ptr<T>(self) -> *mut T {
         self.0 as *mut T
     }
 
@@ -189,14 +210,141 @@ impl<T> From<*mut T> for VirtAddr {
     }
 }
 
-#[inline(always)]
-pub const fn align_up(address: usize, alignment: usize) -> usize {
-    (address + alignment - 1) & !(alignment - 1)
+#[const_trait]
+pub trait AlignTo<Other>: Sized {
+    /// Aligns (rounds) `self` to the next multiple of `alignment` aka align up
+    ///
+    /// for example: 1.to_next_multiple_of(2) == 2
+    fn to_next_multiple_of(self, alignment: Other) -> Self;
+    /// Aligns (rounds) `self` to the previous multiple of `alignment` aka align down
+    ///
+    /// for example: 3.to_previous_multiple_of(2) == 2
+    fn to_previous_multiple_of(self, alignment: Other) -> Self;
 }
 
+#[const_trait]
+pub trait AlignToPage: const AlignTo<usize> {
+    #[inline(always)]
+    /// Aligns (rounds) `self` to the next multiple of [`PAGE_SIZE`]
+    ///
+    /// for example: 0x100.to_next_page() == 0x1000 (4096)
+    fn to_next_page(self) -> Self {
+        self.to_next_multiple_of(PAGE_SIZE)
+    }
+    #[inline(always)]
+    /// Aligns (rounds) `self` to the previous multiple of [`PAGE_SIZE`]
+    ///
+    /// for example: 0x2010.to_previous_page() == 0x2000 (4096*2)
+    fn to_previous_page(self) -> Self {
+        self.to_previous_multiple_of(PAGE_SIZE)
+    }
+}
+
+macro_rules! impl_align_common {
+    ($ty: ty, $from: ty) => {
+        impl const AlignTo<$from> for $ty {
+            #[inline(always)]
+            fn to_next_multiple_of(self, alignment: $from) -> Self {
+                let alignment = alignment as $ty;
+                (self + alignment - 1) & !(alignment - 1)
+            }
+            #[inline(always)]
+            fn to_previous_multiple_of(self, alignment: $from) -> Self {
+                let alignment = alignment as $ty;
+                self & !(alignment - 1)
+            }
+        }
+    };
+
+    ($ty: ty) => {
+        impl_align_common!($ty, $ty);
+    };
+}
+
+impl_align_common!(usize);
+impl<T> const AlignToPage for T where T: const AlignTo<usize> {}
+
+impl_align_common!(usize, u64);
+impl_align_common!(usize, u32);
+impl_align_common!(usize, u16);
+impl_align_common!(u64);
+impl_align_common!(u64, u32);
+impl_align_common!(u64, u16);
+impl_align_common!(u32);
+impl_align_common!(u32, u16);
+impl_align_common!(u16);
+
+/// Copies from an address in a given page table to another address in the same page table
 #[inline(always)]
-pub const fn align_down(x: usize, alignment: usize) -> usize {
-    x & !(alignment - 1)
+pub fn userspace_copy_within(
+    page_table: &mut PageTable,
+    src_addr: VirtAddr,
+    dest_addr: VirtAddr,
+    size: usize,
+) {
+    let end_src_addr = src_addr + size;
+    let end_dest_addr = dest_addr + size;
+
+    let src_iter = Page::iter_pages(
+        Page::containing_address(src_addr),
+        Page::containing_address(end_src_addr + PAGE_SIZE),
+    );
+
+    let dest_iter = Page::iter_pages(
+        Page::containing_address(dest_addr),
+        Page::containing_address(end_dest_addr + PAGE_SIZE),
+    );
+
+    let pages_iter = src_iter.zip(dest_iter);
+    let phys_addr_iter = pages_iter.map(|(curr_src_page, curr_dest_page)| {
+        let src_frame = page_table
+            .get_frame(curr_src_page)
+            .expect("attempt to copy from an unmapped page");
+        let dest_frame = page_table
+            .get_frame(curr_dest_page)
+            .expect("attempt to copy to an unmapped page");
+
+        let calc_within = |curr_page: VirtAddr, start_addr: VirtAddr, end_addr: VirtAddr| {
+            if curr_page == start_addr.to_previous_page() {
+                let offset_within = start_addr - curr_page;
+
+                let to_next_page = PAGE_SIZE - offset_within;
+
+                let to_end = end_addr - start_addr;
+
+                let to_copy = core::cmp::min(to_next_page, to_end);
+
+                (offset_within, to_copy)
+            } else if curr_page == end_addr.to_previous_page() {
+                (0, end_addr - curr_page)
+            } else {
+                (0, PAGE_SIZE)
+            }
+        };
+
+        let (curr_src_diff, to_copy) =
+            calc_within(curr_src_page.virt_addr(), src_addr, end_src_addr);
+
+        let (curr_dest_diff, _) = calc_within(curr_dest_page.virt_addr(), dest_addr, end_dest_addr);
+
+        let src_phys_addr = src_frame.phys_addr() + curr_src_diff;
+        let dest_phys_addr = dest_frame.phys_addr() + curr_dest_diff;
+
+        (src_phys_addr, dest_phys_addr, to_copy)
+    });
+    let pointers = phys_addr_iter.map(|(src, dest, size)| {
+        (
+            src.into_virt().into_ptr::<u8>() as *const u8,
+            dest.into_virt().into_ptr::<u8>(),
+            size,
+        )
+    });
+
+    for (src, dest, size) in pointers {
+        unsafe {
+            dest.copy_from(src, size);
+        }
+    }
 }
 
 #[inline(always)]
@@ -228,115 +376,4 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
         copied += will_copy;
         to_copy -= will_copy;
     }
-}
-
-/// Maps the arguments (`slices`) to the environment area in the given page table.
-/// returns an FFI safe pointer to the args array
-/// returns None if arguments are empty
-///
-/// # Layout
-/// directly at `start` is the argv length,
-/// followed by the arg raw bytes ([u8]),
-/// followed by the args pointers (RawSlice<u8>).
-///
-/// the returned slice is a slice of the argv pointers, meaning it is not available until the page table is loaded
-/// there is an added null character at the end of each argument for compatibility with C
-pub fn map_byte_slices(
-    page_table: &mut PhysPageTable,
-    slices: &[&[u8]],
-    map_start_addr: VirtAddr,
-) -> Result<Option<NonNull<RawSlice<u8>>>, MapToError> {
-    if slices.is_empty() {
-        return Ok(None);
-    }
-
-    let mut allocated_bytes_remaining = 0;
-    let mut current_page = map_start_addr;
-
-    let mut map_next = |page_table: &mut PhysPageTable, allocated_bytes_remaining: &mut usize| {
-        let results = unsafe {
-            page_table.map_to(
-                Page::containing_address(current_page),
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?,
-                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-            )
-        };
-        *allocated_bytes_remaining += 4096;
-        current_page += 4096;
-        results
-    };
-
-    let mut map_next_bytes = |bytes: usize,
-                              page_table: &mut PhysPageTable,
-                              allocated_bytes_remaining: &mut usize|
-     -> Result<(), MapToError> {
-        let pages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-
-        for _ in 0..pages {
-            map_next(page_table, allocated_bytes_remaining)?;
-        }
-        Ok(())
-    };
-
-    macro_rules! map_if_not_enough {
-        ($bytes: expr_2021) => {
-            if allocated_bytes_remaining < $bytes {
-                map_next_bytes($bytes, page_table, &mut allocated_bytes_remaining)?;
-            } else {
-                allocated_bytes_remaining -= $bytes;
-            }
-        };
-    }
-
-    const USIZE_BYTES: usize = size_of::<usize>();
-    map_if_not_enough!(8);
-    let mut start_addr = map_start_addr;
-    // argc
-    copy_to_userspace(page_table, start_addr, &slices.len().to_ne_bytes());
-
-    // argv*
-    start_addr += USIZE_BYTES;
-
-    for slice in slices {
-        map_if_not_enough!(slice.len() + 1);
-
-        copy_to_userspace(page_table, start_addr, slice);
-        // null-terminate arg
-        copy_to_userspace(page_table, start_addr + slice.len(), b"\0");
-        start_addr += slice.len() + 1;
-    }
-
-    let mut start_addr: VirtAddr = start_addr.next_multiple_of(USIZE_BYTES).into();
-    let slices_addr = start_addr;
-    let mut current_slice_ptr = map_start_addr + USIZE_BYTES /* after argc */;
-
-    for slice in slices {
-        map_if_not_enough!(size_of::<RawSlice<u8>>());
-
-        let raw_slice =
-            unsafe { RawSlice::from_raw_parts(current_slice_ptr.into_ptr::<u8>(), slice.len()) };
-        let bytes: [u8; size_of::<RawSlice<u8>>()] = unsafe { core::mem::transmute(raw_slice) };
-
-        copy_to_userspace(page_table, start_addr, &bytes);
-        start_addr += bytes.len();
-
-        current_slice_ptr += slice.len() + 1; // skip the data (and null terminator)
-    }
-
-    Ok(Some(unsafe {
-        NonNull::new_unchecked(slices_addr.into_ptr::<RawSlice<u8>>())
-    }))
-}
-
-/// Same as [`map_byte_slices`] but for &str
-pub fn map_str_slices(
-    page_table: &mut PhysPageTable,
-    args: &[&str],
-    start_addr: VirtAddr,
-) -> Result<Option<NonNull<RawSlice<u8>>>, MapToError> {
-    return map_byte_slices(
-        page_table,
-        unsafe { core::mem::transmute(args) },
-        start_addr,
-    );
 }

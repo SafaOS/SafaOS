@@ -1,9 +1,13 @@
 //! A wrapper around the GIC cpu interface registers, whether it is the GICC Memory Mapped registers or raw system registers
-use core::arch::asm;
+use core::{arch::asm, u16};
 
 use bitfield_struct::bitfield;
 
-use crate::{debug, VirtAddr};
+use crate::{
+    VirtAddr,
+    arch::aarch64::registers::{CPUID, MPIDR},
+    debug,
+};
 
 /// This driver uses the GICC memory mapped registers instead of AArch64 native registers when available
 #[inline(always)]
@@ -250,12 +254,17 @@ pub fn init() {
         let icc_ctlr = ICCCtlr::get();
         debug!(
             ICCCtlr,
-            "Initialized, eoi mode: {}, priority bits: {}, intID bits: {}, affinity 3 valid: {}, extended intID range: {}",
+            "Initialized, eoi mode: {}, priority bits: {}, intID bits: {}, affinity 3 valid: {}, extended intID range: {} for CPU: {}",
             icc_ctlr.eoi_mode(),
             icc_ctlr.pri_bits() + 1,
-            if icc_ctlr.idbits_24() == 1 { "24" } else {"16"},
+            if icc_ctlr.idbits_24() == 1 {
+                "24"
+            } else {
+                "16"
+            },
             icc_ctlr.af3v(),
             icc_ctlr.ext_range_intid(),
+            MPIDR::read().cpuid(),
         );
     }
 
@@ -273,6 +282,82 @@ pub fn deactivate_int(int_id: u32, is_group0: bool) {
             } else {
                 asm!("msr ICC_EOIR1_EL1, {:x}", in(reg) int_id)
             }
+        }
+    }
+}
+
+#[bitfield(u64)]
+struct ICCSGI {
+    /// Target List. The set of PEs for which SGI interrupts will be generated. Each bit corresponds to the
+    /// PE within a cluster with an Affinity 0 value equal to the bit number.
+    target_list: u16,
+    /// The affinity 1 value of the affinity path of the cluster for which SGI interrupts will be generated.
+    ///
+    /// If the IRM bit is 1, this field is RES0.
+    aff1: u8,
+    #[bits(4)]
+    int_id: u8,
+    #[bits(4)]
+    __: u8,
+    /// The affinity 2 value of the affinity path of the cluster for which SGI interrupts will be generated.
+    ///
+    /// If the IRM bit is 1, this field is RES0.
+    aff2: u8,
+    /// Interrupt Routing Mode. Determines how the generated interrupts are distributed to PEs. Possible
+    /// values are:
+    ///
+    /// 0b0 Interrupts routed to the PEs specified by Aff3.Aff2.Aff1.<target list>.
+    ///
+    /// 0b1 Interrupts routed to all PEs in the system, excluding “self”.
+    irm: bool,
+    #[bits(3)]
+    __: (),
+    #[bits(4)]
+    /// RangeSelector
+    ///
+    /// Controls which group of 16 values is represented by the TargetList field.
+    ///
+    /// TargetList[n] represents aff0 value ((RS * 16) + n).
+    ///
+    /// When ICC_CTLR_EL1.RSS==0, RS is RES0.
+    ///
+    /// When ICC_CTLR_EL1.RSS==1 and GICD_TYPER.RSS==0, writing this register with RS != 0 is
+    ///
+    /// a CONSTRAINED UNPREDICTABLE choice of:
+    ///
+    /// • The write is ignored.
+    ///
+    /// • The RS field is treated as 0.
+    rs: u8,
+    /// The affinity 3 value of the affinity path of the cluster for which SGI interrupts will be generated.
+    ///
+    /// If the IRM bit is 1, this field is RES0
+    aff3: u8,
+    __: u8,
+}
+
+pub fn send_sgi(is_group0: bool, int_id: u8, target_cpu: CPUID, all_cpus: bool) {
+    let cpu_id = if all_cpus {
+        unsafe { core::mem::transmute(0) }
+    } else {
+        target_cpu
+    };
+
+    let sigr = ICCSGI::new()
+        .with_irm(all_cpus)
+        .with_target_list(1 << cpu_id.aff0())
+        .with_rs(0)
+        .with_aff1(cpu_id.aff1())
+        .with_aff2(cpu_id.aff2())
+        .with_aff3(cpu_id.aff3())
+        .with_int_id(int_id);
+    if is_group0 {
+        unsafe {
+            core::arch::asm!("msr icc_sgi0r_el1, {}", in(reg) sigr.into_bits());
+        }
+    } else {
+        unsafe {
+            core::arch::asm!("msr icc_sgi1r_el1, {}", in(reg) sigr.into_bits());
         }
     }
 }

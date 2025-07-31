@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use core::cell::SyncUnsafeCell;
 use core::fmt::Debug;
 use core::ops::IndexMut;
 use core::{arch::asm, ops::Index};
@@ -7,6 +8,7 @@ use crate::VirtAddr;
 use crate::arch::x86_64::interrupts::apic;
 use crate::arch::x86_64::pci;
 use crate::memory::paging::{EntryFlags, Page};
+use crate::memory::sorcery::{HEAP, LARGE_HEAP};
 use crate::{
     PhysAddr,
     memory::{
@@ -223,8 +225,8 @@ impl PageTable {
         }
     }
 
-    /// maps a virtual `Page` to physical `Frame`
-    pub unsafe fn map_to(
+    /// maps a virtual `Page` to physical `Frame`, without flushing the cache
+    pub unsafe fn map_to_uncached(
         &mut self,
         page: Page,
         frame: Frame,
@@ -240,14 +242,9 @@ impl PageTable {
         let level_1_table = level_2_table[level_2_index].map(flags)?;
 
         let entry = &mut level_1_table[level_1_index];
-        // TODO: stress test this
-        debug_assert!(
-            entry.frame().is_none(),
-            "entry {:?} already has a frame {:?}, but we're trying to map it to {:?} with page {page:?}",
-            entry,
-            entry.frame(),
-            frame,
-        );
+        if entry.frame().is_some() {
+            return Err(MapToError::AlreadyMapped);
+        }
 
         *entry = Entry::new(flags, frame.start_address());
         Ok(())
@@ -277,8 +274,8 @@ impl PageTable {
         Some(&mut level_1_table[level_1_index])
     }
 
-    /// unmaps a page
-    pub unsafe fn unmap(&mut self, page: Page) {
+    /// unmaps a page without flushing the cache
+    pub unsafe fn unmap_uncached(&mut self, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {
@@ -319,11 +316,20 @@ pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
     unsafe { current_higher_root_table() }
 }
 
+pub static CURRENT_RING0_PAGE_TABLE: SyncUnsafeCell<PhysAddr> =
+    SyncUnsafeCell::new(PhysAddr::null());
+
+pub(super) unsafe fn set_current_page_table_phys(phys_addr: PhysAddr) {
+    unsafe {
+        asm!("mov cr3, rax", in("rax") phys_addr.into_raw());
+    }
+}
 /// sets the current higher half Page Table to `page_table`
 pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
     let phys_addr = page_table.phys_addr();
     unsafe {
-        asm!("mov cr3, rax", in("rax") phys_addr.into_raw());
+        set_current_page_table_phys(phys_addr);
+        *CURRENT_RING0_PAGE_TABLE.get() = phys_addr;
     }
 }
 
@@ -333,5 +339,28 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
         pci::map_pcie(table)?;
         apic::map_apic(table)?;
     }
+    // a hack to handle sharing the higher half in x86_64
+    let (heap_start, heap_end) = HEAP;
+    let (large_heap_start, large_heap_end) = LARGE_HEAP;
+
+    let flags = EntryFlags::WRITE;
+    let (_, _, _, heap_p4_index) = translate(heap_start);
+    let (_, _, _, heap_end_p4_index) = translate(heap_end);
+
+    for entry in &mut table.entries[heap_p4_index..heap_end_p4_index] {
+        entry.map(ArchEntryFlags::from(flags))?;
+        crate::serial!("entry: {entry:#x?}\n");
+    }
+
+    let (_, _, _, lheap_p4_index) = translate(large_heap_start);
+    let (_, _, _, lheap_end_p4_index) = translate(large_heap_end);
+
+    for entry in &mut table.entries[lheap_p4_index..lheap_end_p4_index] {
+        entry.map(ArchEntryFlags::from(flags))?;
+    }
+
+    crate::serial!(
+        "mapped from {heap_p4_index} to {heap_end_p4_index} and from: {lheap_p4_index} to {lheap_end_p4_index}...\n"
+    );
     Ok(())
 }

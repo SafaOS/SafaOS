@@ -146,33 +146,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
-name = "kernel-snowball"
-version = "0.3.1"
-dependencies = [
- "bitfield-struct",
- "bitflags",
- "cfg-if",
- "compile-time",
- "compiler_builtins",
- "const-str",
- "hashbrown",
- "heapless",
- "hermit-dtb",
- "int-enum",
- "lazy_static",
- "limine",
- "lock_api",
- "macros",
- "noto-sans-mono-bitmap",
- "safa-utils",
- "serde",
- "serde_json",
- "slab",
- "spin",
- "thiserror",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,6 +244,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc-demangle"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "989e6739f80c4ad5b13e0fd7fe89531180375b18520cc8c82080e4dc4035b84f"
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,14 +266,34 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "safa-abi"
-version = "0.2.6"
+version = "0.3.5"
 
 [[package]]
-name = "safa-utils"
-version = "0.2.0"
+name = "safa-core"
+version = "0.4.0"
 dependencies = [
+ "bitfield-struct",
+ "bitflags",
+ "cfg-if",
+ "compile-time",
+ "compiler_builtins",
+ "const-str",
+ "hashbrown",
  "heapless",
+ "hermit-dtb",
+ "int-enum",
+ "lazy_static",
+ "limine",
+ "lock_api",
+ "macros",
+ "noto-sans-mono-bitmap",
+ "rustc-demangle",
  "safa-abi",
+ "serde",
+ "serde_json",
+ "slab",
+ "spin",
+ "thiserror",
 ]
 
 [[package]]
@@ -332,7 +331,7 @@ dependencies = [
 [[package]]
 name = "serde_json"
 version = "1.0.137"
-source = "git+https://github.com/ObserverUnit/srede-json-frok#92edb568d213dd1f67113d187c986245213621d3"
+source = "git+https://github.com/safiworks/srede-json-frok#92edb568d213dd1f67113d187c986245213621d3"
 dependencies = [
  "itoa",
  "memchr",

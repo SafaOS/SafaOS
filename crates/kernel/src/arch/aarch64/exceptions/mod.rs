@@ -1,13 +1,15 @@
 use super::gic;
 use crate::{
-    arch::aarch64::{gic::IntID, timer::TIMER_IRQ},
+    arch::aarch64::{gic::IntID, registers::MPIDR, timer::TIMER_IRQ},
     drivers::interrupts::IRQ_MANAGER,
+    khalt,
     syscalls::syscall,
     warn,
 };
 use core::{
     arch::{asm, global_asm},
     fmt::Display,
+    sync::atomic::AtomicUsize,
 };
 
 use super::registers::{Esr, ExcClass, Reg, Spsr};
@@ -29,6 +31,8 @@ pub struct InterruptFrame {
     pub lr: Reg,
     /// The saved sp at the start of the interrupt (sp_el1)
     pub sp: Reg,
+    pub fpu_registers: [[u8; 16]; 32],
+    pub tpidr_el0: Reg,
 }
 
 impl Display for InterruptFrame {
@@ -71,15 +75,18 @@ impl Display for InterruptFrame {
         writeln!(f, "SPSR: {:?}", self.spsr)?;
         writeln!(f, "ELR: {:#x}", self.elr)?;
         writeln!(f, "{}", self.esr)?;
-        write!(f, "FAR: {:?}", self.far)?;
+        writeln!(f, "FAR: {:?}", self.far)?;
+        write!(f, "CPU: {}", MPIDR::read().cpuid())?;
         Ok(())
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn handle_serror(frame: *mut InterruptFrame) { unsafe {
-    panic!("UNRECOVERABLE SERROR:\n{}", &*frame);
-}}
+unsafe extern "C" fn handle_serror(frame: *mut InterruptFrame) {
+    unsafe {
+        panic!("UNRECOVERABLE SERROR:\n{}", &*frame);
+    }
+}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn handle_sync_exception(frame: *mut InterruptFrame) {
@@ -103,6 +110,9 @@ unsafe extern "C" fn handle_fiq(frame: *mut InterruptFrame) {
     }
 }
 
+pub const HALT_ALL_SGI: IntID = IntID::from_int_id(0);
+pub static HALT_RESPONSE: AtomicUsize = AtomicUsize::new(0);
+
 #[inline]
 fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
     let int_id = gic::cpu_if::get_int_id(is_fiq /* Group 0 interrupts are FIQs */);
@@ -115,6 +125,11 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
         // TODO: instead of making this a special case just use the interrupt abstraction layer to register the timer
         // but maybe this is faster?
         i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
+        i if i == HALT_ALL_SGI.id() => {
+            HALT_RESPONSE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            crate::serial!("haltingg: {is_fiq}...\n");
+            khalt()
+        }
         // LPIs
         i if i >= 8192 => {
             let int = IntID::from_int_id(i);

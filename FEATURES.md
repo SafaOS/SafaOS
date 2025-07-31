@@ -17,24 +17,25 @@ Some useful libraries that were ported to `SafaOS`:
 - [X] x86_64
 - [X] AArch64 (incomplete only qemu virt #24)
 
-## Userspace & Tasks
+## Userspace & processes
 Overview of what processes can currently do:
-- [X] ring3
+- [X] Userspace
 - [X] ELF-loader
-- [X] Single Threaded Basic Scheduler
 - [X] Environment variables
 - [X] Arguments
 - [ ] IPC
 - [ ] Signals
-- [ ] Threads
+- [X] Threads with priorities (no load balancing for now)
+- [X] ELF Thread Local Storage
+- [X] Futexes
+- [X] SMP
 
 # VFS
 Overview of what the VFS can currently do & ported file systems:
-- [X] Creating & opening
-- [ ] Deleting & renaming & moving
+- [X] Creating & Opening & Deleting files
 - [X] Operations: reading, writing, truncating, ioctl, buffering (sync), iterating directories
 - [X] TmpFS
-- [X] unix-like proc FS `proc:/`
+- [X] `rod:/` fs, similar to procfs but isn't process specific
 - [X] unix-like devices FS `dev:/` (TmpFS under the hood)
 
 # Devices & Drivers

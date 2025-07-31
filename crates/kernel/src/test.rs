@@ -1,15 +1,15 @@
 use core::any::type_name;
 
+use crate::process::spawn::{SpawnFlags, pspawn};
+use crate::thread::ContextPriority;
+use crate::utils::{path::make_path, types::Name};
 use crate::{
-    arch::power::shutdown,
+    arch::{power::shutdown, without_interrupts},
+    eve::KERNEL_STDIO,
     info, sleep,
-    threading::expose::{pspawn, wait, SpawnFlags},
 };
-use safa_utils::{
-    abi::raw::processes::{AbiStructures, TaskStdio},
-    make_path,
-    types::Name,
-};
+use safa_abi::fs::OpenOptions;
+use safa_abi::process::ProcessStdio;
 
 #[macro_export]
 macro_rules! test_log {
@@ -48,6 +48,8 @@ pub trait Testable {
 pub enum TestPiritory {
     // crate::arch tests must be ran before other tests to ensure fail order
     Highest,
+    // memory tests
+    High,
     Medium,
     // tests that run last, given to this module tests
     Lowest,
@@ -60,6 +62,8 @@ const fn get_test_piritory<T: ?Sized>() -> TestPiritory {
             TestPiritory::Lowest
         } else if const_str::contains!(name, "arch::") {
             TestPiritory::Highest
+        } else if const_str::contains!(name, "memory::") {
+            TestPiritory::High
         } else {
             TestPiritory::Medium
         }
@@ -75,10 +79,12 @@ impl<T: Fn()> Testable for T {
 pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     test_log!("sleeping for 5 second(s) until kernel finishes startup...");
     sleep!(5000 ms);
+    _ = *KERNEL_STDIO;
 
     let tests_iter = tests
         .iter()
         .filter(|x| x.piritory() == TestPiritory::Highest);
+    let tests_iter = tests_iter.chain(tests.iter().filter(|x| x.piritory() == TestPiritory::High));
     let tests_iter = tests_iter.chain(
         tests
             .iter()
@@ -94,16 +100,12 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     let first_log_ms = crate::time!(ms);
 
     for test in tests_iter {
-        unsafe {
-            crate::arch::disable_interrupts();
-        }
-        test_log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
-        let last_log = crate::time!(us);
-        test.run();
-        ok!(last_log);
-        unsafe {
-            crate::arch::enable_interrupts();
-        }
+        without_interrupts(|| {
+            test_log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
+            let last_log = crate::time!(us);
+            test.run();
+            ok!(last_log);
+        })
     }
     info!(
         "finished running tests in {}ms",
@@ -120,10 +122,12 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
 // always runs last because it is given the lowest priority (`[TestPiritory::Lowest`] because it is in this module)
 #[test_case]
 fn userspace_test_script() {
-    use crate::drivers::vfs::expose::File;
+    use crate::fs::File;
 
-    let stdio = File::open(make_path!("dev", "/ss")).unwrap();
-    let stdio = TaskStdio::new(Some(stdio.fd()), Some(stdio.fd()), Some(stdio.fd()));
+    let stdin = File::open_with_options(make_path!("dev", "/ss"), OpenOptions::READ).unwrap();
+    let stdout = File::open_with_options(make_path!("dev", "/ss"), OpenOptions::WRITE).unwrap();
+
+    let stdio = ProcessStdio::new(Some(stdin.fd()), Some(stdout.fd()), Some(stdout.fd()));
 
     let pid = pspawn(
         Name::try_from("Tester").unwrap(),
@@ -131,11 +135,13 @@ fn userspace_test_script() {
         &[],
         &[],
         SpawnFlags::empty(),
-        AbiStructures { stdio },
+        ContextPriority::Medium,
+        stdio,
+        None,
     )
     .unwrap();
     // thread yields, so works even when interrupts are disabled
-    let ret = wait(pid);
+    let ret = crate::thread::current::wait_for_process(pid);
 
-    assert_eq!(ret, 0);
+    assert_eq!(ret, Some(0));
 }

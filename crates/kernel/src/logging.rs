@@ -4,10 +4,10 @@ use core::{
 };
 
 use crate::{
+    VirtAddr,
     arch::registers::StackFrame,
     globals::KERNEL_ELF,
     utils::{alloc::PageString, locks::RwLock},
-    VirtAddr,
 };
 
 pub static SERIAL_LOG: RwLock<Option<PageString>> = RwLock::new(None);
@@ -210,7 +210,12 @@ impl<'a> Display for StackTrace<'a> {
                     sym.and_then(|sym| KERNEL_ELF.string_table_index(sym.name_index))
                 };
                 let name = name.as_deref().unwrap_or("???");
-                writeln!(f, "  {:?} <{}>", return_address, name)?;
+                writeln!(
+                    f,
+                    "  {:?} <{:#}>",
+                    return_address,
+                    rustc_demangle::demangle(name)
+                )?;
 
                 let Some(frame) = fp.prev() else {
                     break;

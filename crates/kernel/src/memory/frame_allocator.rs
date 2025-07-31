@@ -3,10 +3,10 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-use crate::utils::locks::Mutex;
+use crate::{memory::AlignToPage, utils::locks::Mutex};
 use lazy_static::lazy_static;
 
-use super::{align_down, paging::PAGE_SIZE, PhysAddr, VirtAddr};
+use super::{PhysAddr, VirtAddr, paging::PAGE_SIZE};
 
 /// 1 KiB
 pub const SIZE_1K: usize = 1024 * 1;
@@ -60,8 +60,8 @@ impl Frame {
     #[inline(always)]
     // returns the frame that contains an address
     pub fn containing_address(address: PhysAddr) -> Self {
-        let aligned = align_down(address.into_raw(), PAGE_SIZE);
-        Self(PhysAddr::from(aligned))
+        let aligned = address.to_previous_page();
+        Self(aligned)
     }
 
     #[inline]
@@ -139,13 +139,15 @@ impl RegionNode {
     /// creates a new region node in the given frame
     /// # Safety
     /// the caller must ensure that the frame is not used anymore
-    unsafe fn new_in(frame: Frame) -> *mut Self { unsafe {
-        let frame_addr = frame.virt_addr();
-        let region_pointer = frame_addr.into_ptr::<RegionNode>();
+    unsafe fn new_in(frame: Frame) -> *mut Self {
+        unsafe {
+            let frame_addr = frame.virt_addr();
+            let region_pointer = frame_addr.into_ptr::<RegionNode>();
 
-        *region_pointer = RegionNode::new(frame.start_address());
-        region_pointer
-    }}
+            *region_pointer = RegionNode::new(frame.start_address());
+            region_pointer
+        }
+    }
 
     pub const fn page_num(&self) -> usize {
         self.start_address.into_raw() / PAGE_SIZE
@@ -513,9 +515,11 @@ fn allocate_contiguous_test_inner<const N: usize>(align_pages: usize) -> heaples
     let mut results = heapless::Vec::new();
     let (start, end) = allocate_contiguous(align_pages, N).expect("Failed to allocate contiguous");
 
-    assert!(start
-        .start_address()
-        .is_multiple_of(align_pages * PAGE_SIZE));
+    assert!(
+        start
+            .start_address()
+            .is_multiple_of(align_pages * PAGE_SIZE)
+    );
     assert_eq!(used_before + N, mapped_frames());
 
     let iter = Frame::iter_frames(

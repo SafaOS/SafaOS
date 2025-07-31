@@ -1,13 +1,21 @@
+use alloc::boxed::Box;
 use lazy_static::lazy_static;
 
 use crate::{
-    arch::{aarch64::cpu, paging::current_higher_root_table},
+    VirtAddr,
+    arch::{
+        aarch64::{
+            cpu,
+            gic::gicr::{GICRDesc, lpis::LPIManager},
+            registers::{CPUID, MPIDR},
+        },
+        paging::current_higher_root_table,
+    },
     debug, info,
     memory::{
         frame_allocator::SIZE_64K,
         paging::{EntryFlags, MapToError, PAGE_SIZE},
     },
-    VirtAddr,
 };
 
 use super::paging::PageTable;
@@ -43,36 +51,47 @@ lazy_static! {
     static ref GICITS_TRANSLATION_BASE: VirtAddr = *GICITS_BASE + 0x010000;
 }
 
-unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> { unsafe {
-    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
-    if let Some((gicc_base, size)) = *GICC {
+unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
+    unsafe {
+        let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+        if let Some((gicc_base, size)) = *GICC {
+            dest.map_contiguous_pages(
+                gicc_base,
+                gicc_base.into_phys(),
+                size.div_ceil(PAGE_SIZE),
+                flags,
+            )?;
+        }
         dest.map_contiguous_pages(
-            gicc_base,
-            gicc_base.into_phys(),
-            size.div_ceil(PAGE_SIZE),
+            *GICD_BASE,
+            (*GICD_BASE).into_phys(),
+            (*GICD_SIZE).div_ceil(PAGE_SIZE),
             flags,
         )?;
+        dest.map_contiguous_pages(
+            *GICR_BASE,
+            (*GICR_BASE).into_phys(),
+            (*GICR_SIZE).div_ceil(PAGE_SIZE),
+            flags,
+        )?;
+        dest.map_contiguous_pages(
+            *GICITS_BASE,
+            (*GICITS_BASE).into_phys(),
+            (*GICITS_SIZE).div_ceil(PAGE_SIZE),
+            flags,
+        )?;
+        Ok(())
     }
-    dest.map_contiguous_pages(
-        *GICD_BASE,
-        (*GICD_BASE).into_phys(),
-        (*GICD_SIZE).div_ceil(PAGE_SIZE),
-        flags,
-    )?;
-    dest.map_contiguous_pages(
-        *GICR_BASE,
-        (*GICR_BASE).into_phys(),
-        (*GICR_SIZE).div_ceil(PAGE_SIZE),
-        flags,
-    )?;
-    dest.map_contiguous_pages(
-        *GICITS_BASE,
-        (*GICITS_BASE).into_phys(),
-        (*GICITS_SIZE).div_ceil(PAGE_SIZE),
-        flags,
-    )?;
-    Ok(())
-}}
+}
+
+lazy_static! {
+    static ref GICR_DESCRIPTORS: Box<[gicr::GICRDesc]> =
+        unsafe { gicr::GICRDesc::get_all_from_base(*GICR_BASE) }.into_boxed_slice();
+}
+
+pub fn gic_init_cpu() {
+    cpu_if::init();
+}
 
 pub fn init_gic() {
     unsafe {
@@ -84,15 +103,22 @@ pub fn init_gic() {
     );
 
     gicd::init();
-    gicr::init();
+    for gicr in &*GICR_DESCRIPTORS {
+        let enable_lpis = gicr.is_root();
+        gicr.init(enable_lpis);
+    }
+
     cpu_if::init();
     its::init();
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntKind {
+    /// handled by the GICR
     PPI,
+    /// handled by the GICR
     SGI,
+    /// handled by the GICD
     SPI,
     LPI,
 }
@@ -109,50 +135,6 @@ impl IntKind {
             1020..=1023 | 1024..=8191 => unreachable!(),
         }
     }
-
-    fn choose_reg<T, F>(self, gicd_reg: *mut T, gicr_reg: *mut T, lpi_f: F) -> Option<*mut T>
-    where
-        F: FnOnce(),
-    {
-        match self {
-            Self::SGI | Self::PPI => Some(gicr_reg),
-            Self::SPI => Some(gicd_reg),
-            Self::LPI => {
-                lpi_f();
-                None
-            }
-        }
-    }
-}
-
-/// Enables GIC interrupt
-fn enable(interrupt: u32, int_kind: IntKind) {
-    let value = interrupt % 32;
-    let index = interrupt / 32;
-
-    unsafe {
-        let Some(reg) = int_kind.choose_reg(gicd::isenabler(), gicr::isenabler(), || {
-            LPI_MANAGER.lock().enable(interrupt)
-        }) else {
-            return;
-        };
-        core::ptr::write_volatile(reg.add(index as usize), 1 << value);
-    }
-}
-
-#[inline(always)]
-/// Clears pending interrupt
-pub fn clear_pending(interrupt: u32, kind: IntKind) {
-    let value = interrupt % 32;
-    let index = interrupt / 32;
-    unsafe {
-        let Some(reg) = kind.choose_reg(gicd::icpendr0(), gicr::icpendr0(), || {
-            LPI_MANAGER.lock().clear_pending(interrupt)
-        }) else {
-            return;
-        };
-        core::ptr::write_volatile(reg.add(index as usize), 1 << value);
-    }
 }
 
 /// The interrupt group
@@ -164,42 +146,6 @@ pub enum IntGroup {
     Secure = 0,
     /// Group 1, Typically used by IRQs
     NonSecure = 1,
-}
-
-#[inline(always)]
-pub fn set_group(int_id: u32, kind: IntKind, group: IntGroup) {
-    let value = int_id % 32;
-    let index = int_id / 32;
-
-    unsafe {
-        let Some(reg) = kind.choose_reg(gicd::igroup0(), gicr::igroup0(), || unimplemented!())
-        else {
-            return;
-        };
-        let reg = reg.add(index as usize);
-
-        let shift = 1 << value;
-        core::ptr::write_volatile(
-            reg,
-            if group == IntGroup::NonSecure {
-                *reg | shift
-            } else {
-                *reg & !shift
-            },
-        );
-    }
-}
-
-fn set_pending(int_id: u32, kind: IntKind) {
-    let value = int_id % 32;
-    let index = int_id / 32;
-    let reg = kind
-        .choose_reg(gicd::ispendr0(), gicr::ispendr0(), || unimplemented!())
-        .unwrap();
-    unsafe {
-        let reg = reg.add(index as usize);
-        core::ptr::write_volatile(reg, 1 << value);
-    }
 }
 
 /// A Generic Wrapper around a GIC interrupt
@@ -215,25 +161,144 @@ impl IntID {
             kind: IntKind::from_int_id(int_id),
         }
     }
-    /// Enables the interrupt
-    pub fn enable(&self) -> &Self {
-        enable(self.id, self.kind);
+
+    unsafe fn do_all_generic_set<const ALL_CPUS: bool, T: From<u32>>(
+        &self,
+        get_gicd_reg: impl Fn() -> *mut T,
+        get_gicr_reg: impl Fn(&GICRDesc) -> *mut T,
+        lpi_manager_do: impl Fn(&mut LPIManager),
+    ) {
+        let interrupt = self.id;
+        let value = interrupt % (size_of::<T>() * 8) as u32;
+        let index = (interrupt / (size_of::<T>() * 8) as u32) as usize;
+        unsafe {
+            self.do_all_generic_custom::<ALL_CPUS, T>(
+                get_gicd_reg,
+                get_gicr_reg,
+                |reg| reg.add(index).write_volatile((1 << value).into()),
+                lpi_manager_do,
+            );
+        }
+    }
+
+    unsafe fn do_all_generic_custom<const ALL_CPUS: bool, T>(
+        &self,
+        get_gicd_reg: impl Fn() -> *mut T,
+        get_gicr_reg: impl Fn(&GICRDesc) -> *mut T,
+        mut do_with_reg: impl FnMut(*mut T),
+        lpi_manager_do: impl Fn(&mut LPIManager),
+    ) {
+        match self.kind {
+            IntKind::SGI | IntKind::PPI => {
+                if ALL_CPUS {
+                    for gicr in &*GICR_DESCRIPTORS {
+                        let reg = get_gicr_reg(gicr);
+                        crate::serial!("got reg: {reg:?}\n");
+                        do_with_reg(reg);
+                    }
+                } else {
+                    let mpidr = MPIDR::read();
+                    let cpu_id = mpidr.cpuid();
+                    for gicr in &*GICR_DESCRIPTORS {
+                        if gicr.cpu_id() == cpu_id {
+                            let reg = get_gicr_reg(gicr);
+                            do_with_reg(reg);
+                        }
+                    }
+                }
+            }
+            IntKind::SPI => do_with_reg(get_gicd_reg()),
+            IntKind::LPI => lpi_manager_do(&mut *LPI_MANAGER.lock()),
+        }
+    }
+
+    /// Enables the interrupt in all CPUs
+    pub fn enable_all(&self) -> &Self {
+        unsafe {
+            self.do_all_generic_set::<true, _>(
+                || gicd::isenabler(),
+                |gicr| gicr.isenabler(),
+                |lpi_manager| lpi_manager.enable(self.id),
+            );
+        }
         debug!(IntID, "enabled interrupt with ID `{}`", self.id);
         self
     }
-    /// Marks the interrupt as not pending
+
+    fn clear_pending_generic<const ALL_CPUS: bool>(&self) -> &Self {
+        unsafe {
+            self.do_all_generic_set::<ALL_CPUS, _>(
+                || gicd::icpendr0(),
+                |gicr| gicr.icpendr0(),
+                |lpi_m| lpi_m.clear_pending(self.id),
+            );
+        }
+        self
+    }
+
+    /// Marks the interrupt as not pending in the current cpu
     pub fn clear_pending(&self) -> &Self {
-        clear_pending(self.id, self.kind);
-        self
+        self.clear_pending_generic::<false>()
     }
-    /// Makes the interrupt pending
+
+    /// Marks the interrupt as not pending in all CPUs
+    pub fn clear_pending_all(&self) -> &Self {
+        self.clear_pending_generic::<true>()
+    }
+
+    /// Makes the interrupt pending in the current cpu
     pub fn set_pending(&self) -> &Self {
-        set_pending(self.id, self.kind);
+        unsafe {
+            self.do_all_generic_set::<false, _>(
+                || gicd::ispendr0(),
+                |gicr| gicr.ispendr0(),
+                |_| unimplemented!("set pending isn't implemented for LPIs"),
+            );
+        }
         self
     }
-    /// Sets the group of the interrupt to `group`
-    pub fn set_group(&self, group: IntGroup) -> &Self {
-        set_group(self.id, self.kind, group);
+
+    pub fn is_pending(&self) -> bool {
+        unsafe {
+            let interrupt = self.id;
+            let value = interrupt % 32;
+            let index = (interrupt / 32) as usize;
+            let mut pending = false;
+
+            self.do_all_generic_custom::<false, _>(
+                || gicd::icpendr0(),
+                |gicr| gicr.icpendr0(),
+                |reg| {
+                    let reg = reg.add(index);
+                    let reg = reg.read_volatile();
+                    pending = ((reg >> value) & 1) == 1;
+                },
+                |_| unimplemented!(),
+            );
+            pending
+        }
+    }
+    /// Sets the group of the interrupt to `group` in all CPUs
+    pub fn set_group_all(&self, group: IntGroup) -> &Self {
+        let interrupt = self.id;
+        let index = (interrupt % 32) as usize;
+        let value = interrupt / 32;
+        let shift = 1 << value;
+        unsafe {
+            self.do_all_generic_custom::<true, _>(
+                || gicd::igroup0(),
+                |gicr| gicr.igroup0(),
+                |reg| {
+                    reg.add(index)
+                        .write_volatile(if group == IntGroup::NonSecure {
+                            *reg | shift
+                        } else {
+                            *reg & !shift
+                        })
+                },
+                |_| unimplemented!("set group isn't implemented for LPIs"),
+            );
+        }
         debug!(
             IntID,
             "set group of interrupt with ID `{}` to {:?}", self.id, group
@@ -249,5 +314,16 @@ impl IntID {
     pub fn deactivate(&self, is_group0: bool) -> &Self {
         cpu_if::deactivate_int(self.id(), is_group0);
         self
+    }
+
+    /// Requests self assuming it is a sgi, if it isn't will panic
+    pub fn request_sgi_all(&self, is_group0: bool) {
+        assert_eq!(self.kind, IntKind::SGI);
+        cpu_if::send_sgi(
+            is_group0,
+            self.id() as u8,
+            CPUID::construct(0, 0, 0, 0),
+            true,
+        );
     }
 }

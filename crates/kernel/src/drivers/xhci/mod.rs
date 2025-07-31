@@ -9,7 +9,7 @@ use regs::{CapsReg, XHCIDoorbellManager};
 use rings::{command::XHCICommandRing, event::XHCIEventRing};
 
 use crate::{
-    arch::{disable_interrupts, enable_interrupts, paging::current_higher_root_table},
+    arch::{paging::current_higher_root_table, without_interrupts},
     debug,
     drivers::{
         driver_poll::{self, PolledDriver},
@@ -26,7 +26,7 @@ use crate::{
                     self, AddressDeviceCommandTRB, CmdResponseTRB, CompletionStatusCode,
                     ConfigureEndpointCommandTRB, DataStageTRB, EvaluateContextCMDTRB, EventDataTRB,
                     EventResponseTRB, PortStatusChangeTRB, SetupStageTRB, StatusStageTRB,
-                    TransferResponseTRB, XHCIDeviceRequestPacket, TRB_TYPE_ENABLE_SLOT_CMD,
+                    TRB_TYPE_ENABLE_SLOT_CMD, TransferResponseTRB, XHCIDeviceRequestPacket,
                 },
             },
             usb::{GenericUSBDescriptor, UsbDeviceDescriptor},
@@ -389,7 +389,9 @@ impl<'s> XHCIResponseQueue<'s> {
         // FIXME: fails on qemu because it excepts a STATUS first which is a bug, so we don't return failure here
         // there is probably an alternative to using this such as chaining an event after status
         if let Err(e) = self.start_ctrl_ep_transfer(transfer_ring) {
-            warn!("XHCI failed to perform first transfer: {e}, if you are using qemu then this is expected");
+            warn!(
+                "XHCI failed to perform first transfer: {e}, if you are using qemu then this is expected"
+            );
         }
 
         let mut status_stage = StatusStageTRB::new(0);
@@ -765,35 +767,32 @@ impl<'s> PCIDevice for XHCI<'s> {
     }
 
     fn start(&'static self) -> bool {
-        unsafe {
-            disable_interrupts();
-        }
-        let irq_info = self.irq_info.clone();
+        without_interrupts(|| {
+            let irq_info = self.irq_info.clone();
 
-        interrupts::register_irq(irq_info, IntTrigger::Edge, self);
-        driver_poll::add_to_poll(self);
+            interrupts::register_irq(irq_info, IntTrigger::Edge, self);
+            driver_poll::add_to_poll(self);
 
-        let regs = unsafe { self.regs.as_mut_unchecked() };
-        let op_regs = unsafe { regs.operational_regs() };
-        let usbsts_before = read_ref!(op_regs.usbstatus);
-        let usbcmd_before = read_ref!(op_regs.usbcmd);
-        unsafe {
-            regs.start();
-            self.prob();
-        }
-        let usbsts_after = read_ref!(op_regs.usbstatus);
-        let usbcmd_after = read_ref!(op_regs.usbcmd);
-        debug!(
-            XHCI,
-            "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}", usbsts_before, usbsts_after, usbcmd_before, usbcmd_after
-        );
+            let regs = unsafe { self.regs.as_mut_unchecked() };
+            let op_regs = unsafe { regs.operational_regs() };
+            let usbsts_before = read_ref!(op_regs.usbstatus);
+            let usbcmd_before = read_ref!(op_regs.usbcmd);
+            unsafe {
+                regs.start();
+                self.prob();
+            }
+            let usbsts_after = read_ref!(op_regs.usbstatus);
+            let usbcmd_after = read_ref!(op_regs.usbcmd);
+            debug!(
+                XHCI,
+                "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}",
+                usbsts_before,
+                usbsts_after,
+                usbcmd_before,
+                usbcmd_after
+            );
+        });
 
-        unsafe {
-            enable_interrupts();
-        }
-
-        let test = self.enable_device_slot();
-        crate::serial!("XHCI responded with enabling slot {test:#?}\n");
         true
     }
 }

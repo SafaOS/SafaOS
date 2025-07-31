@@ -1,12 +1,12 @@
 use core::fmt::Display;
 
 use crate::{
+    PhysAddr,
     drivers::xhci::rings::trbs::CompletionStatusCode,
     memory::{
         frame_allocator::{self, Frame},
         paging::{MapToError, PAGE_SIZE},
     },
-    PhysAddr,
 };
 
 // FIXME: make a DMA allocator that doesn't waste memory like this
@@ -65,6 +65,7 @@ impl From<MapToError> for XHCIError {
     fn from(value: MapToError) -> Self {
         match value {
             MapToError::FrameAllocationFailed => Self::OutOfMemory,
+            MapToError::AlreadyMapped => Self::Other,
         }
     }
 }

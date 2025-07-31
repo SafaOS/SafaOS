@@ -13,19 +13,34 @@ use limine::request::FramebufferRequest;
 use limine::request::HhdmRequest;
 use limine::request::MemoryMapRequest;
 use limine::request::ModuleRequest;
+use limine::request::MpRequest;
 use limine::request::RsdpRequest;
 
 use limine::BaseRevision;
 use limine::response::MemoryMapResponse;
+use limine::response::MpResponse;
 
 use crate::drivers::framebuffer::FrameBufferInfo;
 use crate::drivers::framebuffer::PixelFormat;
-use crate::memory::align_up;
+use crate::memory::AlignTo;
 use crate::utils::ustar::TarArchiveIter;
 
 #[used]
 #[unsafe(link_section = ".requests")]
 static BASE_REVISION: BaseRevision = BaseRevision::with_revision(2);
+
+#[used]
+#[unsafe(link_section = ".requests")]
+static MP_REQUEST: MpRequest = MpRequest::new();
+
+// TODO: rewrite this whole module to be more generic
+lazy_static! {
+    pub static ref MP_RESPONSE: &'static MpResponse = get_mp_info();
+}
+fn get_mp_info() -> &'static MpResponse {
+    let mp_response = MP_REQUEST.get_response().expect("no Limine MP Response");
+    mp_response
+}
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -77,6 +92,7 @@ pub fn get_phy_offset() -> usize {
     HHDM_REQUEST.get_response().unwrap().offset() as usize
 }
 
+#[allow(unused)]
 pub fn rsdp_addr() -> usize {
     RSDP_REQUEST.get_response().unwrap().address() as usize
 }
@@ -107,7 +123,7 @@ fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
         _ => panic!("unknown limine framebuffer format"),
     };
 
-    let bytes_per_pixel = align_up(first.bpp() as usize, 8) / 8;
+    let bytes_per_pixel = (first.bpp().to_next_multiple_of(8) / 8) as usize;
     let stride = first.pitch() as usize / bytes_per_pixel;
     let height = first.height() as usize;
 

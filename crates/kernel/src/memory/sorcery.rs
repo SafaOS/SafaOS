@@ -1,36 +1,37 @@
 use super::{
+    VirtAddr,
     frame_allocator::FramePtr,
     paging::{EntryFlags, PAGE_SIZE},
-    VirtAddr,
 };
 use ::limine::memory_map::EntryType;
 
 use crate::{
+    PhysAddr,
     arch::{
         self,
         paging::{current_higher_root_table, set_current_higher_page_table},
     },
     debug,
     limine::{self, HHDM},
-    memory::{align_up, frame_allocator},
-    PhysAddr,
+    memory::{AlignToPage, frame_allocator},
 };
 
 use super::paging::{MapToError, Page, PageTable};
 
-pub const HEAP: (usize, usize) = {
+pub const HEAP: (VirtAddr, VirtAddr) = {
     // assuming HHDM starts at 0xffff000000000000
     // this allows for 224 TiBs of HHDM
     // assuming it starts at 0xffff800000000000
     // this allows for 96 TiBs of HHDM meaning you don't really have to worry`
-    let end = 0xffffe00000000000;
-    // 1 TiB from end
-    (end, end + 0x100000000000)
+    let end = VirtAddr::from(0xffffe00000000000);
+    // 2 TiB from end
+    (end, end + (0x100000000000 / 8))
 };
 
-pub const LARGE_HEAP: (usize, usize) = {
+pub const LARGE_HEAP: (VirtAddr, VirtAddr) = {
     let (_, end) = HEAP;
-    (end, 0xffffffff80000000)
+    // 4 TiB from end
+    (end, end + (0x100000000000 / 4))
 };
 
 fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
@@ -63,7 +64,8 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
     for entry in limine::mmap_request().entries() {
         let phys_addr = PhysAddr::from(entry.base as usize);
         let size_bytes = entry.length as usize;
-        let size = align_up(size_bytes, PAGE_SIZE);
+        let size = size_bytes.to_next_page();
+
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
             let virt_addr = phys_addr.into_virt();
             let page_num = size / PAGE_SIZE;
@@ -84,31 +86,34 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
     Ok(largest_addr_virt + PAGE_SIZE)
 }
 
-unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> { unsafe {
-    debug!(PageTable, "mapping kernel");
-    let start = Page::containing_address(VirtAddr::from(0xffffffff80000000));
-    let end = Page::containing_address(VirtAddr::from(0xffffffffffffffff));
-    let iter = Page::iter_pages(start, end);
-    let flags = EntryFlags::WRITE;
+unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> {
+    unsafe {
+        debug!(PageTable, "mapping kernel");
+        let start = Page::containing_address(VirtAddr::from(0xffffffff80000000));
+        let end = Page::containing_address(VirtAddr::from(0xffffffffffffffff));
+        let iter = Page::iter_pages(start, end);
+        let flags = EntryFlags::WRITE;
 
-    for page in iter {
-        let Some(frame) = src.get_frame(page) else {
-            break;
-        };
-        dest.map_to(page, frame, flags)?;
+        for page in iter {
+            let Some(frame) = src.get_frame(page) else {
+                break;
+            };
+            dest.map_to(page, frame, flags)?;
+        }
+        debug!(PageTable, "mapped kernel");
+        Ok(())
     }
-    debug!(PageTable, "mapped kernel");
-    Ok(())
-}}
+}
 
 pub fn init_page_table() {
     debug!(PageTable, "initializing root page table ... ");
-    let previous_table = unsafe { super::paging::current_higher_root_table() };
+    let _ = unsafe { super::paging::current_higher_root_table() };
     let table = create_root_page_table().unwrap();
     unsafe {
         set_current_higher_page_table(table);
     }
     // de-allocating the previous root table
-    let frame = previous_table.frame();
-    frame_allocator::deallocate_frame(frame)
+    // FIXME: could still be used by other cpus so i don't free it for now
+    // let frame = previous_table.frame();
+    // frame_allocator::deallocate_frame(frame)
 }

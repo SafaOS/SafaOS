@@ -4,52 +4,24 @@
 use core::cell::SyncUnsafeCell;
 
 use crate::drivers::driver_poll::{self, PolledDriver};
-use crate::threading::expose::{function_spawn, SpawnFlags};
+use crate::serial;
+use crate::thread::{self, ContextPriority, Tid};
 use crate::utils::alloc::PageString;
-use crate::utils::locks::Mutex;
-use crate::{drivers::vfs, memory::paging::PhysPageTable, serial};
-use crate::{logging, threading};
+use crate::utils::path::make_path;
+use crate::{debug, fs, logging, process};
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
-use safa_utils::types::Name;
-use safa_utils::{
-    abi::raw::processes::{AbiStructures, TaskStdio},
-    make_path,
-};
+use safa_abi::fs::OpenOptions;
+use safa_abi::process::ProcessStdio;
 use spin::Lazy;
 
-pub struct Eve {
-    clean_up_list: Vec<PhysPageTable>,
-}
-
-impl Eve {
-    const fn new() -> Self {
-        Self {
-            clean_up_list: Vec::new(),
-        }
-    }
-
-    pub fn add_cleanup(&mut self, page_table: PhysPageTable) {
-        self.clean_up_list.push(page_table);
-    }
-}
-
-pub static EVE: Mutex<Eve> = Mutex::new(Eve::new());
-
-fn one_shot() -> Option<PhysPageTable> {
-    let mut lock_guard = EVE.lock();
-    return lock_guard.clean_up_list.pop();
-}
-
-pub static KERNEL_STDIO: Lazy<TaskStdio> = Lazy::new(|| {
-    let stdin = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
-    let stdout = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
-    let stderr = vfs::expose::FileRef::open(make_path!("dev", "tty")).unwrap();
-    TaskStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
-});
-
-pub static KERNEL_ABI_STRUCTURES: Lazy<AbiStructures> = Lazy::new(|| AbiStructures {
-    stdio: *KERNEL_STDIO,
+pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
+    let stdin =
+        fs::FileRef::open_with_options(make_path!("dev", "tty"), OpenOptions::READ).unwrap();
+    let stdout =
+        fs::FileRef::open_with_options(make_path!("dev", "tty"), OpenOptions::WRITE).unwrap();
+    let stderr = stdout.dup();
+    ProcessStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
 });
 
 lazy_static! {
@@ -57,24 +29,12 @@ lazy_static! {
         SyncUnsafeCell::new(driver_poll::take_poll());
 }
 
-fn poll_driver_thread() -> ! {
-    let current = threading::current();
-    let thread_name = current.name();
-    let mut poll_driver = None;
-    for polled_driver in unsafe { &*POLLING.get() } {
-        if polled_driver.thread_name() == thread_name {
-            poll_driver = Some(polled_driver);
-        }
-    }
-
-    let poll_driver = poll_driver.unwrap_or_else(|| {
-        panic!(
-            "failed to find a polled driver for the thread: {}",
-            thread_name
-        )
-    });
-    drop(current);
-    poll_driver.poll_function()
+fn poll_driver_thread(tid: Tid, driver: &&dyn PolledDriver) -> ! {
+    debug!(
+        "polling driver in thread: {}, thread TID: {tid}",
+        driver.thread_name()
+    );
+    driver.poll_function()
 }
 
 /// the main loop of Eve
@@ -87,21 +47,24 @@ pub fn main() -> ! {
 
     // FIXME: use threads
     for poll_driver in unsafe { &*POLLING.get() } {
-        function_spawn(
-            Name::try_from(poll_driver.thread_name()).unwrap(),
+        process::current::kernel_thread_spawn(
             poll_driver_thread,
-            &[],
-            &[],
-            SpawnFlags::CLONE_RESOURCES,
-            *KERNEL_ABI_STRUCTURES,
+            poll_driver,
+            Some(ContextPriority::High),
+            Some(0),
         )
-        .expect("failed to spawn a function for a polled driver");
+        .expect("failed to spawn a thread function for a polled driver");
     }
 
     #[cfg(not(test))]
     {
-        use crate::{info, sleep, threading::expose::pspawn};
-        info!("kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell");
+        use crate::process::spawn::{SpawnFlags, pspawn};
+        use crate::utils::types::Name;
+        use crate::{info, sleep};
+
+        info!(
+            "kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell"
+        );
         sleep!(2500 ms);
 
         // start the shell
@@ -112,36 +75,32 @@ pub fn main() -> ! {
             &["sys:/bin/safa", "-i"],
             &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
             SpawnFlags::empty(),
-            *KERNEL_ABI_STRUCTURES,
+            ContextPriority::Medium,
+            *KERNEL_STDIO,
+            None,
         )
         .unwrap();
     }
 
     #[cfg(test)]
     {
-        fn run_tests() -> ! {
+        use crate::thread::ContextPriority;
+
+        fn run_tests(_tid: Tid, _arg: &()) -> ! {
             crate::kernel_testmain();
             unreachable!()
         }
 
-        function_spawn(
-            Name::try_from("TestRunner").unwrap(),
-            run_tests,
-            &[],
-            &[],
-            SpawnFlags::CLONE_RESOURCES,
-            *KERNEL_ABI_STRUCTURES,
-        )
-        .unwrap();
+        process::current::kernel_thread_spawn(run_tests, &(), Some(ContextPriority::Medium), None)
+            .expect("failed to spawn Test Thread");
     }
 
-    loop {
-        one_shot();
-        core::hint::spin_loop();
-    }
+    thread::current::exit(0)
 }
 
-/// adds a page table to the list of page tables that need to be cleaned up
-pub fn add_cleanup(page_table: PhysPageTable) {
-    EVE.lock().add_cleanup(page_table);
+pub fn idle_function() -> ! {
+    crate::serial!("entered idle\n");
+    loop {
+        core::hint::spin_loop();
+    }
 }

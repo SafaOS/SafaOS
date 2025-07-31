@@ -1,27 +1,29 @@
 [workspace]
 [package]
-name = "kernel-snowball"
-version = "0.3.1"
+name = "safa-core"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
+safa-abi = { path = "../safa-abi" }
 noto-sans-mono-bitmap = { version = "0.3.0", features = ["size_20"] }
 
-safa-utils = { path = "../utils" }
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
 spin = { version = "0.9.8", default-features = false, features = [
     "lazy",
     "once",
+    "spin_mutex",
+    "rwlock",
 ] }
 bitflags = "2.6.0"
 macros = { path = "../macros" }
 int-enum = "1.1"
 heapless = { version = "0.8.0", features = ["serde"] }
 limine = "0.5.0"
-hashbrown = "0.15.2"
+hashbrown = { version = "0.15.2", features = ["nightly"] }
 
 serde = { version = "1.0", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0", git = "https://github.com/ObserverUnit/srede-json-frok", default-features = false, features = [
+serde_json = { version = "1.0", git = "https://github.com/safiworks/srede-json-frok", default-features = false, features = [
     "alloc",
 ] }
 
@@ -34,6 +36,8 @@ cfg-if = "1.0.0"
 compiler_builtins = "0.1.158"
 hermit-dtb = "0.1.1"
 bitfield-struct = "0.11.0"
+rustc-demangle = "0.1.25"
+
 [dev-dependencies]
 
 [profile.dev]

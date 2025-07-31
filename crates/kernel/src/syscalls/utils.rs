@@ -1,25 +1,16 @@
+use crate::utils::path::Path;
+use crate::{process, utils::io::Cursor};
+
 use core::fmt::Write;
 use macros::syscall_handler;
-use safa_utils::io::Cursor;
+use safa_abi::errors::ErrorStatus;
 
-use super::SyscallFFI;
-use crate::{
-    threading,
-    utils::{errors::ErrorStatus, path::Path},
-    VirtAddr,
-};
-
-pub fn sysexit(code: usize) -> ! {
-    threading::expose::thread_exit(code)
-}
-
-pub fn sysyield() {
-    threading::expose::thread_yield()
-}
+use super::ffi::SyscallFFI;
+use crate::VirtAddr;
 
 #[syscall_handler]
 fn syschdir(path: Path) -> Result<(), ErrorStatus> {
-    threading::expose::chdir(path).map_err(|err| err.into())
+    process::current::chdir(path).map_err(|err| err.into())
 }
 
 #[syscall_handler]
@@ -27,7 +18,8 @@ fn syschdir(path: Path) -> Result<(), ErrorStatus> {
 /// `dest_len` if it is not null
 /// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
 fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let state = threading::this_state();
+    let this_process = process::current();
+    let state = this_process.state();
     let cwd = state.cwd();
 
     let len = cwd.len();
@@ -42,7 +34,7 @@ fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorS
 
 #[syscall_handler]
 fn syssbrk(amount: isize, results: &mut VirtAddr) -> Result<(), ErrorStatus> {
-    let res = threading::expose::sbrk(amount)?;
+    let res = process::current::extend_data_break(amount)?;
     *results = VirtAddr::from_ptr(res);
     Ok(())
 }

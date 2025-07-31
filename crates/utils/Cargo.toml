@@ -1,8 +1,0 @@
-[package]
-name = "safa-utils"
-version = "0.2.0"
-edition = "2021"
-
-[dependencies]
-heapless = { version = "0.8.0", features = ["serde"] }
-safa-abi = { path = "../safa-abi" }

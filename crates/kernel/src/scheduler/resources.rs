@@ -2,13 +2,12 @@ use core::fmt::Debug;
 
 use crate::{
     drivers::vfs::CollectionIterDescriptor,
+    process,
     utils::locks::{Mutex, MutexGuard},
 };
 use alloc::vec::Vec;
 
 use crate::drivers::vfs::FSObjectDescriptor;
-
-use super::expose::thread_yield;
 
 #[derive(Clone)]
 pub enum Resource {
@@ -41,21 +40,17 @@ impl Debug for ResourceManager {
 }
 
 impl ResourceManager {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         ResourceManager {
-            resources: Vec::with_capacity(2),
+            resources: Vec::new(),
             next_ri: 0,
         }
     }
 
     fn add_resource(&mut self, resource: Resource) -> usize {
-        let resources = &mut self.resources[self.next_ri..];
-
-        for (ri, res) in resources.iter_mut().enumerate() {
+        for (ri, res) in self.resources.iter_mut().enumerate().skip(self.next_ri) {
             let res = res.get_mut();
             if matches!(*res, Resource::Null) {
-                let ri = self.next_ri + ri;
-
                 self.next_ri = ri;
                 *res = resource;
 
@@ -71,20 +66,10 @@ impl ResourceManager {
         ri
     }
 
-    #[inline(always)]
+    #[inline]
     fn remove_resource(&mut self, ri: usize) -> Option<()> {
-        if ri >= self.resources.len() {
-            return None;
-        }
-
-        loop {
-            if let Some(resource) = self.resources.get_mut(ri).map(|r| r.get_mut()) {
-                *resource = Resource::Null;
-                break;
-            }
-
-            thread_yield();
-        }
+        let resource = self.resources.get_mut(ri).map(|r| r.get_mut())?;
+        *resource = Resource::Null;
 
         if ri < self.next_ri {
             self.next_ri = ri;
@@ -141,25 +126,30 @@ pub fn get_resource<DO, R>(ri: usize, then: DO) -> Option<R>
 where
     DO: FnOnce(MutexGuard<Resource>) -> R,
 {
-    let current = super::current();
-    let state = current.state().unwrap();
+    let this = process::current();
+    let state = this.state();
 
-    state.resource_manager().unwrap().get(ri).map(then)
+    state
+        .resource_manager()
+        .expect("tried to get a resource in a dead process (process)")
+        .get(ri)
+        .map(then)
 }
 
 /// adds a resource to the current process
 pub fn add_resource(resource: Resource) -> usize {
-    let current_task = super::current();
-    let mut current = current_task.state_mut().unwrap();
+    let this = process::current();
+    let mut state = this.state_mut();
 
-    current
+    state
         .resource_manager_mut()
-        .unwrap()
+        .expect("tried to add a resource in a dead process")
         .add_resource(resource)
 }
 
 pub fn duplicate_resource(ri: usize) -> usize {
-    let mut state = super::this_state_mut();
+    let current_process = process::current();
+    let mut state = current_process.state_mut();
     let manager = state.resource_manager_mut().unwrap();
 
     let resource = manager.get_mut(ri).unwrap();
@@ -169,8 +159,11 @@ pub fn duplicate_resource(ri: usize) -> usize {
 
 /// removes a resource from the current process with `ri`
 pub fn remove_resource(ri: usize) -> Option<()> {
-    let current_task = super::current();
-    let mut current = current_task.state_mut().unwrap();
+    let current_process = process::current();
+    let mut current = current_process.state_mut();
 
-    current.resource_manager_mut().unwrap().remove_resource(ri)
+    current
+        .resource_manager_mut()
+        .expect("tried to remove a resource in a dead process")
+        .remove_resource(ri)
 }

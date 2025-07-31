@@ -2,13 +2,16 @@ use lazy_static::lazy_static;
 
 use super::{
     acpi,
-    interrupts::apic::{LAPIC_ID, LAPIC_PHYS_ADDR},
+    interrupts::apic::{LAPIC_PHYS_ADDR, get_lapic_id},
 };
 use crate::{
-    arch::{paging::PageTable, x86_64::acpi::MCFGEntry},
+    PhysAddr,
+    arch::{
+        paging::PageTable,
+        x86_64::{acpi::MCFGEntry, interrupts::apic::get_lapic_addr},
+    },
     drivers::{interrupts::IntTrigger, pci::PCI},
     memory::paging::{EntryFlags, MapToError},
-    PhysAddr,
 };
 
 lazy_static! {
@@ -56,7 +59,7 @@ pub fn build_msi_data(irq_num: u32, trigger: IntTrigger) -> u32 {
 }
 pub fn build_msi_addr() -> PhysAddr {
     let lapic_base = (*LAPIC_PHYS_ADDR).into_raw();
-    let lapic_id = *LAPIC_ID;
+    let lapic_id = get_lapic_id(get_lapic_addr());
     let msi_addr = lapic_base | ((lapic_id as usize) << 12);
     PhysAddr::from(msi_addr)
 }

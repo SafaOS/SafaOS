@@ -2,14 +2,13 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{
     debug,
-    memory::{frame_allocator, paging::MapToError},
+    memory::{AlignTo, AlignToPage, paging::MapToError},
     utils::locks::{LazyLock, Mutex},
 };
 
 use super::{
-    align_up,
-    paging::{current_higher_root_table, EntryFlags, Page},
     VirtAddr,
+    paging::{EntryFlags, current_higher_root_table},
 };
 
 pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
@@ -17,8 +16,6 @@ pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
 #[derive(Debug, Clone)]
 pub struct Block {
     free: bool,
-    /// decreases header size
-    /// we dont want more then 4gb of heap space anyways we want a few mbs
     size: usize,
 }
 
@@ -26,14 +23,16 @@ impl Block {
     #[inline]
     /// unsafe because there may be no next block causing UB
     /// use BuddyAllocator::next instead
-    pub unsafe fn next<'b>(&self) -> &'b mut Block { unsafe {
-        let end = (self as *const Self).byte_add(self.size);
-        &mut *end.cast_mut()
-    }}
+    pub unsafe fn next<'b>(&self) -> &'b mut Block {
+        unsafe {
+            let end = (self as *const Self).byte_add(self.size);
+            &mut *end.cast_mut()
+        }
+    }
 
-    pub unsafe fn data(&mut self) -> *mut u8 { unsafe {
-        (self as *mut Self).offset(1).cast()
-    }}
+    pub unsafe fn data(&mut self) -> *mut u8 {
+        unsafe { (self as *mut Self).offset(1).cast() }
+    }
     /// divides self into 2 buddies
     /// returns the right buddy
     /// self is still valid and it points to the left buddy
@@ -70,15 +69,7 @@ pub struct BuddyAllocator<'a> {
     heap_end: VirtAddr,
 }
 
-fn align_to_power_of_2(size: usize) -> usize {
-    let mut results = 1;
-    while size > results {
-        results <<= 1;
-    }
-    results
-}
-
-fn align_down_to_power_of_2(size: usize) -> usize {
+const fn align_down_to_power_of_2(size: usize) -> usize {
     let mut results = 1;
     while size > results {
         results <<= 1;
@@ -93,7 +84,7 @@ fn align_down_to_power_of_2(size: usize) -> usize {
 
 /// returns the actual block size, aligned to power of 2 including header size
 fn actual_size(size: usize) -> usize {
-    align_to_power_of_2(size + size_of::<Block>())
+    (size + size_of::<Block>()).next_power_of_two()
 }
 
 impl BuddyAllocator<'_> {
@@ -113,50 +104,42 @@ impl BuddyAllocator<'_> {
     }
 
     pub fn expand_heap_by<'b>(&mut self, size: usize) -> Option<&'b mut Block> {
+        let size = size.to_next_page();
+        let size = size.next_power_of_two();
+
         debug!(BuddyAllocator, "expanding the heap by {:#x}", size);
-        let start = Page::containing_address(self.heap_end);
-        let end = Page::containing_address(self.heap_end + size);
+        let actual_end = unsafe {
+            let start = self.heap_end;
+            let end = start + size;
 
-        let mut root_table = unsafe { current_higher_root_table() };
-        for page in Page::iter_pages(start, end) {
-            if root_table.get_frame(page).is_none() {
-                let frame = frame_allocator::allocate_frame()?;
-                unsafe {
-                    root_table.map_to(page, frame, EntryFlags::WRITE).ok()?;
-                }
-            }
-        }
+            current_higher_root_table()
+                .alloc_map(start, end, EntryFlags::WRITE)
+                .ok()?
+        };
 
-        debug!(BuddyAllocator, "expandition done ...");
+        debug!(
+            BuddyAllocator,
+            "expandition done end is at: {:#x}..{:#x} ...", self.heap_end, actual_end
+        );
+
+        let size = actual_end - self.heap_end;
         unsafe { Some(self.add_free(size)) }
     }
 
     pub fn create() -> Result<Self, MapToError> {
         let (possible_start, _) = super::sorcery::HEAP;
 
-        let start = align_up(possible_start, size_of::<Block>());
-        let start = align_up(start, 2);
-        let start = VirtAddr::from(start);
+        let start = possible_start.to_next_multiple_of(size_of::<Block>());
+        let start = start.to_next_multiple_of(2);
 
-        let diff = start.into_raw() - possible_start;
+        let diff = start - possible_start;
         let size = align_down_to_power_of_2(INIT_HEAP_SIZE - diff);
         let end = start + size;
 
-        let page_range = {
-            let heap_start_page = Page::containing_address(start);
-            let heap_end_page = Page::containing_address(end);
-            Page::iter_pages(heap_start_page, heap_end_page)
-        };
-
         let flags = EntryFlags::WRITE;
         let mut root_table = unsafe { current_higher_root_table() };
-        for page in page_range {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-
-            unsafe {
-                root_table.map_to(page, frame, flags)?;
-            };
+        unsafe {
+            root_table.alloc_map(start, end, flags)?;
         }
 
         debug!(
@@ -288,19 +271,22 @@ impl BuddyAllocator<'_> {
         if let Some(block) = block {
             block.free = false;
             return unsafe { block.data() };
-        } else if let Some(block) = self.expand_heap_by(size) {
-            block.free = false;
-            return unsafe { block.data() };
-        }
+        } else {
+            if self.expand_heap_by(size).is_none() {
+                return core::ptr::null_mut();
+            };
 
-        core::ptr::null_mut()
+            self.allocmut(layout)
+        }
     }
     /// unsafe because ptr had to be allocated using self
-    pub unsafe fn deallocmut(&mut self, ptr: *mut u8) { unsafe {
-        let block: *mut Block = ptr.byte_sub(size_of::<Block>()).cast();
-        (*block).free = true;
-        self.coalescence_buddies_full();
-    }}
+    pub unsafe fn deallocmut(&mut self, ptr: *mut u8) {
+        unsafe {
+            let block: *mut Block = ptr.byte_sub(size_of::<Block>()).cast();
+            (*block).free = true;
+            self.coalescence_buddies_full();
+        }
+    }
 }
 
 unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
@@ -308,10 +294,12 @@ unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
         self.lock().allocmut(layout)
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unsafe {
-        _ = layout;
-        self.lock().deallocmut(ptr);
-    }}
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe {
+            _ = layout;
+            self.lock().deallocmut(ptr);
+        }
+    }
 }
 
 #[global_allocator]

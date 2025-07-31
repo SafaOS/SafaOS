@@ -3,6 +3,7 @@
 #![test_runner(crate::test::test_runner)]
 #![reexport_test_harness_main = "kernel_testmain"]
 #![no_main]
+#![feature(cold_path)]
 #![feature(abi_x86_interrupt)]
 #![feature(allocator_api)]
 #![feature(pattern)]
@@ -10,7 +11,6 @@
 #![feature(box_vec_non_null)]
 #![feature(vec_into_raw_parts)]
 #![feature(iter_collect_into)]
-#![feature(let_chains)]
 #![feature(sync_unsafe_cell)]
 #![feature(never_type)]
 #![feature(likely_unlikely)]
@@ -28,28 +28,31 @@ mod arch;
 mod devices;
 mod drivers;
 mod eve;
+mod fs;
 mod globals;
 mod limine;
 /// Contains macros and stuff related to debugging
 /// such as info!, debug! and StackTrace
 mod logging;
 mod memory;
+mod process;
+mod scheduler;
 mod syscalls;
 mod terminal;
-mod threading;
+mod thread;
 mod utils;
 
 extern crate alloc;
 use arch::serial;
 
-use drivers::keyboard::keys::Key;
 use drivers::keyboard::HandleKey;
+use drivers::keyboard::keys::Key;
 use globals::*;
 
 pub use memory::PhysAddr;
 pub use memory::VirtAddr;
+use spin::Mutex;
 use terminal::FRAMEBUFFER_TERMINAL;
-use threading::Scheduler;
 
 #[macro_export]
 macro_rules! print {
@@ -96,9 +99,7 @@ macro_rules! sleep {
             core::hint::spin_loop()
         }
     }};
-    ($ms: literal ms) => {{
-        $crate::sleep!($ms)
-    }};
+    ($ms: literal ms) => {{ $crate::sleep!($ms) }};
 }
 
 #[macro_export]
@@ -146,32 +147,58 @@ pub fn khalt() -> ! {
 
 #[allow(unused_imports)]
 use core::panic::PanicInfo;
+use core::sync::atomic::AtomicUsize;
 
+use crate::arch::registers::CPUID;
+use crate::arch::serial::SERIAL;
+use crate::arch::without_interrupts;
+
+static PANCIKED: AtomicUsize = AtomicUsize::new(0);
+const MAX_PANICK_COUNT: usize = 3;
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    unsafe {
-        arch::disable_interrupts();
-    }
     let stack = unsafe { logging::StackTrace::current() };
-    unsafe {
-        arch::serial::SERIAL.force_unlock();
-        if !logging::QUITE_PANIC {
-            FRAMEBUFFER_TERMINAL.force_unlock_write();
-            FRAMEBUFFER_TERMINAL.write().clear();
+    without_interrupts(|| {
+        unsafe {
+            arch::halt_all();
         }
-    }
 
-    panic_println!(
-        "\x1B[31mkernel panic:\n{}, at {}\x1B[0m",
-        info.message(),
-        info.location().unwrap()
-    );
-    panic_println!("{}", stack);
+        static _PANICK_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = _PANICK_LOCK.lock();
 
-    #[cfg(test)]
-    arch::power::shutdown();
-    #[cfg(not(test))]
-    khalt();
+        if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Release) >= MAX_PANICK_COUNT {
+            unsafe {
+                SERIAL.force_unlock();
+            }
+            error!(
+                "\n\x1B[31mkernel panic within a panic:\n{info}, cpu: {}\n\x1B[0mno stack trace",
+                CPUID::get()
+            );
+            khalt()
+        }
+
+        unsafe {
+            SERIAL.force_unlock();
+            if !logging::QUITE_PANIC {
+                FRAMEBUFFER_TERMINAL.force_unlock_write();
+                FRAMEBUFFER_TERMINAL.write().clear();
+            }
+        }
+
+        panic_println!(
+            "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
+            info.message(),
+            info.location().unwrap(),
+            CPUID::get(),
+        );
+        panic_println!("{}", stack);
+
+        drop(_guard);
+        #[cfg(test)]
+        arch::power::shutdown();
+        #[cfg(not(test))]
+        khalt();
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -185,9 +212,8 @@ extern "C" fn kstart() -> ! {
     drivers::pci::init();
 
     unsafe {
-        debug!(Scheduler, "Eve starting...");
         logging::BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
-        Scheduler::init(eve::main, "Eve");
+        scheduler::init(eve::main, eve::idle_function, "Eve");
     }
 
     #[allow(unreachable_code)]

@@ -1,11 +1,11 @@
 [package]
 name = "safa-abi"
-version = "0.2.6"
-edition = "2021"
-description = "an ABI over some of the SafaOS's structures kernel"
+version = "0.3.5"
+edition = "2024"
+description = "an ABI over some of the SafaOS's kernel structures"
 repository = "https://github.com/SafaOS/SafaOS"
 categories = ["os"]
-keywords = ["kernel", "libos"]
+keywords = ["kernel", "libos", "ffi"]
 license = "MIT"
 
 [dependencies]
@@ -23,6 +23,5 @@ level = "warn"
 check-cfg = ['cfg(target_os, values("safaos"))']
 
 [package.metadata.docs.rs]
-
 default-target = "x86_64-unknown-none"
 targets = []
