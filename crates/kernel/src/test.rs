@@ -127,7 +127,7 @@ fn userspace_test_script() {
     let stdin = File::open_with_options(make_path!("dev", "/ss"), OpenOptions::READ).unwrap();
     let stdout = File::open_with_options(make_path!("dev", "/ss"), OpenOptions::WRITE).unwrap();
 
-    let stdio = ProcessStdio::new(Some(stdin.fd()), Some(stdout.fd()), Some(stdout.fd()));
+    let stdio = ProcessStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stdout.fd()));
 
     let pid = pspawn(
         Name::try_from("Tester").unwrap(),
@@ -142,6 +142,5 @@ fn userspace_test_script() {
     .unwrap();
     // thread yields, so works even when interrupts are disabled
     let ret = crate::thread::current::wait_for_process(pid);
-
     assert_eq!(ret, Some(0));
 }
