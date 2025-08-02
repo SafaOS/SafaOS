@@ -59,14 +59,20 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
         "mapping HHDM, limine's: {:#x}",
         limine::get_phy_offset()
     );
-    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
 
+    let flags = EntryFlags::WRITE;
     for entry in limine::mmap_request().entries() {
         let phys_addr = PhysAddr::from(entry.base as usize);
         let size_bytes = entry.length as usize;
         let size = size_bytes.to_next_page();
 
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
+            let flags = if entry.entry_type == EntryType::FRAMEBUFFER {
+                flags | EntryFlags::FRAMEBUFFER_CACHED
+            } else {
+                flags | EntryFlags::DEVICE_UNCACHEABLE
+            };
+
             let virt_addr = phys_addr.into_virt();
             let page_num = size / PAGE_SIZE;
 

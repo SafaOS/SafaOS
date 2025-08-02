@@ -244,6 +244,7 @@ bitflags! {
         const USER_ACCESSIBLE = 1 << 1;
         const DISABLE_EXEC = 1 << 2;
         const DEVICE_UNCACHEABLE = 1 << 3;
+        const FRAMEBUFFER_CACHED = 1 << 4;
     }
 }
 

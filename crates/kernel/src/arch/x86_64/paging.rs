@@ -151,38 +151,51 @@ impl Entry {
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     struct ArchEntryFlags: u64 {
-        const PRESENT =         1;
-        const WRITABLE =        1 << 1;
+        const PRESENT         = 1;
+        const WRITABLE        = 1 << 1;
         const USER_ACCESSIBLE = 1 << 2;
-        const WRITE_THROUGH =   1 << 3;
-        const NO_CACHE =        1 << 4;
-        const ACCESSED =        1 << 5;
-        const DIRTY =           1 << 6;
-        const HUGE_PAGE =       1 << 7;
-        const GLOBAL =          1 << 8;
-        const NO_EXECUTE =      1 << 63;
+        const PWT             = 1 << 3;
+        const PCD             = 1 << 4;
+        const ACCESSED        = 1 << 5;
+        const DIRTY           = 1 << 6;
+        const HUGE_PAGE       = 1 << 7;
+        const PAT             = 1 << 7;
+        const GLOBAL          = 1 << 8;
+        const PAT_OTHER       = 1 << 12;
+        const NO_EXECUTE      = 1 << 63;
+    }
+}
+
+impl ArchEntryFlags {
+    pub const fn from_flags_outer_levels(value: EntryFlags) -> Self {
+        let mut this = ArchEntryFlags::PRESENT;
+        if value.contains(EntryFlags::WRITE) {
+            this = this.union(ArchEntryFlags::WRITABLE);
+        }
+
+        if value.contains(EntryFlags::DEVICE_UNCACHEABLE) {
+            this = this.union(ArchEntryFlags::PCD);
+        }
+
+        if value.contains(EntryFlags::USER_ACCESSIBLE) {
+            this = this.union(ArchEntryFlags::USER_ACCESSIBLE);
+        }
+
+        if value.contains(EntryFlags::DISABLE_EXEC) {
+            this = this.union(ArchEntryFlags::NO_EXECUTE);
+        }
+
+        this
     }
 }
 
 impl From<EntryFlags> for ArchEntryFlags {
     fn from(value: EntryFlags) -> Self {
-        let mut this = ArchEntryFlags::PRESENT;
-        if value.contains(EntryFlags::WRITE) {
-            this |= ArchEntryFlags::WRITABLE;
-        }
+        let mut this = Self::from_flags_outer_levels(value);
 
-        if value.contains(EntryFlags::DEVICE_UNCACHEABLE) {
-            this |= ArchEntryFlags::NO_CACHE;
+        if value.contains(EntryFlags::FRAMEBUFFER_CACHED) {
+            this |= ArchEntryFlags::PAT | ArchEntryFlags::PWT;
         }
-
-        if value.contains(EntryFlags::USER_ACCESSIBLE) {
-            this |= ArchEntryFlags::USER_ACCESSIBLE;
-        }
-
-        if value.contains(EntryFlags::DISABLE_EXEC) {
-            this |= ArchEntryFlags::NO_EXECUTE;
-        }
-
         this
     }
 }
@@ -234,19 +247,22 @@ impl PageTable {
     ) -> Result<(), MapToError> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
             translate(page.virt_addr());
-        let flags: ArchEntryFlags = flags.into();
-        let level_3_table = self[level_4_index].map(flags)?;
 
-        let level_2_table = level_3_table[level_3_index].map(flags)?;
+        let outer_flags: ArchEntryFlags = ArchEntryFlags::from_flags_outer_levels(flags);
+        let final_flags: ArchEntryFlags = flags.into();
 
-        let level_1_table = level_2_table[level_2_index].map(flags)?;
+        let level_3_table = self[level_4_index].map(outer_flags)?;
+
+        let level_2_table = level_3_table[level_3_index].map(outer_flags)?;
+
+        let level_1_table = level_2_table[level_2_index].map(outer_flags)?;
 
         let entry = &mut level_1_table[level_1_index];
         if entry.frame().is_some() {
             return Err(MapToError::AlreadyMapped);
         }
 
-        *entry = Entry::new(flags, frame.start_address());
+        *entry = Entry::new(final_flags, frame.start_address());
         Ok(())
     }
 
