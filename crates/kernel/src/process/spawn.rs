@@ -63,32 +63,22 @@ fn spawn_inner(
     let current_process = process::current();
     let current_pid = current_process.pid();
 
-    let current_state = current_process.state();
-
     let cwd = if flags.contains(SpawnFlags::CLONE_CWD) {
-        current_state.cwd()
+        current_process.cwd().clone()
     } else {
-        path::make_path!("ram", "")
+        Box::new(path::make_path!("ram", "").into_owned().unwrap())
     };
 
     let new_pid = scheduler::add_pid();
-
-    let cwd = Box::new(cwd.into_owned().unwrap());
     let (new_process, root_thread) = create_process(name, current_pid, new_pid, cwd)?;
 
     // Provides resources for the new process
     {
-        let mut new_state = new_process.state_mut();
-
-        let Some(new_process_resources) = new_state.resource_manager_mut() else {
-            unreachable!();
-        };
-
-        drop(current_state);
-        let mut this_state = current_process.state_mut();
+        let mut new_process_resources = new_process.resources_mut();
+        let mut this_resources = current_process.resources_mut();
 
         let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-            this_state.clone_resources()
+            this_resources.clone_resources()
         } else {
             // clone only necessary resources
             let mut resources = heapless::Vec::<usize, 3>::new();
@@ -105,7 +95,7 @@ fn spawn_inner(
             }
 
             if !resources.is_empty() {
-                this_state
+                this_resources
                     .clone_specific_resources(&resources)
                     .map_err(|()| FSError::InvalidResource)?
             } else {

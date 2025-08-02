@@ -122,13 +122,13 @@ use crate::utils::path::Path;
 /// will only Err if new_dir doesn't exists or is not a directory
 pub fn chdir(new_dir: Path) -> FSResult<()> {
     VFS_STRUCT.read().verify_path_dir(new_dir)?;
+    let is_abs = new_dir.is_absolute();
 
     let process = process::current();
-    let mut state = process.state_mut();
-    let cwd = state.cwd_mut();
 
-    if new_dir.is_absolute() {
-        *cwd = new_dir.into_owned_simple()?;
+    let mut cwd = process.cwd_mut();
+    if is_abs {
+        **cwd = new_dir.into_owned_simple()?;
     } else {
         cwd.append_simplified(new_dir)?;
     }

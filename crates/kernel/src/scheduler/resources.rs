@@ -78,10 +78,6 @@ impl ResourceManager {
         Some(())
     }
 
-    pub fn next_ri(&self) -> usize {
-        self.next_ri
-    }
-
     pub fn overwrite_resources(&mut self, resources: Vec<ResourceItem>) {
         self.resources = resources;
     }
@@ -93,12 +89,38 @@ impl ResourceManager {
             .collect()
     }
 
-    pub fn clone_resource(&mut self, ri: usize) -> Option<ResourceItem> {
+    pub fn clone_resource(&self, ri: usize) -> Option<ResourceItem> {
         if ri >= self.resources.len() {
             return None;
         }
 
-        Some(Mutex::new(self.resources[ri].get_mut().clone()))
+        Some(Mutex::new(self.resources[ri].lock().clone()))
+    }
+    /// Clones specific resources by their ids
+    ///
+    /// # Returns
+    /// A vector of cloned resources corresponding to the provided ids if successful, otherwise an Err(()) if any resource doesn't exist
+    pub fn clone_specific_resources(
+        &self,
+        resource_ids: &[usize],
+    ) -> Result<Vec<ResourceItem>, ()> {
+        if resource_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let biggest = resource_ids.iter().max().copied().unwrap_or(0);
+        // ensures the results has the same ids as the resources
+        let mut results = Vec::with_capacity(biggest + 1);
+        results.resize_with(biggest + 1, || Mutex::new(Resource::Null));
+
+        for resource_id in resource_ids {
+            let resource_id = *resource_id;
+
+            let result = self.clone_resource(resource_id).ok_or(())?;
+            results[resource_id] = result;
+        }
+
+        Ok(results)
     }
 
     /// gets a reference to the resource with index `ri`
@@ -127,30 +149,18 @@ where
     DO: FnOnce(MutexGuard<Resource>) -> R,
 {
     let this = process::current();
-    let state = this.state();
-
-    state
-        .resource_manager()
-        .expect("tried to get a resource in a dead process (process)")
-        .get(ri)
-        .map(then)
+    this.resources().get(ri).map(then)
 }
 
 /// adds a resource to the current process
 pub fn add_resource(resource: Resource) -> usize {
     let this = process::current();
-    let mut state = this.state_mut();
-
-    state
-        .resource_manager_mut()
-        .expect("tried to add a resource in a dead process")
-        .add_resource(resource)
+    this.resources_mut().add_resource(resource)
 }
 
 pub fn duplicate_resource(ri: usize) -> usize {
     let current_process = process::current();
-    let mut state = current_process.state_mut();
-    let manager = state.resource_manager_mut().unwrap();
+    let mut manager = current_process.resources_mut();
 
     let resource = manager.get_mut(ri).unwrap();
     let clone = resource.clone();
@@ -160,10 +170,5 @@ pub fn duplicate_resource(ri: usize) -> usize {
 /// removes a resource from the current process with `ri`
 pub fn remove_resource(ri: usize) -> Option<()> {
     let current_process = process::current();
-    let mut current = current_process.state_mut();
-
-    current
-        .resource_manager_mut()
-        .expect("tried to remove a resource in a dead process")
-        .remove_resource(ri)
+    current_process.resources_mut().remove_resource(ri)
 }

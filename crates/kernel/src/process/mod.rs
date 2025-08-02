@@ -34,11 +34,11 @@ use crate::{
     utils::{
         elf::{Elf, ElfError},
         io::Readable,
-        path::{Path, PathBuf},
+        path::PathBuf,
     },
 };
 
-use crate::scheduler::resources::{Resource, ResourceManager};
+use crate::scheduler::resources::ResourceManager;
 
 pub mod current;
 pub mod spawn;
@@ -49,73 +49,21 @@ pub type Pid = u32;
 #[derive(Debug)]
 pub struct AliveProcess {
     root_page_table: ManuallyDrop<PhysPageTable>,
-    resources: ResourceManager,
-
     data_pages: usize,
     data_start: VirtAddr,
     data_break: VirtAddr,
     master_tls: Option<(VirtAddr, usize, usize, usize)>,
-    cwd: Box<PathBuf>,
 }
 #[derive(Debug)]
 pub struct ZombieProcess {
     exit_code: usize,
     killed_by: Pid,
-
     data_start: VirtAddr,
     data_break: VirtAddr,
-
-    last_resource_id: usize,
-    cwd: Box<PathBuf>,
     root_page_table: ManuallyDrop<PhysPageTable>,
 }
 
 impl AliveProcess {
-    pub fn resource_manager(&self) -> &ResourceManager {
-        &self.resources
-    }
-
-    pub fn resource_manager_mut(&mut self) -> &mut ResourceManager {
-        &mut self.resources
-    }
-    pub fn cwd<'s>(&'s self) -> Path<'s> {
-        self.cwd.as_path()
-    }
-
-    /// Clones the resources of `self`, panicks if self isn't alive
-    pub fn clone_resources(&mut self) -> Vec<Mutex<Resource>> {
-        self.resources.clone_resources()
-    }
-
-    /// Clones only the resources in `resources` of `self`
-    ///
-    /// # Returns
-    /// A vector of cloned resources, or an error if any resource fails to clone because it doesn't exist
-    pub fn clone_specific_resources(
-        &mut self,
-        resources: &[usize],
-    ) -> Result<Vec<Mutex<Resource>>, ()> {
-        if resources.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let biggest = resources.iter().max().copied().unwrap_or(0);
-        // ensures the results has the same ids as the resources
-        let mut results = Vec::with_capacity(biggest + 1);
-        results.resize_with(biggest + 1, || Mutex::new(Resource::Null));
-
-        for resource in resources {
-            let result = self.resources.clone_resource(*resource).ok_or(())?;
-            results[*resource] = result;
-        }
-
-        Ok(results)
-    }
-
-    pub fn cwd_mut(&mut self) -> &mut PathBuf {
-        &mut self.cwd
-    }
-
     fn page_extend_data(&mut self) -> Option<VirtAddr> {
         use crate::memory::paging::EntryFlags;
 
@@ -200,18 +148,11 @@ impl AliveProcess {
                 killed_by,
                 data_start: self.data_start,
                 data_break: self.data_break,
-                last_resource_id: self.resources.next_ri(),
-                cwd: core::mem::take(&mut self.cwd),
             }
         }
     }
 }
 
-impl ZombieProcess {
-    pub fn cwd<'s>(&'s self) -> Path<'s> {
-        self.cwd.as_path()
-    }
-}
 #[derive(Debug)]
 pub enum ProcessState {
     Alive(AliveProcess),
@@ -226,55 +167,11 @@ impl ProcessState {
         }
     }
 
-    fn alive(&self) -> Option<&AliveProcess> {
-        match self {
-            ProcessState::Alive(alive) => Some(alive),
-            ProcessState::Zombie { .. } => None,
-        }
-    }
-
     fn alive_mut(&mut self) -> Option<&mut AliveProcess> {
         match self {
             ProcessState::Alive(alive) => Some(alive),
             ProcessState::Zombie { .. } => None,
         }
-    }
-
-    pub fn resource_manager(&self) -> Option<&ResourceManager> {
-        self.alive().map(|alive| alive.resource_manager())
-    }
-
-    pub fn resource_manager_mut(&mut self) -> Option<&mut ResourceManager> {
-        self.alive_mut().map(|alive| alive.resource_manager_mut())
-    }
-
-    pub fn cwd<'s>(&'s self) -> Path<'s> {
-        match self {
-            ProcessState::Alive(alive) => alive.cwd(),
-            ProcessState::Zombie(zombie) => zombie.cwd(),
-        }
-    }
-
-    /// Clones the resources of `self`, panicks if self isn't alive
-    ///
-    /// # Returns
-    /// A vector of cloned resources, or an error if any resource fails to clone because it doesn't exist
-    pub fn clone_resources(&mut self) -> Vec<Mutex<Resource>> {
-        self.alive_mut().unwrap().clone_resources()
-    }
-
-    /// Clones only the resources in `resources` of `self`, panicks if self isn't alive
-    pub fn clone_specific_resources(
-        &mut self,
-        resources: &[usize],
-    ) -> Result<Vec<Mutex<Resource>>, ()> {
-        self.alive_mut()
-            .unwrap()
-            .clone_specific_resources(resources)
-    }
-
-    pub fn cwd_mut(&mut self) -> &mut PathBuf {
-        self.alive_mut().unwrap().cwd_mut()
     }
 
     pub fn extend_data_by(&mut self, amount: isize) -> Option<*mut u8> {
@@ -303,7 +200,11 @@ pub struct Process {
     pid: Pid,
     /// process may change it's parent pid
     ppid: AtomicU32,
+
     state: RwLock<ProcessState>,
+    resources: RwLock<ResourceManager>,
+    cwd: RwLock<Box<PathBuf>>,
+
     is_alive: AtomicBool,
 
     pub schedule_cleanup: AtomicBool,
@@ -476,17 +377,18 @@ impl Process {
 
             state: RwLock::new(ProcessState::Alive(AliveProcess {
                 root_page_table: ManuallyDrop::new(root_page_table),
-                resources: ResourceManager::new(),
                 master_tls,
                 data_pages: 0,
                 data_start: data_break,
                 data_break,
-                cwd,
             })),
+            resources: RwLock::new(ResourceManager::new()),
+            cwd: RwLock::new(cwd),
             allocator: Mutex::new(allocator),
             userspace_process,
         }
     }
+
     /// Creates a new process returning a combination of the process and the main thread
     pub fn create(
         name: Name,
@@ -678,8 +580,7 @@ impl Process {
 
         let thread =
             Self::create_thread_from_status(process, context_id, cpu_status, priority, to_track);
-        process.context_count.fetch_add(1, Ordering::Relaxed);
-
+        process.context_count.fetch_add(1, Ordering::SeqCst);
         Ok(thread)
     }
 
@@ -724,6 +625,21 @@ impl Process {
         &self.name
     }
 
+    pub fn cwd<'s>(&'s self) -> RwLockReadGuard<'s, Box<PathBuf>> {
+        self.cwd.read()
+    }
+
+    pub fn cwd_mut<'s>(&'s self) -> RwLockWriteGuard<'s, Box<PathBuf>> {
+        self.cwd.write()
+    }
+
+    pub fn resources<'s>(&'s self) -> RwLockReadGuard<'s, ResourceManager> {
+        self.resources.read()
+    }
+
+    pub fn resources_mut<'s>(&'s self) -> RwLockWriteGuard<'s, ResourceManager> {
+        self.resources.write()
+    }
     pub fn state<'s>(&'s self) -> RwLockReadGuard<'s, ProcessState> {
         self.state.read()
     }
@@ -739,9 +655,10 @@ impl Process {
         let killed_by = killed_by.unwrap_or(pid);
 
         let threads = self.threads.lock();
-        let mut state = self.state.write();
-
-        state.die(exit_code, killed_by);
+        // Set state to dead
+        self.state_mut().die(exit_code, killed_by);
+        // Drop resources
+        self.resources_mut().overwrite_resources(Vec::new());
 
         let current_thread = thread::current();
         let current_tid = current_thread.tid();
@@ -778,9 +695,6 @@ impl Process {
             killed_by
         );
 
-        // for some reason a thread yield may happen here sow e want to make sure everything is dropped before the process is unswitchable to
-        // i actually have no idea why a thread yield would happen here...
-        drop(state);
         drop(threads);
         self.is_alive.store(false, Ordering::Release);
         current_thread.mark_dead(true);
@@ -858,7 +772,6 @@ pub struct ProcessInfo {
     pub ppid: Pid,
     pub pid: Pid,
 
-    pub last_resource_id: usize,
     pub exit_code: usize,
     pub at: VirtAddr,
     pub stack_addr: VirtAddr,
@@ -876,27 +789,19 @@ impl From<&Process> for ProcessInfo {
 
         let state = process.state();
 
-        let (exit_code, data_start, data_break, killed_by, last_resource_id) = match &*state {
+        let (exit_code, data_start, data_break, killed_by) = match &*state {
             ProcessState::Alive(AliveProcess {
                 data_start,
                 data_break,
-                resources,
                 ..
-            }) => (0, *data_start, *data_break, 0, resources.next_ri()),
+            }) => (0, *data_start, *data_break, 0),
             ProcessState::Zombie(ZombieProcess {
                 data_start,
                 data_break,
                 exit_code,
                 killed_by,
-                last_resource_id,
                 ..
-            }) => (
-                *exit_code,
-                *data_start,
-                *data_break,
-                *killed_by,
-                *last_resource_id,
-            ),
+            }) => (*exit_code, *data_start, *data_break, *killed_by),
         };
 
         let is_alive = process.is_alive();
@@ -907,7 +812,6 @@ impl From<&Process> for ProcessInfo {
             ppid,
             pid: process.pid(),
             name,
-            last_resource_id,
             exit_code,
             at,
             stack_addr,

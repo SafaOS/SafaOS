@@ -556,10 +556,8 @@ impl VFS {
             let relative_parts = path.parts().unwrap_or_default();
 
             let process = process::current();
-            let state = process.state();
-            let cwd = state.cwd();
-
-            self.resolve_relative_path(cwd, relative_parts)
+            let cwd = process.cwd();
+            self.resolve_relative_path(cwd.as_path(), relative_parts)
         }
     }
 

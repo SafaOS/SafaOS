@@ -19,8 +19,9 @@ fn syschdir(path: Path) -> Result<(), ErrorStatus> {
 /// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
 fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
     let this_process = process::current();
-    let state = this_process.state();
-    let cwd = state.cwd();
+
+    let cwd = this_process.cwd();
+    let cwd = cwd.as_path();
 
     let len = cwd.len();
     if let Some(dest_len) = dest_len {
