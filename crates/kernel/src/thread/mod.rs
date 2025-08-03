@@ -60,6 +60,7 @@ pub enum BlockedReason {
         value: u32,
         timeout_wake_at: u128,
     },
+    BlockedForever,
 }
 
 impl BlockedReason {
@@ -71,6 +72,7 @@ impl BlockedReason {
             } => time!(ms) as u128 >= *n,
             Self::WaitingForProcess(process) => !process.is_alive(),
             Self::WaitingForThread(thread) => thread.is_dead(),
+            Self::BlockedForever => false,
         }
     }
 }
@@ -230,6 +232,20 @@ impl Thread {
 
     pub fn status_mut<'a>(&'a self) -> spin::MutexGuard<'a, ContextStatus> {
         self.status.lock()
+    }
+
+    /// Blocks the current thread forever, making sure it is not running first
+    pub fn block_forever(&self) {
+        loop {
+            let mut status = self.status.lock();
+            if status.is_running() {
+                drop(status);
+                current::yield_now();
+            } else {
+                *status = ContextStatus::Blocked(BlockedReason::BlockedForever);
+                break;
+            }
+        }
     }
 
     /// Should only be called by the current thread or the scheduler or on a sleeping thread

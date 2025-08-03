@@ -258,7 +258,9 @@ unsafe fn switch_inner(
         current_context.set_cpu_status(current_status);
 
         let mut status = current_thread.status_mut();
-        if status.is_running() {
+        if current_thread.is_dead() {
+            *status = ContextStatus::Blocked(thread::BlockedReason::BlockedForever);
+        } else if status.is_running() {
             *status = ContextStatus::Runnable;
         }
         drop(status);

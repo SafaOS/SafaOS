@@ -673,16 +673,9 @@ impl Process {
                 continue;
             }
 
-            if thread.is_dead() {
-                continue;
-            }
-
-            thread.mark_dead(true);
-
-            // wait for the thread to exit
-            while thread.status_mut().is_running() {
-                thread::current::yield_now();
-                core::hint::spin_loop();
+            if !thread.is_dead() {
+                thread.mark_dead(true);
+                thread.block_forever();
             }
         }
 
