@@ -67,8 +67,9 @@ pub fn kernel_thread_spawn<T: 'static>(
 /// - Err([ErrorStatus::MissingPermissions]) if the current process does not have parentship of the process.
 /// - Err([ErrorStatus::InvalidPid]) if the process with the given pid does not exist.
 pub fn try_cleanup_process(pid: Pid) -> Result<Option<usize>, ErrorStatus> {
-    let found_process = scheduler::find(|process| process.pid() == pid, |process| process.clone())
-        .ok_or(ErrorStatus::InvalidPid)?;
+    let found_process =
+        scheduler::process_list::find(|process| process.pid() == pid, |process| process.clone())
+            .ok_or(ErrorStatus::InvalidPid)?;
 
     if found_process.ppid() != process::current_pid() {
         return Err(ErrorStatus::MissingPermissions);
@@ -80,7 +81,7 @@ pub fn try_cleanup_process(pid: Pid) -> Result<Option<usize>, ErrorStatus> {
 
     // process is dead
     // TODO: block multiple waits on same pid
-    let Some(process_info) = scheduler::remove(|p| p.pid() == pid) else {
+    let Some(process_info) = scheduler::process_list::remove(|p| p.pid() == pid) else {
         warn!("process with `{pid}` was already cleaned up by another operation");
         return Err(ErrorStatus::InvalidPid);
     };

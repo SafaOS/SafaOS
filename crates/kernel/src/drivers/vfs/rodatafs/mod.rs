@@ -257,7 +257,7 @@ impl InternalStructure {
     }
 
     fn try_generate_from_process(process_pid: Pid) -> Option<Self> {
-        match scheduler::find(|process| process.pid() == process_pid, |_| ()) {
+        match scheduler::process_list::find(|process| process.pid() == process_pid, |_| ()) {
             Some(_) => Some(Self::generate_from_process(process_pid)),
             _ => None,
         }
@@ -411,7 +411,9 @@ impl RodFS {
                 let process_pid = process_obj_id.process_pid();
                 // if the process is not found, it means the process has been terminated
                 // remove the process from the cache
-                if scheduler::find(|process| process.pid() == process_pid, |_| ()).is_none() {
+                if scheduler::process_list::find(|process| process.pid() == process_pid, |_| ())
+                    .is_none()
+                {
                     self.processes_cache.remove(&process_pid);
                 }
             }
@@ -493,7 +495,7 @@ impl FileSystem for RwLock<RodFS> {
             use core::fmt::Write;
 
             let mut pid_fmt_buf = heapless::String::<20>::new();
-            scheduler::for_each(|process| {
+            scheduler::process_list::for_each(|process| {
                 _ = write!(pid_fmt_buf, "{}", process.pid());
                 let attrs = FileAttr::new(FSObjectType::Directory, 0);
 

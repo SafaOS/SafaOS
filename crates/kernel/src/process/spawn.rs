@@ -69,7 +69,7 @@ fn spawn_inner(
         Box::new(path::make_path!("ram", "").into_owned().unwrap())
     };
 
-    let new_pid = scheduler::add_pid();
+    let new_pid = scheduler::process_list::add_pid();
     let (new_process, root_thread) = create_process(name, current_pid, new_pid, cwd)?;
 
     // Provides resources for the new process
@@ -106,8 +106,8 @@ fn spawn_inner(
         new_process_resources.overwrite_resources(clone);
     }
 
-    let pid = scheduler::add_process(new_process, root_thread);
-    Ok(pid)
+    scheduler::add_process(new_process, root_thread, None);
+    Ok(new_pid)
 }
 
 fn spawn<T: Readable>(

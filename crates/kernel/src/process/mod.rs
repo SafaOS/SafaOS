@@ -819,5 +819,5 @@ impl From<&Process> for ProcessInfo {
 
 /// Returns [`ProcessInfo`] for the process with the given PID.
 pub fn getinfo(pid: Pid) -> Option<ProcessInfo> {
-    scheduler::find(|p| p.pid() == pid, |t| ProcessInfo::from(&**t))
+    scheduler::process_list::find(|p| p.pid() == pid, |t| ProcessInfo::from(&**t))
 }

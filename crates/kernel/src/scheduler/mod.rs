@@ -1,4 +1,3 @@
-pub mod queue;
 pub mod resources;
 #[cfg(test)]
 mod tests;
@@ -12,13 +11,13 @@ use crate::utils::path::make_path;
 use alloc::sync::Arc;
 
 use crate::arch::without_interrupts;
-use crate::process::{Pid, Process, ProcessInfo};
-use crate::scheduler::queue::ProcessQueue;
-use crate::utils::locks::{RwLock, SpinLock};
+use crate::process::Process;
+use crate::utils::locks::SpinLock;
 use crate::utils::types::Name;
 use crate::{VirtAddr, arch};
 use alloc::boxed::Box;
-use slab::Slab;
+
+pub mod process_list;
 
 use crate::{
     arch::threading::{CPUStatus, restore_cpu_status},
@@ -83,149 +82,6 @@ unsafe fn timeslices_sub_finished() -> bool {
             *ptr -= 1;
             false
         }
-    }
-}
-
-struct Scheduler {
-    processes_queue: ProcessQueue,
-    pids: Slab<()>,
-}
-
-unsafe impl Send for Scheduler {}
-unsafe impl Sync for Scheduler {}
-
-impl Scheduler {
-    pub const fn new() -> Self {
-        Self {
-            processes_queue: ProcessQueue::new(),
-            pids: Slab::new(),
-        }
-    }
-
-    pub fn add_pid(&mut self) -> Pid {
-        self.pids.insert(()) as Pid
-    }
-
-    /// appends a process to the end of the scheduler processes list
-    /// returns the pid of the added process
-    fn add_process(&mut self, process: Arc<Process>, root_thread: Arc<Thread>) -> Pid {
-        let pid = process.pid();
-
-        self.processes_queue.push_back(process.clone());
-        self.add_thread(root_thread, None);
-
-        let name = process.name();
-
-        debug!(Scheduler, "Process {} ({}) PROCESS ADDED", pid, name);
-        pid
-    }
-
-    /// appends a thread to the end of the scheduler threads list
-    /// returns the tid of the added thread
-    ///
-    /// by default (if `cpu` is None) chooses the least full CPU to append to otherwise if CPU is Some(i) and i is a valid CPU index, chooses that CPU
-    /// use Some(0) to append to the boot CPU
-    fn add_thread(&mut self, thread: Arc<Thread>, cpu: Option<usize>) {
-        let cpu_locals = CPULocalStorage::get_all();
-
-        let (cpu_local, cpu_index) = if let Some(cpu) = cpu
-            && let Some(local) = cpu_locals.get(cpu)
-        {
-            (local, cpu)
-        } else {
-            let mut least_full = None;
-            for (index, cpu_local) in cpu_locals.iter().enumerate() {
-                let threads_amount = cpu_local
-                    .threads_count
-                    .load(core::sync::atomic::Ordering::Acquire);
-
-                if least_full.is_none_or(|(amount, _, _)| amount > threads_amount) {
-                    let is_empty = threads_amount == 1;
-                    least_full = Some((threads_amount, cpu_local, index));
-                    if is_empty {
-                        break;
-                    }
-                }
-            }
-            let (_, cpu_local, index) = least_full.expect("no CPUs were found");
-            (cpu_local, index)
-        };
-
-        let cid = thread.tid();
-        let pid = thread.process().pid();
-
-        without_interrupts(
-            /* lock scheduler without interrupts enabled so we don't lock ourself */
-            move || {
-                let mut queue_lock = cpu_local.thread_node_queue.lock();
-                let (root_thread, _) = &mut *queue_lock;
-
-                ThreadNode::push_front(root_thread, thread);
-                cpu_local
-                    .threads_count
-                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            },
-        );
-
-        debug!(
-            Scheduler,
-            "Thread {cid} added for process {pid}, CPU: {cpu_index}"
-        );
-    }
-
-    /// finds a process where executing `condition` on returns true and returns it
-    fn find<C>(&self, condition: C) -> Option<&Arc<Process>>
-    where
-        C: Fn(&Process) -> bool,
-    {
-        for process in self.processes_queue.iter() {
-            if condition(process) {
-                return Some(&process);
-            }
-        }
-
-        None
-    }
-
-    /// iterates through all processes and executes `then` on each of them
-    /// executed on all processes
-    pub fn for_each<T>(&self, mut then: T)
-    where
-        T: FnMut(&Process),
-    {
-        for process in self.processes_queue.iter() {
-            then(process);
-        }
-    }
-
-    /// attempt to remove a process where executing `condition` on returns true, returns the removed process info
-    pub fn remove(&mut self, condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
-        let process = self
-            .processes_queue
-            .remove_where(|process| condition(process))?;
-
-        let mut threads = process.threads.lock();
-        for thread in &*threads {
-            assert!(thread.is_dead());
-            // wait for thread to exit before removing
-            // will be removed on context switch at some point
-            while !thread.is_removed() {
-                // --> thread is removed on thread yield by the scheduler as a part of the thread list iteration
-                // one thread yield should be enough
-                thread::current::yield_now();
-                // however maybe the thread list is in another CPU...
-                core::hint::spin_loop();
-            }
-        }
-        // Because processes are referenced by their own threads, we need to clear the threads so they drop the process reference
-        // TODO: Maybe move this somewhere else
-        threads.clear();
-
-        let (info, page_table) = process.cleanup();
-        drop(page_table);
-
-        self.pids.remove(info.pid as usize);
-        Some(info)
     }
 }
 
@@ -378,49 +234,8 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
     }
 }
 
-static PROCESS_LIST: RwLock<Scheduler> = RwLock::new(Scheduler::new());
-
-/// acquires lock on the process list and finds a process where executing `condition` on returns true and returns the result of `map` on that process
-pub fn find<C, M, R>(condition: C, map: M) -> Option<R>
-where
-    C: Fn(&Process) -> bool,
-    M: FnMut(&Arc<Process>) -> R,
-{
-    let schd = PROCESS_LIST.read();
-    schd.find(condition).map(map)
-}
-
-/// acquires lock on the process list
-/// executes `then` on each process
-pub fn for_each<T>(then: T)
-where
-    T: FnMut(&Process),
-{
-    PROCESS_LIST.read().for_each(then)
-}
-
-/// acquires lock on the process list and adds a process to it
-pub fn add_process(process: Arc<Process>, root_thread: Arc<Thread>) -> Pid {
-    PROCESS_LIST.write().add_process(process, root_thread)
-}
-
-/// acquires lock on the process list and adds a thread to it
-pub fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
-    PROCESS_LIST.write().add_thread(thread, cpu)
-}
-
-/// returns the result of `then` if a process was found
-/// acquires lock on the process list and removes a process from it where `condition` on the process returns true
-pub fn remove(condition: impl Fn(&Process) -> bool) -> Option<ProcessInfo> {
-    PROCESS_LIST.write().remove(condition)
-}
-
-/// Adds a new claimed pid to the process list and returns the pid
-///
-/// the returned pid is guaranteed to be unique and not in use by any other process
-pub fn add_pid() -> Pid {
-    PROCESS_LIST.write().add_pid()
-}
+/// TODO: use
+struct Scheduler;
 
 /// inits the scheduler
 pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &str) -> ! {
@@ -429,7 +244,7 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
         let page_table = unsafe { PhysPageTable::from_current() };
         let cwd = Box::new(make_path!("ram", "").into_owned().unwrap());
 
-        let pid = add_pid();
+        let pid = process_list::add_pid();
         let (process, root_thread) = Process::create(
             Name::try_from(name).expect("initial process name too long"),
             pid,
@@ -451,7 +266,7 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
         unsafe {
             let status = arch::threading::init_cpus(&process, idle_function);
             let status_ref = status.as_ref();
-            self::add_process(process, root_thread);
+            self::add_process(process, root_thread, None);
             *SCHEDULER_INITED.get() = true;
 
             debug!(
@@ -463,4 +278,65 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
             restore_cpu_status(status_ref)
         }
     })
+}
+
+/// Appends a thread to the end of a Scheduler's threads list
+/// returns the tid of the added thread
+///
+/// by default (if `cpu` is None) chooses the least full CPU to append to otherwise if CPU is Some(i) and i is a valid CPU index, chooses that CPU
+/// use Some(0) to append to the boot CPU
+pub fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
+    let cpu_locals = CPULocalStorage::get_all();
+
+    let (cpu_local, cpu_index) = if let Some(cpu) = cpu
+        && let Some(local) = cpu_locals.get(cpu)
+    {
+        (local, cpu)
+    } else {
+        let mut least_full = None;
+        for (index, cpu_local) in cpu_locals.iter().enumerate() {
+            let threads_amount = cpu_local
+                .threads_count
+                .load(core::sync::atomic::Ordering::Acquire);
+
+            if least_full.is_none_or(|(amount, _, _)| amount > threads_amount) {
+                let is_empty = threads_amount == 1;
+                least_full = Some((threads_amount, cpu_local, index));
+                if is_empty {
+                    break;
+                }
+            }
+        }
+        let (_, cpu_local, index) = least_full.expect("no CPUs were found");
+        (cpu_local, index)
+    };
+
+    let cid = thread.tid();
+    let pid = thread.process().pid();
+
+    without_interrupts(
+        /* lock scheduler without interrupts enabled so we don't lock ourself */
+        move || {
+            let mut queue_lock = cpu_local.thread_node_queue.lock();
+            let (root_thread, _) = &mut *queue_lock;
+
+            ThreadNode::push_front(root_thread, thread);
+            cpu_local
+                .threads_count
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        },
+    );
+    debug!(
+        Scheduler,
+        "Thread {cid} added for process {pid}, CPU: {cpu_index}"
+    );
+}
+
+/// Adds a combination of a process and its root thread to the scheduler.
+///
+/// `custom_cpu` is an optional parameter that specifies the CPU to which the thread should be assigned.
+/// If `custom_cpu` is `None`, the thread will be assigned to the least loaded CPU.
+pub fn add_process(process: Arc<Process>, root_thread: Arc<Thread>, custom_cpu: Option<usize>) {
+    process_list::add_process(process);
+    add_thread(root_thread, custom_cpu);
 }

@@ -56,7 +56,8 @@ pub fn yield_now() {
 pub fn wait_for_process(pid: Pid) -> Option<usize> {
     // cycles through the processes one by one until it finds the process with `pid`
     // returns the exit code of the process if it's a zombie and cleans it up
-    let found_proc = scheduler::find(|process| process.pid() == pid, |process| process.clone())?;
+    let found_proc =
+        scheduler::process_list::find(|process| process.pid() == pid, |process| process.clone())?;
 
     let this_thread = thread::current();
     this_thread.wait_for_process(found_proc.clone());
@@ -68,7 +69,7 @@ pub fn wait_for_process(pid: Pid) -> Option<usize> {
     );
     // process is dead
     // TODO: block multiple waits on same pid
-    let Some(process_info) = scheduler::remove(|p| p.pid() == pid) else {
+    let Some(process_info) = scheduler::process_list::remove(|p| p.pid() == pid) else {
         warn!("process with `{pid}` was already cleaned up by another wait operation");
         return None;
     };
