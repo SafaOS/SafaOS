@@ -12,7 +12,7 @@ use crate::{
     process::{Pid, Process},
     scheduler::CPULocalStorage,
     time,
-    utils::locks::SpinMutex,
+    utils::locks::{SpinLock, SpinLockGuard},
 };
 
 pub mod current;
@@ -140,7 +140,7 @@ impl ThreadNode {
 pub struct Thread {
     id: Tid,
     priority: ContextPriority,
-    status: SpinMutex<ContextStatus>,
+    status: SpinLock<ContextStatus>,
     context: UnsafeCell<Option<Context>>,
 
     is_dead: AtomicBool,
@@ -159,7 +159,7 @@ impl Thread {
         Self {
             id: cid,
             priority,
-            status: SpinMutex::new(ContextStatus::Runnable),
+            status: SpinLock::new(ContextStatus::Runnable),
             context: UnsafeCell::new(Some(Context::new(cpu_status, tracked_allocations))),
             is_dead: AtomicBool::new(false),
             is_removed: AtomicBool::new(false),
@@ -230,7 +230,7 @@ impl Thread {
         }
     }
 
-    pub fn status_mut<'a>(&'a self) -> spin::MutexGuard<'a, ContextStatus> {
+    pub fn status_mut<'a>(&'a self) -> SpinLockGuard<'a, ContextStatus> {
         self.status.lock()
     }
 

@@ -6,7 +6,41 @@ use core::{
 use lock_api::{GuardSend, RawMutex, RawRwLock};
 use spin::Lazy;
 
-use crate::thread;
+use crate::{arch::without_interrupts, thread};
+pub struct LockRawSpinLock(AtomicBool);
+unsafe impl RawMutex for LockRawSpinLock {
+    const INIT: Self = Self(AtomicBool::new(false));
+    type GuardMarker = GuardSend;
+
+    fn is_locked(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    fn lock(&self) {
+        without_interrupts(|| {
+            while self
+                .0
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                {
+                    core::hint::spin_loop();
+                }
+            }
+        });
+    }
+
+    #[inline(always)]
+    fn try_lock(&self) -> bool {
+        self.0
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+    }
+
+    unsafe fn unlock(&self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 pub const SPIN_AMOUNT: u32 = 10_000;
 
@@ -108,15 +142,19 @@ unsafe impl RawRwLock for LockRawRwLock {
         self.0.store(0, Ordering::Release);
     }
 }
-
+type SpinLockExt<T> = lock_api::Mutex<LockRawSpinLock, T>;
 type MutexExt<T> = lock_api::Mutex<LockRawMutex, T>;
+
 pub type MutexGuard<'a, T> = lock_api::MutexGuard<'a, LockRawMutex, T>;
+pub type SpinLockGuard<'a, T> = lock_api::MutexGuard<'a, LockRawSpinLock, T>;
 
 type RwLockExt<T> = lock_api::RwLock<LockRawRwLock, T>;
 pub type RwLockReadGuard<'a, T> = lock_api::RwLockReadGuard<'a, LockRawRwLock, T>;
 pub type RwLockWriteGuard<'a, T> = lock_api::RwLockWriteGuard<'a, LockRawRwLock, T>;
 
-pub type SpinMutex<T> = spin::Mutex<T>;
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct SpinLock<T>(SpinLockExt<T>);
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -165,9 +203,16 @@ macro_rules! impl_common {
 
 impl_common!(Mutex);
 impl_common!(RwLock);
+impl_common!(SpinLock);
 
 impl<T> Mutex<T> {
     pub fn lock(&self) -> MutexGuard<'_, T> {
+        self.0.lock()
+    }
+}
+
+impl<T> SpinLock<T> {
+    pub fn lock(&self) -> SpinLockGuard<'_, T> {
         self.0.lock()
     }
 }

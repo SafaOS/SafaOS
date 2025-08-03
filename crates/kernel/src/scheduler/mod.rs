@@ -14,7 +14,7 @@ use alloc::sync::Arc;
 use crate::arch::without_interrupts;
 use crate::process::{Pid, Process, ProcessInfo};
 use crate::scheduler::queue::ProcessQueue;
-use crate::utils::locks::{RwLock, SpinMutex};
+use crate::utils::locks::{RwLock, SpinLock};
 use crate::utils::types::Name;
 use crate::{VirtAddr, arch};
 use alloc::boxed::Box;
@@ -29,7 +29,7 @@ use crate::{
 #[derive(Debug)]
 pub struct CPULocalStorage {
     current_thread: UnsafeCell<Arc<Thread>>,
-    thread_node_queue: SpinMutex<(Box<ThreadNode>, *mut ThreadNode)>,
+    thread_node_queue: SpinLock<(Box<ThreadNode>, *mut ThreadNode)>,
     threads_count: AtomicUsize,
 
     time_slices_left: SyncUnsafeCell<u32>,
@@ -42,7 +42,7 @@ impl CPULocalStorage {
 
         Self {
             current_thread: UnsafeCell::new(root_thread),
-            thread_node_queue: SpinMutex::new((root_thread_node, root_thread_node_ptr)),
+            thread_node_queue: SpinLock::new((root_thread_node, root_thread_node_ptr)),
             threads_count: AtomicUsize::new(0),
             time_slices_left: SyncUnsafeCell::new(0),
         }

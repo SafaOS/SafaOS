@@ -24,7 +24,7 @@ use crate::{
         utils::TICKS_PER_MS,
     },
     info, sleep,
-    utils::locks::SpinMutex,
+    utils::locks::SpinLock,
 };
 
 use self::gdt::init_gdt;
@@ -163,7 +163,7 @@ pub unsafe fn flush_cache_inner() {
 }
 
 pub unsafe fn flush_cache() {
-    static _CACHE_FLUSH: SpinMutex<()> = SpinMutex::new(());
+    static _CACHE_FLUSH: SpinLock<()> = SpinLock::new(());
     let _guard = _CACHE_FLUSH.lock();
     unsafe {
         flush_cache_inner();

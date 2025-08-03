@@ -14,7 +14,7 @@ use crate::{
     info,
     memory::paging::{EntryFlags, MapToError},
     serial,
-    utils::locks::SpinMutex,
+    utils::locks::SpinLock,
 };
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
@@ -335,7 +335,7 @@ fn configure_error(lapic_addr: VirtAddr) {
 }
 
 fn enable_apic_timer(local_apic_addr: VirtAddr, lapic_id: u8) {
-    static _CALIBRATE_LOCK: SpinMutex<()> = SpinMutex::new(());
+    static _CALIBRATE_LOCK: SpinLock<()> = SpinLock::new(());
     let _guard = _CALIBRATE_LOCK.lock();
 
     info!("enabling apic timer for lapic: {lapic_id}...");
@@ -386,7 +386,7 @@ fn enable_apic_timer(local_apic_addr: VirtAddr, lapic_id: u8) {
 }
 
 pub fn calibrate_tsc(lapic_id: u8, ticks_per_ms: &mut u64) {
-    static _CALIBRATE_LOCK: SpinMutex<()> = SpinMutex::new(());
+    static _CALIBRATE_LOCK: SpinLock<()> = SpinLock::new(());
     let _guard = _CALIBRATE_LOCK.lock();
     serial!("calbrating tsc\n");
     unsafe {
@@ -441,7 +441,7 @@ pub fn enable_apic_interrupts_generic(tsc_ticks_per_ms_output: &mut u64) {
         info!(
             "enabled APIC, lapic_id is {lapic_id}, ioapic_id is {ioapic_id}, IO APIC is at {ioapic_addr:#x}, local APIC is at {lapic_addr:#x}"
         );
-        static _ENABLE_LOCK: SpinMutex<()> = SpinMutex::new(());
+        static _ENABLE_LOCK: SpinLock<()> = SpinLock::new(());
         let _guard = _ENABLE_LOCK.lock();
 
         configure_error(lapic_addr);
