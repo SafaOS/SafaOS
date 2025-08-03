@@ -204,7 +204,8 @@ impl Scheduler {
             .processes_queue
             .remove_where(|process| condition(process))?;
 
-        for thread in &*process.threads.lock() {
+        let mut threads = process.threads.lock();
+        for thread in &*threads {
             assert!(thread.is_dead());
             // wait for thread to exit before removing
             // will be removed on context switch at some point
@@ -216,6 +217,9 @@ impl Scheduler {
                 core::hint::spin_loop();
             }
         }
+        // Because processes are referenced by their own threads, we need to clear the threads so they drop the process reference
+        // TODO: Maybe move this somewhere else
+        threads.clear();
 
         let (info, page_table) = process.cleanup();
         drop(page_table);
