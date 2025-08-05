@@ -17,17 +17,7 @@ unsafe impl RawMutex for LockRawSpinLock {
     }
 
     fn lock(&self) {
-        without_interrupts(|| {
-            while self
-                .0
-                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                {
-                    core::hint::spin_loop();
-                }
-            }
-        });
+        without_interrupts(|| lock_loop::<_, true>(self, Self::try_lock));
     }
 
     #[inline(always)]
@@ -47,14 +37,16 @@ pub const SPIN_AMOUNT: u32 = 10_000;
 pub struct LockRawMutex(AtomicBool);
 
 #[inline(always)]
-fn lock_loop<T>(this: &T, try_lock: impl Fn(&T) -> bool) {
+fn lock_loop<T, const SPIN_ONLY: bool>(this: &T, try_lock: impl Fn(&T) -> bool) {
     let mut spin_count = 0;
     while !try_lock(this) {
         core::hint::spin_loop();
-        spin_count += 1;
-        if spin_count > SPIN_AMOUNT {
-            thread::current::yield_now();
-            spin_count = 0;
+        if !SPIN_ONLY {
+            spin_count += 1;
+            if spin_count > SPIN_AMOUNT {
+                thread::current::yield_now();
+                spin_count = 0;
+            }
         }
     }
 }
@@ -64,7 +56,7 @@ unsafe impl RawMutex for LockRawMutex {
     type GuardMarker = GuardSend;
 
     fn lock(&self) {
-        lock_loop(self, Self::try_lock)
+        lock_loop::<_, false>(self, Self::try_lock)
     }
 
     #[inline(always)]
@@ -94,11 +86,11 @@ unsafe impl RawRwLock for LockRawRwLock {
     type GuardMarker = GuardSend;
 
     fn lock_shared(&self) {
-        lock_loop(self, Self::try_lock_shared)
+        lock_loop::<_, false>(self, Self::try_lock_shared)
     }
 
     fn lock_exclusive(&self) {
-        lock_loop(self, Self::try_lock_exclusive)
+        lock_loop::<_, false>(self, Self::try_lock_exclusive)
     }
 
     fn try_lock_shared(&self) -> bool {

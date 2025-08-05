@@ -13,7 +13,7 @@ use crate::{
     debug,
     limine::MP_RESPONSE,
     process::Process,
-    scheduler::{CPULocalStorage, SCHEDULER_INITED},
+    scheduler::{SCHEDULER_INITED, Scheduler},
     thread::Tid,
     utils::locks::Mutex,
 };
@@ -284,7 +284,7 @@ unsafe fn create_cpu_local(
 ) -> Result<(&'static ArchCPULocalStorage, NonNull<CPUStatus>), MapToError> {
     assert!(!tss_ptr.is_null());
 
-    let (thread, _) = Process::add_thread_to_process(
+    let (thread, _) = Process::new_thread(
         process,
         VirtAddr::from(idle_function as usize),
         VirtAddr::null(),
@@ -294,7 +294,7 @@ unsafe fn create_cpu_local(
 
     let status = unsafe { thread.context_unchecked().cpu_status() };
 
-    let cpu_local = CPULocalStorage::new(thread);
+    let cpu_local = Scheduler::new(thread);
     let arch_cpu_local_boxed = Box::new(ArchCPULocalStorage {
         cpu_local,
         tss_ptr,
@@ -388,7 +388,7 @@ pub unsafe fn init_cpus(process: &Arc<Process>, idle_function: fn() -> !) -> Non
 
 #[repr(C)]
 pub(in crate::arch::x86_64) struct ArchCPULocalStorage {
-    cpu_local: CPULocalStorage,
+    cpu_local: Scheduler,
     pub tss_ptr: *mut TaskStateSegment,
     ptr_to_self: *const Self,
 }
@@ -402,15 +402,15 @@ pub(in crate::arch::x86_64) fn arch_cpu_local_storage_ptr() -> *mut ArchCPULocal
     ptr
 }
 /// Retrieves a pointer local to each CPU to a CPU Local Storage
-pub fn cpu_local_storage_ptr() -> *mut CPULocalStorage {
+pub fn cpu_local_storage_ptr() -> *mut Scheduler {
     arch_cpu_local_storage_ptr().cast()
 }
 
 /// Returns a list of pointers of CPU local storage to each cpu, can then be used by the scheduler to manage distrubting threads across CPUs
-pub unsafe fn cpu_local_storages() -> &'static [&'static CPULocalStorage] {
+pub unsafe fn cpu_local_storages() -> &'static [&'static Scheduler] {
     // only is called after the CPUs are initialized so should be safe
     unsafe {
         &*((&*CPU_LOCALS.data_ptr()).as_slice() as *const [&ArchCPULocalStorage]
-            as *const [&CPULocalStorage])
+            as *const [&Scheduler])
     }
 }

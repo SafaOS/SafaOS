@@ -15,7 +15,7 @@ use crate::{
     memory::paging::MapToError,
     process::{self, Pid, Process},
     scheduler,
-    thread::{ContextPriority, Thread},
+    thread::{ArcThread, ContextPriority},
     utils::{
         elf::{Elf, ElfError},
         io::Readable,
@@ -58,7 +58,7 @@ fn spawn_inner(
         Pid,
         Pid,
         Box<PathBuf>,
-    ) -> Result<(Arc<Process>, Arc<Thread>), SpawnError>,
+    ) -> Result<(Arc<Process>, ArcThread), SpawnError>,
 ) -> Result<Pid, SpawnError> {
     let current_process = process::current();
     let current_pid = current_process.pid();

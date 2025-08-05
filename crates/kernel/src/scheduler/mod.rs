@@ -3,10 +3,11 @@ pub mod resources;
 mod tests;
 
 use core::cell::{SyncUnsafeCell, UnsafeCell};
+use core::hint::likely;
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::thread::{self, ContextPriority, ContextStatus, Thread, ThreadNode};
+use crate::thread::{ArcThread, ContextPriority, ContextStatus};
 use crate::utils::path::make_path;
 use alloc::sync::Arc;
 
@@ -26,44 +27,56 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct CPULocalStorage {
-    current_thread: UnsafeCell<Arc<Thread>>,
-    thread_node_queue: SpinLock<(Box<ThreadNode>, *mut ThreadNode)>,
+pub struct Scheduler {
+    pub current_thread: UnsafeCell<ArcThread>,
+    /// The head thread is the thread that is the head of the thread queue
+    pub head_thread: SpinLock<ArcThread>,
     threads_count: AtomicUsize,
 
     time_slices_left: SyncUnsafeCell<u32>,
+    context_switch_count: AtomicUsize,
 }
-impl CPULocalStorage {
-    pub fn new(root_thread: Arc<Thread>) -> Self {
-        let root_thread_node = ThreadNode::new(root_thread.clone());
-        let mut root_thread_node = Box::new(root_thread_node);
-        let root_thread_node_ptr = &raw mut *root_thread_node;
-
+impl Scheduler {
+    pub fn new(idle_thread: ArcThread) -> Self {
         Self {
-            current_thread: UnsafeCell::new(root_thread),
-            thread_node_queue: SpinLock::new((root_thread_node, root_thread_node_ptr)),
+            current_thread: UnsafeCell::new(idle_thread.clone()),
+            head_thread: SpinLock::new(idle_thread.clone()),
             threads_count: AtomicUsize::new(0),
             time_slices_left: SyncUnsafeCell::new(0),
+            context_switch_count: AtomicUsize::new(0),
         }
     }
     /// Get the current thread
-    pub fn current_thread(&self) -> Arc<Thread> {
+    pub fn current_thread(&self) -> ArcThread {
         // safe because the current thread is only ever read by the current thread and modifieded by context switch
         unsafe { (*self.current_thread.get()).clone() }
     }
     /// Get a reference to the current thread
-    pub fn current_thread_ref(&self) -> &Arc<Thread> {
+    pub fn current_thread_ref(&self) -> &ArcThread {
         unsafe { &*self.current_thread.get() }
+    }
+
+    /// Subtracts 1 from the thread count
+    /// returns the old thread count
+    pub fn sub_thread_count(&self) -> usize {
+        self.threads_count.fetch_sub(1, Ordering::AcqRel)
+    }
+
+    /// Get a reference to the number of context switches that have been done
+    pub fn context_switches_count_ref(&self) -> &AtomicUsize {
+        &self.context_switch_count
     }
 }
 
-unsafe impl Send for CPULocalStorage {}
-unsafe impl Sync for CPULocalStorage {}
+unsafe impl Send for Scheduler {}
+unsafe impl Sync for Scheduler {}
 
-impl CPULocalStorage {
+impl Scheduler {
+    /// Get a reference to the current Scheduler
     pub fn get() -> &'static Self {
         unsafe { &*arch::threading::cpu_local_storage_ptr().cast() }
     }
+    /// Get a reference to all Schedulers for all CPUs
     pub fn get_all() -> &'static [&'static Self] {
         unsafe { arch::threading::cpu_local_storages() }
     }
@@ -72,7 +85,7 @@ impl CPULocalStorage {
 /// Subtracts one timeslice from the current context's timeslices passed.
 /// Returns `true` if the current context has finished all of its timeslices.
 unsafe fn timeslices_sub_finished() -> bool {
-    let local = CPULocalStorage::get();
+    let local = Scheduler::get();
     let ptr = local.time_slices_left.get();
     unsafe {
         if *ptr < 1 {
@@ -90,112 +103,74 @@ pub static SCHEDULER_INITED: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);
 /// Scheduler should be initialized first
 pub(super) unsafe fn before_thread_yield() {
     unsafe {
-        *CPULocalStorage::get().time_slices_left.get() = 0;
+        *Scheduler::get().time_slices_left.get() = 0;
     }
 }
 
+#[inline]
 /// context switches into next process, takes current context outputs new context
 /// returns the new context and a boolean indicating if the address space has changed
 unsafe fn switch_inner(
-    root_thread_node: &mut ThreadNode,
-    current_thread_node: &mut *mut ThreadNode,
-    current_thread_ptr: *mut Arc<Thread>,
+    head_thread: &ArcThread,
+    current_thread_ptr: *mut ArcThread,
     current_status: CPUStatus,
 ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
     unsafe {
         let current_thread = &*current_thread_ptr;
-        let current_tid = current_thread.tid();
-        let current_context = current_thread
-            .context()
-            .expect("context is None before the thread is removed");
         let current_process = current_thread.process();
         let current_pid = current_process.pid();
 
-        current_context.set_cpu_status(current_status);
+        if likely(!current_thread.is_dead()) {
+            let current_context = current_thread
+                .context()
+                .expect("context is None before the thread is removed");
+            current_context.set_cpu_status(current_status);
 
-        let mut status = current_thread.status_mut();
-        if current_thread.is_dead() {
-            *status = ContextStatus::Blocked(thread::BlockedReason::BlockedForever);
-        } else if status.is_running() {
-            *status = ContextStatus::Runnable;
-        }
-        drop(status);
-
-        if !current_process.is_alive() {
-            current_process
-                .schedule_cleanup
-                .store(true, core::sync::atomic::Ordering::SeqCst);
-        }
-
-        let mut current_node = *current_thread_node;
-        // FIXME: a lil bit unsafe
-        loop {
-            let (
-                next_node,
-                next_is_head, /* BECAREFUL head should be treated specially, especially when muttating */
-            ) = (*current_node)
-                .next
-                .as_deref_mut()
-                .map(|n| (n, false))
-                .unwrap_or((root_thread_node, true));
-
-            {
-                let thread = next_node.thread();
-                let thread_tid = thread.tid();
-                let process = thread.process();
-
-                let process_pid = process.pid();
-                let address_space_changed = process_pid != current_pid;
-
-                if thread.is_dead() {
-                    debug_assert!(!thread.is_removed());
-
-                    // same tid, same thread, another thread must be the one to mark removal
-                    if !address_space_changed && thread_tid == current_tid {
-                        current_node = next_node;
-                    } else {
-                        thread.mark_removed();
-                        let next = next_node.next.take();
-                        if next_is_head {
-                            *root_thread_node =
-                                    /* all references to the node become invalid here... */
-                                    *next.expect("no more threads to use as the head of the queue");
-                        } else {
-                            (*current_node).next = next;
-                        }
-                    }
-
-                    continue;
-                }
-
-                let mut status = thread.status_mut();
-
-                macro_rules! choose_context {
-                    () => {{
-                        *status = ContextStatus::Running;
-                        let priority = thread.priority();
-
-                        let context = thread.context_unchecked();
-                        let cpu_status = context.cpu_status();
-                        *current_thread_ptr = thread.clone();
-                        drop(status);
-                        *current_thread_node = next_node;
-                        (cpu_status, priority, address_space_changed)
-                    }};
-                }
-
-                match &*status {
-                    ContextStatus::Runnable => return choose_context!(),
-                    ContextStatus::Blocked(reason) if reason.block_lifted() => {
-                        return choose_context!();
-                    }
-                    ContextStatus::Blocked(_) => {}
-                    ContextStatus::Running => unreachable!(),
-                }
-
-                drop(status);
-                current_node = next_node;
+            let mut status = current_thread.status_mut();
+            if status.is_running() {
+                *status = ContextStatus::Runnable;
             }
+        }
+
+        let try_choose_thread = |thread: &ArcThread| {
+            assert!(!thread.is_dead());
+
+            let process = thread.process();
+            let process_pid = process.pid();
+            let address_space_changed = process_pid != current_pid;
+
+            let mut status = thread.status_mut();
+
+            macro_rules! choose_context {
+                () => {{
+                    *status = ContextStatus::Running;
+                    let priority = thread.priority();
+
+                    let context = thread.context_unchecked();
+                    let cpu_status = context.cpu_status();
+                    drop(status);
+                    *current_thread_ptr = thread.clone();
+                    Some((cpu_status, priority, address_space_changed))
+                }};
+            }
+
+            match &*status {
+                ContextStatus::Runnable => return choose_context!(),
+                ContextStatus::Blocked(reason) if reason.block_lifted() => {
+                    return choose_context!();
+                }
+                ContextStatus::Blocked(_) => None,
+                ContextStatus::Running => unreachable!(),
+            }
+        };
+
+        let mut current = current_thread.next().as_ref().unwrap_or(head_thread);
+        loop {
+            if let Some(results) = try_choose_thread(current) {
+                return results;
+            }
+
+            current = current.next().as_ref().unwrap_or(head_thread);
         }
     }
 }
@@ -216,26 +191,20 @@ pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
         return None;
     }
 
-    let local = CPULocalStorage::get();
-
-    let mut queue_lock = local.thread_node_queue.lock();
-    let (root_thread_node, current_thread_node_ptr) = &mut *queue_lock;
+    let scheduler = Scheduler::get();
+    let head_thread = scheduler.head_thread.lock();
+    scheduler
+        .context_switch_count
+        .fetch_add(1, Ordering::Release);
 
     unsafe {
-        let (cpu_status, priority, address_space_changed) = switch_inner(
-            &mut **root_thread_node,
-            current_thread_node_ptr,
-            local.current_thread.get(),
-            context,
-        );
-        *local.time_slices_left.get() = priority.timeslices();
+        let (cpu_status, priority, address_space_changed) =
+            switch_inner(&*head_thread, scheduler.current_thread.get(), context);
+        *scheduler.time_slices_left.get() = priority.timeslices();
 
         Some((cpu_status, address_space_changed))
     }
 }
-
-/// TODO: use
-struct Scheduler;
 
 /// inits the scheduler
 pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &str) -> ! {
@@ -285,30 +254,19 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
 ///
 /// by default (if `cpu` is None) chooses the least full CPU to append to otherwise if CPU is Some(i) and i is a valid CPU index, chooses that CPU
 /// use Some(0) to append to the boot CPU
-pub fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
-    let cpu_locals = CPULocalStorage::get_all();
+pub fn add_thread(thread: ArcThread, cpu: Option<usize>) {
+    let schedulers = Scheduler::get_all();
 
-    let (cpu_local, cpu_index) = if let Some(cpu) = cpu
-        && let Some(local) = cpu_locals.get(cpu)
+    let (cpu_index, scheduler) = if let Some(cpu) = cpu
+        && let Some(scheduler) = schedulers.get(cpu)
     {
-        (local, cpu)
+        (cpu, scheduler)
     } else {
-        let mut least_full = None;
-        for (index, cpu_local) in cpu_locals.iter().enumerate() {
-            let threads_amount = cpu_local
-                .threads_count
-                .load(core::sync::atomic::Ordering::Acquire);
-
-            if least_full.is_none_or(|(amount, _, _)| amount > threads_amount) {
-                let is_empty = threads_amount == 1;
-                least_full = Some((threads_amount, cpu_local, index));
-                if is_empty {
-                    break;
-                }
-            }
-        }
-        let (_, cpu_local, index) = least_full.expect("no CPUs were found");
-        (cpu_local, index)
+        schedulers
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, scheduler)| scheduler.threads_count.load(Ordering::Acquire))
+            .expect("no CPU found")
     };
 
     let cid = thread.tid();
@@ -317,13 +275,14 @@ pub fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
     without_interrupts(
         /* lock scheduler without interrupts enabled so we don't lock ourself */
         move || {
-            let mut queue_lock = cpu_local.thread_node_queue.lock();
-            let (root_thread, _) = &mut *queue_lock;
+            let mut head_thread = scheduler.head_thread.lock();
+            unsafe {
+                // FIXME: the idle thread should put the scheduler in itself
+                *head_thread.scheduler.get() = NonNull::new(*scheduler as *const _ as *mut _);
+                head_thread.add_to_head_thread(thread);
+            }
 
-            ThreadNode::push_front(root_thread, thread);
-            cpu_local
-                .threads_count
-                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            scheduler.threads_count.fetch_add(1, Ordering::SeqCst);
         },
     );
     debug!(
@@ -336,7 +295,7 @@ pub fn add_thread(thread: Arc<Thread>, cpu: Option<usize>) {
 ///
 /// `custom_cpu` is an optional parameter that specifies the CPU to which the thread should be assigned.
 /// If `custom_cpu` is `None`, the thread will be assigned to the least loaded CPU.
-pub fn add_process(process: Arc<Process>, root_thread: Arc<Thread>, custom_cpu: Option<usize>) {
+pub fn add_process(process: Arc<Process>, root_thread: ArcThread, custom_cpu: Option<usize>) {
     process_list::add_process(process);
     add_thread(root_thread, custom_cpu);
 }

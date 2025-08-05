@@ -23,7 +23,7 @@ use crate::{
     limine::MP_RESPONSE,
     memory::paging::{MapToError, PhysPageTable},
     process::Process,
-    scheduler::{self, CPULocalStorage, SCHEDULER_INITED},
+    scheduler::{self, SCHEDULER_INITED, Scheduler},
     thread::Tid,
     utils::locks::Mutex,
 };
@@ -225,7 +225,7 @@ pub fn invoke_context_switch() {
     }
 }
 
-static CPU_LOCALS: Mutex<Vec<&CPULocalStorage>> = Mutex::new(Vec::new());
+static SCHEDULERS: Mutex<Vec<&Scheduler>> = Mutex::new(Vec::new());
 
 unsafe fn set_tpidr(value: VirtAddr) {
     crate::serial!("tpidr_el1 set to: {value:#x}\n");
@@ -241,8 +241,8 @@ unsafe fn set_tpidr(value: VirtAddr) {
 unsafe fn create_cpu_local(
     process: &Arc<Process>,
     idle_function: fn() -> !,
-) -> Result<(&'static CPULocalStorage, NonNull<CPUStatus>), MapToError> {
-    let (thread, _) = Process::add_thread_to_process(
+) -> Result<(&'static Scheduler, NonNull<CPUStatus>), MapToError> {
+    let (thread, _) = Process::new_thread(
         process,
         VirtAddr::from(idle_function as usize),
         VirtAddr::null(),
@@ -252,7 +252,7 @@ unsafe fn create_cpu_local(
 
     let status = unsafe { thread.context_unchecked().cpu_status() };
 
-    let cpu_local_boxed = Box::new(CPULocalStorage::new(thread));
+    let cpu_local_boxed = Box::new(Scheduler::new(thread));
 
     unsafe {
         let cpu_local_ref = Box::into_non_null(cpu_local_boxed).as_ref();
@@ -270,7 +270,7 @@ unsafe fn add_new_cpu_local(
     unsafe {
         set_tpidr(VirtAddr::from_ptr(cpu_local));
     }
-    CPU_LOCALS.lock().push(cpu_local);
+    SCHEDULERS.lock().push(cpu_local);
     status
 }
 
@@ -335,14 +335,14 @@ pub unsafe fn init_cpus(process: &Arc<Process>, idle_function: fn() -> !) -> Non
 }
 
 /// Retrieves a pointer local to each CPU to a CPU Local Storage
-pub fn cpu_local_storage_ptr() -> *mut CPULocalStorage {
-    let ptr: *mut CPULocalStorage;
+pub fn cpu_local_storage_ptr() -> *mut Scheduler {
+    let ptr: *mut Scheduler;
     unsafe { asm!("mrs {}, tpidr_el1", out(reg) ptr, options(nostack, nomem)) }
     ptr
 }
 
 /// Returns a list of pointers of CPU local storage to each cpu, can then be used by the scheduler to manage distrubting threads across CPUs
-pub unsafe fn cpu_local_storages() -> &'static [&'static CPULocalStorage] {
+pub unsafe fn cpu_local_storages() -> &'static [&'static Scheduler] {
     // only is called after the CPUs are initialized so should be safe
-    unsafe { &*CPU_LOCALS.data_ptr() }
+    unsafe { &*SCHEDULERS.data_ptr() }
 }

@@ -11,9 +11,11 @@ use crate::{VirtAddr, process, scheduler, warn};
 
 pub fn exit(code: usize) -> ! {
     without_interrupts(|| {
-        let current_process = process::current();
-        current_process.kill(code, None);
-
+        // current process should be dropped after this
+        unsafe {
+            let current_process = process::current();
+            current_process.kill(code, None)
+        }
         thread::current::yield_now();
         unreachable!("process didn't exit")
     })
@@ -30,7 +32,7 @@ pub fn thread_spawn(
     custom_stack_size: Option<NonZero<usize>>,
 ) -> Result<Tid, MapToError> {
     let this = process::current();
-    let (thread, cid) = Process::add_thread_to_process(
+    let (thread, cid) = Process::new_thread(
         &this,
         entry_point,
         argument_ptr,

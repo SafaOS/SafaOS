@@ -12,7 +12,7 @@ use crate::{
         userspace_copy_within,
     },
     scheduler,
-    thread::{self, Tid},
+    thread::{self, ArcThread, Tid},
     utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
@@ -207,14 +207,14 @@ pub struct Process {
 
     is_alive: AtomicBool,
 
-    pub schedule_cleanup: AtomicBool,
+    cleaned_up: AtomicBool,
     userspace_process: bool,
 
     next_tid: AtomicU32,
     default_priority: ContextPriority,
     allocator: Mutex<ProcessMemAllocator>,
 
-    pub(super) threads: Mutex<Vec<Arc<Thread>>>,
+    pub(super) threads: Mutex<Vec<ArcThread>>,
     pub context_count: AtomicU32,
 }
 
@@ -367,8 +367,7 @@ impl Process {
 
             ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
-            schedule_cleanup: AtomicBool::new(false),
-
+            cleaned_up: AtomicBool::new(false),
             threads: Mutex::new(Vec::new()),
 
             next_tid: AtomicU32::new(1),
@@ -405,7 +404,7 @@ impl Process {
         default_priority: ContextPriority,
         userspace_process: bool,
         custom_stack_size: Option<NonZero<usize>>,
-    ) -> Result<(Arc<Self>, Arc<Thread>), MapToError> {
+    ) -> Result<(Arc<Self>, ArcThread), MapToError> {
         let data_break = data_break.to_next_page();
         let mut root_page_table = root_page_table;
 
@@ -485,16 +484,13 @@ impl Process {
             userspace_process,
         ));
 
-        let thread = Arc::new(Self::create_thread_from_status(
-            &process, 0, context, None, to_track,
-        ));
-        process.threads.lock().push(thread.clone());
+        let root_thread = ArcThread::new(Self::create_thread(&process, 0, context, None, to_track));
+        process.add_thread(root_thread.clone());
 
-        Ok((process, thread))
+        Ok((process, root_thread))
     }
 
-    /// Creates a new thread from a CPU status giving it a `cid` and everything
-    fn create_thread_from_status(
+    fn create_thread(
         process: &Arc<Process>,
         tid: Tid,
         cpu_status: CPUStatus,
@@ -510,39 +506,21 @@ impl Process {
         )
     }
 
-    /// Creates a new thread from a CPU status giving it a `cid` and everything
-    /// adds to the process's context count so it tracks this thread
-    pub fn add_thread_to_process(
-        process: &Arc<Process>,
-        entry_point: VirtAddr,
-        argument_ptr: VirtAddr,
-        priority: Option<ContextPriority>,
-        custom_stack_size: Option<NonZero<usize>>,
-    ) -> Result<(Arc<Thread>, Tid), MapToError> {
-        let context_id = process.next_tid.fetch_add(1, Ordering::SeqCst);
-        let thread = Self::create_thread_from_process_owned(
-            process,
-            context_id,
-            entry_point,
-            argument_ptr,
-            priority,
-            custom_stack_size,
-        )
-        .map(|thread| Arc::new(thread))?;
-        process.threads.lock().push(thread.clone());
-        Ok((thread, context_id))
+    fn add_thread(&self, thread: ArcThread) {
+        self.threads.lock().push(thread);
+        self.context_count.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Creates a new thread for a given process
-    /// doesn't add to the process's thread list so the thread is owned by the caller
-    pub fn create_thread_from_process_owned(
+    /// Creates a new thread from a CPU status giving it a `cid` and everything
+    /// adds to the process's context count so it tracks this thread
+    pub fn new_thread(
         process: &Arc<Process>,
-        context_id: Tid,
         entry_point: VirtAddr,
         argument_ptr: VirtAddr,
         priority: Option<ContextPriority>,
         custom_stack_size: Option<NonZero<usize>>,
-    ) -> Result<Thread, MapToError> {
+    ) -> Result<(ArcThread, Tid), MapToError> {
+        let context_id = process.next_tid.fetch_add(1, Ordering::SeqCst);
         let user_stack_tracker = process.allocate_stack(custom_stack_size)?;
         let kernel_stack_tracker = process.allocate_stack(custom_stack_size)?;
         let tls = process.allocate_thread_local()?;
@@ -578,10 +556,11 @@ impl Process {
             to_track.push(tracker).unwrap();
         }
 
-        let thread =
-            Self::create_thread_from_status(process, context_id, cpu_status, priority, to_track);
-        process.context_count.fetch_add(1, Ordering::SeqCst);
-        Ok(thread)
+        let thread = Self::create_thread(process, context_id, cpu_status, priority, to_track);
+        let thread = ArcThread::new(thread);
+
+        process.add_thread(thread.clone());
+        Ok((thread, context_id))
     }
 
     /// Creates a new process from an elf
@@ -597,7 +576,7 @@ impl Process {
         default_priority: ContextPriority,
         stdio: ProcessStdio,
         custom_stack_size: Option<NonZero<usize>>,
-    ) -> Result<(Arc<Self>, Arc<Thread>), ElfError> {
+    ) -> Result<(Arc<Self>, ArcThread), ElfError> {
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
         let (data_break, master_tls) = elf.load_exec(&mut page_table)?;
@@ -650,7 +629,9 @@ impl Process {
 
     /// kills the process
     /// if `killed_by` is `None` the process will be killed by itself
-    pub fn kill(&self, exit_code: usize, killed_by: Option<Pid>) {
+    /// # Safety
+    /// If this function was called on the current process, the caller must call it without interrupts enabled.
+    pub unsafe fn kill(&self, exit_code: usize, killed_by: Option<Pid>) {
         let pid = self.pid();
         let killed_by = killed_by.unwrap_or(pid);
 
@@ -660,22 +641,9 @@ impl Process {
         // Drop resources
         self.resources_mut().overwrite_resources(Vec::new());
 
-        let current_thread = thread::current();
-        let current_tid = current_thread.tid();
-        let current_pid = current_thread.process().pid();
-
-        let killing_self = current_pid == pid;
-
         for thread in &*threads {
-            let tid = thread.tid();
-            // we don't have to wait for self to exit
-            if killing_self && current_tid == tid {
-                continue;
-            }
-
             if !thread.is_dead() {
-                thread.mark_dead(true);
-                thread.block_forever();
+                unsafe { thread.soft_kill(true) };
             }
         }
 
@@ -690,25 +658,22 @@ impl Process {
 
         drop(threads);
         self.is_alive.store(false, Ordering::Release);
-        current_thread.mark_dead(true);
     }
 
     pub(super) fn cleanup(&self) -> (ProcessInfo, Option<PhysPageTable>) {
-        let mut page_table = None;
-
-        if self
-            .schedule_cleanup
-            .compare_exchange(true, false, Ordering::SeqCst, Ordering::Acquire)
+        let page_table = if self
+            .cleaned_up
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
             let mut state = self.state_mut();
             let zombie = state
                 .zombie_mut()
                 .expect("attempt to cleanup an alive process");
-
-            page_table = Some(unsafe { ManuallyDrop::take(&mut zombie.root_page_table) });
-        }
-
+            Some(unsafe { ManuallyDrop::take(&mut zombie.root_page_table) })
+        } else {
+            None
+        };
         (ProcessInfo::from(self), page_table)
     }
 

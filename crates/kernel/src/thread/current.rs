@@ -17,9 +17,11 @@ use crate::{
 /// if this thread is the last thread in the process, the process will be terminated with the given exit code, otherwise the exit code will be left unused.
 pub fn exit(code: usize) -> ! {
     without_interrupts(|| {
-        let current = thread::current();
-        current.kill_thread(code);
-
+        // current thread should be dropped at the end of this
+        unsafe {
+            let current = thread::current();
+            current.kill(code);
+        }
         self::yield_now();
         unreachable!("thread didn't exit")
     })
