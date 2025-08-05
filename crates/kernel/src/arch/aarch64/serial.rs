@@ -1,9 +1,9 @@
 use core::fmt::{self, Write};
 use core::hint::unlikely;
 
-use crate::limine::HHDM;
-use crate::utils::locks::Mutex;
 use crate::VirtAddr;
+use crate::limine::HHDM;
+use crate::utils::locks::SpinLock;
 use lazy_static::lazy_static;
 lazy_static! {
     static ref PL011: VirtAddr = super::cpu::PL011BASE.into_virt();
@@ -35,7 +35,7 @@ pub(super) fn write_str(s: &str) {
 pub struct Serial;
 lazy_static! {
     /// Global Serial writer
-    pub static ref SERIAL: Mutex<Serial> = Mutex::new(Serial);
+    pub static ref SERIAL: SpinLock<Serial> = SpinLock::new(Serial);
 }
 
 impl Write for Serial {
@@ -51,5 +51,5 @@ impl Write for Serial {
 }
 
 pub fn _serial(args: fmt::Arguments) {
-    SERIAL.lock().write_fmt(args).unwrap();
+    super::without_interrupts(|| SERIAL.lock().write_fmt(args).unwrap())
 }

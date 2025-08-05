@@ -3,12 +3,12 @@ use core::fmt::Write;
 use crate::{
     arch::serial::Serial,
     drivers::vfs::{FSError, FSResult},
-    utils::locks::Mutex,
+    utils::locks::SpinLock,
 };
 
 use super::CharDevice;
 
-impl CharDevice for Mutex<Serial> {
+impl CharDevice for SpinLock<Serial> {
     fn name(&self) -> &'static str {
         "ss"
     }
