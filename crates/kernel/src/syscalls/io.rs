@@ -8,7 +8,7 @@ use crate::{
 use macros::syscall_handler;
 use safa_abi::{
     errors::ErrorStatus,
-    fs::{DirEntry, FileAttr, OpenOptions},
+    fs::{DirEntry, FileAttr},
 };
 
 impl SyscallFFI for FileRef {
@@ -23,36 +23,6 @@ impl SyscallFFI for DirIterRef {
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         DirIterRef::get(args).ok_or(ErrorStatus::InvalidResource)
     }
-}
-
-/// Opens a file or directory with all permissions
-#[syscall_handler]
-fn sysopen_all(path: Path, dest_fd: Option<&mut usize>) -> FSResult<()> {
-    let file_ref = FileRef::open_all(path)?;
-    if let Some(dest_fd) = dest_fd {
-        *dest_fd = file_ref.ri();
-    }
-
-    Ok(())
-}
-
-/// Opens a file or directory with the specified options
-#[syscall_handler]
-fn sysopen(path: Path, options: u8, dest_fd: Option<&mut usize>) -> FSResult<()> {
-    let options = OpenOptions::from_bits(options);
-    let file_ref = FileRef::open_with_options(path, options)?;
-
-    if let Some(dest_fd) = dest_fd {
-        *dest_fd = file_ref.ri();
-    }
-
-    Ok(())
-}
-
-/// Removes a path
-#[syscall_handler]
-fn sysremove_path(path: Path) -> FSResult<()> {
-    fs::remove(path)
 }
 
 #[syscall_handler]
@@ -83,16 +53,6 @@ fn sysread(
     }
 
     Ok(())
-}
-
-#[syscall_handler]
-fn syscreate(path: Path) -> FSResult<()> {
-    fs::create(path)
-}
-
-#[syscall_handler]
-fn syscreatedir(path: Path) -> FSResult<()> {
-    fs::createdir(path)
 }
 
 #[syscall_handler]

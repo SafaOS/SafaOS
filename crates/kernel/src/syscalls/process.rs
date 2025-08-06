@@ -1,12 +1,13 @@
+use crate::VirtAddr;
 use crate::thread::ContextPriority;
-use safa_abi::process::{ProcessStdio, RawContextPriority, RawPSpawnConfig, RawTSpawnConfig};
+use crate::utils::io::Cursor;
+use safa_abi::process::{ProcessStdio, RawPSpawnConfig};
 
 use crate::process::spawn::PSpawnConfig;
 use crate::process::{self, Pid, spawn::SpawnFlags};
-use crate::{VirtAddr, utils::types::Name};
+use crate::utils::types::Name;
 use core::fmt::Write;
 use core::num::NonZero;
-use core::sync::atomic::AtomicU32;
 
 use crate::utils::path::Path;
 use safa_abi::errors::ErrorStatus;
@@ -14,22 +15,6 @@ use safa_abi::errors::ErrorStatus;
 use super::ffi::SyscallFFI;
 use crate::thread::{self, Tid};
 use macros::syscall_handler;
-
-#[syscall_handler]
-fn syst_fut_wait(addr: &AtomicU32, val: u32, timeout_ms: u64, wait_results: Option<&mut bool>) {
-    let results = unsafe { thread::current::wait_for_futex(addr, val, timeout_ms) };
-    if let Some(wait_results) = wait_results {
-        *wait_results = results;
-    }
-}
-
-#[syscall_handler]
-fn syst_fut_wake(addr: &AtomicU32, n: usize, wake_results: Option<&mut usize>) {
-    let num_threads = process::current::wake_futex(addr, n);
-    if let Some(wake_results) = wake_results {
-        *wake_results = num_threads;
-    }
-}
 
 #[syscall_handler]
 fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
@@ -123,58 +108,34 @@ fn syspspawn(
     Ok(())
 }
 
-struct TSpawnConfig {
-    argument_ptr: VirtAddr,
-    priority: Option<ContextPriority>,
-    cpu: Option<u8>,
-    custom_stack_size: Option<NonZero<usize>>,
-}
-
-impl TryFrom<&RawTSpawnConfig> for TSpawnConfig {
-    type Error = ErrorStatus;
-    fn try_from(value: &RawTSpawnConfig) -> Result<Self, Self::Error> {
-        let argument_ptr = VirtAddr::from_ptr(value.argument_ptr);
-        let priority = match value.priority {
-            RawContextPriority::Default => None,
-            RawContextPriority::Medium => Some(ContextPriority::Medium),
-            RawContextPriority::Low => Some(ContextPriority::Low),
-            RawContextPriority::High => Some(ContextPriority::High),
-        };
-
-        let cpu = value.cpu.into();
-        let custom_stack_size = if value.revision >= 1 {
-            value.custom_stack_size.into()
-        } else {
-            None
-        };
-
-        Ok(TSpawnConfig {
-            argument_ptr,
-            priority,
-            cpu,
-            custom_stack_size,
-        })
-    }
+#[syscall_handler]
+fn sysp_sbrk(amount: isize, results: &mut VirtAddr) -> Result<(), ErrorStatus> {
+    let res = process::current::extend_data_break(amount)?;
+    *results = VirtAddr::from_ptr(res);
+    Ok(())
 }
 
 #[syscall_handler]
-fn sys_tspawn(
-    entry_point: VirtAddr,
-    raw_config: &RawTSpawnConfig,
-    target_tid: Option<&mut Tid>,
-) -> Result<(), ErrorStatus> {
-    let config: TSpawnConfig = raw_config.try_into()?;
+fn syschdir(path: Path) -> Result<(), ErrorStatus> {
+    process::current::chdir(path).map_err(|err| err.into())
+}
 
-    let thread_tid = process::current::thread_spawn(
-        entry_point,
-        config.argument_ptr,
-        config.priority,
-        config.cpu.map(|v| v as usize /* too lazy to change */),
-        config.custom_stack_size,
-    )
-    .map_err(|_| ErrorStatus::MMapError)?;
-    if let Some(target_tid) = target_tid {
-        *target_tid = thread_tid;
+#[syscall_handler]
+/// gets the current working directory in `path` and puts the length of the gotten path in
+/// `dest_len` if it is not null
+/// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
+fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
+    let this_process = process::current();
+
+    let cwd = this_process.cwd();
+    let cwd = cwd.as_path();
+
+    let len = cwd.len();
+    if let Some(dest_len) = dest_len {
+        *dest_len = len;
     }
+
+    let mut cursor = Cursor::new(path);
+    write!(&mut cursor, "{cwd}").map_err(|_| ErrorStatus::Generic)?;
     Ok(())
 }
