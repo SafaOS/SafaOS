@@ -43,6 +43,11 @@ impl From<EntryFlags> for ArchEntryFlags {
             flags |= ArchEntryFlags::MAIR1;
         }
 
+        if value.contains(EntryFlags::FRAMEBUFFER_CACHED) {
+            // treat the framebuffer as uncached for now
+            flags |= ArchEntryFlags::MAIR1;
+        }
+
         if !value.contains(EntryFlags::WRITE) {
             // read-only flag
             flags |= ArchEntryFlags::AP_HIGHER;
