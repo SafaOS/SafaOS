@@ -149,6 +149,13 @@ impl ArcThread {
             self.block_forever();
         }
 
+        if is_current {
+            unsafe {
+                eve::schedule_thread_cleanup(self.clone(), scheduler.context_switches_count_ref())
+            };
+            self.set_status(ContextStatus::Blocked(BlockedReason::BlockedForever));
+        }
+
         /* ensures no other thread is going to be removed or switched to during this operation */
         let mut head_thread = scheduler.head_thread.lock();
 
@@ -170,13 +177,10 @@ impl ArcThread {
             }
         }
 
-        if is_current {
-            self.set_status(ContextStatus::Blocked(BlockedReason::BlockedForever));
-            eve::schedule_thread_cleanup(self.clone(), scheduler.context_switches_count_ref());
-        } else {
+        if !is_current {
             // the thread isn't running we can drop it now
             unsafe { self.cleanup() };
-        }
+        };
 
         scheduler.sub_thread_count();
     }

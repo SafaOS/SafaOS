@@ -4,12 +4,11 @@
 use core::cell::SyncUnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::arch::without_interrupts;
 use crate::drivers::driver_poll::{self, PolledDriver};
 use crate::serial;
 use crate::thread::{self, ArcThread, ContextPriority, Tid};
 use crate::utils::alloc::PageString;
-use crate::utils::locks::SpinLock;
+use crate::utils::locks::Mutex;
 use crate::utils::path::make_path;
 use crate::{debug, fs, logging, process};
 use alloc::vec::Vec;
@@ -42,7 +41,7 @@ unsafe impl Send for CleanupItem {}
 unsafe impl Sync for CleanupItem {}
 
 static SHOULD_WAKEUP: AtomicUsize = AtomicUsize::new(0);
-static TO_CLEANUP: SpinLock<Vec<CleanupItem>> = SpinLock::new(Vec::new());
+static TO_CLEANUP: Mutex<Vec<CleanupItem>> = Mutex::new(Vec::new());
 
 fn poll_driver_thread(tid: Tid, driver: &&dyn PolledDriver) -> ! {
     debug!(
@@ -117,22 +116,19 @@ pub fn idle_function() -> ! {
     crate::serial!("entered idle\n");
     loop {
         if SHOULD_WAKEUP.load(Ordering::Acquire) > 0 {
-            without_interrupts(|| {
-                // A thread yield during this would deadlock if [`schedule_thread_cleanup`] is called
-                let mut to_cleanup = TO_CLEANUP.lock();
-                // TODO: Maybe there is a faster method to handle this
-                to_cleanup.retain(|item| {
-                    // only remove items that's been around beyond or at `at_context_switch_count`
-                    if item.context_switch_count.load(Ordering::Acquire)
-                        >= item.at_context_switch_count
-                    {
-                        unsafe { item.thread.cleanup() };
-                        SHOULD_WAKEUP.fetch_sub(1, Ordering::Release);
-                        false
-                    } else {
-                        true
-                    }
-                });
+            // A thread yield during this would deadlock if [`schedule_thread_cleanup`] is called
+            let mut to_cleanup = TO_CLEANUP.lock();
+            // TODO: Maybe there is a faster method to handle this
+            to_cleanup.retain(|item| {
+                // only remove items that's been around beyond or at `at_context_switch_count`
+                if item.context_switch_count.load(Ordering::Acquire) >= item.at_context_switch_count
+                {
+                    unsafe { item.thread.cleanup() };
+                    SHOULD_WAKEUP.fetch_sub(1, Ordering::Release);
+                    false
+                } else {
+                    true
+                }
             });
         }
 
@@ -142,14 +138,19 @@ pub fn idle_function() -> ! {
 
 /// Schedules a thread's Context for cleanup
 /// when the scheduler switches to another thread
-pub fn schedule_thread_cleanup(thread: ArcThread, context_switch_count_ref: &'static AtomicUsize) {
-    without_interrupts(|| {
-        let mut to_cleanup = TO_CLEANUP.lock();
-        to_cleanup.push(CleanupItem {
-            thread,
-            context_switch_count: context_switch_count_ref,
-            at_context_switch_count: context_switch_count_ref.load(Ordering::Acquire) + 2,
-        });
-        SHOULD_WAKEUP.fetch_add(1, Ordering::Release);
+/// # Safety
+/// If any context switch occurs after this function is called the thread will be dropped
+pub unsafe fn schedule_thread_cleanup(
+    thread: ArcThread,
+    context_switch_count_ref: &'static AtomicUsize,
+) {
+    let mut to_cleanup = TO_CLEANUP.lock();
+    // reserve space for the new item
+    to_cleanup.reserve(1);
+    to_cleanup.push(CleanupItem {
+        thread,
+        context_switch_count: context_switch_count_ref,
+        at_context_switch_count: context_switch_count_ref.load(Ordering::Acquire) + 2,
     });
+    SHOULD_WAKEUP.fetch_add(1, Ordering::Release);
 }
