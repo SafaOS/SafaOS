@@ -70,7 +70,7 @@ impl<'a> FrameBuffer<'a> {
             [self.buffer_display_index..self.buffer_display_index + self.video_buffer.len() / 4];
 
         let start = pixel_start.min(pixels.len() - 1);
-        let end = (start + pixel_count).min(pixels.len() - start);
+        let end = (start + pixel_count).min(pixels.len());
 
         for i in start..end {
             let row = i / width;
