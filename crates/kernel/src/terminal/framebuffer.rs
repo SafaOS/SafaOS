@@ -13,7 +13,7 @@ use crate::{
     },
 };
 use noto_sans_mono_bitmap::{
-    get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
+    FontWeight, RasterHeight, RasterizedChar, get_raster, get_raster_width,
 };
 
 use super::TTYInterface;
@@ -144,7 +144,7 @@ impl FrameBufferTTY<'_> {
     }
 
     fn sync_pixels(&mut self) {
-        self.framebuffer.buffer().sync_pixels();
+        self.framebuffer.buffer().sync_pixels_full();
     }
 
     fn putc_unsynced(&mut self, c: char) {

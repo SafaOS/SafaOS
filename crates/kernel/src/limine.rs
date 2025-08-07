@@ -114,7 +114,7 @@ pub fn mmap_request() -> &'static MemoryMapResponse {
     MMAP_REQUEST.get_response().unwrap()
 }
 
-fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
+fn get_framebuffer() -> (&'static mut [u8], FrameBufferInfo) {
     let mut buffers = FRAMEBUFFER_REQUEST.get_response().unwrap().framebuffers();
     let first = buffers.next().unwrap();
 
@@ -136,14 +136,14 @@ fn get_framebuffer() -> (&'static mut [u32], FrameBufferInfo) {
 
     assert_eq!(info.bytes_per_pixel, 4);
 
-    let size = (first.width() * first.height() * first.bpp() as u64 / 8 / 4) as usize;
-    let buffer = unsafe { slice::from_raw_parts_mut(first.addr() as *mut u32, size) };
+    let size = (first.width() * first.height() * first.bpp() as u64 / 8) as usize;
+    let buffer = unsafe { slice::from_raw_parts_mut(first.addr(), size) };
 
     (buffer, info)
 }
 
 lazy_static! {
-    pub static ref LIMINE_FRAMEBUFFER: (SyncUnsafeCell<&'static mut [u32]>, FrameBufferInfo) = {
+    pub static ref LIMINE_FRAMEBUFFER: (SyncUnsafeCell<&'static mut [u8]>, FrameBufferInfo) = {
         let (video_buffer, info) = get_framebuffer();
         (SyncUnsafeCell::new(video_buffer), info)
     };
