@@ -4,7 +4,7 @@ pub mod tty;
 use crate::{
     arch::serial::SERIAL,
     debug,
-    drivers::vfs::{self, CtlArgs, FSError, FSResult, VFS},
+    drivers::vfs::{self, FSError, FSResult, VFS},
     terminal::FRAMEBUFFER_TERMINAL,
     time,
 };
@@ -36,9 +36,9 @@ pub trait Device: Send + Sync {
     fn name(&self) -> &'static str;
     fn read(&self, buffer: &mut [u8]) -> FSResult<usize>;
     fn write(&self, buffer: &[u8]) -> FSResult<usize>;
-    fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
+    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
         _ = cmd;
-        _ = args;
+        _ = arg;
         Err(FSError::OperationNotSupported)
     }
     fn sync(&self) -> FSResult<()> {
@@ -50,9 +50,9 @@ pub trait CharDevice: Send + Sync {
     fn name(&self) -> &'static str;
     fn read(&self, buffer: &mut [u8]) -> FSResult<usize>;
     fn write(&self, buffer: &[u8]) -> FSResult<usize>;
-    fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
+    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
         _ = cmd;
-        _ = args;
+        _ = arg;
         Err(FSError::OperationNotSupported)
     }
     fn sync(&self) -> FSResult<()> {
@@ -70,8 +70,8 @@ impl<T: CharDevice> Device for T {
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
         self.write(buffer)
     }
-    fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
-        self.ctl(cmd, args)
+    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+        self.send_command(cmd, arg)
     }
     fn sync(&self) -> FSResult<()> {
         self.sync()

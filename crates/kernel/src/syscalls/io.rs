@@ -1,6 +1,6 @@
 use super::ffi::SyscallFFI;
 use crate::{
-    drivers::vfs::{CtlArgs, FSResult},
+    drivers::vfs::FSResult,
     fs::{self, DirIterRef, FileRef},
     utils::path::Path,
 };
@@ -116,7 +116,6 @@ fn sysget_direntry(path: Path, dest_direntry: &mut DirEntry) -> FSResult<()> {
 }
 
 #[syscall_handler]
-fn sysctl(fd: FileRef, cmd: u16, args: &[usize]) -> FSResult<()> {
-    let ctl_args = CtlArgs::new(args);
-    fd.ctl(cmd, ctl_args)
+fn sysio_command(fd: FileRef, cmd: u16, arg: usize) -> FSResult<()> {
+    fd.send_command(cmd, arg)
 }

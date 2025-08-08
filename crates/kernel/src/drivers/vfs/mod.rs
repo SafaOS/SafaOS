@@ -58,11 +58,10 @@ pub enum FSError {
     PathTooLong,
     MissingPermission,
     OperationNotSupported,
-    NotEnoughArguments,
     InvalidResource,
     AlreadyExists,
-    InvalidCtlCmd,
-    InvalidCtlArg,
+    InvalidCmd,
+    InvalidArg,
     NotExecutable,
 }
 
@@ -86,9 +85,9 @@ impl IntoErr for FSError {
             Self::AlreadyExists => ErrorStatus::AlreadyExists,
             Self::NotExecutable => ErrorStatus::NotExecutable,
             Self::InvalidOffset => ErrorStatus::InvalidOffset,
-            Self::InvalidCtlCmd | Self::InvalidCtlArg => ErrorStatus::Generic,
+            Self::InvalidCmd => ErrorStatus::InvalidCommand,
+            Self::InvalidArg => ErrorStatus::InvalidArgument,
             Self::InvalidName | Self::PathTooLong => ErrorStatus::StrTooLong,
-            Self::NotEnoughArguments => ErrorStatus::NotEnoughArguments,
             Self::InvalidResource => ErrorStatus::InvalidResource,
         }
     }
@@ -157,8 +156,8 @@ impl FSObjectDescriptor {
         self.attrs().size
     }
 
-    pub fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
-        self.id.ctl(cmd, args)
+    pub fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+        self.id.send_command(cmd, arg)
     }
 
     pub fn sync(&self) -> FSResult<()> {
@@ -195,8 +194,8 @@ impl VFSObjectID {
         self.fs.attrs_of(self.fs_obj_id)
     }
 
-    pub fn ctl(&self, cmd: u16, args: CtlArgs) -> FSResult<()> {
-        self.fs.ctl(self.fs_obj_id, cmd, args)
+    pub fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+        self.fs.send_command(self.fs_obj_id, cmd, arg)
     }
 
     pub fn sync(&self) -> FSResult<()> {
@@ -233,46 +232,6 @@ impl CollectionIterDescriptor {
         let index = self.index;
         self.index += 1;
         self.entries.get(index).cloned()
-    }
-}
-
-#[derive(Debug)]
-pub struct CtlArgs<'a> {
-    index: usize,
-    args: &'a [usize],
-}
-
-pub trait CtlArg: Sized {
-    fn try_from(value: usize) -> Option<Self>;
-}
-
-impl<T: TryFrom<usize>> CtlArg for T {
-    fn try_from(value: usize) -> Option<Self> {
-        TryFrom::try_from(value).ok()
-    }
-}
-
-impl<'a> CtlArgs<'a> {
-    pub fn new(args: &'a [usize]) -> Self {
-        Self { index: 0, args }
-    }
-
-    pub fn get_ref_to<'b, T>(&mut self) -> FSResult<&'b mut T> {
-        let it = self.get_ty::<usize>()? as *mut T;
-
-        if it.is_null() || !it.is_aligned() {
-            return Err(FSError::InvalidCtlArg);
-        }
-        Ok(unsafe { &mut *it })
-    }
-
-    pub fn get_ty<T: CtlArg>(&mut self) -> FSResult<T> {
-        let it = self
-            .args
-            .get(self.index)
-            .ok_or(FSError::NotEnoughArguments)?;
-        self.index += 1;
-        T::try_from(*it).ok_or(FSError::InvalidCtlArg)
     }
 }
 
@@ -369,10 +328,11 @@ pub trait FileSystem: Send + Sync {
         Err(FSError::OperationNotSupported)
     }
 
-    fn ctl<'a>(&'a self, id: FSObjectID, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
+    fn send_command(&self, id: FSObjectID, cmd: u16, arg: usize) -> FSResult<()> {
         _ = id;
         _ = cmd;
-        _ = args;
+        _ = arg;
+
         Err(FSError::OperationNotSupported)
     }
 

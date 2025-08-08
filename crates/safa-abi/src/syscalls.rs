@@ -49,7 +49,12 @@ pub enum SyscallTable {
     SysIOSync = 16,
     /// Truncates a file to a given size
     SysIOTruncate = 17,
-    SysCtl = 12,
+    /// Sends a Command to a given resource that is a device
+    ///
+    /// The behavior is device specific.
+    ///
+    /// Takes 2 arguments: the command (can be as big as size of u16) and the argument (can be as big as size of usize)
+    SysIOCommand = 12,
     /// Duplicates a given resource, returns a new resource ID pointing to the same resource internally
     ///
     /// Succeeds whether the resource is a file, directory, directory iterator or a device

@@ -3,7 +3,7 @@ use core::{mem::ManuallyDrop, ops::Deref};
 use safa_abi::fs::{FSObjectType, FileAttr, OpenOptions};
 
 use crate::{
-    drivers::vfs::{CtlArgs, FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
+    drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
     fs::diriter::{DirIter, DirIterRef},
     scheduler::resources::{self, Resource},
     utils::{
@@ -108,9 +108,9 @@ impl File {
         self.with_fd(|fd| fd.kind())
     }
 
-    /// Performs a `ctl` operation on the given file (assuming it is a device)
-    pub fn ctl<'a>(&'a self, cmd: u16, args: CtlArgs<'a>) -> FSResult<()> {
-        self.with_fd(|fd| fd.ctl(cmd, args))
+    /// Performs a `command` operation on the given file (assuming it is a device)
+    pub fn send_command<'a>(&'a self, cmd: u16, arg: usize) -> FSResult<()> {
+        self.with_fd(|fd| fd.send_command(cmd, arg))
     }
 
     /// Return the size of the file

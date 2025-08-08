@@ -2,13 +2,13 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum ErrorStatus {
-    /// use when no ErrorStatus is available for xyz and you cannot add a new one
+    /// Use when no ErrorStatus is available for xyz and you cannot add a new one
     Generic = 1,
     OperationNotSupported = 2,
-    /// for example an elf class is not supported, there is a difference between NotSupported and
+    /// For example an elf class is not supported, there is a difference between NotSupported and
     /// OperationNotSupported
     NotSupported = 3,
-    /// for example a magic value is invalid
+    /// For example a magic value is invalid
     Corrupted = 4,
     InvalidSyscall = 5,
     InvalidResource = 6,
@@ -28,23 +28,33 @@ pub enum ErrorStatus {
     NotADirectory = 0xF,
     AlreadyExists = 0x10,
     NotExecutable = 0x11,
-    // would be useful when i add remove related operations to the vfs
     DirectoryNotEmpty = 0x12,
-    // Generic permissions(protection) related error
+    /// Generic permissions(protection) related error
     MissingPermissions = 0x13,
-    // memory allocations and mapping error, most likely that memory is full
+    /// Memory allocations and mapping error, most likely that memory is full
     MMapError = 0x14,
     Busy = 0x15,
-    // errors sent by processes
+    // Errors sent by processes
     NotEnoughArguments = 0x16,
     OutOfMemory = 0x17,
     /// Invalid Thread ID
     InvalidTid = 0x18,
+    /// Operation Timeouted
+    Timeout = 0x19,
+    /// A given Command is unknown or invalid
+    InvalidCommand = 0x1A,
+    /// A given Argument is invalid
+    InvalidArgument = 0x1B,
+    Unknown = 0x1C,
+    /// A panick or a fatal exception occurred, used for example when the rust runtime panics and it wants to exit the process with a value
+    Panic = 0x1D,
+    /// A given resource wasn't a Device while one was expected
+    NotADevice = 0x1E,
 }
 
 impl ErrorStatus {
     // update when a new error is added
-    const MAX: u16 = Self::OutOfMemory as u16;
+    const MAX: u16 = Self::NotADevice as u16;
 
     #[inline(always)]
     /// Gives a string description of the error
@@ -75,6 +85,12 @@ impl ErrorStatus {
             Busy => "Resource Busy",
             NotEnoughArguments => "Not Enough Arguments",
             OutOfMemory => "Out of Memory",
+            InvalidArgument => "Invalid Argument",
+            InvalidCommand => "Invalid Command",
+            Unknown => "Operation Unknown",
+            Panic => "Unrecoverable Panick",
+            Timeout => "Operation Timeouted",
+            NotADevice => "Not A Device",
         }
     }
 }

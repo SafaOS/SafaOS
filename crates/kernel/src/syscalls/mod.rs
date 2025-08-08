@@ -53,7 +53,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysIOSync => io::syssync_raw(a),
             SyscallTable::SysFSize => io::sysfsize_raw(a, b as *mut usize),
             SyscallTable::SysFAttrs => io::sysattrs_raw(a, b as *mut FileAttr),
-            SyscallTable::SysCtl => io::sysctl_raw(a, b, (c as *const usize, d)),
+            SyscallTable::SysIOCommand => io::sysio_command_raw(a, b, c),
             // Resources related syscalls
             SyscallTable::SysRDestroy => {
                 // FIXME: For now it is only implemented for files

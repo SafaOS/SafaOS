@@ -1,10 +1,10 @@
 use core::str;
 
-use crate::{thread, utils::locks::RwLock};
+use crate::{syscalls::ffi::SyscallFFI, thread, utils::locks::RwLock};
 use int_enum::IntEnum;
 
 use crate::{
-    drivers::vfs::{CtlArgs, FSError, FSResult},
+    drivers::vfs::{FSError, FSResult},
     terminal::{TTY, TTYInterface, TTYSettings},
     utils::bstr::BStr,
 };
@@ -54,17 +54,18 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
         Ok(buffer.len())
     }
 
-    fn ctl(&self, cmd: u16, mut args: CtlArgs) -> FSResult<()> {
-        let cmd = TTYCtlCmd::try_from(cmd).map_err(|_| FSError::InvalidCtlCmd)?;
+    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+        let cmd = TTYCtlCmd::try_from(cmd).map_err(|_| FSError::InvalidCmd)?;
         match cmd {
             TTYCtlCmd::GetFlags => {
-                let flags = args.get_ref_to::<TTYSettings>()?;
+                let flags: &mut TTYSettings =
+                    SyscallFFI::make(arg as *mut TTYSettings).map_err(|_| FSError::InvalidArg)?;
                 *flags = self.read().settings;
                 Ok(())
             }
             TTYCtlCmd::SetFlags => {
                 let flags: TTYSettings =
-                    TTYSettings::from_bits(args.get_ty()?).ok_or(FSError::InvalidCtlArg)?;
+                    TTYSettings::from_bits(arg as u8).ok_or(FSError::InvalidArg)?;
                 self.write().settings = flags;
                 Ok(())
             }
