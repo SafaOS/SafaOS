@@ -13,7 +13,7 @@ use crate::{
     },
 };
 use noto_sans_mono_bitmap::{
-    get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
+    FontWeight, RasterHeight, RasterizedChar, get_raster, get_raster_width,
 };
 
 use super::TTYInterface;
@@ -37,6 +37,7 @@ impl FrameBufferTTY<'_> {
     pub fn new() -> Self {
         let framebuffer = &FRAMEBUFFER_DRIVER;
         framebuffer.buffer().fill(RGB::BG_COLOR);
+        framebuffer.buffer().sync_pixels_full();
 
         Self {
             framebuffer,
@@ -48,9 +49,16 @@ impl FrameBufferTTY<'_> {
         }
     }
     #[inline(always)]
-    fn get_pixel_at(&self) -> (usize, usize) {
+    fn get_pixel_offset_at(&self) -> (usize, usize) {
         (self.get_x(), self.get_y())
     }
+
+    #[inline(always)]
+    fn get_current_pixel(&self) -> usize {
+        let (x, y) = self.get_pixel_offset_at();
+        (y * self.framebuffer.width()) + x
+    }
+
     #[inline(always)]
     fn get_x(&self) -> usize {
         self.cursor_x * RASTER_WIDTH
@@ -82,6 +90,8 @@ impl FrameBufferTTY<'_> {
     }
 
     // TODO: refactor all the draw and remove functions
+    // Draws a single character taking the specified position as a hint (in characters)
+    // returns the actual position of the drawn character (in pixels)
     fn draw_raster_opaque(
         &mut self,
         raster: RasterizedChar,
@@ -89,7 +99,7 @@ impl FrameBufferTTY<'_> {
         bg_color: RGB,
         x: usize,
         y: usize,
-    ) {
+    ) -> (usize, usize) {
         let stride = self.framebuffer.width();
 
         let (x, y) = if (x * RASTER_WIDTH) + raster.width() * 2 > stride {
@@ -111,11 +121,13 @@ impl FrameBufferTTY<'_> {
                 }
             }
         }
+        (x, y)
     }
+
     fn draw_raster(&mut self, raster: RasterizedChar, fg_color: RGB, bg_color: RGB) {
         self.check_draw_raster(&raster);
 
-        let (x, y) = self.get_pixel_at();
+        let (x, y) = self.get_pixel_offset_at();
         let mut buffer = self.framebuffer.buffer();
 
         for (row, rows) in raster.raster().iter().enumerate() {
@@ -143,15 +155,33 @@ impl FrameBufferTTY<'_> {
         }
     }
 
-    fn sync_pixels(&mut self) {
-        self.framebuffer.buffer().sync_pixels();
+    fn sync_pixels_full(&mut self) {
+        self.framebuffer.buffer().sync_pixels_full();
+    }
+
+    fn sync_pixels_partial(&mut self, pixel0: usize, pixel1: usize) {
+        if pixel0 == pixel1 {
+            return;
+        }
+
+        let (start_pixel, end_pixel) = if pixel0 <= pixel1 {
+            (pixel0, pixel1)
+        } else {
+            (pixel1, pixel0)
+        };
+
+        self.framebuffer
+            .buffer()
+            .sync_pixels(start_pixel, end_pixel - start_pixel);
     }
 
     fn putc_unsynced(&mut self, c: char) {
         let raster = self.raster(c);
         match c {
             '\n' => self.newline(),
-            '\r' => self.cursor_x = DEFAULT_CURSOR_X,
+            '\r' => {
+                self.cursor_x = DEFAULT_CURSOR_X;
+            }
             '\t' => {
                 for _ in 0..TAB_WIDTH {
                     self.putc_unsynced(' ');
@@ -279,13 +309,20 @@ impl FrameBufferTTY<'_> {
 
 impl TTYInterface for FrameBufferTTY<'_> {
     fn write_str(&mut self, s: &BStr) {
+        let pixel0 = self.get_current_pixel();
         self.write_str_unsynced(s);
-        self.sync_pixels();
+        let pixel1 = self.get_current_pixel();
+
+        self.sync_pixels_partial(pixel0, pixel1);
     }
 
     fn newline(&mut self) {
+        let pixel0 = self.get_current_pixel();
         self.cursor_x = DEFAULT_CURSOR_X;
         self.cursor_y += 1;
+        let pixel1 = self.get_current_pixel();
+
+        self.sync_pixels_partial(pixel0, pixel1);
     }
 
     fn set_cursor(&mut self, x: usize, y: usize) {
@@ -341,26 +378,37 @@ impl TTYInterface for FrameBufferTTY<'_> {
         drop(buffer);
 
         self.cursor_y = 0;
-        self.sync_pixels();
+        self.sync_pixels_full();
     }
 
     fn hide_cursor(&mut self) {
         if self.show_cursor {
+            let pixel0 = self.get_current_pixel();
             self.remove_char_opaque(CURSOR_CHAR, self.bg_color, self.cursor_x, self.cursor_y);
-            self.sync_pixels();
+            // Since it draws at the current position, we need to sync all pixels from the current position to the position draw raster opaque drawd at + a single character
+            let pixel1 = pixel0 + (RASTER_WIDTH * RASTER_HEIGHT.val());
+
+            self.sync_pixels_partial(pixel0, pixel1);
+
             self.show_cursor = false;
         }
     }
     fn draw_cursor(&mut self) {
         let raster = self.raster(CURSOR_CHAR);
-        self.draw_raster_opaque(
+
+        let (x, y) = self.draw_raster_opaque(
             raster,
             RGB::WHITE,
             self.bg_color,
             self.cursor_x,
             self.cursor_y,
         );
-        self.sync_pixels();
+        let pixel0 = self.get_current_pixel();
+        // Syncs all pixels from the current position to the position draw raster opaque drawd at + a single character
+        let pixel1 =
+            pixel0 + (x + y * self.framebuffer.width()) + (RASTER_WIDTH * RASTER_HEIGHT.val());
+
+        self.sync_pixels_partial(pixel0, pixel1);
         self.show_cursor = true;
     }
 }

@@ -6,8 +6,8 @@ use lazy_static::lazy_static;
 
 use crate::{
     drivers::keyboard::{
-        keys::{Key, KeyCode, KeyFlags},
         HandleKey,
+        keys::{Key, KeyCode, KeyFlags},
     },
     utils::{alloc::PageBString, bstr::BStr},
 };

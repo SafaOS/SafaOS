@@ -124,7 +124,7 @@ pub fn idle_function() -> ! {
                 if item.context_switch_count.load(Ordering::Acquire) >= item.at_context_switch_count
                 {
                     unsafe { item.thread.cleanup() };
-                    SHOULD_WAKEUP.fetch_sub(1, Ordering::Release);
+                    SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
                     false
                 } else {
                     true
@@ -152,5 +152,5 @@ pub unsafe fn schedule_thread_cleanup(
         context_switch_count: context_switch_count_ref,
         at_context_switch_count: context_switch_count_ref.load(Ordering::Acquire) + 2,
     });
-    SHOULD_WAKEUP.fetch_add(1, Ordering::Release);
+    SHOULD_WAKEUP.fetch_add(1, Ordering::SeqCst);
 }

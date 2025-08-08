@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 
 use crate::{
     debug, limine,
-    memory::page_allocator::{PageAlloc, GLOBAL_PAGE_ALLOCATOR},
+    memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc},
     utils::display::RGB,
 };
 
@@ -27,24 +27,25 @@ pub struct FrameBufferInfo {
 pub struct FrameBuffer<'a> {
     info: FrameBufferInfo,
     buffer_display_index: usize,
-    buffer: Box<[u32], PageAlloc>,
-    video_buffer: &'a mut [u32],
+    pixel_buffer: Box<[u32], PageAlloc>,
+    video_buffer: &'a mut [u8],
 }
 
 impl<'a> FrameBuffer<'a> {
-    pub fn new(video_buffer: &'a mut [u32], info: FrameBufferInfo) -> Self {
-        let mut buffer = Vec::with_capacity_in(video_buffer.len() * 4, &*GLOBAL_PAGE_ALLOCATOR);
+    pub fn new(video_buffer: &'a mut [u8], info: FrameBufferInfo) -> Self {
+        let mut pixel_buffer =
+            Vec::with_capacity_in((info.stride * info.height) * 4, &*GLOBAL_PAGE_ALLOCATOR);
         unsafe {
-            buffer.set_len(buffer.capacity());
+            pixel_buffer.set_len(pixel_buffer.capacity());
         }
 
-        let buffer = buffer.into_boxed_slice();
-        debug!(FrameBuffer, "created ({}KiB)", buffer.len() / 1024);
+        let pixel_buffer = pixel_buffer.into_boxed_slice();
+        debug!(FrameBuffer, "created ({}KiB)", pixel_buffer.len() / 1024);
 
         Self {
             info,
             buffer_display_index: 0,
-            buffer,
+            pixel_buffer,
             video_buffer,
         }
     }
@@ -52,15 +53,40 @@ impl<'a> FrameBuffer<'a> {
     #[inline(always)]
     pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {
         let index = x + y * self.info.stride;
-        self.buffer[self.buffer_display_index + index] = color.into_u32();
+        self.pixel_buffer[self.buffer_display_index + index] = color.into_u32();
     }
 
-    /// draws all pixels in the buffer to the actual video_buffer
-    pub fn sync_pixels(&mut self) {
-        self.video_buffer.copy_from_slice(
-            &self.buffer
-                [self.buffer_display_index..self.buffer_display_index + self.video_buffer.len()],
-        );
+    pub fn sync_pixels_full(&mut self) {
+        self.sync_pixels(0, self.info.stride * self.info.height);
+    }
+
+    /// Syncs pixel_count pixels in the buffer to the actual video_buffer starting at pixel_start
+    pub fn sync_pixels(&mut self, pixel_start: usize, pixel_count: usize) {
+        let width = self.info.stride;
+        let bytes_per_pixel = self.info.bytes_per_pixel;
+        let pitch = width * bytes_per_pixel;
+
+        let pixels = &self.pixel_buffer
+            [self.buffer_display_index..self.buffer_display_index + self.video_buffer.len() / 4];
+
+        let start = pixel_start.min(pixels.len() - 1);
+        let end = (start + pixel_count).min(pixels.len());
+
+        for i in start..end {
+            let row = i / width;
+            let row_start = row * pitch;
+
+            let col = i % width;
+
+            let indx = row_start + (col * bytes_per_pixel);
+
+            let pixel = pixels[i];
+            let pixel_bytes = pixel.to_ne_bytes();
+
+            self.video_buffer[indx + 0] = pixel_bytes[0];
+            self.video_buffer[indx + 1] = pixel_bytes[1];
+            self.video_buffer[indx + 2] = pixel_bytes[2];
+        }
     }
 
     #[inline]
@@ -75,20 +101,22 @@ impl<'a> FrameBuffer<'a> {
             }
             core::cmp::Ordering::Greater => {
                 let amount = pixels as usize;
-                let max_index = self.buffer.len() - self.video_buffer.len();
+                /* subtracting one screen from the buffer */
+                let max_index = self.pixel_buffer.len() - (self.info.stride * self.info.height);
                 let new_index = self.buffer_display_index + amount;
 
                 if new_index <= max_index {
+                    // We don't need to recopy
                     self.buffer_display_index = new_index;
                 } else {
                     self.buffer_display_index = max_index;
-                    self.buffer.copy_within(amount.., 0);
+                    self.pixel_buffer.copy_within(amount.., 0);
                 }
             }
             core::cmp::Ordering::Equal => {}
         }
 
-        self.sync_pixels();
+        self.sync_pixels_full();
     }
 
     #[inline(always)]
@@ -97,10 +125,9 @@ impl<'a> FrameBuffer<'a> {
         self.buffer_display_index = pixel;
     }
 
-    /// FIXME: assumes that [`self.info.bytes_per_pixel`] == 4
     pub fn fill(&mut self, color: RGB) {
         let color: u32 = color.into();
-        self.buffer.fill(color);
+        self.pixel_buffer.fill(color);
     }
 }
 pub struct FrameBufferDriver {

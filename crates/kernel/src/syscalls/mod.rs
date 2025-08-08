@@ -14,9 +14,12 @@ use crate::time;
 use crate::{VirtAddr, arch::power};
 
 pub mod ffi;
+mod fs;
 mod io;
-mod processes;
-mod utils;
+/// SysP syscalls implementation
+mod process;
+/// SysT syscalls implementation
+mod thread;
 
 #[inline(always)]
 /// takes the number of the syscall and the arguments and returns an error as a u16 if it fails
@@ -35,51 +38,55 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
     ) -> Result<(), ErrorStatus> {
         let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvalidSyscall)?;
         match syscall {
-            // utils
-            SyscallTable::SysSbrk => utils::syssbrk_raw(a, b as *mut VirtAddr),
-            SyscallTable::SysGetCWD => utils::sysgetcwd_raw((a as *mut u8, b), c as *mut usize),
-            SyscallTable::SysCHDir => utils::syschdir_raw((a as *const u8, b)),
-            // io
-            SyscallTable::SysGetDirEntry => {
+            // IO related syscalls
+            SyscallTable::SysFGetDirEntry => {
                 io::sysget_direntry_raw((a as *const u8, b), c as *mut DirEntry)
             }
-            SyscallTable::SysOpenAll => io::sysopen_all_raw((a as *const u8, b), c as *mut usize),
-            SyscallTable::SysOpen => io::sysopen_raw((a as *const u8, b), c, d as *mut usize),
-            SyscallTable::SysRemovePath => io::sysremove_path_raw((a as *const u8, b)),
-            SyscallTable::SysDirIterOpen => io::sysdiriter_open_raw(a, b as *mut usize),
-            SyscallTable::SysDestroyResource => {
-                resources::remove_resource(a).ok_or(ErrorStatus::InvalidResource)
-            }
+            SyscallTable::SysFDirIterOpen => io::sysdiriter_open_raw(a, b as *mut usize),
             SyscallTable::SysDirIterClose => Ok(drop(DirIter::make(a)?)),
             SyscallTable::SysDirIterNext => io::sysdiriter_next_raw(a, b as *mut DirEntry),
-            SyscallTable::SysCreate => io::syscreate_raw((a as *const u8, b)),
-            SyscallTable::SysCreateDir => io::syscreatedir_raw((a as *const u8, b)),
-            SyscallTable::SysWrite => io::syswrite_raw(a, b, (c as *const u8, d), e as *mut usize),
-            SyscallTable::SysRead => io::sysread_raw(a, b, (c as *mut u8, d), e as *mut usize),
-            SyscallTable::SysTruncate => io::systruncate_raw(a, b),
-            SyscallTable::SysSync => io::syssync_raw(a),
+            SyscallTable::SysIOWrite => {
+                io::syswrite_raw(a, b, (c as *const u8, d), e as *mut usize)
+            }
+            SyscallTable::SysIORead => io::sysread_raw(a, b, (c as *mut u8, d), e as *mut usize),
+            SyscallTable::SysIOTruncate => io::systruncate_raw(a, b),
+            SyscallTable::SysIOSync => io::syssync_raw(a),
             SyscallTable::SysFSize => io::sysfsize_raw(a, b as *mut usize),
             SyscallTable::SysFAttrs => io::sysattrs_raw(a, b as *mut FileAttr),
-            SyscallTable::SysDup => io::sysdup_raw(a, b as *mut FileRef),
             SyscallTable::SysCtl => io::sysctl_raw(a, b, (c as *const usize, d)),
-            // processes
-            SyscallTable::SysPSpawn => {
-                processes::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut Pid)
+            // Resources related syscalls
+            SyscallTable::SysRDestroy => {
+                // FIXME: For now it is only implemented for files
+                resources::remove_resource(a).ok_or(ErrorStatus::InvalidResource)
             }
-            SyscallTable::SysTSpawn => processes::sys_tspawn_raw(a, b as *const _, c as *mut Tid),
+            SyscallTable::SysRDup => io::sysdup_raw(a, b as *mut FileRef),
+            // FS related operations
+            SyscallTable::SysFSOpenAll => fs::sysopen_all_raw((a as *const u8, b), c as *mut usize),
+            SyscallTable::SysFSOpen => fs::sysopen_raw((a as *const u8, b), c, d as *mut usize),
+            SyscallTable::SysFSRemovePath => fs::sysremove_path_raw((a as *const u8, b)),
+            SyscallTable::SysFSCreate => fs::syscreate_raw((a as *const u8, b)),
+            SyscallTable::SysFSCreateDir => fs::syscreatedir_raw((a as *const u8, b)),
+            // processes
+            SyscallTable::SysPSbrk => process::sysp_sbrk_raw(a, b as *mut VirtAddr),
+            SyscallTable::SysPGetCWD => process::sysgetcwd_raw((a as *mut u8, b), c as *mut usize),
+            SyscallTable::SysPCHDir => process::syschdir_raw((a as *const u8, b)),
+            SyscallTable::SysPSpawn => {
+                process::syspspawn_raw((a as *const u8, b), c as *const _, d as *mut Pid)
+            }
+            SyscallTable::SysTSpawn => thread::sys_tspawn_raw(a, b as *const _, c as *mut Tid),
             SyscallTable::SysPExit => crate::process::current::exit(a),
             SyscallTable::SysTExit => crate::thread::current::exit(a),
             SyscallTable::SysTYield => Ok(crate::thread::current::yield_now()),
             SyscallTable::SysTSleep => Ok(crate::thread::current::sleep_for_ms(a as u64)),
             SyscallTable::SysTFutWait => {
-                processes::syst_fut_wait_raw(a as *const AtomicU32, b, c, d as *mut bool)
+                thread::syst_fut_wait_raw(a as *const AtomicU32, b, c, d as *mut bool)
             }
             SyscallTable::SysTFutWake => {
-                processes::syst_fut_wake_raw(a as *const AtomicU32, b, c as *mut usize)
+                thread::syst_fut_wake_raw(a as *const AtomicU32, b, c as *mut usize)
             }
-            SyscallTable::SysPTryCleanUp => processes::sysp_try_cleanup_raw(a, b as *mut usize),
-            SyscallTable::SysPWait => processes::sysp_wait_raw(a, b as *mut usize),
-            SyscallTable::SysTWait => processes::syst_wait_raw(a),
+            SyscallTable::SysPTryCleanUp => process::sysp_try_cleanup_raw(a, b as *mut usize),
+            SyscallTable::SysPWait => process::sysp_wait_raw(a, b as *mut usize),
+            SyscallTable::SysTWait => process::syst_wait_raw(a),
             // power
             SyscallTable::SysShutdown => power::shutdown(),
             SyscallTable::SysReboot => power::reboot(),

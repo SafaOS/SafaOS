@@ -163,12 +163,14 @@ pub unsafe fn flush_cache_inner() {
 }
 
 pub unsafe fn flush_cache() {
-    static _CACHE_FLUSH: SpinLock<()> = SpinLock::new(());
-    let _guard = _CACHE_FLUSH.lock();
-    unsafe {
-        flush_cache_inner();
-    }
-    apic::send_nmi_all(FLUSH_CACHE_ALL_ID);
+    without_interrupts(|| {
+        static _CACHE_FLUSH: SpinLock<()> = SpinLock::new(());
+        let _guard = _CACHE_FLUSH.lock();
+        unsafe {
+            flush_cache_inner();
+        }
+        apic::send_nmi_all(FLUSH_CACHE_ALL_ID);
+    });
 }
 
 pub unsafe fn halt_all() {
