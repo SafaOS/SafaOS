@@ -317,8 +317,12 @@ impl TTYInterface for FrameBufferTTY<'_> {
     }
 
     fn newline(&mut self) {
+        let pixel0 = self.get_current_pixel();
         self.cursor_x = DEFAULT_CURSOR_X;
         self.cursor_y += 1;
+        let pixel1 = self.get_current_pixel();
+
+        self.sync_pixels_partial(pixel0, pixel1);
     }
 
     fn set_cursor(&mut self, x: usize, y: usize) {
