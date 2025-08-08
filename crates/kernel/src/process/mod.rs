@@ -38,9 +38,10 @@ use crate::{
     },
 };
 
-use crate::scheduler::resources::ResourceManager;
+use resources::ResourceManager;
 
 pub mod current;
+pub mod resources;
 pub mod spawn;
 
 /// Process ID, a unique identifier for a process (process)

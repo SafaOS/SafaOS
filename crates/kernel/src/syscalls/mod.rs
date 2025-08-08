@@ -6,7 +6,7 @@ use safa_abi::syscalls::SyscallTable;
 
 use crate::fs::{DirIter, FileRef};
 use crate::process::Pid;
-use crate::scheduler::resources;
+use crate::process::resources;
 use crate::syscalls::ffi::SyscallFFI;
 use crate::thread::Tid;
 

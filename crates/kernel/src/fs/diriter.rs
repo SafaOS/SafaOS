@@ -4,7 +4,7 @@ use safa_abi::fs::DirEntry;
 
 use crate::{
     drivers::vfs::CollectionIterDescriptor,
-    scheduler::resources::{self, Resource},
+    process::resources::{self, Resource},
 };
 
 /// a wrapper around a DirIterDescriptor resource which closes the diriter when dropped

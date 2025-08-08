@@ -5,7 +5,7 @@ use safa_abi::fs::{FSObjectType, FileAttr, OpenOptions};
 use crate::{
     drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
     fs::diriter::{DirIter, DirIterRef},
-    scheduler::resources::{self, Resource},
+    process::resources::{self, Resource},
     utils::{
         io::{IoError, Readable},
         path::Path,
