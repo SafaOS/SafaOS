@@ -116,6 +116,6 @@ fn sysget_direntry(path: Path, dest_direntry: &mut DirEntry) -> FSResult<()> {
 }
 
 #[syscall_handler]
-fn sysio_command(fd: FileRef, cmd: u16, arg: usize) -> FSResult<()> {
+fn sysio_command(fd: FileRef, cmd: u16, arg: u64) -> FSResult<()> {
     fd.send_command(cmd, arg)
 }

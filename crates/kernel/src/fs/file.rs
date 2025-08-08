@@ -109,7 +109,7 @@ impl File {
     }
 
     /// Performs a `command` operation on the given file (assuming it is a device)
-    pub fn send_command<'a>(&'a self, cmd: u16, arg: usize) -> FSResult<()> {
+    pub fn send_command<'a>(&'a self, cmd: u16, arg: u64) -> FSResult<()> {
         self.with_fd(|fd| fd.send_command(cmd, arg))
     }
 

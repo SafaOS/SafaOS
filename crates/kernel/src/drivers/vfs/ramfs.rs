@@ -104,7 +104,7 @@ impl RamFSObject {
 
         match self.state {
             RamFSObjectState::Data(ref mut data) => write_data(data, offset, buf),
-            RamFSObjectState::StaticDevice(device) => device.write(buf),
+            RamFSObjectState::StaticDevice(device) => device.write(offset, buf),
             _ => Err(FSError::NotAFile),
         }
     }
@@ -127,7 +127,7 @@ impl RamFSObject {
         }
     }
 
-    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+    fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         match self.state {
             RamFSObjectState::StaticDevice(device) => device.send_command(cmd, arg),
             _ => Err(FSError::NotAFile),
@@ -151,7 +151,7 @@ impl RamFSObject {
 
                 Ok(len)
             }
-            RamFSObjectState::StaticDevice(device) => device.read(buf),
+            RamFSObjectState::StaticDevice(device) => device.read(offset, buf),
             _ => Err(FSError::NotAFile),
         }
     }
@@ -439,7 +439,7 @@ impl FileSystem for RwLock<RamFS> {
     fn sync(&self, id: FSObjectID) -> FSResult<()> {
         self.read().sync(id)
     }
-    fn send_command(&self, id: FSObjectID, cmd: u16, arg: usize) -> FSResult<()> {
+    fn send_command(&self, id: FSObjectID, cmd: u16, arg: u64) -> FSResult<()> {
         let read_guard = self.read();
         let obj = read_guard.fget(id)?;
         obj.send_command(cmd, arg)

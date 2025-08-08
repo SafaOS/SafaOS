@@ -53,7 +53,7 @@ pub enum SyscallTable {
     ///
     /// The behavior is device specific.
     ///
-    /// Takes 2 arguments: the command (can be as big as size of u16) and the argument (can be as big as size of usize)
+    /// Takes 2 arguments: the command (can be as big as size of u16) and the argument (can be as big as size of u64)
     SysIOCommand = 12,
     /// Duplicates a given resource, returns a new resource ID pointing to the same resource internally
     ///

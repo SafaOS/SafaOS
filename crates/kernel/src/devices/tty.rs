@@ -54,7 +54,7 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
         Ok(buffer.len())
     }
 
-    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+    fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         let cmd = TTYCtlCmd::try_from(cmd).map_err(|_| FSError::InvalidCmd)?;
         match cmd {
             TTYCtlCmd::GetFlags => {

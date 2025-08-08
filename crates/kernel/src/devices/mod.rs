@@ -1,10 +1,14 @@
+pub mod framebuffer;
 pub mod serial;
 pub mod tty;
 
 use crate::{
     arch::serial::SERIAL,
     debug,
-    drivers::vfs::{self, FSError, FSResult, VFS},
+    drivers::{
+        framebuffer::FRAMEBUFFER_DRIVER,
+        vfs::{self, FSError, FSResult, SeekOffset, VFS},
+    },
     terminal::FRAMEBUFFER_TERMINAL,
     time,
 };
@@ -28,15 +32,16 @@ pub fn init(vfs: &mut VFS) {
     .expect("failed to mount `dev:/`");
     add_device(vfs, &*FRAMEBUFFER_TERMINAL);
     add_device(vfs, &*SERIAL);
+    add_device(vfs, &*FRAMEBUFFER_DRIVER);
     let elapsed = time!(ms) - now;
     debug!(VFS, "Initialized devices in ({}ms) ...", elapsed);
 }
 
 pub trait Device: Send + Sync {
     fn name(&self) -> &'static str;
-    fn read(&self, buffer: &mut [u8]) -> FSResult<usize>;
-    fn write(&self, buffer: &[u8]) -> FSResult<usize>;
-    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+    fn read(&self, offset: SeekOffset, buffer: &mut [u8]) -> FSResult<usize>;
+    fn write(&self, offset: SeekOffset, buffer: &[u8]) -> FSResult<usize>;
+    fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         _ = cmd;
         _ = arg;
         Err(FSError::OperationNotSupported)
@@ -50,7 +55,7 @@ pub trait CharDevice: Send + Sync {
     fn name(&self) -> &'static str;
     fn read(&self, buffer: &mut [u8]) -> FSResult<usize>;
     fn write(&self, buffer: &[u8]) -> FSResult<usize>;
-    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+    fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         _ = cmd;
         _ = arg;
         Err(FSError::OperationNotSupported)
@@ -60,17 +65,23 @@ pub trait CharDevice: Send + Sync {
     }
 }
 
+#[allow(unused)]
+pub trait BlockDevice: Device {}
+
 impl<T: CharDevice> Device for T {
     fn name(&self) -> &'static str {
         self.name()
     }
-    fn read(&self, buffer: &mut [u8]) -> FSResult<usize> {
+    fn read(&self, offset: SeekOffset, buffer: &mut [u8]) -> FSResult<usize> {
+        _ = offset;
         self.read(buffer)
     }
-    fn write(&self, buffer: &[u8]) -> FSResult<usize> {
+    fn write(&self, offset: SeekOffset, buffer: &[u8]) -> FSResult<usize> {
+        // offset is ignored in char devices
+        _ = offset;
         self.write(buffer)
     }
-    fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+    fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         self.send_command(cmd, arg)
     }
     fn sync(&self) -> FSResult<()> {

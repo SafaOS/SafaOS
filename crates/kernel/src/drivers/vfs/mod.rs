@@ -156,7 +156,7 @@ impl FSObjectDescriptor {
         self.attrs().size
     }
 
-    pub fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+    pub fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         self.id.send_command(cmd, arg)
     }
 
@@ -194,7 +194,7 @@ impl VFSObjectID {
         self.fs.attrs_of(self.fs_obj_id)
     }
 
-    pub fn send_command(&self, cmd: u16, arg: usize) -> FSResult<()> {
+    pub fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         self.fs.send_command(self.fs_obj_id, cmd, arg)
     }
 
@@ -328,7 +328,7 @@ pub trait FileSystem: Send + Sync {
         Err(FSError::OperationNotSupported)
     }
 
-    fn send_command(&self, id: FSObjectID, cmd: u16, arg: usize) -> FSResult<()> {
+    fn send_command(&self, id: FSObjectID, cmd: u16, arg: u64) -> FSResult<()> {
         _ = id;
         _ = cmd;
         _ = arg;
