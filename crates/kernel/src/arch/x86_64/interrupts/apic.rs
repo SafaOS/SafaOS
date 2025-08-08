@@ -147,6 +147,9 @@ pub fn read_ic_reg() -> APICICReg {
 
 /// Sends an NMI to all processors
 pub fn send_nmi_all(vector: u8) {
+    static _NMI_SEND: SpinLock<()> = SpinLock::new(());
+    let _guard = _NMI_SEND.lock();
+
     write_ic_reg(
         APICICReg::new()
             .with_destination_shorthand(APICDestShorthand::ExcludingSelf)
