@@ -4,9 +4,9 @@ use safa_abi::errors::{ErrorStatus, SysResult};
 use safa_abi::fs::{DirEntry, FileAttr};
 use safa_abi::syscalls::SyscallTable;
 
-use crate::fs::{DirIter, FileRef};
+use crate::fs::DirIter;
 use crate::process::Pid;
-use crate::process::resources;
+use crate::process::resources::{self, Ri};
 use crate::syscalls::ffi::SyscallFFI;
 use crate::thread::Tid;
 
@@ -56,10 +56,13 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysIOCommand => io::sysio_command_raw(a, b, c),
             // Resources related syscalls
             SyscallTable::SysRDestroy => {
-                // FIXME: For now it is only implemented for files
-                resources::remove_resource(a).ok_or(ErrorStatus::InvalidResource)
+                if !resources::remove_resource(a) {
+                    return Err(ErrorStatus::InvalidResource);
+                }
+
+                Ok(())
             }
-            SyscallTable::SysRDup => io::sysdup_raw(a, b as *mut FileRef),
+            SyscallTable::SysRDup => io::sysdup_raw(a, b as *mut Ri),
             // FS related operations
             SyscallTable::SysFSOpenAll => fs::sysopen_all_raw((a as *const u8, b), c as *mut usize),
             SyscallTable::SysFSOpen => fs::sysopen_raw((a as *const u8, b), c, d as *mut usize),

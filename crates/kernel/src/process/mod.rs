@@ -350,7 +350,7 @@ impl Process {
         Self::allocate_stack_inner(&mut *self.allocator.lock(), custom_stack_size)
     }
 
-    const fn new(
+    fn new(
         name: Name,
         pid: Pid,
         ppid: Pid,
@@ -640,7 +640,8 @@ impl Process {
         // Set state to dead
         self.state_mut().die(exit_code, killed_by);
         // Drop resources
-        self.resources_mut().overwrite_resources(Vec::new());
+        self.resources_mut()
+            .overwrite_resources(ResourceManager::new());
 
         for thread in &*threads {
             if !thread.is_dead() {

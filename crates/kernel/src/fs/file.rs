@@ -5,9 +5,10 @@ use safa_abi::fs::{FSObjectType, FileAttr, OpenOptions};
 use crate::{
     drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
     fs::diriter::{DirIter, DirIterRef},
-    process::resources::{self, Resource},
+    process::resources::{self, Resource, ResourceData},
     utils::{
         io::{IoError, Readable},
+        locks::Mutex,
         path::Path,
     },
 };
@@ -25,11 +26,11 @@ impl File {
 
     fn with_fd<T, R>(&self, then: T) -> R
     where
-        T: FnOnce(&mut FSObjectDescriptor) -> R,
+        T: FnOnce(&FSObjectDescriptor) -> R,
     {
         unsafe {
-            resources::get_resource(self.0, |mut resource| {
-                let Resource::File(ref mut fd) = *resource else {
+            resources::get_resource(self.0, |resource| {
+                let ResourceData::File(fd) = resource.data() else {
                     unreachable!()
                 };
 
@@ -43,7 +44,7 @@ impl File {
     pub fn open_all(path: Path) -> FSResult<Self> {
         let fd = VFS_STRUCT.read().open_all(path)?;
 
-        let fd_ri = resources::add_resource(Resource::File(fd));
+        let fd_ri = resources::add_resource(Resource::new_global(ResourceData::File(fd)));
         Ok(Self(fd_ri))
     }
 
@@ -51,7 +52,7 @@ impl File {
     pub fn open_with_options(path: Path, options: OpenOptions) -> FSResult<Self> {
         let fd = VFS_STRUCT.read().open(path, options)?;
 
-        let fd_ri = resources::add_resource(Resource::File(fd));
+        let fd_ri = resources::add_resource(Resource::new_global(ResourceData::File(fd)));
         Ok(Self(fd_ri))
     }
 
@@ -82,7 +83,7 @@ impl File {
 
     pub fn from_fd(fd: usize) -> Option<Self> {
         resources::get_resource(fd, |resource| {
-            if let Resource::File(_) = *resource {
+            if let ResourceData::File(_) = resource.data() {
                 Some(Self(fd))
             } else {
                 None
@@ -95,7 +96,9 @@ impl File {
     pub fn diriter_open(&self) -> FSResult<DirIter> {
         let diriter = self.with_fd(|fd| fd.open_collection_iter())?;
 
-        Ok(DirIter(resources::add_resource(Resource::DirIter(diriter))))
+        Ok(DirIter(resources::add_resource(Resource::new_global(
+            ResourceData::DirIter(Mutex::new(diriter)),
+        ))))
     }
 
     /// Sync the file
@@ -126,13 +129,16 @@ impl File {
 
     /// Duplicate the files resource into a new handle pointing to the same file
     pub fn dup(&self) -> Self {
-        Self(resources::duplicate_resource(self.0))
+        Self(resources::duplicate_resource(self.0).unwrap())
     }
 }
 
 impl Drop for File {
     fn drop(&mut self) {
-        resources::remove_resource(self.0).unwrap();
+        assert!(
+            resources::remove_resource(self.0),
+            "Dropping A File failed, invalid Resource ID"
+        );
     }
 }
 

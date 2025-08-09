@@ -1,7 +1,8 @@
 use super::ffi::SyscallFFI;
 use crate::{
-    drivers::vfs::FSResult,
+    drivers::vfs::{FSError, FSResult},
     fs::{self, DirIterRef, FileRef},
+    process::resources::{self, Ri},
     utils::path::Path,
 };
 
@@ -104,8 +105,8 @@ fn sysattrs(fd: FileRef, dest_attrs: Option<&mut FileAttr>) -> FSResult<()> {
 }
 
 #[syscall_handler]
-fn sysdup(fd: FileRef, dest_fd: &mut FileRef) -> FSResult<()> {
-    *dest_fd = fd.dup();
+fn sysdup(resource: Ri, dest_resource: &mut Ri) -> FSResult<()> {
+    *dest_resource = resources::duplicate_resource(resource).ok_or(FSError::InvalidResource)?;
     Ok(())
 }
 

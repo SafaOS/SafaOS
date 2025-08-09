@@ -4,7 +4,7 @@ use safa_abi::fs::DirEntry;
 
 use crate::{
     drivers::vfs::CollectionIterDescriptor,
-    process::resources::{self, Resource},
+    process::resources::{self, ResourceData},
 };
 
 /// a wrapper around a DirIterDescriptor resource which closes the diriter when dropped
@@ -15,7 +15,7 @@ impl DirIter {
     /// takes ownership of the resource index, meaning that the resource will be closed when the `DirIter` is dropped.
     pub fn from_ri(ri: usize) -> Option<Self> {
         resources::get_resource(ri, |resource| {
-            if let Resource::DirIter(_) = *resource {
+            if let ResourceData::DirIter(_) = resource.data() {
                 Some(Self(ri))
             } else {
                 None
@@ -29,12 +29,12 @@ impl DirIter {
         F: FnOnce(&mut CollectionIterDescriptor) -> R,
     {
         unsafe {
-            resources::get_resource(self.0, |mut resource| {
-                let Resource::DirIter(ref mut diriter) = *resource else {
+            resources::get_resource(self.0, |resource| {
+                let ResourceData::DirIter(diriter) = resource.data() else {
                     unreachable!()
                 };
-
-                f(diriter)
+                let mut lock = diriter.lock();
+                f(&mut *lock)
             })
             .unwrap_unchecked()
         }
@@ -48,7 +48,10 @@ impl DirIter {
 
 impl Drop for DirIter {
     fn drop(&mut self) {
-        resources::remove_resource(self.0).unwrap();
+        assert!(
+            resources::remove_resource(self.0),
+            "Failed to Drop a DirIter, invalid Resource ID"
+        );
     }
 }
 

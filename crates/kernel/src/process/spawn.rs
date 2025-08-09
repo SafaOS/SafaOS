@@ -13,7 +13,7 @@ use crate::{
     drivers::vfs::FSError,
     fs::File,
     memory::paging::MapToError,
-    process::{self, Pid, Process},
+    process::{self, Pid, Process, resources::Ri},
     scheduler,
     thread::{ArcThread, ContextPriority},
     utils::{
@@ -78,10 +78,10 @@ fn spawn_inner(
         let mut this_resources = current_process.resources_mut();
 
         let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
-            this_resources.clone_resources()
+            this_resources.clone()
         } else {
             // clone only necessary resources
-            let mut resources = heapless::Vec::<usize, 3>::new();
+            let mut resources = heapless::Vec::<Ri, 3>::new();
             if let Some(stdin) = stdio.stdin.into() {
                 _ = resources.push(stdin);
             }
@@ -94,13 +94,9 @@ fn spawn_inner(
                 _ = resources.push(stderr);
             }
 
-            if !resources.is_empty() {
-                this_resources
-                    .clone_specific_resources(&resources)
-                    .map_err(|()| FSError::InvalidResource)?
-            } else {
-                alloc::vec::Vec::new()
-            }
+            this_resources
+                .clone_specific_resources(&resources)
+                .map_err(|()| FSError::InvalidResource)?
         };
 
         new_process_resources.overwrite_resources(clone);
