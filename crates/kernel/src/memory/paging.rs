@@ -8,6 +8,7 @@ use core::{
     fmt::{Debug, LowerHex},
     ops::{Deref, DerefMut},
 };
+use safa_abi::errors::IntoErr;
 use thiserror::Error;
 
 use super::{
@@ -109,10 +110,24 @@ impl PageTable {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
-            if let Err(e) = self.map_to(page, frame, flags) {
+            if let Err(e) = self.map_zeroed_to(page, frame, flags) {
                 frame_allocator::deallocate_frame(frame);
                 return Err(e);
             }
+            Ok(())
+        }
+    }
+
+    /// maps a virtual `Page` to a physical `Frame` filling the frame with zeros
+    /// flushes the cache if necessary
+    pub unsafe fn map_zeroed_to(
+        &mut self,
+        page: Page,
+        frame: Frame,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        unsafe {
+            self.map_to(page, frame, flags)?;
 
             let addr = frame.virt_addr();
             let ptr = addr.into_ptr::<[u8; PAGE_SIZE]>();
@@ -235,6 +250,15 @@ pub enum MapToError {
     FrameAllocationFailed,
     #[error("fatal: attempt to map an already mapped region")]
     AlreadyMapped,
+}
+
+impl IntoErr for MapToError {
+    fn into_err(self) -> safa_abi::errors::ErrorStatus {
+        match self {
+            Self::AlreadyMapped => safa_abi::errors::ErrorStatus::MMapError,
+            Self::FrameAllocationFailed => safa_abi::errors::ErrorStatus::OutOfMemory,
+        }
+    }
 }
 
 bitflags! {

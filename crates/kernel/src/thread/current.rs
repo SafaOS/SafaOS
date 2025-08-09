@@ -76,7 +76,11 @@ pub fn wait_for_process(pid: Pid) -> Option<usize> {
         return None;
     };
 
-    Some(process_info.exit_code)
+    Some(
+        process_info
+            .exit_code
+            .expect("process dead but exit code hasn't been set"),
+    )
 }
 
 /// Sleeps the current thread until the thread with tid `tid` exits.

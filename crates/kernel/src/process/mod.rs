@@ -11,9 +11,10 @@ use crate::{
         AlignTo, AlignToPage, copy_to_userspace, proc_mem_allocator::ProcessMemAllocator,
         userspace_copy_within,
     },
+    process::vas::ProcVASA,
     scheduler,
     thread::{self, ArcThread, Tid},
-    utils::locks::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use crate::{
@@ -30,7 +31,7 @@ use crate::{
     VirtAddr,
     arch::threading::CPUStatus,
     debug,
-    memory::paging::{PAGE_SIZE, Page, PhysPageTable},
+    memory::paging::{PAGE_SIZE, PhysPageTable},
     utils::{
         elf::{Elf, ElfError},
         io::Readable,
@@ -43,149 +44,15 @@ use resources::ResourceManager;
 pub mod current;
 pub mod resources;
 pub mod spawn;
+pub mod vas;
 
 /// Process ID, a unique identifier for a process (process)
 pub type Pid = u32;
 
-#[derive(Debug)]
-pub struct AliveProcess {
-    root_page_table: ManuallyDrop<PhysPageTable>,
-    data_pages: usize,
-    data_start: VirtAddr,
-    data_break: VirtAddr,
-    master_tls: Option<(VirtAddr, usize, usize, usize)>,
-}
-#[derive(Debug)]
-pub struct ZombieProcess {
+#[derive(Debug, Clone, Copy)]
+pub struct ExitInfo {
     exit_code: usize,
     killed_by: Pid,
-    data_start: VirtAddr,
-    data_break: VirtAddr,
-    root_page_table: ManuallyDrop<PhysPageTable>,
-}
-
-impl AliveProcess {
-    fn page_extend_data(&mut self) -> Option<VirtAddr> {
-        use crate::memory::paging::EntryFlags;
-
-        let page_end = self.data_start + PAGE_SIZE * self.data_pages;
-        let new_page = Page::containing_address(page_end);
-
-        unsafe {
-            if let Err(e) = self
-                .root_page_table
-                .map_zeroed(new_page, EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE)
-            {
-                match e {
-                    MapToError::FrameAllocationFailed => {
-                        return None;
-                    }
-                    MapToError::AlreadyMapped => {
-                        panic!("attempted to extend data break beyond an already mapped territory")
-                    }
-                }
-            }
-        }
-
-        self.data_pages += 1;
-        Some(new_page.virt_addr())
-    }
-
-    fn page_unextend_data(&mut self) -> Option<VirtAddr> {
-        if self.data_pages == 0 {
-            return Some(self.data_start);
-        }
-
-        let page_end = self.data_start + PAGE_SIZE * self.data_pages;
-        let page_addr = page_end - PAGE_SIZE;
-        let page = Page::containing_address(page_addr);
-
-        unsafe {
-            self.root_page_table.unmap(page);
-        }
-
-        self.data_pages -= 1;
-        Some(page_addr)
-    }
-
-    pub fn extend_data_by(&mut self, amount: isize) -> Option<*mut u8> {
-        let actual_data_break = self.data_start + PAGE_SIZE * self.data_pages;
-        let usable_bytes = actual_data_break - self.data_break;
-        let is_negative = amount.is_negative();
-        let amount = amount.unsigned_abs();
-
-        if (usable_bytes < amount) || (is_negative) {
-            let pages = (amount - usable_bytes).to_next_page() / PAGE_SIZE;
-
-            // FIXME: not tested
-            let func = if is_negative {
-                Self::page_unextend_data
-            } else {
-                Self::page_extend_data
-            };
-
-            for _ in 0..pages {
-                func(self)?;
-            }
-        }
-
-        if is_negative && amount >= usable_bytes {
-            self.data_break -= amount;
-        } else {
-            self.data_break += amount;
-        }
-
-        Some(self.data_break.into_ptr::<u8>())
-    }
-
-    /// Makes `self` a zombie
-    /// # Safety
-    ///  unsafe because `self` becomes invalid after this call
-    unsafe fn die_mut(&mut self, exit_code: usize, killed_by: Pid) -> ZombieProcess {
-        unsafe {
-            ZombieProcess {
-                root_page_table: ManuallyDrop::new(ManuallyDrop::take(&mut self.root_page_table)),
-                exit_code,
-                killed_by,
-                data_start: self.data_start,
-                data_break: self.data_break,
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ProcessState {
-    Alive(AliveProcess),
-    Zombie(ZombieProcess),
-}
-
-impl ProcessState {
-    fn zombie_mut(&mut self) -> Option<&mut ZombieProcess> {
-        match self {
-            ProcessState::Zombie(zombie) => Some(zombie),
-            ProcessState::Alive { .. } => None,
-        }
-    }
-
-    fn alive_mut(&mut self) -> Option<&mut AliveProcess> {
-        match self {
-            ProcessState::Alive(alive) => Some(alive),
-            ProcessState::Zombie { .. } => None,
-        }
-    }
-
-    pub fn extend_data_by(&mut self, amount: isize) -> Option<*mut u8> {
-        self.alive_mut().unwrap().extend_data_by(amount)
-    }
-
-    pub fn die(&mut self, exit_code: usize, killed_by: Pid) {
-        let Some(alive) = self.alive_mut() else {
-            return;
-        };
-
-        *self = ProcessState::Zombie(unsafe { alive.die_mut(exit_code, killed_by) });
-    }
 }
 
 pub const PROCESS_AREA_START_ADDR: VirtAddr = VirtAddr::from(0x00007A0000000000);
@@ -202,19 +69,25 @@ pub struct Process {
     /// process may change it's parent pid
     ppid: AtomicU32,
 
-    state: RwLock<ProcessState>,
     resources: RwLock<ResourceManager>,
     cwd: RwLock<Box<PathBuf>>,
+    allocator: Mutex<ProcessMemAllocator>,
+    /// The Virtual address space allocator
+    vasa: Mutex<ProcVASA>,
 
     is_alive: AtomicBool,
-
+    /// The exit information of the Process if it has exited
+    exit_info: RwLock<Option<ExitInfo>>,
+    /// Whether or not the process's memory was cleaned up, Prevents double clean-up
     cleaned_up: AtomicBool,
+
     userspace_process: bool,
 
-    next_tid: AtomicU32,
+    /// The priortiy of the root thread, that other threads will inherit unless otherwise specified
     default_priority: ContextPriority,
-    allocator: Mutex<ProcessMemAllocator>,
-
+    /// Information about the master TLS if it exits
+    master_tls: Option<(VirtAddr, usize, usize, usize)>,
+    next_tid: AtomicU32,
     pub(super) threads: Mutex<Vec<ArcThread>>,
     pub context_count: AtomicU32,
 }
@@ -223,7 +96,6 @@ impl core::fmt::Debug for Process {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("process")
             .field("name", &self.name)
-            .field("state", &self.state)
             .field("pid", &self.pid)
             .field("ppid", &self.ppid)
             .field("is_alive", &self.is_alive)
@@ -245,13 +117,11 @@ impl Process {
 
     #[inline]
     fn allocate_thread_local(&self) -> Result<Option<(VirtAddr, TrackedAllocation)>, MapToError> {
-        let mut state = self.state_mut();
-        let alive_state = state
-            .alive_mut()
-            .expect("attempt to allocate a new thread local for a thread that isn't alive");
+        let master_tls = self.master_tls;
 
-        let page_table = &mut alive_state.root_page_table;
-        let master_tls = alive_state.master_tls;
+        let mut vasa = self.vasa();
+
+        let page_table = &mut vasa.page_table;
         let mut allocator = self.allocator.lock();
 
         Self::allocate_thread_local_inner(page_table, &mut *allocator, master_tls)
@@ -372,16 +242,11 @@ impl Process {
             threads: Mutex::new(Vec::new()),
 
             next_tid: AtomicU32::new(1),
-            context_count: AtomicU32::new(1),
+            master_tls,
+            context_count: AtomicU32::new(0),
             default_priority,
-
-            state: RwLock::new(ProcessState::Alive(AliveProcess {
-                root_page_table: ManuallyDrop::new(root_page_table),
-                master_tls,
-                data_pages: 0,
-                data_start: data_break,
-                data_break,
-            })),
+            exit_info: RwLock::new(None),
+            vasa: Mutex::new(ProcVASA::new(root_page_table, data_break)),
             resources: RwLock::new(ResourceManager::new()),
             cwd: RwLock::new(cwd),
             allocator: Mutex::new(allocator),
@@ -531,11 +396,8 @@ impl Process {
             None => (VirtAddr::null(), None),
         };
 
-        let mut write_guard = process.state_mut();
-        let state = write_guard
-            .alive_mut()
-            .expect("tried to create a thread in a process that is not alive");
-        let page_table = &mut state.root_page_table;
+        let mut vasa = process.vasa();
+        let page_table = &mut vasa.page_table;
 
         let cpu_status = unsafe {
             CPUStatus::create_child(
@@ -620,12 +482,9 @@ impl Process {
     pub fn resources_mut<'s>(&'s self) -> RwLockWriteGuard<'s, ResourceManager> {
         self.resources.write()
     }
-    pub fn state<'s>(&'s self) -> RwLockReadGuard<'s, ProcessState> {
-        self.state.read()
-    }
 
-    pub fn state_mut<'s>(&'s self) -> RwLockWriteGuard<'s, ProcessState> {
-        self.state.write()
+    fn vasa<'s>(&'s self) -> MutexGuard<'s, ProcVASA> {
+        self.vasa.lock()
     }
 
     /// kills the process
@@ -638,7 +497,10 @@ impl Process {
 
         let threads = self.threads.lock();
         // Set state to dead
-        self.state_mut().die(exit_code, killed_by);
+        *self.exit_info.write() = Some(ExitInfo {
+            exit_code,
+            killed_by,
+        });
         // Drop resources
         self.resources_mut()
             .overwrite_resources(ResourceManager::new());
@@ -668,11 +530,11 @@ impl Process {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
-            let mut state = self.state_mut();
-            let zombie = state
-                .zombie_mut()
-                .expect("attempt to cleanup an alive process");
-            Some(unsafe { ManuallyDrop::take(&mut zombie.root_page_table) })
+            let mut vasa = self.vasa();
+            // Safety:
+            // it hasn't been cleaned up before so we wouldn't have double free
+            // as for use after free this doesn't gurantuee anything
+            Some(unsafe { ManuallyDrop::take(&mut vasa.page_table) })
         } else {
             None
         };
@@ -732,13 +594,11 @@ pub struct ProcessInfo {
     pub ppid: Pid,
     pub pid: Pid,
 
-    pub exit_code: usize,
     pub at: VirtAddr,
     pub stack_addr: VirtAddr,
 
-    pub killed_by: Pid,
-    pub data_start: VirtAddr,
-    pub data_break: VirtAddr,
+    pub killed_by: Option<Pid>,
+    pub exit_code: Option<usize>,
     pub is_alive: bool,
 }
 
@@ -747,21 +607,10 @@ impl From<&Process> for ProcessInfo {
         let at = process.at();
         let stack_addr = process.stack_at();
 
-        let state = process.state();
-
-        let (exit_code, data_start, data_break, killed_by) = match &*state {
-            ProcessState::Alive(AliveProcess {
-                data_start,
-                data_break,
-                ..
-            }) => (0, *data_start, *data_break, 0),
-            ProcessState::Zombie(ZombieProcess {
-                data_start,
-                data_break,
-                exit_code,
-                killed_by,
-                ..
-            }) => (*exit_code, *data_start, *data_break, *killed_by),
+        let exit_info = process.exit_info.read();
+        let (exit_code, killed_by) = match &*exit_info {
+            Some(i) => (Some(i.exit_code), Some(i.killed_by)),
+            None => (None, None),
         };
 
         let is_alive = process.is_alive();
@@ -777,8 +626,6 @@ impl From<&Process> for ProcessInfo {
             stack_addr,
 
             killed_by,
-            data_start,
-            data_break,
             is_alive,
         }
     }

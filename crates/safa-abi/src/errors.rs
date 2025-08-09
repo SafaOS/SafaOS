@@ -31,7 +31,7 @@ pub enum ErrorStatus {
     DirectoryNotEmpty = 0x12,
     /// Generic permissions(protection) related error
     MissingPermissions = 0x13,
-    /// Memory allocations and mapping error, most likely that memory is full
+    /// Memory Mapping error for now this means that the region has been already mapped before
     MMapError = 0x14,
     Busy = 0x15,
     // Errors sent by processes

@@ -88,7 +88,11 @@ pub fn try_cleanup_process(pid: Pid) -> Result<Option<usize>, ErrorStatus> {
         return Err(ErrorStatus::InvalidPid);
     };
 
-    Ok(Some(process_info.exit_code))
+    Ok(Some(
+        process_info
+            .exit_code
+            .expect("process dead but exit code hasn't been set"),
+    ))
 }
 
 /// Attempts to wake up `n` threads waiting on the futex at `target_addr` in the current process.
@@ -114,8 +118,8 @@ use safa_abi::errors::ErrorStatus;
 /// on fail returns null
 pub fn extend_data_break(amount: isize) -> Result<*mut u8, ErrorStatus> {
     let current_process = process::current();
-    let mut state = current_process.state_mut();
-    state.extend_data_by(amount).ok_or(ErrorStatus::OutOfMemory)
+    let mut vasa = current_process.vasa();
+    Ok(vasa.extend_data_by(amount)?)
 }
 
 use crate::drivers::vfs::{FSResult, VFS_STRUCT};
