@@ -1,6 +1,6 @@
 use core::{fmt::Debug, sync::atomic::AtomicBool};
 
-use crate::{drivers::vfs::CollectionIterDescriptor, process, utils::locks::Mutex};
+use crate::{drivers::vfs::CollectionIterDescriptor, process, thread, utils::locks::Mutex};
 use hashbrown::HashMap;
 
 use crate::drivers::vfs::FSObjectDescriptor;
@@ -39,6 +39,10 @@ impl Resource {
 
     pub const fn new_global(data: ResourceData) -> Self {
         Self::new(data, true)
+    }
+
+    pub const fn new_local(data: ResourceData) -> Self {
+        Self::new(data, false)
     }
 
     pub fn clone(&mut self) -> Self {
@@ -81,8 +85,16 @@ impl ResourceManager {
         ri
     }
 
+    pub fn add_global_resource(&mut self, data: ResourceData) -> Ri {
+        self.add_resource(Resource::new_global(data))
+    }
+
+    fn add_local_resource(&mut self, data: ResourceData) -> Ri {
+        self.add_resource(Resource::new_local(data))
+    }
+
     #[inline]
-    fn remove_resource(&mut self, ri: Ri) -> bool {
+    pub fn remove_resource(&mut self, ri: Ri) -> bool {
         // TODO: keep track of resource ids
         match self.resources.remove(&ri) {
             None => false,
@@ -160,10 +172,19 @@ where
     this.resources().get(ri).map(then)
 }
 
-/// adds a resource to the current process
-pub fn add_resource(resource: Resource) -> Ri {
+/// Adds a resource that lives as long as the current process, to the current process
+pub fn add_global_resource(resource_data: ResourceData) -> Ri {
     let this = process::current();
-    this.resources_mut().add_resource(resource)
+    this.resources_mut().add_global_resource(resource_data)
+}
+
+/// Adds a resource that lives as long as the current thread, to the current process
+pub fn add_local_resource(resource_data: ResourceData) -> Ri {
+    let curr_thread = thread::current();
+    let curr_proc = curr_thread.process();
+    let ri = curr_proc.resources_mut().add_local_resource(resource_data);
+    curr_thread.take_resource(ri);
+    ri
 }
 
 /// Duplicates a resource return the new duplicate resource's ID or None if that resource doesn't exist

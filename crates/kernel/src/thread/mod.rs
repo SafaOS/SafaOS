@@ -11,10 +11,10 @@ use crate::{
     arch::threading::CPUStatus,
     debug, eve,
     memory::proc_mem_allocator::TrackedAllocation,
-    process::{Pid, Process},
+    process::{Pid, Process, resources::Ri},
     scheduler::Scheduler,
     time,
-    utils::locks::{SpinLock, SpinLockGuard},
+    utils::locks::{Mutex, SpinLock, SpinLockGuard},
 };
 
 pub mod current;
@@ -107,10 +107,10 @@ impl ContextStatus {
     }
 }
 
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use safa_abi::process::RawContextPriority;
 
-/// A shared reference to a Thread, once dropped, removes itself from the thread list
+/// A shared reference to a Thread, provides extra safety checks and methods over an Arc<Thread>
 #[derive(Debug, Clone)]
 pub struct ArcThread(Arc<Thread>);
 
@@ -237,6 +237,15 @@ impl ArcThread {
     /// The caller must handle the case that this is the current thread carefully, interrupts must be disabled and all caller resources shall be dropped.
     pub unsafe fn kill(&self, exit_code: usize) {
         let process = &self.parent_process;
+        {
+            let mut resource_manager = process.resources_mut();
+            let owned_resources = self.owned_resources.lock();
+
+            for resource in &*owned_resources {
+                resource_manager.remove_resource(*resource);
+            }
+        }
+
         let process_dead = process
             .context_count
             .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
@@ -284,6 +293,7 @@ pub struct Thread {
     is_dead: AtomicBool,
     is_removed: AtomicBool,
     parent_process: Arc<Process>,
+    owned_resources: Mutex<Vec<Ri>>,
 
     /// The scheduler that this thread belongs to.
     /// null until scheduled
@@ -296,6 +306,11 @@ pub struct Thread {
 }
 
 impl Thread {
+    /// Takes ownership of a given resource
+    pub fn take_resource(&self, ri: Ri) {
+        self.owned_resources.lock().push(ri);
+    }
+
     pub fn new(
         cid: Tid,
         cpu_status: CPUStatus,
@@ -304,6 +319,7 @@ impl Thread {
         tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
     ) -> Self {
         Self {
+            owned_resources: Mutex::new(Vec::new()),
             id: cid,
             priority,
             status: SpinLock::new(ContextStatus::Runnable),

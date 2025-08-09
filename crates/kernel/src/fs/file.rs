@@ -5,7 +5,7 @@ use safa_abi::fs::{FSObjectType, FileAttr, OpenOptions};
 use crate::{
     drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
     fs::diriter::{DirIter, DirIterRef},
-    process::resources::{self, Resource, ResourceData},
+    process::resources::{self, ResourceData},
     utils::{
         io::{IoError, Readable},
         locks::Mutex,
@@ -44,7 +44,7 @@ impl File {
     pub fn open_all(path: Path) -> FSResult<Self> {
         let fd = VFS_STRUCT.read().open_all(path)?;
 
-        let fd_ri = resources::add_resource(Resource::new_global(ResourceData::File(fd)));
+        let fd_ri = resources::add_global_resource(ResourceData::File(fd));
         Ok(Self(fd_ri))
     }
 
@@ -52,7 +52,7 @@ impl File {
     pub fn open_with_options(path: Path, options: OpenOptions) -> FSResult<Self> {
         let fd = VFS_STRUCT.read().open(path, options)?;
 
-        let fd_ri = resources::add_resource(Resource::new_global(ResourceData::File(fd)));
+        let fd_ri = resources::add_global_resource(ResourceData::File(fd));
         Ok(Self(fd_ri))
     }
 
@@ -96,9 +96,9 @@ impl File {
     pub fn diriter_open(&self) -> FSResult<DirIter> {
         let diriter = self.with_fd(|fd| fd.open_collection_iter())?;
 
-        Ok(DirIter(resources::add_resource(Resource::new_global(
+        Ok(DirIter(resources::add_global_resource(
             ResourceData::DirIter(Mutex::new(diriter)),
-        ))))
+        )))
     }
 
     /// Sync the file
