@@ -101,11 +101,6 @@ impl File {
         )))
     }
 
-    /// Sync the file
-    pub fn sync(&self) -> FSResult<()> {
-        self.with_fd(|fd| fd.sync())
-    }
-
     /// Return the type of the file (Directory or Device or a normal File)
     pub fn kind(&self) -> FSObjectType {
         self.with_fd(|fd| fd.kind())
