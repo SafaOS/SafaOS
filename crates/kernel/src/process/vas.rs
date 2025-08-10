@@ -3,7 +3,7 @@
 use crate::{
     VirtAddr,
     arch::paging::PageTable,
-    drivers::vfs::FSObjectDescriptor,
+    drivers::vfs::{FSObjectDescriptor, FSResult, SeekOffset},
     memory::{
         AlignToPage,
         frame_allocator::{self, Frame},
@@ -18,13 +18,31 @@ pub struct TrackedMemoryMapping {
     page_table: *mut PageTable,
     start_page: Page,
     end_page: Page,
-    // on Drop syncs descriptor's last writes
-    _obj_descriptor: Option<FSObjectDescriptor>,
+
+    descriptor_off: SeekOffset,
+    obj_descriptor: Option<FSObjectDescriptor>,
 }
 
 impl TrackedMemoryMapping {
     pub const fn end(&self) -> VirtAddr {
         self.end_page.virt_addr()
+    }
+
+    /// Syncs the writes done to this mapping to the underlying File Descriptor
+    /// # Safety
+    /// The caller must be in the same address space as the mapping
+    pub unsafe fn sync(&self) -> FSResult<usize> {
+        let Some(ref desc) = self.obj_descriptor else {
+            return Ok(0);
+        };
+
+        let start = self.start_page.virt_addr();
+        let end = self.end_page.virt_addr();
+        let len = end - start;
+        let start_ptr = start.into_ptr::<u8>();
+        let bytes = unsafe { core::slice::from_raw_parts(start_ptr, len) };
+
+        desc.write(self.descriptor_off, bytes)
     }
 }
 
@@ -141,6 +159,7 @@ impl ProcVASA {
         flags: paging::EntryFlags,
         frames_to_use: I,
         tracked_fs_obj: Option<FSObjectDescriptor>,
+        fs_obj_offset: Option<SeekOffset>,
     ) -> Result<TrackedMemoryMapping, MapToError> {
         let (start_page, end_page) =
             self.map_n_pages(addr_hint, n, guard_pages, flags, frames_to_use)?;
@@ -148,7 +167,8 @@ impl ProcVASA {
             page_table: &mut *self.page_table,
             start_page,
             end_page,
-            _obj_descriptor: tracked_fs_obj,
+            obj_descriptor: tracked_fs_obj,
+            descriptor_off: fs_obj_offset.unwrap_or(SeekOffset::Start(0)),
         })
     }
 

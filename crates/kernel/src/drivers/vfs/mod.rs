@@ -39,6 +39,7 @@ lazy_static! {
     pub static ref VFS_STRUCT: RwLock<VFS> = RwLock::new(VFS::create());
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum SeekOffset {
     Start(usize),
     End(usize),

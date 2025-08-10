@@ -38,10 +38,7 @@ impl Device for FrameBufferDriver {
         Err(FSError::OperationNotSupported)
     }
     fn write(&self, offset: SeekOffset, buffer: &[u8]) -> crate::drivers::vfs::FSResult<usize> {
-        // TODO: Implement Write, for now we only support mapping this device to memory
-        _ = offset;
-        _ = buffer;
-        Err(FSError::OperationNotSupported)
+        self.buffer().write_bytes(offset, buffer)
     }
 
     /// Performs a full pixel Sync

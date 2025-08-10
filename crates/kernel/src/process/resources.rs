@@ -1,7 +1,7 @@
 use core::{fmt::Debug, sync::atomic::AtomicBool};
 
 use crate::{
-    drivers::vfs::CollectionIterDescriptor,
+    drivers::vfs::{CollectionIterDescriptor, FSResult},
     process::{self, vas::TrackedMemoryMapping},
     utils::locks::Mutex,
 };
@@ -73,6 +73,17 @@ impl Resource {
     pub fn cloneable_to_different_address_space(&self) -> bool {
         self.data.cloneable_to_different_address_space()
             && self.global.load(core::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Performs a Sync operation on this resource
+    /// # Safety
+    /// Must be called from the address space owning this resource
+    pub unsafe fn sync(&self) -> FSResult<()> {
+        match self.data() {
+            ResourceData::File(f) => f.sync(),
+            ResourceData::TrackedMapping(m) => unsafe { m.sync().map(|_| ()) },
+            ResourceData::DirIter(_) => Err(crate::drivers::vfs::FSError::OperationNotSupported),
+        }
     }
 }
 

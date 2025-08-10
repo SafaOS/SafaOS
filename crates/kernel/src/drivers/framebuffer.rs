@@ -1,4 +1,7 @@
-use crate::utils::locks::{Mutex, MutexGuard};
+use crate::{
+    drivers::vfs::{FSError, FSResult, SeekOffset},
+    utils::locks::{Mutex, MutexGuard},
+};
 use alloc::{boxed::Box, vec::Vec};
 use lazy_static::lazy_static;
 
@@ -54,6 +57,44 @@ impl<'a> FrameBuffer<'a> {
     pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {
         let index = x + y * self.info.stride;
         self.pixel_buffer[self.buffer_display_index + index] = color.into_u32();
+    }
+
+    /// Writes the given bytes buffer to the framebuffer
+    pub fn write_bytes(&mut self, offset: SeekOffset, bytes: &[u8]) -> FSResult<usize> {
+        let pb_ptr = self.pixel_buffer.as_ptr();
+        let pb_len = self.pixel_buffer.len();
+
+        let pb_u8_ptr = pb_ptr as *mut u8;
+        let pb_u8_len = pb_len / size_of::<u32>();
+        let pb_u8_buf = unsafe { core::slice::from_raw_parts_mut(pb_u8_ptr, pb_u8_len) };
+        let pb_u8_buf = match offset {
+            SeekOffset::Start(0) => pb_u8_buf,
+            SeekOffset::Start(amount) => {
+                core::hint::cold_path();
+                if amount >= pb_u8_buf.len() {
+                    return Err(FSError::InvalidOffset);
+                }
+
+                &mut pb_u8_buf[amount..]
+            }
+            SeekOffset::End(amount) => {
+                core::hint::cold_path();
+                let actual_off = pb_u8_buf
+                    .len()
+                    .checked_sub(amount)
+                    .ok_or(FSError::InvalidOffset)?;
+                if actual_off >= pb_u8_buf.len() {
+                    return Err(FSError::InvalidOffset);
+                }
+
+                &mut pb_u8_buf[actual_off..]
+            }
+        };
+
+        let write_len = bytes.len().min(pb_u8_buf.len());
+
+        pb_u8_buf[..write_len].copy_from_slice(&bytes[..write_len]);
+        Ok(write_len)
     }
 
     pub fn sync_pixels_full(&mut self) {

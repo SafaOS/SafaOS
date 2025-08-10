@@ -248,6 +248,7 @@ impl Process {
             flags,
             core::iter::empty(),
             None,
+            None,
         )?;
 
         let ke_stack_end = thread_ke_stack_mapping.end();
@@ -269,6 +270,7 @@ impl Process {
             GUARD_PAGES_COUNT,
             flags,
             core::iter::empty(),
+            None,
             None,
         )?;
 

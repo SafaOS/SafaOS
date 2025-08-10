@@ -78,8 +78,10 @@ fn sysdiriter_next(diriter_rd: DirIterRef, direntry: &mut DirEntry) -> Result<()
 }
 
 #[syscall_handler]
-fn syssync(fd: FileRef) -> FSResult<()> {
-    fd.sync()
+fn syssync(ri: Ri) -> FSResult<()> {
+    resources::get_resource(ri, |resource| unsafe { resource.sync() })
+        .ok_or(FSError::InvalidResource)
+        .flatten()
 }
 
 #[syscall_handler]
