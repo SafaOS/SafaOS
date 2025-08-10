@@ -1,29 +1,31 @@
 use core::{
-    mem::ManuallyDrop,
     num::NonZero,
     ptr::NonNull,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use crate::{
-    arch::paging::PageTable,
     memory::{
-        AlignTo, AlignToPage, copy_to_userspace, proc_mem_allocator::ProcessMemAllocator,
+        AlignTo, AlignToPage, copy_to_userspace,
+        paging::{EntryFlags, Page},
         userspace_copy_within,
     },
-    process::vas::ProcVASA,
+    process::{
+        resources::ResourceData,
+        vas::{ProcVASA, TrackedMemoryMapping},
+    },
     scheduler,
     thread::{self, ArcThread, Tid},
     utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
-use crate::{
-    memory::{paging::MapToError, proc_mem_allocator::TrackedAllocation},
-    utils::types::Name,
-};
+use crate::{memory::paging::MapToError, utils::types::Name};
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use cfg_if::cfg_if;
-use safa_abi::process::{AbiStructures, ProcessStdio};
+use safa_abi::{
+    ffi::{slice::Slice, str::Str},
+    process::{AbiStructures, ProcessStdio},
+};
 use serde::Serialize;
 use thread::{ContextPriority, Thread};
 
@@ -55,9 +57,7 @@ pub struct ExitInfo {
     killed_by: Pid,
 }
 
-pub const PROCESS_AREA_START_ADDR: VirtAddr = VirtAddr::from(0x00007A0000000000);
-pub const PROCESS_AREA_SIZE: usize = 0x50000000000;
-pub const PROCESS_AREA_END_ADDR: VirtAddr = PROCESS_AREA_START_ADDR + PROCESS_AREA_SIZE;
+pub const PROCESS_AREA_END_ADDR: VirtAddr = VirtAddr::from(0x00007F0000000000);
 
 const DEFAULT_STACK_SIZE: usize = 8 * PAGE_SIZE;
 const GUARD_PAGES_COUNT: usize = 2;
@@ -71,15 +71,12 @@ pub struct Process {
 
     resources: RwLock<ResourceManager>,
     cwd: RwLock<Box<PathBuf>>,
-    allocator: Mutex<ProcessMemAllocator>,
     /// The Virtual address space allocator
     vasa: Mutex<ProcVASA>,
 
     is_alive: AtomicBool,
     /// The exit information of the Process if it has exited
     exit_info: RwLock<Option<ExitInfo>>,
-    /// Whether or not the process's memory was cleaned up, Prevents double clean-up
-    cleaned_up: AtomicBool,
 
     userspace_process: bool,
 
@@ -115,26 +112,175 @@ impl Process {
         self.ppid.load(Ordering::Relaxed)
     }
 
-    #[inline]
-    fn allocate_thread_local(&self) -> Result<Option<(VirtAddr, TrackedAllocation)>, MapToError> {
-        let master_tls = self.master_tls;
+    fn allocate_root_thread_memory_inner(
+        vasa: &mut ProcVASA,
+        custom_stack_size: Option<NonZero<usize>>,
+        master_tls: Option<(VirtAddr, usize, usize, usize)>,
+        args: &[&str],
+        env: &[&[u8]],
+        abi_structures: AbiStructures,
+    ) -> Result<
+        (
+            TrackedMemoryMapping,
+            VirtAddr,
+            Option<VirtAddr>,
+            VirtAddr,
+            VirtAddr,
+            VirtAddr,
+            TrackedMemoryMapping,
+            VirtAddr,
+        ),
+        MapToError,
+    > {
+        let env_bytes: usize = env.iter().map(|x| x.len() + 1).sum();
+        let args_bytes: usize = env.iter().map(|x| x.len() + 1).sum();
 
-        let mut vasa = self.vasa();
+        let env_size =
+            /* envv themselves (aligned) */ ((env.len() + 1) * size_of::<Slice<u8>>())
+            + (size_of::<usize>() /* envc */ + env_bytes).to_next_multiple_of(size_of::<Slice<u8>>());
+        let env_size = env_size.to_next_multiple_of(0x10usize);
 
+        let args_size =
+            /* argv themselves (aligned) */ ((args.len() + 1) * size_of::<Str>())
+        + (size_of::<usize>() /* argc */ + args_bytes).to_next_multiple_of(size_of::<Str>());
+        let args_size = args_size.to_next_multiple_of(0x10usize);
+
+        let extra_stack_bytes =
+            (env_size + args_size + size_of::<AbiStructures>()).to_next_multiple_of(0x10usize);
+
+        let (th_mem_tracker, stack_supposed_end, tp_addr, ke_stack_tracker, ke_stack_end) =
+            Self::allocate_thread_memory_inner(
+                vasa,
+                custom_stack_size,
+                master_tls,
+                extra_stack_bytes,
+            )?;
         let page_table = &mut vasa.page_table;
-        let mut allocator = self.allocator.lock();
 
-        Self::allocate_thread_local_inner(page_table, &mut *allocator, master_tls)
+        let env_start = stack_supposed_end - env_size;
+        let args_start = env_start - args_size;
+        let abi_structures_start = args_start - size_of::<AbiStructures>();
+
+        let stack_end = abi_structures_start.to_previous_multiple_of(0x10);
+
+        let mut copy_slices = |start: VirtAddr, slices: &[&[u8]]| {
+            let mut copied = 0;
+
+            macro_rules! copy_bytes {
+                ($bytes: expr) => {{
+                    let data = $bytes;
+                    crate::memory::copy_to_userspace(page_table, start + copied, data);
+                    copied += data.len();
+                }};
+            }
+
+            copy_bytes!(&slices.len().to_ne_bytes());
+
+            let slices_data_area_start = start + copied;
+            for slice in slices {
+                copy_bytes!(slice);
+                copy_bytes!(&[0]);
+            }
+
+            copied = copied.to_next_multiple_of(size_of::<Slice<u8>>());
+            let pointers_start = start + copied;
+            let mut current_slice_data_ptr = slices_data_area_start;
+
+            for slice in slices {
+                let raw_slice_fat = unsafe {
+                    Slice::from_raw_parts(current_slice_data_ptr.into_ptr::<u8>(), slice.len())
+                };
+                let bytes: [u8; size_of::<Slice<u8>>()] =
+                    unsafe { core::mem::transmute(raw_slice_fat) };
+
+                copy_bytes!(&bytes);
+                current_slice_data_ptr += slice.len() + 1;
+            }
+
+            pointers_start
+        };
+
+        let env_pointers_start = copy_slices(env_start, env);
+        let argv_pointers_start = copy_slices(args_start, unsafe { core::mem::transmute(args) });
+        crate::memory::copy_to_userspace(page_table, abi_structures_start, &unsafe {
+            core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(abi_structures)
+        });
+        Ok((
+            th_mem_tracker,
+            stack_end,
+            tp_addr,
+            env_pointers_start,
+            argv_pointers_start,
+            abi_structures_start,
+            ke_stack_tracker,
+            ke_stack_end,
+        ))
     }
 
-    #[inline]
-    fn allocate_thread_local_inner(
-        page_table: &mut PageTable,
-        allocator: &mut ProcessMemAllocator,
+    /// Allocates the thread stack, thread local area, and the kernel thread stack, the kernel thread stack will have `extra_stack_bytes` extra bytes
+    /// # Returns
+    /// (the kernel thread stack and thread local copy tracker, the thread stack end, the TP, the kernel thread stack tracker)
+    fn allocate_thread_memory_inner(
+        vasa: &mut ProcVASA,
+        custom_stack_size: Option<NonZero<usize>>,
         master_tls: Option<(VirtAddr, usize, usize, usize)>,
-    ) -> Result<Option<(VirtAddr, TrackedAllocation)>, MapToError> {
+        extra_stack_bytes: usize,
+    ) -> Result<
+        (
+            TrackedMemoryMapping,
+            VirtAddr,
+            Option<VirtAddr>,
+            TrackedMemoryMapping,
+            VirtAddr,
+        ),
+        MapToError,
+    > {
+        let flags = EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE;
+        let stack_size = custom_stack_size
+            .map(|v| v.get())
+            .unwrap_or(DEFAULT_STACK_SIZE)
+            .to_next_page();
+
+        let thread_ke_stack_mapping = vasa.map_n_pages_tracked(
+            None,
+            stack_size / PAGE_SIZE,
+            GUARD_PAGES_COUNT,
+            flags,
+            core::iter::empty(),
+            None,
+        )?;
+
+        let ke_stack_end = thread_ke_stack_mapping.end();
+
+        let size = stack_size
+            + if let Some((_, tls_mem_size, _, tls_alignment)) = master_tls {
+                (tls_mem_size + size_of::<UThreadLocalInfo>())
+                    .to_next_multiple_of(tls_alignment)
+                    .to_next_multiple_of(0x10usize)
+            } else {
+                0
+            }
+            + extra_stack_bytes;
+        let size = size.to_next_page();
+
+        let thread_space_mapping = vasa.map_n_pages_tracked(
+            None,
+            size / PAGE_SIZE,
+            GUARD_PAGES_COUNT,
+            flags,
+            core::iter::empty(),
+            None,
+        )?;
+
+        let mapping_end = thread_space_mapping.end();
         let Some((master_tls_addr, tls_mem_size, tls_file_size, tls_alignment)) = master_tls else {
-            return Ok(None);
+            return Ok((
+                thread_space_mapping,
+                mapping_end,
+                None,
+                thread_ke_stack_mapping,
+                ke_stack_end,
+            ));
         };
         assert!(tls_alignment >= align_of::<UThreadLocalInfo>());
 
@@ -153,10 +299,10 @@ impl Process {
             thread_local_storage_size: usize,
         }
 
-        let size = size_of::<UThreadLocalInfo>() + tls_mem_size;
-        let tracker = allocator.allocate_tracked_guraded(size, tls_alignment, 0)?;
-
-        let allocated_start = tracker.start();
+        let tls_v_size =
+            (size_of::<UThreadLocalInfo>() + tls_mem_size).to_next_multiple_of(tls_alignment);
+        let allocated_start = mapping_end - tls_v_size;
+        let stack_end = allocated_start.to_previous_multiple_of(0x10);
 
         let (uthread_addr, tls_addr) = {
             cfg_if! {
@@ -192,32 +338,34 @@ impl Process {
         let uthread_bytes: [u8; size_of::<UThreadLocalInfo>()] =
             unsafe { core::mem::transmute(uthread_info) };
 
+        let page_table = &mut vasa.page_table;
         copy_to_userspace(page_table, uthread_addr, &uthread_bytes);
         // only copy file size
         userspace_copy_within(page_table, master_tls_addr, tls_addr, tls_file_size);
 
-        Ok(Some((uthread_addr, tracker)))
+        Ok((
+            thread_space_mapping,
+            stack_end,
+            Some(uthread_addr),
+            thread_ke_stack_mapping,
+            ke_stack_end,
+        ))
     }
 
-    fn allocate_stack_inner(
-        allocator: &mut ProcessMemAllocator,
-        custom_stack_size: Option<NonZero<usize>>,
-    ) -> Result<TrackedAllocation, MapToError> {
-        allocator.allocate_tracked_guraded(
-            custom_stack_size
-                .map(|v| v.get())
-                .unwrap_or(DEFAULT_STACK_SIZE)
-                .to_next_multiple_of(0x10usize),
-            PAGE_SIZE,
-            GUARD_PAGES_COUNT,
-        )
-    }
-
-    fn allocate_stack(
+    fn allocate_thread_memory(
         &self,
         custom_stack_size: Option<NonZero<usize>>,
-    ) -> Result<TrackedAllocation, MapToError> {
-        Self::allocate_stack_inner(&mut *self.allocator.lock(), custom_stack_size)
+    ) -> Result<
+        (
+            TrackedMemoryMapping,
+            VirtAddr,
+            Option<VirtAddr>,
+            TrackedMemoryMapping,
+            VirtAddr,
+        ),
+        MapToError,
+    > {
+        Self::allocate_thread_memory_inner(&mut *self.vasa(), custom_stack_size, self.master_tls, 0)
     }
 
     fn new(
@@ -225,11 +373,10 @@ impl Process {
         pid: Pid,
         ppid: Pid,
         default_priority: ContextPriority,
-        root_page_table: PhysPageTable,
         cwd: Box<PathBuf>,
-        data_break: VirtAddr,
+        vasa: ProcVASA,
+        resources: ResourceManager,
         master_tls: Option<(VirtAddr, usize, usize, usize)>,
-        allocator: ProcessMemAllocator,
         userspace_process: bool,
     ) -> Self {
         Self {
@@ -238,7 +385,6 @@ impl Process {
 
             ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
-            cleaned_up: AtomicBool::new(false),
             threads: Mutex::new(Vec::new()),
 
             next_tid: AtomicU32::new(1),
@@ -246,15 +392,14 @@ impl Process {
             context_count: AtomicU32::new(0),
             default_priority,
             exit_info: RwLock::new(None),
-            vasa: Mutex::new(ProcVASA::new(root_page_table, data_break)),
-            resources: RwLock::new(ResourceManager::new()),
+            vasa: Mutex::new(vasa),
+            resources: RwLock::new(resources),
             cwd: RwLock::new(cwd),
-            allocator: Mutex::new(allocator),
             userspace_process,
         }
     }
 
-    /// Creates a new process returning a combination of the process and the main thread
+    /// Creates a new process returning a combination of the process, the main thread, and resources that should be added to the process
     pub fn create(
         name: Name,
         pid: Pid,
@@ -270,87 +415,72 @@ impl Process {
         default_priority: ContextPriority,
         userspace_process: bool,
         custom_stack_size: Option<NonZero<usize>>,
+        with_resources: Option<ResourceManager>,
     ) -> Result<(Arc<Self>, ArcThread), MapToError> {
         let data_break = data_break.to_next_page();
-        let mut root_page_table = root_page_table;
+        let mut vasa = ProcVASA::new(root_page_table, data_break);
+        let mut resources = with_resources.unwrap_or(ResourceManager::new());
+        let abi_structures = AbiStructures::new(stdio, pid, crate::arch::available_cpus());
 
-        let mut proc_mem_allocator = ProcessMemAllocator::new(
-            &mut *root_page_table,
-            PROCESS_AREA_START_ADDR,
-            PROCESS_AREA_SIZE,
-        );
-
-        let envc = env.len();
-        let (_, _, envv_start) = proc_mem_allocator.allocate_filled_with_slices(env, 0x10)?;
-
-        let argc = args.len();
-        let (_, _, argv_start) = proc_mem_allocator
-            .allocate_filled_with_slices(unsafe { core::mem::transmute(args) }, 0x10)?;
-
-        let structures = AbiStructures::new(stdio, pid, crate::arch::available_cpus());
-        let (abi_structures_start, _) = proc_mem_allocator.allocate_filled_with(
-            &unsafe { core::mem::transmute::<_, [u8; size_of::<AbiStructures>()]>(structures) }[..],
-            align_of::<AbiStructures>(),
+        let (
+            thread_mem_tracker,
+            stack_end,
+            tp_addr,
+            envv_pointers_start,
+            argv_pointers_start,
+            abi_structers_start,
+            ke_stack_tracker,
+            ke_stack_end,
+        ) = Self::allocate_root_thread_memory_inner(
+            &mut vasa,
+            custom_stack_size,
+            master_tls,
+            args,
+            env,
+            abi_structures,
         )?;
-
         let entry_args = [
-            argc,
-            argv_start.into_raw(),
-            envc,
-            envv_start.into_raw(),
-            abi_structures_start.into_raw(),
+            args.len(),
+            argv_pointers_start.into_raw(),
+            env.len(),
+            envv_pointers_start.into_raw(),
+            abi_structers_start.into_raw(),
         ];
 
-        let mut to_track = heapless::Vec::new();
-
-        let user_stack_tracker =
-            Self::allocate_stack_inner(&mut proc_mem_allocator, custom_stack_size)?;
-        let kernel_stack_tracker =
-            Self::allocate_stack_inner(&mut proc_mem_allocator, custom_stack_size)?;
-
-        let tls = Self::allocate_thread_local_inner(
-            &mut root_page_table,
-            &mut proc_mem_allocator,
-            master_tls,
-        )?;
-
-        let (tls_addr, tls_tracker) = match tls {
-            Some((tls_addr, tracker)) => (tls_addr, Some(tracker)),
-            None => (VirtAddr::null(), None),
-        };
-
         let context = unsafe {
+            let root_page_table = &mut vasa.page_table;
+            assert!(
+                root_page_table
+                    .get_frame(Page::containing_address(stack_end))
+                    .is_some()
+            );
             CPUStatus::create_root(
-                &mut root_page_table,
+                root_page_table,
                 entry_point,
                 entry_args,
-                tls_addr,
-                user_stack_tracker.end(),
-                kernel_stack_tracker.end(),
+                tp_addr.unwrap_or(VirtAddr::null()),
+                stack_end,
+                ke_stack_end,
                 userspace_process,
             )?
         };
 
-        to_track.push(user_stack_tracker).unwrap();
-        to_track.push(kernel_stack_tracker).unwrap();
-        if let Some(tracker) = tls_tracker {
-            to_track.push(tracker).unwrap();
-        }
+        resources.add_global_resource(ResourceData::TrackedMapping(Arc::new(thread_mem_tracker)));
+        resources.add_global_resource(ResourceData::TrackedMapping(Arc::new(ke_stack_tracker)));
 
         let process = Arc::new(Self::new(
             name,
             pid,
             ppid,
             default_priority,
-            root_page_table,
             cwd,
-            data_break,
+            vasa,
+            resources,
             master_tls,
-            proc_mem_allocator,
             userspace_process,
         ));
 
-        let root_thread = ArcThread::new(Self::create_thread(&process, 0, context, None, to_track));
+        let root_thread = ArcThread::new(Self::create_thread(&process, 0, context, None));
         process.add_thread(root_thread.clone());
 
         Ok((process, root_thread))
@@ -361,14 +491,12 @@ impl Process {
         tid: Tid,
         cpu_status: CPUStatus,
         priority: Option<ContextPriority>,
-        tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
     ) -> Thread {
         Thread::new(
             tid,
             cpu_status,
             process,
             priority.unwrap_or(process.default_priority),
-            tracked_allocations,
         )
     }
 
@@ -387,23 +515,18 @@ impl Process {
         custom_stack_size: Option<NonZero<usize>>,
     ) -> Result<(ArcThread, Tid), MapToError> {
         let context_id = process.next_tid.fetch_add(1, Ordering::SeqCst);
-        let user_stack_tracker = process.allocate_stack(custom_stack_size)?;
-        let kernel_stack_tracker = process.allocate_stack(custom_stack_size)?;
-        let tls = process.allocate_thread_local()?;
 
-        let (tls_addr, tls_tracker) = match tls {
-            Some((tls_addr, tracker)) => (tls_addr, Some(tracker)),
-            None => (VirtAddr::null(), None),
-        };
+        let (th_mem_tracker, stack_end, tp_addr, ke_stack_tracker, ke_stack_end) =
+            process.allocate_thread_memory(custom_stack_size)?;
 
         let mut vasa = process.vasa();
         let page_table = &mut vasa.page_table;
 
         let cpu_status = unsafe {
             CPUStatus::create_child(
-                tls_addr,
-                user_stack_tracker.end(),
-                kernel_stack_tracker.end(),
+                tp_addr.unwrap_or(VirtAddr::null()),
+                stack_end,
+                ke_stack_end,
                 page_table,
                 entry_point,
                 context_id,
@@ -412,17 +535,18 @@ impl Process {
             )?
         };
 
-        let mut to_track = heapless::Vec::new();
-        to_track.push(user_stack_tracker).unwrap();
-        to_track.push(kernel_stack_tracker).unwrap();
-        if let Some(tracker) = tls_tracker {
-            to_track.push(tracker).unwrap();
-        }
-
-        let thread = Self::create_thread(process, context_id, cpu_status, priority, to_track);
+        let thread = Self::create_thread(process, context_id, cpu_status, priority);
         let thread = ArcThread::new(thread);
 
+        let mut resources = process.resources_mut();
+        let th_mem_ri =
+            resources.add_local_resource(ResourceData::TrackedMapping(Arc::new(th_mem_tracker)));
+        let ke_stack_ri =
+            resources.add_local_resource(ResourceData::TrackedMapping(Arc::new(ke_stack_tracker)));
+
+        thread.take_resources(&[th_mem_ri, ke_stack_ri]);
         process.add_thread(thread.clone());
+
         Ok((thread, context_id))
     }
 
@@ -439,6 +563,7 @@ impl Process {
         default_priority: ContextPriority,
         stdio: ProcessStdio,
         custom_stack_size: Option<NonZero<usize>>,
+        with_resources: Option<ResourceManager>,
     ) -> Result<(Arc<Self>, ArcThread), ElfError> {
         let entry_point = elf.header().entry_point;
         let mut page_table = PhysPageTable::create()?;
@@ -459,6 +584,7 @@ impl Process {
             default_priority,
             true,
             custom_stack_size,
+            with_resources,
         )
         .map_err(|e| e.into())
     }
@@ -501,9 +627,6 @@ impl Process {
             exit_code,
             killed_by,
         });
-        // Drop resources
-        self.resources_mut()
-            .overwrite_resources(ResourceManager::new());
 
         for thread in &*threads {
             if !thread.is_dead() {
@@ -524,21 +647,8 @@ impl Process {
         self.is_alive.store(false, Ordering::Release);
     }
 
-    pub(super) fn cleanup(&self) -> (ProcessInfo, Option<PhysPageTable>) {
-        let page_table = if self
-            .cleaned_up
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-        {
-            let mut vasa = self.vasa();
-            // Safety:
-            // it hasn't been cleaned up before so we wouldn't have double free
-            // as for use after free this doesn't gurantuee anything
-            Some(unsafe { ManuallyDrop::take(&mut vasa.page_table) })
-        } else {
-            None
-        };
-        (ProcessInfo::from(self), page_table)
+    pub(super) fn info(&self) -> ProcessInfo {
+        ProcessInfo::from(self)
     }
 
     /// Attempts to wake up `n` threads waiting on the futex at `target_addr`.

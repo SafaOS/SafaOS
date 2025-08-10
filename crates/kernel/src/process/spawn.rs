@@ -13,7 +13,10 @@ use crate::{
     drivers::vfs::FSError,
     fs::File,
     memory::paging::MapToError,
-    process::{self, Pid, Process, resources::Ri},
+    process::{
+        self, Pid, Process,
+        resources::{ResourceManager, Ri},
+    },
     scheduler,
     thread::{ArcThread, ContextPriority},
     utils::{
@@ -58,6 +61,7 @@ fn spawn_inner(
         Pid,
         Pid,
         Box<PathBuf>,
+        ResourceManager,
     ) -> Result<(Arc<Process>, ArcThread), SpawnError>,
 ) -> Result<Pid, SpawnError> {
     let current_process = process::current();
@@ -70,11 +74,9 @@ fn spawn_inner(
     };
 
     let new_pid = scheduler::process_list::add_pid();
-    let (new_process, root_thread) = create_process(name, current_pid, new_pid, cwd)?;
 
     // Provides resources for the new process
-    {
-        let mut new_process_resources = new_process.resources_mut();
+    let with_resources = {
         let mut this_resources = current_process.resources_mut();
 
         let clone = if flags.contains(SpawnFlags::CLONE_RESOURCES) {
@@ -99,8 +101,11 @@ fn spawn_inner(
                 .map_err(|()| FSError::InvalidResource)?
         };
 
-        new_process_resources.overwrite_resources(clone);
-    }
+        clone
+    };
+
+    let (new_process, root_thread) =
+        create_process(name, current_pid, new_pid, cwd, with_resources)?;
 
     scheduler::add_process(new_process, root_thread, None);
     Ok(new_pid)
@@ -116,22 +121,28 @@ fn spawn<T: Readable>(
     stdio: ProcessStdio,
     custom_stack_size: Option<NonZero<usize>>,
 ) -> Result<Pid, SpawnError> {
-    spawn_inner(name, flags, stdio, |name: Name, ppid, pid, cwd| {
-        let elf = Elf::new(reader)?;
-        let process = Process::from_elf(
-            name,
-            pid,
-            ppid,
-            cwd,
-            elf,
-            argv,
-            env,
-            priority,
-            stdio,
-            custom_stack_size,
-        )?;
-        Ok(process)
-    })
+    spawn_inner(
+        name,
+        flags,
+        stdio,
+        |name: Name, ppid, pid, cwd, with_resources| {
+            let elf = Elf::new(reader)?;
+            let process = Process::from_elf(
+                name,
+                pid,
+                ppid,
+                cwd,
+                elf,
+                argv,
+                env,
+                priority,
+                stdio,
+                custom_stack_size,
+                Some(with_resources),
+            )?;
+            Ok(process)
+        },
+    )
 }
 
 /// spawns an elf process from a path

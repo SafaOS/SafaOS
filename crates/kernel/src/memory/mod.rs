@@ -2,7 +2,6 @@ pub mod buddy_allocator;
 pub mod frame_allocator;
 pub mod page_allocator;
 pub mod paging;
-pub mod proc_mem_allocator;
 pub mod sorcery;
 
 use core::{
@@ -362,7 +361,13 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
             to_copy
         };
 
-        let frame = page_table.get_frame(page).unwrap();
+        if will_copy == 0 {
+            return;
+        }
+
+        let Some(frame) = page_table.get_frame(page) else {
+            panic!("attempt to copy to an unmapped page: {page:?}");
+        };
 
         let virt_addr = frame.virt_addr() + diff;
         unsafe {

@@ -10,7 +10,6 @@ use core::{
 use crate::{
     arch::threading::CPUStatus,
     debug, eve,
-    memory::proc_mem_allocator::TrackedAllocation,
     process::{Pid, Process, resources::Ri},
     scheduler::Scheduler,
     time,
@@ -237,15 +236,6 @@ impl ArcThread {
     /// The caller must handle the case that this is the current thread carefully, interrupts must be disabled and all caller resources shall be dropped.
     pub unsafe fn kill(&self, exit_code: usize) {
         let process = &self.parent_process;
-        {
-            let mut resource_manager = process.resources_mut();
-            let owned_resources = self.owned_resources.lock();
-
-            for resource in &*owned_resources {
-                resource_manager.remove_resource(*resource);
-            }
-        }
-
         let process_dead = process
             .context_count
             .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
@@ -306,9 +296,10 @@ pub struct Thread {
 }
 
 impl Thread {
-    /// Takes ownership of a given resource
-    pub fn take_resource(&self, ri: Ri) {
-        self.owned_resources.lock().push(ri);
+    /// Takes ownership of a given resource list
+    pub fn take_resources(&self, ri: &[Ri]) {
+        let mut owned_resources = self.owned_resources.lock();
+        owned_resources.extend_from_slice(ri);
     }
 
     pub fn new(
@@ -316,14 +307,13 @@ impl Thread {
         cpu_status: CPUStatus,
         parent_process: &Arc<Process>,
         priority: ContextPriority,
-        tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
     ) -> Self {
         Self {
             owned_resources: Mutex::new(Vec::new()),
             id: cid,
             priority,
             status: SpinLock::new(ContextStatus::Runnable),
-            context: UnsafeCell::new(Some(Context::new(cpu_status, tracked_allocations))),
+            context: UnsafeCell::new(Some(Context::new(cpu_status))),
             is_dead: AtomicBool::new(false),
             is_removed: AtomicBool::new(false),
             parent_process: parent_process.clone(),
@@ -394,6 +384,15 @@ impl Thread {
             unsafe { (&mut *self.context.get()).take() }.expect("Thread was already removed");
         drop(context);
 
+        {
+            let mut resource_manager = self.parent_process.resources_mut();
+            let owned_resources = self.owned_resources.lock();
+
+            for resource in &*owned_resources {
+                resource_manager.remove_resource(*resource);
+            }
+        }
+
         self.is_removed
             .store(true, core::sync::atomic::Ordering::Release);
     }
@@ -458,7 +457,6 @@ impl Thread {
 #[derive(Debug)]
 pub struct Context {
     cpu_status: CPUStatus,
-    _tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
 }
 
 impl Context {
@@ -470,14 +468,8 @@ impl Context {
         unsafe { core::ptr::NonNull::new_unchecked(&mut self.cpu_status) }
     }
 
-    pub(super) fn new(
-        cpu_status: CPUStatus,
-        tracked_allocations: heapless::Vec<TrackedAllocation, 3>,
-    ) -> Self {
-        Context {
-            cpu_status,
-            _tracked_allocations: tracked_allocations,
-        }
+    pub(super) fn new(cpu_status: CPUStatus) -> Self {
+        Context { cpu_status }
     }
 }
 

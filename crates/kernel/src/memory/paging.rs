@@ -110,24 +110,27 @@ impl PageTable {
             let frame =
                 frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
-            if let Err(e) = self.map_zeroed_to(page, frame, flags) {
+            if let Err(e) = self.map_zeroed_to_uncached(page, frame, flags) {
                 frame_allocator::deallocate_frame(frame);
                 return Err(e);
             }
+
+            self.flush_cache();
             Ok(())
         }
     }
 
-    /// maps a virtual `Page` to a physical `Frame` filling the frame with zeros
-    /// flushes the cache if necessary
-    pub unsafe fn map_zeroed_to(
+    /// Maps a virtual `Page` to a physical `Frame` filling the frame with zeros
+    ///
+    /// Doesn't flush the cache
+    pub unsafe fn map_zeroed_to_uncached(
         &mut self,
         page: Page,
         frame: Frame,
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
         unsafe {
-            self.map_to(page, frame, flags)?;
+            self.map_to_uncached(page, frame, flags)?;
 
             let addr = frame.virt_addr();
             let ptr = addr.into_ptr::<[u8; PAGE_SIZE]>();
@@ -141,25 +144,6 @@ impl PageTable {
         unsafe {
             self.unmap_uncached(page);
             self.flush_cache();
-        }
-    }
-
-    /// Attempts to allocate a frame and map it to a page, returning the frame if successful if the page was already mapped to another frame returns Ok(None)
-    pub unsafe fn try_alloc_map_single_uncached(
-        &mut self,
-        page: Page,
-        flags: EntryFlags,
-    ) -> Result<Option<Frame>, MapToError> {
-        let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-        if let Err(e) = unsafe { self.map_to_uncached(page, frame, flags) } {
-            if e != MapToError::AlreadyMapped {
-                return Err(e);
-            }
-
-            frame_allocator::deallocate_frame(frame);
-            Ok(None)
-        } else {
-            Ok(Some(frame))
         }
     }
 

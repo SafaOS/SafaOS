@@ -228,6 +228,7 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
             ContextPriority::Medium,
             false,
             None,
+            None,
         )
         .expect("failed to create Eve");
 

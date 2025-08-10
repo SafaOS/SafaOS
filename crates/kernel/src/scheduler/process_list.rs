@@ -97,8 +97,7 @@ impl ProcessList {
         // TODO: Maybe move this somewhere else
         threads.clear();
 
-        let (info, page_table) = process.cleanup();
-        drop(page_table);
+        let info = process.info();
 
         self.pids.remove(info.pid as usize);
         Some(info)
