@@ -1,6 +1,11 @@
 use core::{fmt::Debug, sync::atomic::AtomicBool};
 
-use crate::{drivers::vfs::CollectionIterDescriptor, process, thread, utils::locks::Mutex};
+use crate::{
+    drivers::vfs::CollectionIterDescriptor,
+    process::{self, vas::TrackedMemoryMapping},
+    utils::locks::Mutex,
+};
+use alloc::sync::Arc;
 use hashbrown::HashMap;
 
 use crate::drivers::vfs::FSObjectDescriptor;
@@ -11,6 +16,7 @@ pub type Ri = usize;
 pub enum ResourceData {
     File(FSObjectDescriptor),
     DirIter(Mutex<CollectionIterDescriptor>),
+    TrackedMapping(Arc<TrackedMemoryMapping>),
 }
 
 impl ResourceData {
@@ -18,6 +24,14 @@ impl ResourceData {
         match self {
             Self::File(file) => Self::File(file.clone()),
             Self::DirIter(coll) => Self::DirIter(Mutex::new(coll.get_mut().clone())),
+            Self::TrackedMapping(mapping) => Self::TrackedMapping(mapping.clone()),
+        }
+    }
+
+    pub fn cloneable_to_different_address_space(&self) -> bool {
+        match self {
+            Self::TrackedMapping(_) => false,
+            _ => true,
         }
     }
 }
@@ -55,6 +69,11 @@ impl Resource {
     pub fn data(&self) -> &ResourceData {
         &self.data
     }
+
+    pub fn cloneable_to_different_address_space(&self) -> bool {
+        self.data.cloneable_to_different_address_space()
+            && self.global.load(core::sync::atomic::Ordering::Acquire)
+    }
 }
 
 pub struct ResourceManager {
@@ -89,7 +108,7 @@ impl ResourceManager {
         self.add_resource(Resource::new_global(data))
     }
 
-    fn add_local_resource(&mut self, data: ResourceData) -> Ri {
+    pub fn add_local_resource(&mut self, data: ResourceData) -> Ri {
         self.add_resource(Resource::new_local(data))
     }
 
@@ -102,19 +121,22 @@ impl ResourceManager {
         }
     }
 
-    pub fn overwrite_resources(&mut self, resources: Self) {
-        *self = resources;
-    }
-
     pub fn clone_resource(&mut self, ri: Ri) -> Option<Resource> {
         let resource = self.get_mut(ri)?;
+        // Only clones global resources
+        if !*resource.global.get_mut() {
+            return None;
+        }
+
         Some(resource.clone())
     }
 
     pub fn clone(&mut self) -> Self {
         let mut resources = HashMap::with_capacity(self.resources.capacity());
         for (res_id, res) in self.resources.iter_mut() {
-            resources.insert(*res_id, res.clone());
+            if res.cloneable_to_different_address_space() {
+                resources.insert(*res_id, res.clone());
+            }
         }
 
         Self {
@@ -176,15 +198,6 @@ where
 pub fn add_global_resource(resource_data: ResourceData) -> Ri {
     let this = process::current();
     this.resources_mut().add_global_resource(resource_data)
-}
-
-/// Adds a resource that lives as long as the current thread, to the current process
-pub fn add_local_resource(resource_data: ResourceData) -> Ri {
-    let curr_thread = thread::current();
-    let curr_proc = curr_thread.process();
-    let ri = curr_proc.resources_mut().add_local_resource(resource_data);
-    curr_thread.take_resource(ri);
-    ri
 }
 
 /// Duplicates a resource return the new duplicate resource's ID or None if that resource doesn't exist
