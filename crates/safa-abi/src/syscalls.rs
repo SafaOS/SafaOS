@@ -100,11 +100,29 @@ pub enum SyscallTable {
     SysReboot = 21,
     /// returns the Uptime of the system in milliseconds
     SysUptime = 27,
+    /// Maps N pages after a given address to memory that may be shared with a Device or a File
+    ///
+    /// The given address is a just a hint unless specified (not yet implemented) with the flag [`crate::mem::MemMapFlags::FIXED`], in that case unlike mmap in linux you cannot map colliding regions
+    /// The address can be null telling the kernel to choose it's own hint
+    ///
+    /// The given reosurce (the resource to map) is ignored unless otherwise specified with the flag [`crate::mem::MemMapFlags::MAP_RESOURCE`]
+    ///
+    /// Returns A Resource that tracks that Memory Mapping and the mappings start address,
+    /// By default the resource is a global resource meaning it lives as long as the process,
+    /// The resource's lifetime can be thread bound with the flag `F_LOCAL`, when the thread exits the resource will be dropped
+    ///
+    /// To Manually Drop the resource aside from relaying on lifetimes use [`SyscallTable::SysRDestroy`],
+    /// To Sync the Memory with the associated File or Device you can either destroy it, let it die or use [`SyscallTable::SysIOSync`]
+    ///
+    /// Other flags include:
+    /// - [crate::mem::MemMapFlags::WRITE]
+    /// - [crate::mem::MemMapFlags::DISABLE_EXEC]
+    SysMemMap = 36,
 }
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const NEXT_SYSCALL_NUM: u16 = 36;
+const NEXT_SYSCALL_NUM: u16 = 37;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();

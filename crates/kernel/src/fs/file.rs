@@ -24,7 +24,7 @@ impl File {
         self.0
     }
 
-    fn with_fd<T, R>(&self, then: T) -> R
+    pub fn with_fd<T, R>(&self, then: T) -> R
     where
         T: FnOnce(&FSObjectDescriptor) -> R,
     {
@@ -58,21 +58,13 @@ impl File {
 
     /// Read data from the file at the given offset into the provided buffer
     pub fn read(&self, offset: isize, buffer: &mut [u8]) -> FSResult<usize> {
-        let offset = if offset.is_negative() {
-            SeekOffset::End((-offset) as usize)
-        } else {
-            SeekOffset::Start(offset as usize)
-        };
+        let offset = SeekOffset::from(offset);
         self.with_fd(|fd| fd.read(offset, buffer))
     }
 
     /// Write data to the file at the given offset from the provided buffer
     pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
-        let offset = if offset.is_negative() {
-            SeekOffset::End((-offset) as usize)
-        } else {
-            SeekOffset::Start(offset as usize)
-        };
+        let offset = SeekOffset::from(offset);
         self.with_fd(|fd| fd.write(offset, buffer))
     }
 

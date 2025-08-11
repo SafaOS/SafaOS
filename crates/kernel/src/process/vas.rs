@@ -28,6 +28,10 @@ impl TrackedMemoryMapping {
         self.end_page.virt_addr()
     }
 
+    pub const fn start(&self) -> VirtAddr {
+        self.start_page.virt_addr()
+    }
+
     /// Syncs the writes done to this mapping to the underlying File Descriptor
     /// # Safety
     /// The caller must be in the same address space as the mapping
@@ -100,7 +104,9 @@ impl ProcVASA {
         let bytes_wanted = n * PAGE_SIZE;
         let guard_bytes = guard_pages * PAGE_SIZE;
 
-        let lookup_start = addr_hint.unwrap_or(self.lookup_start);
+        let lookup_start = addr_hint
+            .map(|a| a.to_next_page())
+            .unwrap_or(self.lookup_start);
         let mut looking_at = Page::containing_address(lookup_start);
 
         let (map_start, map_end) = loop {

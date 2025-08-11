@@ -16,6 +16,8 @@ use crate::{VirtAddr, arch::power};
 pub mod ffi;
 mod fs;
 mod io;
+/// SysMem syscalls implementation
+mod mem;
 /// SysP syscalls implementation
 mod process;
 /// SysT syscalls implementation
@@ -97,6 +99,10 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
                 let dest_uptime = <&mut u64>::make(a as *mut u64)?;
                 *dest_uptime = time!(ms);
             }),
+            // Memory
+            SyscallTable::SysMemMap => {
+                mem::sysmem_map_raw(a as *const _, b, c as *mut _, d as *mut _)
+            }
         }
     }
 

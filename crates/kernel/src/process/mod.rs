@@ -611,7 +611,7 @@ impl Process {
         self.resources.write()
     }
 
-    fn vasa<'s>(&'s self) -> MutexGuard<'s, ProcVASA> {
+    pub fn vasa<'s>(&'s self) -> MutexGuard<'s, ProcVASA> {
         self.vasa.lock()
     }
 

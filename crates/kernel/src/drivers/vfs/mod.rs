@@ -45,6 +45,16 @@ pub enum SeekOffset {
     End(usize),
 }
 
+impl From<isize> for SeekOffset {
+    fn from(value: isize) -> Self {
+        if value.is_negative() {
+            SeekOffset::End((-value) as usize - 1)
+        } else {
+            SeekOffset::Start(value as usize)
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum FSError {
     NotFound,
