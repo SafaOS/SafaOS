@@ -14,17 +14,27 @@ use crate::drivers::vfs::FSObjectDescriptor;
 pub type Ri = usize;
 
 pub enum ResourceData {
+    Null,
     File(FSObjectDescriptor),
     DirIter(Mutex<CollectionIterDescriptor>),
-    TrackedMapping(Arc<TrackedMemoryMapping>),
+    SharedTrackedMapping(Arc<TrackedMemoryMapping>),
+    TrackedMapping(TrackedMemoryMapping),
 }
 
 impl ResourceData {
     pub fn clone(&mut self) -> Self {
         match self {
+            ResourceData::Null => unreachable!(),
             Self::File(file) => Self::File(file.clone()),
             Self::DirIter(coll) => Self::DirIter(Mutex::new(coll.get_mut().clone())),
-            Self::TrackedMapping(mapping) => Self::TrackedMapping(mapping.clone()),
+            Self::SharedTrackedMapping(mapping) => Self::SharedTrackedMapping(mapping.clone()),
+            Self::TrackedMapping(_) => {
+                let Self::TrackedMapping(mapping) = core::mem::replace(self, Self::Null) else {
+                    unreachable!()
+                };
+                *self = Self::SharedTrackedMapping(Arc::new(mapping));
+                self.clone()
+            }
         }
     }
 
@@ -80,8 +90,10 @@ impl Resource {
     /// Must be called from the address space owning this resource
     pub unsafe fn sync(&self) -> FSResult<()> {
         match self.data() {
+            ResourceData::Null => unreachable!(),
             ResourceData::File(f) => f.sync(),
             ResourceData::TrackedMapping(m) => unsafe { m.sync().map(|_| ()) },
+            ResourceData::SharedTrackedMapping(m) => unsafe { m.sync().map(|_| ()) },
             ResourceData::DirIter(_) => Err(crate::drivers::vfs::FSError::OperationNotSupported),
         }
     }

@@ -6,7 +6,6 @@ use crate::process::resources;
 use crate::process::resources::ResourceData;
 use crate::syscalls::ErrorStatus;
 use crate::syscalls::SyscallFFI;
-use alloc::sync::Arc;
 use macros::syscall_handler;
 use safa_abi::mem::MemMapFlags;
 use safa_abi::mem::RawMemMapConfig;
@@ -80,7 +79,7 @@ pub fn sysmem_map(
 
     let start_addr = tracker.start();
     // TODO: Implement local option
-    let ri = resources::add_global_resource(ResourceData::TrackedMapping(Arc::new(tracker)));
+    let ri = resources::add_global_resource(ResourceData::TrackedMapping(tracker));
 
     if let Some(p) = out_res_id {
         *p = ri;

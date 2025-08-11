@@ -467,8 +467,8 @@ impl Process {
             )?
         };
 
-        resources.add_global_resource(ResourceData::TrackedMapping(Arc::new(thread_mem_tracker)));
-        resources.add_global_resource(ResourceData::TrackedMapping(Arc::new(ke_stack_tracker)));
+        resources.add_global_resource(ResourceData::TrackedMapping(thread_mem_tracker));
+        resources.add_global_resource(ResourceData::TrackedMapping(ke_stack_tracker));
 
         let process = Arc::new(Self::new(
             name,
@@ -541,10 +541,9 @@ impl Process {
         let thread = ArcThread::new(thread);
 
         let mut resources = process.resources_mut();
-        let th_mem_ri =
-            resources.add_local_resource(ResourceData::TrackedMapping(Arc::new(th_mem_tracker)));
+        let th_mem_ri = resources.add_local_resource(ResourceData::TrackedMapping(th_mem_tracker));
         let ke_stack_ri =
-            resources.add_local_resource(ResourceData::TrackedMapping(Arc::new(ke_stack_tracker)));
+            resources.add_local_resource(ResourceData::TrackedMapping(ke_stack_tracker));
 
         thread.take_resources(&[th_mem_ri, ke_stack_ri]);
         process.add_thread(thread.clone());
