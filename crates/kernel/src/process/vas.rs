@@ -1,15 +1,30 @@
 //! Process's Virtual Address Space related things
 
+use alloc::boxed::Box;
+
 use crate::{
     VirtAddr,
     arch::paging::PageTable,
-    drivers::vfs::{FSObjectDescriptor, FSResult, SeekOffset},
+    drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset},
     memory::{
         AlignToPage,
         frame_allocator::{self, Frame},
         paging::{self, MapToError, PAGE_SIZE, Page, PhysPageTable},
     },
 };
+
+pub trait MemMappedInterface {
+    fn frames(&self) -> Option<&[Frame]>;
+    fn sync(&self) -> FSResult<()> {
+        Ok(())
+    }
+
+    fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
+        _ = cmd;
+        _ = arg;
+        Err(FSError::OperationNotSupported)
+    }
+}
 
 /// A page aligned memory mapping that is unmapped (freed) when dropped
 ///
@@ -19,8 +34,7 @@ pub struct TrackedMemoryMapping {
     start_page: Page,
     end_page: Page,
 
-    descriptor_off: SeekOffset,
-    obj_descriptor: Option<FSObjectDescriptor>,
+    interface: Option<Box<dyn MemMappedInterface>>,
 }
 
 impl TrackedMemoryMapping {
@@ -35,18 +49,20 @@ impl TrackedMemoryMapping {
     /// Syncs the writes done to this mapping to the underlying File Descriptor
     /// # Safety
     /// The caller must be in the same address space as the mapping
-    pub unsafe fn sync(&self) -> FSResult<usize> {
-        let Some(ref desc) = self.obj_descriptor else {
-            return Ok(0);
-        };
+    pub unsafe fn sync(&self) -> FSResult<()> {
+        if let Some(ref int) = self.interface {
+            int.sync()
+        } else {
+            Ok(())
+        }
+    }
 
-        let start = self.start_page.virt_addr();
-        let end = self.end_page.virt_addr();
-        let len = end - start;
-        let start_ptr = start.into_ptr::<u8>();
-        let bytes = unsafe { core::slice::from_raw_parts(start_ptr, len) };
-
-        desc.write(self.descriptor_off, bytes)
+    pub fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
+        if let Some(ref int) = self.interface {
+            int.send_command(cmd, arg)
+        } else {
+            Err(FSError::OperationNotSupported)
+        }
     }
 }
 
@@ -157,24 +173,56 @@ impl ProcVASA {
     /// Returns a Tracker that frees the mapping on Drop
     /// # Returns
     /// The start address of the mapping
-    pub fn map_n_pages_tracked<I: Iterator<Item = Frame>>(
+    pub fn map_n_pages_tracked(
         &mut self,
         addr_hint: Option<VirtAddr>,
         n: usize,
         guard_pages: usize,
         flags: paging::EntryFlags,
-        frames_to_use: I,
-        tracked_fs_obj: Option<FSObjectDescriptor>,
-        fs_obj_offset: Option<SeekOffset>,
     ) -> Result<TrackedMemoryMapping, MapToError> {
         let (start_page, end_page) =
-            self.map_n_pages(addr_hint, n, guard_pages, flags, frames_to_use)?;
+            self.map_n_pages(addr_hint, n, guard_pages, flags, core::iter::empty())?;
         Ok(TrackedMemoryMapping {
             page_table: &mut *self.page_table,
             start_page,
             end_page,
-            obj_descriptor: tracked_fs_obj,
-            descriptor_off: fs_obj_offset.unwrap_or(SeekOffset::Start(0)),
+            interface: None,
+        })
+    }
+    /// Maps 'n' pages, taking `addr_hint` as a hint to where the mapping should start, using the flags `flags`
+    ///
+    /// Will use the `frames_to_use` iterator as frames to map to until it returns None, in that case it will use newly allocated frames
+    /// Returns a Tracker that frees the mapping on Drop
+    /// # Returns
+    /// The start address of the mapping
+    pub fn map_n_pages_tracked_fs(
+        &mut self,
+        addr_hint: Option<VirtAddr>,
+        n: usize,
+        guard_pages: usize,
+        flags: paging::EntryFlags,
+        tracked_fs_obj: Option<FSObjectDescriptor>,
+        fs_obj_offset: Option<SeekOffset>,
+    ) -> Result<TrackedMemoryMapping, FSError> {
+        let fs_obj_offset = fs_obj_offset.unwrap_or(SeekOffset::Start(0));
+        let interface = match tracked_fs_obj {
+            Some(d) => Some(d.open_mmap_interface(fs_obj_offset, n)?),
+            None => None,
+        };
+
+        let frames = if let Some(ref i) = interface {
+            i.frames().unwrap_or(&[])
+        } else {
+            &[]
+        };
+
+        let (start_page, end_page) =
+            self.map_n_pages(addr_hint, n, guard_pages, flags, frames.iter().copied())?;
+        Ok(TrackedMemoryMapping {
+            page_table: &mut *self.page_table,
+            start_page,
+            end_page,
+            interface,
         })
     }
 

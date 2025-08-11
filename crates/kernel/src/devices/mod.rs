@@ -2,6 +2,8 @@ pub mod framebuffer;
 pub mod serial;
 pub mod tty;
 
+use alloc::boxed::Box;
+
 use crate::{
     arch::serial::SERIAL,
     debug,
@@ -9,6 +11,7 @@ use crate::{
         framebuffer::FRAMEBUFFER_DRIVER,
         vfs::{self, FSError, FSResult, SeekOffset, VFS},
     },
+    process::vas::MemMappedInterface,
     terminal::FRAMEBUFFER_TERMINAL,
     time,
 };
@@ -48,6 +51,12 @@ pub trait Device: Send + Sync {
     }
     fn sync(&self) -> FSResult<()> {
         Ok(())
+    }
+
+    fn mmap(&self, offset: SeekOffset, page_count: usize) -> FSResult<Box<dyn MemMappedInterface>> {
+        _ = offset;
+        _ = page_count;
+        Err(FSError::OperationNotSupported)
     }
 }
 

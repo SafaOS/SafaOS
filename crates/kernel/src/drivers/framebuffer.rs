@@ -1,5 +1,11 @@
 use crate::{
+    VirtAddr,
+    arch::paging::current_higher_root_table,
     drivers::vfs::{FSError, FSResult, SeekOffset},
+    memory::{
+        frame_allocator::Frame,
+        paging::{PAGE_SIZE, Page},
+    },
     utils::locks::{Mutex, MutexGuard},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -35,15 +41,25 @@ pub struct FrameBuffer<'a> {
 }
 
 impl<'a> FrameBuffer<'a> {
-    pub fn new(video_buffer: &'a mut [u8], info: FrameBufferInfo) -> Self {
-        let mut pixel_buffer =
-            Vec::with_capacity_in((info.stride * info.height) * 4, &*GLOBAL_PAGE_ALLOCATOR);
+    pub fn new(
+        video_buffer: &'a mut [u8],
+        pixels_buffers_count: usize,
+        info: FrameBufferInfo,
+    ) -> Self {
+        let mut pixel_buffer = Vec::with_capacity_in(
+            (info.stride * info.height) * pixels_buffers_count,
+            &*GLOBAL_PAGE_ALLOCATOR,
+        );
         unsafe {
             pixel_buffer.set_len(pixel_buffer.capacity());
         }
 
         let pixel_buffer = pixel_buffer.into_boxed_slice();
-        debug!(FrameBuffer, "created ({}KiB)", pixel_buffer.len() / 1024);
+        debug!(
+            FrameBuffer,
+            "created ({}KiB)",
+            pixel_buffer.len() * 4 / 1024
+        );
 
         Self {
             info,
@@ -61,11 +77,12 @@ impl<'a> FrameBuffer<'a> {
 
     /// Writes the given bytes buffer to the framebuffer
     pub fn write_bytes(&mut self, offset: SeekOffset, bytes: &[u8]) -> FSResult<usize> {
-        let pb_ptr = self.pixel_buffer.as_ptr();
-        let pb_len = self.pixel_buffer.len();
+        let pixels = &self.pixel_buffer[self.buffer_display_index..];
+        let pb_ptr = pixels.as_ptr();
+        let pb_len = pixels.len();
 
         let pb_u8_ptr = pb_ptr as *mut u8;
-        let pb_u8_len = pb_len / size_of::<u32>();
+        let pb_u8_len = pb_len * size_of::<u32>();
         let pb_u8_buf = unsafe { core::slice::from_raw_parts_mut(pb_u8_ptr, pb_u8_len) };
         let pb_u8_buf = match offset {
             SeekOffset::Start(0) => pb_u8_buf,
@@ -172,20 +189,43 @@ impl<'a> FrameBuffer<'a> {
     }
 }
 pub struct FrameBufferDriver {
+    mapped_frames: Vec<Frame>,
     info: FrameBufferInfo,
     inner: Mutex<FrameBuffer<'static>>,
 }
 
 impl FrameBufferDriver {
-    pub fn create() -> Self {
+    pub fn frames(&self) -> &[Frame] {
+        &self.mapped_frames
+    }
+
+    pub fn create(pixel_buffers_count: usize) -> Self {
         let (video_buffer, info) = &*limine::LIMINE_FRAMEBUFFER;
         assert_eq!(info.bytes_per_pixel, 4);
         unsafe {
-            let framebuffer = FrameBuffer::new(*video_buffer.get(), *info);
+            let framebuffer = FrameBuffer::new(*video_buffer.get(), pixel_buffers_count, *info);
 
+            let pb = &framebuffer.pixel_buffer;
+            let ptr = pb.as_ptr();
+            let virt_addr = VirtAddr::from_ptr(ptr);
+
+            let len = pb.len() * 4;
+            let page_n = len / PAGE_SIZE;
+
+            let mut frames = Vec::with_capacity(page_n);
+            for i in 0..page_n {
+                let page_addr = virt_addr + i * PAGE_SIZE;
+                let page = Page::containing_address(page_addr);
+                let frame = current_higher_root_table()
+                    .get_frame(page)
+                    .expect("Failed to get Frame of a page belonging to a created double buffer");
+
+                frames.push(frame);
+            }
             Self {
                 info: *info,
                 inner: Mutex::new(framebuffer),
+                mapped_frames: frames,
             }
         }
     }
@@ -207,5 +247,5 @@ impl FrameBufferDriver {
 }
 
 lazy_static! {
-    pub static ref FRAMEBUFFER_DRIVER: FrameBufferDriver = FrameBufferDriver::create();
+    pub static ref FRAMEBUFFER_DRIVER: FrameBufferDriver = FrameBufferDriver::create(4);
 }

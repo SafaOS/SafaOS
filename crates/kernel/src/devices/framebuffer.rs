@@ -4,8 +4,10 @@ use crate::{
         framebuffer::FrameBufferDriver,
         vfs::{FSError, SeekOffset},
     },
+    process::vas::MemMappedInterface,
     syscalls::ffi::SyscallFFI,
 };
+use alloc::boxed::Box;
 use int_enum::IntEnum;
 
 #[repr(C)]
@@ -24,6 +26,21 @@ pub struct FramebufferDevInfo {
 enum Cmd {
     Sync,
     GetInfo,
+}
+
+impl MemMappedInterface for FrameBufferDriver {
+    fn frames(&self) -> Option<&[crate::memory::frame_allocator::Frame]> {
+        Some(self.frames())
+    }
+
+    fn sync(&self) -> crate::drivers::vfs::FSResult<()> {
+        self.buffer().sync_pixels_full();
+        Ok(())
+    }
+
+    fn send_command(&self, cmd: u16, arg: u64) -> crate::drivers::vfs::FSResult<()> {
+        Device::send_command(self, cmd, arg)
+    }
 }
 
 impl Device for FrameBufferDriver {
@@ -73,6 +90,19 @@ impl Device for FrameBufferDriver {
         }
 
         Ok(())
+    }
+
+    fn mmap(
+        &self,
+        offset: SeekOffset,
+        page_count: usize,
+    ) -> crate::drivers::vfs::FSResult<alloc::boxed::Box<dyn crate::process::vas::MemMappedInterface>>
+    {
+        // FIXME: offset and page counts are ignored for now
+        _ = offset;
+        _ = page_count;
+        let new = FrameBufferDriver::create(1);
+        Ok(Box::new(new))
     }
 }
 

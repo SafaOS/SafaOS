@@ -127,6 +127,17 @@ impl RamFSObject {
         }
     }
 
+    fn open_mmap_interface(
+        &self,
+        offset: SeekOffset,
+        page_count: usize,
+    ) -> FSResult<Box<dyn crate::process::vas::MemMappedInterface>> {
+        match self.state {
+            RamFSObjectState::StaticDevice(d) => d.mmap(offset, page_count),
+            _ => Err(FSError::OperationNotSupported),
+        }
+    }
+
     fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         match self.state {
             RamFSObjectState::StaticDevice(device) => device.send_command(cmd, arg),
@@ -517,5 +528,16 @@ impl FileSystem for RwLock<RamFS> {
         let read_guard = self.read();
         let obj = read_guard.fget(id).expect("Object not found in the ramfs");
         obj.attrs()
+    }
+
+    fn open_mmap_interface(
+        &self,
+        id: FSObjectID,
+        offset: SeekOffset,
+        page_count: usize,
+    ) -> FSResult<Box<dyn crate::process::vas::MemMappedInterface>> {
+        let read_guard = self.read();
+        let obj = read_guard.fget(id).expect("Object not found in the ramfs");
+        obj.open_mmap_interface(offset, page_count)
     }
 }

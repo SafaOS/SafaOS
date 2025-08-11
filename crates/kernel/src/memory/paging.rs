@@ -1,6 +1,7 @@
 pub const PAGE_SIZE: usize = 4096;
 use crate::{
     arch,
+    drivers::vfs::FSError,
     memory::{AlignToPage, PhysAddr},
 };
 use bitflags::bitflags;
@@ -241,6 +242,15 @@ impl IntoErr for MapToError {
         match self {
             Self::AlreadyMapped => safa_abi::errors::ErrorStatus::MMapError,
             Self::FrameAllocationFailed => safa_abi::errors::ErrorStatus::OutOfMemory,
+        }
+    }
+}
+
+impl From<MapToError> for FSError {
+    fn from(value: MapToError) -> Self {
+        match value {
+            MapToError::AlreadyMapped => FSError::MMapError,
+            MapToError::FrameAllocationFailed => FSError::OutOfMemory,
         }
     }
 }

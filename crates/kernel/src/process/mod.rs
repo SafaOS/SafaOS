@@ -241,15 +241,8 @@ impl Process {
             .unwrap_or(DEFAULT_STACK_SIZE)
             .to_next_page();
 
-        let thread_ke_stack_mapping = vasa.map_n_pages_tracked(
-            None,
-            stack_size / PAGE_SIZE,
-            GUARD_PAGES_COUNT,
-            flags,
-            core::iter::empty(),
-            None,
-            None,
-        )?;
+        let thread_ke_stack_mapping =
+            vasa.map_n_pages_tracked(None, stack_size / PAGE_SIZE, GUARD_PAGES_COUNT, flags)?;
 
         let ke_stack_end = thread_ke_stack_mapping.end();
 
@@ -264,15 +257,8 @@ impl Process {
             + extra_stack_bytes;
         let size = size.to_next_page();
 
-        let thread_space_mapping = vasa.map_n_pages_tracked(
-            None,
-            size / PAGE_SIZE,
-            GUARD_PAGES_COUNT,
-            flags,
-            core::iter::empty(),
-            None,
-            None,
-        )?;
+        let thread_space_mapping =
+            vasa.map_n_pages_tracked(None, size / PAGE_SIZE, GUARD_PAGES_COUNT, flags)?;
 
         let mapping_end = thread_space_mapping.end();
         let Some((master_tls_addr, tls_mem_size, tls_file_size, tls_alignment)) = master_tls else {

@@ -2,7 +2,7 @@ use super::ffi::SyscallFFI;
 use crate::{
     drivers::vfs::{FSError, FSResult},
     fs::{self, DirIterRef, FileRef},
-    process::resources::{self, Ri},
+    process::resources::{self, ResourceData, Ri},
     utils::path::Path,
 };
 
@@ -119,6 +119,13 @@ fn sysget_direntry(path: Path, dest_direntry: &mut DirEntry) -> FSResult<()> {
 }
 
 #[syscall_handler]
-fn sysio_command(fd: FileRef, cmd: u16, arg: u64) -> FSResult<()> {
-    fd.send_command(cmd, arg)
+fn sysio_command(ri: Ri, cmd: u16, arg: u64) -> FSResult<()> {
+    resources::get_resource(ri, |res| match res.data() {
+        ResourceData::File(f) => f.send_command(cmd, arg),
+        ResourceData::TrackedMapping(m) => m.send_command(cmd, arg),
+        ResourceData::SharedTrackedMapping(m) => m.send_command(cmd, arg),
+        _ => Err(FSError::OperationNotSupported),
+    })
+    .ok_or(FSError::InvalidResource)
+    .flatten()
 }

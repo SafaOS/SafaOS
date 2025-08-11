@@ -4,8 +4,12 @@ use crate::{
     debug,
     devices::{self, Device},
     error, limine,
-    memory::{frame_allocator, paging::PAGE_SIZE},
-    process, time,
+    memory::{
+        frame_allocator::{self},
+        paging::PAGE_SIZE,
+    },
+    process::{self, vas::MemMappedInterface},
+    time,
     utils::{
         path::PathParts,
         ustar::{self, TarArchiveIter},
@@ -74,6 +78,8 @@ pub enum FSError {
     InvalidCmd,
     InvalidArg,
     NotExecutable,
+    MMapError,
+    OutOfMemory,
 }
 
 impl Display for FSError {
@@ -100,6 +106,8 @@ impl IntoErr for FSError {
             Self::InvalidArg => ErrorStatus::InvalidArgument,
             Self::InvalidName | Self::PathTooLong => ErrorStatus::StrTooLong,
             Self::InvalidResource => ErrorStatus::InvalidResource,
+            Self::MMapError => ErrorStatus::MMapError,
+            Self::OutOfMemory => ErrorStatus::OutOfMemory,
         }
     }
 }
@@ -174,6 +182,14 @@ impl FSObjectDescriptor {
     pub fn sync(&self) -> FSResult<()> {
         self.id.sync()
     }
+
+    pub fn open_mmap_interface(
+        &self,
+        offset: SeekOffset,
+        page_count: usize,
+    ) -> FSResult<Box<dyn MemMappedInterface>> {
+        self.id.open_mmap_interface(offset, page_count)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +227,15 @@ impl VFSObjectID {
 
     pub fn sync(&self) -> FSResult<()> {
         self.fs.sync(self.fs_obj_id)
+    }
+
+    pub fn open_mmap_interface(
+        &self,
+        offset: SeekOffset,
+        page_count: usize,
+    ) -> FSResult<Box<dyn MemMappedInterface>> {
+        self.fs
+            .open_mmap_interface(self.fs_obj_id, offset, page_count)
     }
 }
 
@@ -364,6 +389,18 @@ pub trait FileSystem: Send + Sync {
 
     fn sync(&self, id: FSObjectID) -> FSResult<()> {
         _ = id;
+        Err(FSError::OperationNotSupported)
+    }
+
+    fn open_mmap_interface(
+        &self,
+        id: FSObjectID,
+        offset: SeekOffset,
+        page_count: usize,
+    ) -> FSResult<Box<dyn MemMappedInterface>> {
+        _ = id;
+        _ = offset;
+        _ = page_count;
         Err(FSError::OperationNotSupported)
     }
 

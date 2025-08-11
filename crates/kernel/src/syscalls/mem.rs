@@ -67,12 +67,11 @@ pub fn sysmem_map(
 
     let curr_proc = process::current();
     let mut vasa = curr_proc.vasa();
-    let tracker = vasa.map_n_pages_tracked(
+    let tracker = vasa.map_n_pages_tracked_fs(
         addr_hint,
         page_count,
         guard_pages_count,
         mem_flags,
-        core::iter::empty(),
         file_desc,
         resource_off,
     )?;
