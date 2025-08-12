@@ -4,7 +4,7 @@ use core::fmt::Write;
 use core::ops::{Deref, DerefMut};
 use core::str;
 
-use crate::memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc};
+use crate::memory::page_allocator::PageAlloc;
 use alloc::vec::Vec;
 
 use super::bstr::BStr;
@@ -14,11 +14,11 @@ pub struct PageVec<T>(Vec<T, PageAlloc>);
 
 impl<T> PageVec<T> {
     pub fn with_capacity(capacity: usize) -> Self {
-        Self(Vec::with_capacity_in(capacity, &*GLOBAL_PAGE_ALLOCATOR))
+        Self(Vec::with_capacity_in(capacity, PageAlloc))
     }
 
-    pub fn new() -> Self {
-        Self(Vec::new_in(&*GLOBAL_PAGE_ALLOCATOR))
+    pub const fn new() -> Self {
+        Self(Vec::new_in(PageAlloc))
     }
 }
 

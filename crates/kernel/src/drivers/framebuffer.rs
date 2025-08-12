@@ -11,11 +11,7 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use lazy_static::lazy_static;
 
-use crate::{
-    debug, limine,
-    memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc},
-    utils::display::RGB,
-};
+use crate::{debug, limine, memory::page_allocator::PageAlloc, utils::display::RGB};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -48,7 +44,7 @@ impl<'a> FrameBuffer<'a> {
     ) -> Self {
         let mut pixel_buffer = Vec::with_capacity_in(
             (info.stride * info.height) * pixels_buffers_count,
-            &*GLOBAL_PAGE_ALLOCATOR,
+            PageAlloc,
         );
         unsafe {
             pixel_buffer.set_len(pixel_buffer.capacity());

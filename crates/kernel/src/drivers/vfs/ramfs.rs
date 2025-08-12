@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::drivers::vfs::{FSObjectID, FSObjectType, SeekOffset};
-use crate::memory::page_allocator::{GLOBAL_PAGE_ALLOCATOR, PageAlloc};
+use crate::memory::page_allocator::PageAlloc;
 use crate::utils::alloc::PageVec;
 use crate::utils::locks::RwLock;
 use crate::utils::path::PathParts;
@@ -264,7 +264,7 @@ impl RamFS {
         let id = self.next_id;
         self.next_id += 1;
 
-        let mut collection = HashMap::new_in(&*GLOBAL_PAGE_ALLOCATOR);
+        let mut collection = HashMap::new_in(PageAlloc);
         // don't increase the reference count because these are going to be deleted when the directory is deleted, and the directory will be treated as empty
         let previous_dir_name = FileName::new_const("..");
         let current_dir_name = FileName::new_const(".");
@@ -301,7 +301,7 @@ impl RamFS {
 
 impl RamFS {
     pub fn create() -> Self {
-        let root_collection = HashMap::new_in(&*GLOBAL_PAGE_ALLOCATOR);
+        let root_collection = HashMap::new_in(PageAlloc);
         let root_obj = RamFSObject::new(RamFSObjectState::Collection(root_collection));
         let mut objects = HashMap::new();
         objects.insert(0, root_obj);

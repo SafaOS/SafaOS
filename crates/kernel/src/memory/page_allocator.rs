@@ -306,10 +306,58 @@ unsafe impl Allocator for Mutex<PageAllocator> {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_PAGE_ALLOCATOR: Mutex<PageAllocator> = Mutex::new(PageAllocator::new());
+    static ref GLOBAL_PAGE_ALLOCATOR: Mutex<PageAllocator> = Mutex::new(PageAllocator::new());
 }
 
-pub type PageAlloc = &'static Mutex<PageAllocator>;
+#[derive(Clone)]
+pub struct PageAlloc;
+
+unsafe impl Allocator for PageAlloc {
+    fn allocate(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        GLOBAL_PAGE_ALLOCATOR.allocate(layout)
+    }
+
+    fn allocate_zeroed(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        GLOBAL_PAGE_ALLOCATOR.allocate_zeroed(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+        unsafe { GLOBAL_PAGE_ALLOCATOR.deallocate(ptr, layout) }
+    }
+
+    unsafe fn grow(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        unsafe { GLOBAL_PAGE_ALLOCATOR.grow(ptr, old_layout, new_layout) }
+    }
+
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        unsafe { GLOBAL_PAGE_ALLOCATOR.grow_zeroed(ptr, old_layout, new_layout) }
+    }
+
+    unsafe fn shrink(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        unsafe { GLOBAL_PAGE_ALLOCATOR.shrink(ptr, old_layout, new_layout) }
+    }
+}
 
 #[test_case]
 fn page_allocator_test() {
