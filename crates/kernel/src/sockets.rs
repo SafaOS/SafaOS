@@ -29,31 +29,35 @@ pub enum SocketError {
     WouldBlockEmpty,
     /// Should Block because the Socket is full and we are trying to append to it
     WouldBlockFull,
+    /// Should Block because of an attempted accept while there are no connection requests pending
+    WouldBlockNoConnectionRequests,
     /// Attempted to write data that is too large
     TooLarge,
     /// One side closed the connection
     ConnectionClosed,
+    /// Connection refused for some reason
+    ConnectionRefused,
 }
 
 const MAX_STREAM_SIZE: usize = PAGE_SIZE;
 struct SocketStreamConn {
-    server_buf: heapless::Vec<u8, MAX_STREAM_SIZE>,
-    client_buf: heapless::Vec<u8, MAX_STREAM_SIZE>,
+    server_buf: Mutex<heapless::Vec<u8, MAX_STREAM_SIZE>>,
+    client_buf: Mutex<heapless::Vec<u8, MAX_STREAM_SIZE>>,
 }
 
 impl SocketStreamConn {
     pub const fn new() -> Self {
         Self {
-            server_buf: heapless::Vec::new(),
-            client_buf: heapless::Vec::new(),
+            server_buf: Mutex::new(heapless::Vec::new()),
+            client_buf: Mutex::new(heapless::Vec::new()),
         }
     }
 
-    fn read_inner<const IS_SERVER: bool>(&mut self, buf: &mut [u8]) -> Result<usize, SocketError> {
-        let to_read_from = if IS_SERVER {
-            &mut self.server_buf
+    fn read_inner<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+        let mut to_read_from = if IS_SERVER {
+            self.server_buf.lock()
         } else {
-            &mut self.client_buf
+            self.client_buf.lock()
         };
         let max_len = to_read_from.len();
 
@@ -69,11 +73,11 @@ impl SocketStreamConn {
         Ok(read_len)
     }
 
-    fn write_inner<const IS_SERVER: bool>(&mut self, buf: &[u8]) -> Result<(), SocketError> {
-        let to_write_to = if IS_SERVER {
-            &mut self.server_buf
+    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
+        let mut to_write_to = if IS_SERVER {
+            self.server_buf.lock()
         } else {
-            &mut self.client_buf
+            self.client_buf.lock()
         };
 
         if buf.len() >= MAX_STREAM_SIZE {
@@ -88,24 +92,24 @@ impl SocketStreamConn {
 
 struct SocketSeqPacketConn {
     inner: SocketStreamConn,
-    server_packets: LinkedList<usize>,
-    client_packets: LinkedList<usize>,
+    server_packets: Mutex<LinkedList<usize>>,
+    client_packets: Mutex<LinkedList<usize>>,
 }
 
 impl SocketSeqPacketConn {
     pub const fn new() -> Self {
         Self {
             inner: SocketStreamConn::new(),
-            server_packets: LinkedList::new(),
-            client_packets: LinkedList::new(),
+            server_packets: Mutex::new(LinkedList::new()),
+            client_packets: Mutex::new(LinkedList::new()),
         }
     }
 
-    fn read_inner<const IS_SERVER: bool>(&mut self, buf: &mut [u8]) -> Result<usize, SocketError> {
-        let to_read_from = if IS_SERVER {
-            &mut self.server_packets
+    fn read_inner<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+        let mut to_read_from = if IS_SERVER {
+            self.server_packets.lock()
         } else {
-            &mut self.client_packets
+            self.client_packets.lock()
         };
 
         let Some(msg_len) = to_read_from.pop_front() else {
@@ -116,11 +120,12 @@ impl SocketSeqPacketConn {
         self.inner.read_inner::<IS_SERVER>(&mut buf[..amount])
     }
 
-    fn write_inner<const IS_SERVER: bool>(&mut self, buf: &[u8]) -> Result<(), SocketError> {
-        let to_write_to = if IS_SERVER {
-            &mut self.server_packets
+    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
+        if buf.len() == 0 {}
+        let mut to_write_to = if IS_SERVER {
+            self.server_packets.lock()
         } else {
-            &mut self.client_packets
+            self.client_packets.lock()
         };
 
         self.inner.write_inner::<IS_SERVER>(buf)?;
@@ -138,9 +143,9 @@ trait GenericSockConnTrait {
         Self: Sized;
 
     /// A Write operation
-    fn write<const TARGETS_SERVER: bool>(&mut self, buf: &[u8]) -> Result<(), SocketError>;
+    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError>;
     /// A Read operation
-    fn read<const IS_SERVER: bool>(&mut self, buf: &mut [u8]) -> Result<usize, SocketError>;
+    fn read<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError>;
 }
 
 impl GenericSockConnTrait for SocketStreamConn {
@@ -151,11 +156,11 @@ impl GenericSockConnTrait for SocketStreamConn {
         Self::new()
     }
 
-    fn read<const IS_SERVER: bool>(&mut self, buf: &mut [u8]) -> Result<usize, SocketError> {
+    fn read<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
         self.read_inner::<IS_SERVER>(buf)
     }
 
-    fn write<const TARGETS_SERVER: bool>(&mut self, buf: &[u8]) -> Result<(), SocketError> {
+    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
         self.write_inner::<TARGETS_SERVER>(buf)
     }
 }
@@ -165,17 +170,17 @@ impl GenericSockConnTrait for SocketSeqPacketConn {
         Self::new()
     }
 
-    fn read<const IS_SERVER: bool>(&mut self, buf: &mut [u8]) -> Result<usize, SocketError> {
+    fn read<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
         self.read_inner::<IS_SERVER>(buf)
     }
 
-    fn write<const TARGETS_SERVER: bool>(&mut self, buf: &[u8]) -> Result<(), SocketError> {
+    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
         self.write_inner::<TARGETS_SERVER>(buf)
     }
 }
 
 struct GenericSockConn<T: GenericSockConnTrait> {
-    inner_conn: Mutex<T>,
+    inner_conn: T,
     available_server: AtomicUsize,
     available_cli: AtomicUsize,
     conn_dropped: AtomicBool,
@@ -184,7 +189,7 @@ struct GenericSockConn<T: GenericSockConnTrait> {
 impl<T: GenericSockConnTrait> GenericSockConn<T> {
     fn new() -> Self {
         Self {
-            inner_conn: Mutex::new(T::new()),
+            inner_conn: T::new(),
             available_cli: AtomicUsize::new(0),
             available_server: AtomicUsize::new(0),
             conn_dropped: AtomicBool::new(false),
@@ -202,17 +207,14 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
             &self.available_cli
         };
 
-        let results = self.inner_conn.lock().read::<IS_SERVER>(buf);
+        let results = self.inner_conn.read::<IS_SERVER>(buf);
         match results {
             Ok(r) => {
-                update.fetch_sub(r, core::sync::atomic::Ordering::SeqCst);
+                update.fetch_sub(r, Ordering::SeqCst);
                 Ok(r)
             }
             Err(SocketError::WouldBlockEmpty) if can_block => {
-                if self
-                    .conn_dropped
-                    .load(core::sync::atomic::Ordering::Acquire)
-                {
+                if self.conn_dropped.load(Ordering::Acquire) {
                     return Err(SocketError::ConnectionClosed);
                 }
 
@@ -228,10 +230,7 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
         buf: &[u8],
         can_block: bool,
     ) -> Result<(), SocketError> {
-        if self
-            .conn_dropped
-            .load(core::sync::atomic::Ordering::Acquire)
-        {
+        if self.conn_dropped.load(Ordering::Acquire) {
             return Err(SocketError::ConnectionClosed);
         }
 
@@ -241,17 +240,14 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
             &self.available_cli
         };
 
-        let results = self.inner_conn.lock().write::<TARGETS_SERVER>(buf);
+        let results = self.inner_conn.write::<TARGETS_SERVER>(buf);
         match results {
             Ok(()) => {
-                update.fetch_add(buf.len(), core::sync::atomic::Ordering::SeqCst);
+                update.fetch_add(buf.len(), Ordering::SeqCst);
                 Ok(())
             }
             Err(SocketError::WouldBlockFull) if can_block => {
-                if self
-                    .conn_dropped
-                    .load(core::sync::atomic::Ordering::Acquire)
-                {
+                if self.conn_dropped.load(Ordering::Acquire) {
                     return Err(SocketError::ConnectionClosed);
                 }
 
@@ -271,8 +267,7 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
     }
 
     fn mark_dropped(&self) {
-        self.conn_dropped
-            .store(true, core::sync::atomic::Ordering::Release);
+        self.conn_dropped.store(true, Ordering::Release);
     }
 }
 
@@ -552,7 +547,7 @@ impl SockQueue {
         }
     }
 }
-static SOCKET_ABSTRACT_BINDINGS: Mutex<heapless::FnvIndexMap<Name, SockID, 32>> =
+static SOCKET_ABSTRACT_BINDINGS: Mutex<heapless::FnvIndexMap<Name, SockID, 4096>> =
     Mutex::new(heapless::FnvIndexMap::new());
 
 lazy_static! {
@@ -607,7 +602,7 @@ impl ServerSocketDesc {
     }
 
     /// As the server, accept a connection from the listening Queue
-    pub fn accept(&self) -> Result<SocketServerConn, ()> {
+    pub fn accept(&self) -> Result<SocketServerConn, SocketError> {
         let mut listen_queue = self.listen_queue.lock();
         let Some(ptr) = listen_queue.pop() else {
             // Once a connection is available
@@ -621,7 +616,7 @@ impl ServerSocketDesc {
                 debug_assert!(!self.socket_dropped.load(Ordering::Acquire));
                 return self.accept();
             } else {
-                return Err(());
+                return Err(SocketError::WouldBlockNoConnectionRequests);
             }
         };
 
@@ -651,7 +646,7 @@ impl Deref for CliSocketDesc {
 impl CliSocketDesc {
     /// As a client connect with the server
     /// returns an Error if the server dropped the socket while we were trying to connect
-    pub fn connect(&self) -> Result<SocketClientConn, ()> {
+    pub fn connect(&self) -> Result<SocketClientConn, SocketError> {
         // Create stuff in the higher half
         let mut boxed = Box::new((MaybeUninit::uninit(), AtomicBool::new(false)));
 
@@ -666,7 +661,7 @@ impl CliSocketDesc {
             if self.socket_dropped.load(Ordering::Acquire) {
                 // We got wake signal because the socket was dropped by the server and therefore
                 // We must return an error
-                return Err(());
+                return Err(SocketError::ConnectionRefused);
             }
 
             let conn = boxed.0.assume_init();
@@ -777,7 +772,7 @@ fn ipc_stream_test_inner() {
     drop(sock_desc);
     drop(connection);
 
-    while !SOCKET_DROPPED.load(core::sync::atomic::Ordering::Acquire) {}
+    while !SOCKET_DROPPED.load(Ordering::Acquire) {}
     assert!(
         weak_sock.strong_count() == 0,
         "The socket has a tailing reference, got {} references",
