@@ -4,15 +4,15 @@ use core::{
     cell::UnsafeCell,
     ops::Deref,
     ptr::NonNull,
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
 
 use crate::{
-    arch::threading::CPUStatus,
+    arch::{threading::CPUStatus, without_interrupts},
     debug, eve,
     process::{Pid, Process, resources::Ri},
     scheduler::Scheduler,
-    time,
+    thread, time,
     utils::locks::{Mutex, SpinLock, SpinLockGuard},
 };
 
@@ -62,6 +62,19 @@ pub enum BlockedReason {
         timeout_wake_at: u128,
     },
     BlockedForever,
+    BlockSocketEmpty {
+        conn_dropped: *const AtomicBool,
+        update: *const AtomicUsize,
+    },
+    BlockSocketFull {
+        conn_dropped: *const AtomicBool,
+        update: *const AtomicUsize,
+        required_value: usize,
+    },
+    /// Waits until wakeup is true
+    WaitForSignal {
+        wakeup: *const AtomicBool,
+    },
 }
 
 impl BlockedReason {
@@ -74,6 +87,21 @@ impl BlockedReason {
             Self::WaitingForProcess(process) => !process.is_alive(),
             Self::WaitingForThread(thread) => thread.is_dead(),
             Self::BlockedForever => false,
+            Self::BlockSocketEmpty {
+                conn_dropped,
+                update,
+            } => unsafe {
+                (**conn_dropped).load(Ordering::Acquire) || (**update).load(Ordering::SeqCst) > 0
+            },
+            Self::BlockSocketFull {
+                conn_dropped,
+                update,
+                required_value,
+            } => unsafe {
+                (**conn_dropped).load(Ordering::Acquire)
+                    || (**update).load(Ordering::SeqCst) <= *required_value
+            },
+            Self::WaitForSignal { wakeup } => unsafe { (**wakeup).load(Ordering::Acquire) },
         }
     }
 }
@@ -451,6 +479,54 @@ impl Thread {
         }));
 
         timeout_at
+    }
+
+    /// Waits for an empty socket to have data to read
+    ///
+    /// # Safety
+    /// very safe to call from the current thread as long as the references are in the higher half
+    pub fn wait_for_empty_socket(&self, data_ava_info: &AtomicUsize, conn_dropped: &AtomicBool) {
+        without_interrupts(|| {
+            self.set_status(ContextStatus::Blocked(BlockedReason::BlockSocketEmpty {
+                conn_dropped,
+                update: data_ava_info,
+            }));
+
+            thread::current::yield_now();
+        });
+    }
+
+    /// Waits for a full socket to have `required_data_to_write` more data to read
+    ///
+    /// # Safety
+    /// Very safe to call from the current thread as long as the references are in the higher half
+    pub unsafe fn wait_for_full_socket(
+        &self,
+        data_ava_info: &AtomicUsize,
+        conn_dropped: &AtomicBool,
+        max_data_to_write: usize,
+        required_data_to_write: usize,
+    ) {
+        without_interrupts(|| {
+            self.set_status(ContextStatus::Blocked(BlockedReason::BlockSocketFull {
+                conn_dropped,
+                update: data_ava_info,
+                required_value: max_data_to_write - required_data_to_write,
+            }));
+            thread::current::yield_now();
+        });
+    }
+    /// Waits for `wakeup` to be true
+    ///
+    /// # Safety
+    /// Very safe to call from the current thread as long as the references are in the higher half
+    pub unsafe fn wait_for_wake_signal(&self, wakeup: &AtomicBool) {
+        without_interrupts(|| {
+            self.set_status(ContextStatus::Blocked(BlockedReason::WaitForSignal {
+                wakeup,
+            }));
+            thread::current::yield_now();
+        })
     }
 }
 

@@ -37,6 +37,7 @@ mod logging;
 mod memory;
 mod process;
 mod scheduler;
+mod sockets;
 mod syscalls;
 mod terminal;
 mod thread;
@@ -51,7 +52,6 @@ use globals::*;
 
 pub use memory::PhysAddr;
 pub use memory::VirtAddr;
-use spin::Mutex;
 use terminal::FRAMEBUFFER_TERMINAL;
 
 #[macro_export]
@@ -152,6 +152,7 @@ use core::sync::atomic::AtomicUsize;
 use crate::arch::registers::CPUID;
 use crate::arch::serial::SERIAL;
 use crate::arch::without_interrupts;
+use crate::utils::locks::SpinLock;
 
 static PANCIKED: AtomicUsize = AtomicUsize::new(0);
 const MAX_PANICK_COUNT: usize = 3;
@@ -163,7 +164,7 @@ fn panic(info: &PanicInfo) -> ! {
             arch::halt_all();
         }
 
-        static _PANICK_LOCK: Mutex<()> = Mutex::new(());
+        static _PANICK_LOCK: SpinLock<()> = SpinLock::new(());
         let _guard = _PANICK_LOCK.lock();
 
         if PANCIKED.fetch_add(1, core::sync::atomic::Ordering::Release) >= MAX_PANICK_COUNT {
