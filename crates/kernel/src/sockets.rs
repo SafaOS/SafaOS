@@ -462,11 +462,12 @@ impl Drop for SocketServerConn {
 }
 
 pub struct Socket {
-    _domain: SocketDomain,
     can_block: bool,
     sock_type: SocketType,
+
     listen_queue: Mutex<Vec<*mut (MaybeUninit<SocketClientConn>, AtomicBool)>>,
     listen_queue_available: AtomicBool,
+    listen_queue_max: AtomicUsize,
 
     socket_dropped: AtomicBool,
 }
@@ -517,9 +518,11 @@ impl SockQueue {
         kind: SocketKind,
         can_block: bool,
     ) -> ServerSocketDesc {
+        _ = domain;
+
         let id = self.next_id;
         let sock = Socket {
-            _domain: domain,
+            listen_queue_max: AtomicUsize::new(0),
             can_block,
             sock_type: match kind {
                 SocketKind::SeqPacket => {
@@ -601,6 +604,11 @@ impl ServerSocketDesc {
         )
     }
 
+    /// Configures the listen queue to be able to hold `backlog` connection requests
+    pub fn configure_listen_queue(&self, backlog: usize) {
+        self.listen_queue_max.store(backlog, Ordering::Release);
+    }
+
     /// As the server, accept a connection from the listening Queue
     pub fn accept(&self) -> Result<SocketServerConn, SocketError> {
         let mut listen_queue = self.listen_queue.lock();
@@ -647,10 +655,13 @@ impl CliSocketDesc {
     /// As a client connect with the server
     /// returns an Error if the server dropped the socket while we were trying to connect
     pub fn connect(&self) -> Result<SocketClientConn, SocketError> {
+        let mut queue = self.listen_queue.lock();
+        if self.listen_queue_max.load(Ordering::Acquire) <= queue.len() + 1 {
+            return Err(SocketError::ConnectionRefused);
+        }
+
         // Create stuff in the higher half
         let mut boxed = Box::new((MaybeUninit::uninit(), AtomicBool::new(false)));
-
-        let mut queue = self.listen_queue.lock();
         queue.push(&mut *boxed);
         drop(queue);
         // Wake up the server waiting to accept
@@ -744,6 +755,7 @@ fn ipc_stream_test_inner() {
 
     *BINDED_SOCKET.lock() = sock_desc.id;
     bind_abstract_socket(name, sock_desc.id);
+    sock_desc.configure_listen_queue(1);
 
     // Spawn a second thread
     kernel_thread_spawn(test_thread, &(), None, None)
@@ -824,6 +836,7 @@ fn ipc_seqpacket_test_inner() {
 
     let sock_desc = create_socket(SocketDomain::Unix, SocketKind::SeqPacket, true);
     bind_abstract_socket(name, sock_desc.id);
+    sock_desc.configure_listen_queue(1);
 
     // Spawn a second thread
     kernel_thread_spawn(test_thread, &(), None, None)
