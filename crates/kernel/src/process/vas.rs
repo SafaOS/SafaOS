@@ -69,6 +69,7 @@ impl TrackedMemoryMapping {
 impl Drop for TrackedMemoryMapping {
     fn drop(&mut self) {
         unsafe {
+            _ = self.sync();
             (*self.page_table).free_unmap(self.start_page.virt_addr(), self.end_page.virt_addr());
         }
     }

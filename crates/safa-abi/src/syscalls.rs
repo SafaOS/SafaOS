@@ -105,7 +105,7 @@ pub enum SyscallTable {
     /// The given address is a just a hint unless specified (not yet implemented) with the flag [`crate::mem::MemMapFlags::FIXED`], in that case unlike mmap in linux you cannot map colliding regions
     /// The address can be null telling the kernel to choose it's own hint
     ///
-    /// The given reosurce (the resource to map) is ignored unless otherwise specified with the flag [`crate::mem::MemMapFlags::MAP_RESOURCE`]
+    /// The given Resource (the Resource to map) is ignored unless otherwise specified with the flag [`crate::mem::MemMapFlags::MAP_RESOURCE`]
     ///
     /// Returns A Resource that tracks that Memory Mapping and the mappings start address,
     /// By default the resource is a global resource meaning it lives as long as the process,
@@ -118,11 +118,30 @@ pub enum SyscallTable {
     /// - [crate::mem::MemMapFlags::WRITE]
     /// - [crate::mem::MemMapFlags::DISABLE_EXEC]
     SysMemMap = 36,
+    // Sockets
+    /// Creates a Socket Descriptor resource
+    ///
+    /// That resource just describes properties of the socket, and then can be upgraded using a [`SyscallTable::SysSocketBind`] to a Server Socket,
+    /// or can be used to connect to one
+    SysSockCreate = 37,
+    /// Binds a Server Socket or binds and upgrades a Socket Descriptor created [`SyscallTable::SysSockCreate`] to a Server Socket Resource
+    /// and binds it to an address
+    SysSockBind = 38,
+    /// Configures a Server Socket's, binded with [`SyscallTable::SysSockBind`], listening queue, by default the socket cannot hold any pending connections before calling this
+    SysSockListen = 39,
+    /// Accepts a pending connection request from the listening queue configured with [`SyscallTable::SysSockListen`] takes in a Server Socket,
+    /// the pending connection request has been made using [`SyscallTable::SysSockConnect`], returns a Resource describing the server's end of the connection
+    SysSockAccept = 40,
+    /// Takes in a Socket Descriptor created with [`SyscallTable::SysSockCreate`], and a Server Socket address
+    ///
+    /// and attempts to connect to a Server Socket binded using [`SyscallTable::SysSockBind`],
+    /// returns a Resource describing the client's end of the connection
+    SysSockConnect = 41,
 }
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const NEXT_SYSCALL_NUM: u16 = 37;
+const NEXT_SYSCALL_NUM: u16 = 42;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();

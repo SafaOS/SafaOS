@@ -74,6 +74,7 @@ pub enum FSError {
     MissingPermission,
     OperationNotSupported,
     InvalidResource,
+    UnsupportedResource,
     AlreadyExists,
     InvalidCmd,
     InvalidArg,
@@ -105,7 +106,8 @@ impl IntoErr for FSError {
             Self::InvalidCmd => ErrorStatus::InvalidCommand,
             Self::InvalidArg => ErrorStatus::InvalidArgument,
             Self::InvalidName | Self::PathTooLong => ErrorStatus::StrTooLong,
-            Self::InvalidResource => ErrorStatus::InvalidResource,
+            Self::InvalidResource => ErrorStatus::UnknownResource,
+            Self::UnsupportedResource => ErrorStatus::UnsupportedResource,
             Self::MMapError => ErrorStatus::MMapError,
             Self::OutOfMemory => ErrorStatus::OutOfMemory,
         }

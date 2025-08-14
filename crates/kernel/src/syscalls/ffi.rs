@@ -169,14 +169,20 @@ impl_ffi_int!(i64);
 impl SyscallFFI for File {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        File::from_fd(args).ok_or(ErrorStatus::InvalidResource)
+        File::from_fd(args)
+            .map(|s| s.map_err(|()| ErrorStatus::UnsupportedResource))
+            .ok_or(ErrorStatus::UnknownResource)
+            .flatten()
     }
 }
 
 impl SyscallFFI for DirIter {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        DirIter::from_ri(args).ok_or(ErrorStatus::InvalidResource)
+        DirIter::from_ri(args)
+            .map(|s| s.map_err(|()| ErrorStatus::UnsupportedResource))
+            .ok_or(ErrorStatus::UnknownResource)
+            .flatten()
     }
 }
 

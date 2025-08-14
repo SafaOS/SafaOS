@@ -3,10 +3,12 @@ use core::{fmt::Debug, sync::atomic::AtomicBool};
 use crate::{
     drivers::vfs::{CollectionIterDescriptor, FSResult},
     process::{self, vas::TrackedMemoryMapping},
+    sockets::{ServerSocketDesc, SocketClientConn, SocketDomain, SocketKind, SocketServerConn},
     utils::locks::Mutex,
 };
 use alloc::sync::Arc;
 use hashbrown::HashMap;
+use safa_abi::errors::ErrorStatus;
 
 use crate::drivers::vfs::FSObjectDescriptor;
 
@@ -14,27 +16,37 @@ use crate::drivers::vfs::FSObjectDescriptor;
 pub type Ri = usize;
 
 pub enum ResourceData {
-    Null,
     File(FSObjectDescriptor),
     DirIter(Mutex<CollectionIterDescriptor>),
-    SharedTrackedMapping(Arc<TrackedMemoryMapping>),
     TrackedMapping(TrackedMemoryMapping),
+    SocketDesc {
+        domain: SocketDomain,
+        kind: SocketKind,
+        can_block: bool,
+    },
+    ServerSocket(ServerSocketDesc),
+    ServerSocketConn(SocketServerConn),
+    ClientSocketConn(SocketClientConn),
 }
 
 impl ResourceData {
-    pub fn clone(&mut self) -> Self {
+    pub fn try_clone(&self) -> Result<Self, ()> {
         match self {
-            ResourceData::Null => unreachable!(),
-            Self::File(file) => Self::File(file.clone()),
-            Self::DirIter(coll) => Self::DirIter(Mutex::new(coll.get_mut().clone())),
-            Self::SharedTrackedMapping(mapping) => Self::SharedTrackedMapping(mapping.clone()),
-            Self::TrackedMapping(_) => {
-                let Self::TrackedMapping(mapping) = core::mem::replace(self, Self::Null) else {
-                    unreachable!()
-                };
-                *self = Self::SharedTrackedMapping(Arc::new(mapping));
-                self.clone()
-            }
+            Self::File(file) => Ok(Self::File(file.clone())),
+            Self::DirIter(coll) => Ok(Self::DirIter(Mutex::new(coll.lock().clone()))),
+            Self::SocketDesc {
+                domain,
+                kind,
+                can_block,
+            } => Ok(Self::SocketDesc {
+                domain: *domain,
+                kind: *kind,
+                can_block: *can_block,
+            }),
+            Self::ServerSocket(_)
+            | Self::ClientSocketConn(_)
+            | Self::ServerSocketConn(_)
+            | Self::TrackedMapping(_) => Err(()),
         }
     }
 
@@ -69,11 +81,11 @@ impl Resource {
         Self::new(data, false)
     }
 
-    pub fn clone(&mut self) -> Self {
-        Self {
-            data: self.data.clone(),
-            global: AtomicBool::new(*self.global.get_mut()),
-        }
+    pub fn try_clone(&self) -> Result<Self, ()> {
+        Ok(Self {
+            data: self.data.try_clone()?,
+            global: AtomicBool::new(self.global.load(core::sync::atomic::Ordering::Acquire)),
+        })
     }
 
     pub fn data(&self) -> &ResourceData {
@@ -90,17 +102,21 @@ impl Resource {
     /// Must be called from the address space owning this resource
     pub unsafe fn sync(&self) -> FSResult<()> {
         match self.data() {
-            ResourceData::Null => unreachable!(),
             ResourceData::File(f) => f.sync(),
             ResourceData::TrackedMapping(m) => unsafe { m.sync().map(|_| ()) },
-            ResourceData::SharedTrackedMapping(m) => unsafe { m.sync().map(|_| ()) },
-            ResourceData::DirIter(_) => Err(crate::drivers::vfs::FSError::OperationNotSupported),
+            ResourceData::DirIter(_)
+            | ResourceData::ServerSocket(_)
+            | ResourceData::ClientSocketConn(_)
+            | ResourceData::ServerSocketConn(_)
+            | ResourceData::SocketDesc { .. } => {
+                Err(crate::drivers::vfs::FSError::OperationNotSupported)
+            }
         }
     }
 }
 
 pub struct ResourceManager {
-    resources: HashMap<Ri, Resource>,
+    resources: HashMap<Ri, Arc<Resource>>,
     next_resource_id: Ri,
 }
 
@@ -122,7 +138,7 @@ impl ResourceManager {
 
     fn add_resource(&mut self, resource: Resource) -> Ri {
         let ri = self.next_resource_id;
-        self.resources.insert(ri, resource);
+        self.resources.insert(ri, Arc::new(resource));
         self.next_resource_id += 1;
         ri
     }
@@ -144,21 +160,23 @@ impl ResourceManager {
         }
     }
 
-    pub fn clone_resource(&mut self, ri: Ri) -> Option<Resource> {
+    pub fn clone_resource(&mut self, ri: Ri) -> Option<Result<Resource, ()>> {
         let resource = self.get_mut(ri)?;
         // Only clones global resources
-        if !*resource.global.get_mut() {
+        if !resource.global.load(core::sync::atomic::Ordering::Acquire) {
             return None;
         }
 
-        Some(resource.clone())
+        Some(resource.try_clone())
     }
 
-    pub fn clone(&mut self) -> Self {
+    pub fn clone(&self) -> Self {
         let mut resources = HashMap::with_capacity(self.resources.capacity());
-        for (res_id, res) in self.resources.iter_mut() {
-            if res.cloneable_to_different_address_space() {
-                resources.insert(*res_id, res.clone());
+        for (res_id, res) in self.resources.iter() {
+            if res.cloneable_to_different_address_space()
+                && let Ok(res) = res.try_clone()
+            {
+                resources.insert(*res_id, Arc::new(res));
             }
         }
 
@@ -182,10 +200,12 @@ impl ResourceManager {
         for resource_id in resource_ids {
             let resource_id = *resource_id;
             let result = self.clone_resource(resource_id).ok_or(())?;
-            new_resources.insert(resource_id, result);
+            if let Ok(result) = result {
+                new_resources.insert(resource_id, Arc::new(result));
 
-            if max_resource_id < resource_id {
-                max_resource_id = resource_id;
+                if max_resource_id < resource_id {
+                    max_resource_id = resource_id;
+                }
             }
         }
 
@@ -197,24 +217,50 @@ impl ResourceManager {
 
     /// gets a reference to the resource with index `ri`
     /// returns `None` if `ri` is invalid
-    fn get<'s>(&'s self, ri: Ri) -> Option<&'s Resource> {
+    fn get<'s>(&'s self, ri: Ri) -> Option<&'s Arc<Resource>> {
         self.resources.get(&ri)
     }
 
-    fn get_mut(&mut self, ri: Ri) -> Option<&mut Resource> {
+    fn get_mut(&mut self, ri: Ri) -> Option<&mut Arc<Resource>> {
         self.resources.get_mut(&ri)
     }
 }
 // TODO: fgure out a better way to do this, where it's easier to tell that we are holding a lock on
 // the current process state.
 
-/// gets a resource with ri `ri` then executes then on it
-pub fn get_resource<DO, R>(ri: Ri, then: DO) -> Option<R>
+pub fn get_resource<DO, R, E: Into<ErrorStatus>>(ri: Ri, then: DO) -> Result<R, ErrorStatus>
+where
+    DO: FnOnce(Arc<Resource>) -> Result<R, E>,
+{
+    let res = {
+        let this = process::current();
+        this.resources()
+            .get(ri)
+            .cloned()
+            .ok_or(ErrorStatus::UnknownResource)?
+    };
+
+    then(res).map_err(|e| e.into())
+}
+
+/// Gets a reference to resource with ri `ri` then executes then on it
+///
+/// If you are going to do something poteinally blocking use [get_resource] instead
+pub fn get_resource_reference<DO, R>(ri: Ri, then: DO) -> Option<R>
 where
     DO: FnOnce(&Resource) -> R,
 {
     let this = process::current();
-    this.resources().get(ri).map(then)
+    this.resources_mut().get(ri).map(|r| then(r))
+}
+
+/// gets a resource with ri `ri` then executes then on it
+pub fn get_resource_mut<DO, R>(ri: Ri, then: DO) -> Option<R>
+where
+    DO: FnOnce(&mut Arc<Resource>) -> R,
+{
+    let this = process::current();
+    this.resources_mut().get_mut(ri).map(then)
 }
 
 /// Adds a resource that lives as long as the current process, to the current process
@@ -224,12 +270,16 @@ pub fn add_global_resource(resource_data: ResourceData) -> Ri {
 }
 
 /// Duplicates a resource return the new duplicate resource's ID or None if that resource doesn't exist
-pub fn duplicate_resource(ri: Ri) -> Option<Ri> {
+pub fn duplicate_resource(ri: Ri) -> Option<Result<Ri, ()>> {
     let current_process = process::current();
     let mut manager = current_process.resources_mut();
 
     let resource = manager.clone_resource(ri)?;
-    Some(manager.add_resource(resource))
+    if let Err(()) = resource {
+        return Some(Err(()));
+    }
+
+    Some(Ok(manager.add_resource(resource.unwrap())))
 }
 
 /// removes a resource from the current process with `ri`

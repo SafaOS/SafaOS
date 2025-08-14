@@ -1,14 +1,15 @@
 use core::{mem::ManuallyDrop, ops::Deref};
 
-use safa_abi::fs::{FSObjectType, FileAttr, OpenOptions};
+use safa_abi::{
+    errors::ErrorStatus,
+    fs::{FSObjectType, OpenOptions},
+};
 
 use crate::{
     drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
-    fs::diriter::{DirIter, DirIterRef},
     process::resources::{self, ResourceData},
     utils::{
         io::{IoError, Readable},
-        locks::Mutex,
         path::Path,
     },
 };
@@ -34,7 +35,7 @@ impl File {
                     unreachable!()
                 };
 
-                then(fd)
+                Ok::<_, ErrorStatus>(then(fd))
             })
             .unwrap_unchecked()
         }
@@ -62,35 +63,14 @@ impl File {
         self.with_fd(|fd| fd.read(offset, buffer))
     }
 
-    /// Write data to the file at the given offset from the provided buffer
-    pub fn write(&self, offset: isize, buffer: &[u8]) -> FSResult<usize> {
-        let offset = SeekOffset::from(offset);
-        self.with_fd(|fd| fd.write(offset, buffer))
-    }
-
-    /// Truncate the file to the given length
-    pub fn truncate(&self, len: usize) -> FSResult<()> {
-        self.with_fd(|fd| fd.truncate(len))
-    }
-
-    pub fn from_fd(fd: usize) -> Option<Self> {
-        resources::get_resource(fd, |resource| {
+    pub fn from_fd(fd: usize) -> Option<Result<Self, ()>> {
+        resources::get_resource_reference(fd, |resource| {
             if let ResourceData::File(_) = resource.data() {
-                Some(Self(fd))
+                Ok(Self(fd))
             } else {
-                None
+                Err(())
             }
         })
-        .flatten()
-    }
-
-    /// Open a directory iterator for the given file (assuming it is a directory otherwise returns an error), closes the resource when dropped unlike [`FileRef::diriter_open`]
-    pub fn diriter_open(&self) -> FSResult<DirIter> {
-        let diriter = self.with_fd(|fd| fd.open_collection_iter())?;
-
-        Ok(DirIter(resources::add_global_resource(
-            ResourceData::DirIter(Mutex::new(diriter)),
-        )))
     }
 
     /// Return the type of the file (Directory or Device or a normal File)
@@ -98,25 +78,13 @@ impl File {
         self.with_fd(|fd| fd.kind())
     }
 
-    /// Performs a `command` operation on the given file (assuming it is a device)
-    pub fn send_command<'a>(&'a self, cmd: u16, arg: u64) -> FSResult<()> {
-        self.with_fd(|fd| fd.send_command(cmd, arg))
-    }
-
-    /// Return the size of the file
-    ///
-    /// size is undefined for directories and devices
-    pub fn size(&self) -> usize {
-        self.with_fd(|fd| fd.size())
-    }
-
-    pub fn attrs(&self) -> FileAttr {
-        self.with_fd(|fd| fd.attrs())
-    }
-
     /// Duplicate the files resource into a new handle pointing to the same file
     pub fn dup(&self) -> Self {
-        Self(resources::duplicate_resource(self.0).unwrap())
+        Self(
+            resources::duplicate_resource(self.0)
+                .expect("file doesn't point to anything")
+                .expect("file doesn't point to file"),
+        )
     }
 }
 
@@ -159,17 +127,6 @@ impl FileRef {
     pub fn open_with_options(path: Path, options: OpenOptions) -> FSResult<Self> {
         let file = File::open_with_options(path, options)?;
         Ok(Self(ManuallyDrop::new(file)))
-    }
-
-    /// Open a directory iterator for the given file (assuming it is a directory otherwise returns an error), doesn't close the resource when dropped unlike [`File::diriter_open`]
-    pub fn diriter_open(&self) -> FSResult<DirIterRef> {
-        self.0
-            .diriter_open()
-            .map(|x| DirIterRef(ManuallyDrop::new(x)))
-    }
-
-    pub fn get(fd: usize) -> Option<Self> {
-        Some(Self(ManuallyDrop::new(File::from_fd(fd)?)))
     }
 
     /// Return the resource ID (equivalent to file descriptor in linux) of the file

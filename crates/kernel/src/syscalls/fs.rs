@@ -1,5 +1,5 @@
 use macros::syscall_handler;
-use safa_abi::fs::OpenOptions;
+use safa_abi::fs::{DirEntry, OpenOptions};
 
 use crate::syscalls::{ErrorStatus, SyscallFFI};
 use crate::{
@@ -48,4 +48,10 @@ fn syscreate(path: Path) -> FSResult<()> {
 #[syscall_handler]
 fn syscreatedir(path: Path) -> FSResult<()> {
     fs::createdir(path)
+}
+
+#[syscall_handler]
+fn sysget_direntry(path: Path, dest_direntry: &mut DirEntry) -> FSResult<()> {
+    *dest_direntry = fs::get_direntry(path)?;
+    Ok(())
 }

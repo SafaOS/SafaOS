@@ -11,7 +11,8 @@ pub enum ErrorStatus {
     /// For example a magic value is invalid
     Corrupted = 4,
     InvalidSyscall = 5,
-    InvalidResource = 6,
+    /// There is no Resource associated with a given ID
+    UnknownResource = 6,
     InvalidPid = 7,
     InvalidOffset = 8,
     /// instead of panicking syscalls will return this on null and unaligned pointers
@@ -50,23 +51,45 @@ pub enum ErrorStatus {
     Panic = 0x1D,
     /// A given resource wasn't a Device while one was expected
     NotADevice = 0x1E,
+    /// An Operation on a resource would block while it was configured as not blockable, for example through sockets
+    WouldBlock = 0x1F,
+    /// A bi-directional Connection closed from a side and not the other
+    ConnectionClosed = 0x20,
+    /// Attempt to form a Connection failed
+    ConnectionRefused = 0x21,
+    /// There is a resource associated with the given ID but it isn't supported by that operation
+    UnsupportedResource = 0x22,
+    /// The given Resource is not duplictable
+    ResourceCloneFailed = 0x23,
+    /// A given X is incompatible with a Y in an operation that requires them to be compatible
+    ///
+    /// Used for example with Sockets when you try to connect with a bad Descriptor
+    TypeMismatch = 0x24,
+    TooShort = 0x25,
+    /// Failed to connect to an address because it wasn't found
+    AddressNotFound = 0x26,
 }
 
 impl ErrorStatus {
     // update when a new error is added
-    const MAX: u16 = Self::NotADevice as u16;
+    const MAX: u16 = Self::AddressNotFound as u16;
 
     #[inline(always)]
     /// Gives a string description of the error
     pub fn as_str(&self) -> &'static str {
         use ErrorStatus::*;
         match *self {
+            AddressNotFound => "Address Not Found",
+            TooShort => "Too Short",
             Generic => "Generic Error",
             OperationNotSupported => "Operation Not Supported",
             NotSupported => "Object Not Supported",
             Corrupted => "Corrupted",
             InvalidSyscall => "Invalid Syscall",
-            InvalidResource => "Invalid Resource",
+            UnknownResource => "Unknown Resource ID",
+            UnsupportedResource => "Resource not supported by that Operation",
+            ResourceCloneFailed => "Failed to clone Resource",
+            TypeMismatch => "Type Mismatch",
             InvalidPid => "Invalid PID",
             InvalidTid => "Invalid TID",
             InvalidOffset => "Invalid Offset",
@@ -91,6 +114,9 @@ impl ErrorStatus {
             Panic => "Unrecoverable Panick",
             Timeout => "Operation Timeouted",
             NotADevice => "Not A Device",
+            ConnectionClosed => "Connection Closed",
+            ConnectionRefused => "Connection Refused",
+            WouldBlock => "Operation Would Block",
         }
     }
 }

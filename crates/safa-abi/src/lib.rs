@@ -8,6 +8,7 @@ pub mod ffi;
 pub mod fs;
 pub mod mem;
 pub mod process;
+pub mod sockets;
 pub mod syscalls;
 
 pub mod consts {

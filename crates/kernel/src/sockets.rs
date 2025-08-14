@@ -7,6 +7,7 @@ use core::{
 use alloc::{boxed::Box, collections::linked_list::LinkedList, sync::Arc, vec::Vec};
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
+use safa_abi::errors::IntoErr;
 
 use crate::{
     memory::paging::PAGE_SIZE,
@@ -37,6 +38,19 @@ pub enum SocketError {
     ConnectionClosed,
     /// Connection refused for some reason
     ConnectionRefused,
+}
+
+impl IntoErr for SocketError {
+    fn into_err(self) -> safa_abi::errors::ErrorStatus {
+        match self {
+            Self::WouldBlockEmpty | Self::WouldBlockFull | Self::WouldBlockNoConnectionRequests => {
+                safa_abi::errors::ErrorStatus::WouldBlock
+            }
+            Self::ConnectionRefused => safa_abi::errors::ErrorStatus::ConnectionRefused,
+            Self::ConnectionClosed => safa_abi::errors::ErrorStatus::ConnectionClosed,
+            Self::TooLarge => safa_abi::errors::ErrorStatus::StrTooLong,
+        }
+    }
 }
 
 const MAX_STREAM_SIZE: usize = PAGE_SIZE;
@@ -439,12 +453,12 @@ pub struct SocketClientConn {
 
 impl SocketClientConn {
     /// Reads `buf.len()` or less data from the client's buffer
-    fn read(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
         self.inner.read::<false>(buf)
     }
 
     /// Writes `buf.len()` data to the server's buffer
-    fn write(&self, buf: &[u8]) -> Result<(), SocketError> {
+    pub fn write(&self, buf: &[u8]) -> Result<(), SocketError> {
         self.inner.write::<true>(buf)
     }
 }
@@ -485,12 +499,27 @@ impl Socket {
         }
     }
 
+    pub const fn can_block(&self) -> bool {
+        self.can_block
+    }
+
+    pub const fn sock_type(&self) -> SocketKind {
+        match self.sock_type {
+            SocketType::SeqPacket(_) => SocketKind::SeqPacket,
+            SocketType::Stream(_) => SocketKind::Stream,
+        }
+    }
+
+    pub const fn domain(&self) -> SocketDomain {
+        SocketDomain::Unix
+    }
+
     pub fn disconnect(&self, id: SockConnID) {
         self.sock_type.remove_connection(id);
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketKind {
     SeqPacket,
     Stream,
@@ -562,7 +591,7 @@ lazy_static! {
 /// Once dropped the socket is removed
 pub struct ServerSocketDesc {
     reference: Arc<Socket>,
-    id: SockID,
+    pub id: SockID,
 }
 
 impl Deref for ServerSocketDesc {
@@ -656,7 +685,7 @@ impl CliSocketDesc {
     /// returns an Error if the server dropped the socket while we were trying to connect
     pub fn connect(&self) -> Result<SocketClientConn, SocketError> {
         let mut queue = self.listen_queue.lock();
-        if self.listen_queue_max.load(Ordering::Acquire) <= queue.len() + 1 {
+        if self.listen_queue_max.load(Ordering::Acquire) < queue.len() + 1 {
             return Err(SocketError::ConnectionRefused);
         }
 
@@ -681,7 +710,7 @@ impl CliSocketDesc {
     }
 }
 
-/// Creates a new socket returning it's ID
+/// Creates a new socket returning a Server Descriptor
 pub fn create_socket(domain: SocketDomain, kind: SocketKind, can_block: bool) -> ServerSocketDesc {
     SOCKET_QUEUE.write().create(domain, kind, can_block)
 }

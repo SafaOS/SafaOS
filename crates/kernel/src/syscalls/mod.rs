@@ -20,6 +20,8 @@ mod io;
 mod mem;
 /// SysP syscalls implementation
 mod process;
+/// SysSock syscalls implementation
+mod sockets;
 /// SysT syscalls implementation
 mod thread;
 
@@ -41,9 +43,6 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
         let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvalidSyscall)?;
         match syscall {
             // IO related syscalls
-            SyscallTable::SysFGetDirEntry => {
-                io::sysget_direntry_raw((a as *const u8, b), c as *mut DirEntry)
-            }
             SyscallTable::SysFDirIterOpen => io::sysdiriter_open_raw(a, b as *mut usize),
             SyscallTable::SysDirIterClose => Ok(drop(DirIter::make(a)?)),
             SyscallTable::SysDirIterNext => io::sysdiriter_next_raw(a, b as *mut DirEntry),
@@ -59,13 +58,16 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             // Resources related syscalls
             SyscallTable::SysRDestroy => {
                 if !resources::remove_resource(a) {
-                    return Err(ErrorStatus::InvalidResource);
+                    return Err(ErrorStatus::UnknownResource);
                 }
 
                 Ok(())
             }
             SyscallTable::SysRDup => io::sysdup_raw(a, b as *mut Ri),
             // FS related operations
+            SyscallTable::SysFGetDirEntry => {
+                fs::sysget_direntry_raw((a as *const u8, b), c as *mut DirEntry)
+            }
             SyscallTable::SysFSOpenAll => fs::sysopen_all_raw((a as *const u8, b), c as *mut usize),
             SyscallTable::SysFSOpen => fs::sysopen_raw((a as *const u8, b), c, d as *mut usize),
             SyscallTable::SysFSRemovePath => fs::sysremove_path_raw((a as *const u8, b)),
@@ -102,6 +104,16 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             // Memory
             SyscallTable::SysMemMap => {
                 mem::sysmem_map_raw(a as *const _, b, c as *mut _, d as *mut _)
+            }
+            // Sockets
+            SyscallTable::SysSockCreate => sockets::syssock_create_raw(a, b, c, d as *mut _),
+            SyscallTable::SysSockBind => sockets::syssock_bind_raw(a, b as *const _, c),
+            SyscallTable::SysSockListen => sockets::syssock_listen_raw(a, b),
+            SyscallTable::SysSockAccept => {
+                sockets::syssock_accept_raw(a, b as *mut _, c as *mut _, d as *mut _)
+            }
+            SyscallTable::SysSockConnect => {
+                sockets::syssock_connect_raw(a, b as *const _, c, d as *mut _)
             }
         }
     }

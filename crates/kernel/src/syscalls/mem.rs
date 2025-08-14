@@ -1,5 +1,4 @@
 use crate::drivers::vfs::SeekOffset;
-use crate::fs::FileRef;
 use crate::memory::paging::EntryFlags;
 use crate::process;
 use crate::process::resources;
@@ -49,10 +48,12 @@ pub fn sysmem_map(
     };
 
     let file_desc = match associated_resource {
-        Some(ri) => {
-            let file = FileRef::make(ri)?;
-            Some(file.with_fd(|f| f.clone()))
-        }
+        Some(ri) => resources::get_resource_reference(ri, |res| match res.data() {
+            ResourceData::File(fd) => Ok(Some(fd.clone())),
+            _ => Err(ErrorStatus::UnsupportedResource),
+        })
+        .ok_or(ErrorStatus::UnknownResource)
+        .flatten()?,
         None => None,
     };
 
