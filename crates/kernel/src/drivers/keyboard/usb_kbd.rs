@@ -12,7 +12,7 @@ use macros::EncodeKey;
 #[repr(u8)]
 #[derive(IntEnum, Debug, Clone, Copy, EncodeKey, PartialEq, Eq)]
 pub enum USBKey {
-    NULL = 0x00, // Reserved
+    Null = 0x00, // Reserved
 
     // Function keys (F1–F12)
     F1 = 0x3A,       // 58
@@ -213,11 +213,11 @@ impl USBHIDDriver for USBKeyboard {
 
             let usb_keycode = USBKey::try_from(*item).unwrap_or_else(|_| {
                 warn!("unknown key byte with code: {:#x} encotoured", item);
-                USBKey::NULL
+                USBKey::Null
             });
 
             // also handles zero
-            if usb_keycode == USBKey::NULL {
+            if usb_keycode == USBKey::Null {
                 continue;
             }
 
@@ -233,13 +233,35 @@ impl USBHIDDriver for USBKeyboard {
             keycodes.push((keycode, report_key)).unwrap();
         }
 
-        for (keycode, report_key) in keycodes {
-            let key = keyboard.add_pressed_keycode(keycode);
+        // Release all the keys that has been released
+        if self.last_report_buffer != [0u8; 8] {
+            for item in &last_report[1..7] {
+                let dereport_key = !report_buffer[1..7].contains(item);
 
-            if let Some(key) = key
-                && report_key
-            {
-                crate::__navi_key_pressed(key);
+                let usb_keycode = USBKey::try_from(*item).unwrap_or_else(|_| {
+                    warn!("unknown key byte with code: {:#x} encotoured", item);
+                    USBKey::Null
+                });
+
+                if usb_keycode != USBKey::CapsLock && dereport_key {
+                    let keycode = usb_keycode.encode();
+                    super::key_release(keycode);
+                }
+            }
+        }
+
+        for (keycode, report_key) in keycodes {
+            if keycode == KeyCode::Null {
+                continue;
+            }
+
+            let add_attempt = keyboard.add_pressed_keycode(keycode);
+
+            if report_key {
+                match add_attempt {
+                    Ok(key) => super::key_pressed(key),
+                    Err(keycode) => super::key_release(keycode),
+                }
             }
         }
     }

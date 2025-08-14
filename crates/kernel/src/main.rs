@@ -46,8 +46,6 @@ mod utils;
 extern crate alloc;
 use arch::serial;
 
-use drivers::keyboard::HandleKey;
-use drivers::keyboard::keys::Key;
 use globals::*;
 
 pub use memory::PhysAddr;
@@ -221,12 +219,4 @@ extern "C" fn kstart() -> ! {
     {
         panic!("failed context switching to Eve! ...")
     }
-}
-
-// whenever a key is pressed this function should be called
-// this executes a few other kernel-functions
-pub fn __navi_key_pressed(key: Key) {
-    if let Some(mut writer) = FRAMEBUFFER_TERMINAL.try_write() {
-        writer.handle_key(key);
-    };
 }

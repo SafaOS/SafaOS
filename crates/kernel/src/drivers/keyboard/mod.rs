@@ -4,7 +4,7 @@ pub mod usb_kbd;
 
 use heapless::Vec;
 
-use crate::utils::locks::RwLock;
+use crate::{devices, terminal::FRAMEBUFFER_TERMINAL, utils::locks::RwLock};
 use keys::{Key, KeyCode, KeyFlags, ProcessUnencodedKeyByte};
 
 const MAX_KEYS: usize = 256;
@@ -26,28 +26,23 @@ impl Keyboard {
         }
     }
 
-    #[allow(unused)]
     pub fn clear_keys(&mut self) {
         self.current_keys.clear();
     }
 
-    #[allow(unused)]
     #[inline]
     fn reset_unencoded_buffer(&mut self) {
         self.latest_unencoded_byte = 0;
         self.current_unencoded_key = [0; 8];
     }
 
+    /// Adds a pressed key to the keyboard driver, returns an Err(keycode) if a key was removed, Ok(key) if a key was added
     #[must_use]
-    fn add_pressed_keycode(&mut self, code: KeyCode) -> Option<Key> {
-        if code == KeyCode::NULL {
-            return None;
-        }
-
+    fn add_pressed_keycode(&mut self, code: KeyCode) -> Result<Key, KeyCode> {
         // the 'lock' in capslock
         if code == KeyCode::CapsLock && self.code_is_pressed(code) {
             self.remove_pressed_keycode(code);
-            return None;
+            return Err(code);
         }
 
         let key = self.process_keycode(code);
@@ -55,11 +50,11 @@ impl Keyboard {
         if attempt.is_err() {
             *self.current_keys.last_mut().unwrap() = attempt.unwrap_err();
         }
-        Some(key)
+        Ok(key)
     }
 
     fn remove_pressed_keycode(&mut self, code: KeyCode) {
-        if code == KeyCode::NULL {
+        if code == KeyCode::Null {
             return;
         }
 
@@ -97,15 +92,6 @@ impl Keyboard {
         Key::new(keycode, flags)
     }
 
-    pub fn is_pressed(&self, key: Key) -> bool {
-        for ckey in &self.current_keys {
-            if ckey.code == key.code && ckey.flags == key.flags {
-                return true;
-            }
-        }
-        false
-    }
-
     pub fn code_is_pressed(&self, code: KeyCode) -> bool {
         for ckey in &self.current_keys {
             if ckey.code == code {
@@ -116,11 +102,30 @@ impl Keyboard {
     }
 
     #[allow(unused)]
-    pub fn process_byte<T: ProcessUnencodedKeyByte>(&mut self, byte: u8) -> Key {
+    pub fn process_byte<T: ProcessUnencodedKeyByte>(
+        &mut self,
+        byte: u8,
+    ) -> Option<Result<Key, KeyCode>> {
         T::process_byte(self, byte)
     }
 }
 
 pub trait HandleKey {
     fn handle_key(&mut self, key: Key);
+}
+
+// whenever a key is pressed this function should be called
+// this executes a few other kernel-functions
+pub fn key_pressed(key: Key) {
+    if let Some(mut writer) = FRAMEBUFFER_TERMINAL.try_write() {
+        writer.handle_key(key);
+    };
+
+    devices::input::keyboard::on_key_press(key.code);
+}
+
+// whenever a key is released this function should be called
+// this executes a few other kernel-functions
+pub fn key_release(keycode: KeyCode) {
+    devices::input::keyboard::on_key_release(keycode);
 }

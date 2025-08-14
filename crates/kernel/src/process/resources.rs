@@ -32,7 +32,7 @@ pub enum ResourceData {
 impl ResourceData {
     pub fn try_clone(&self) -> Result<Self, ()> {
         match self {
-            Self::File(file) => Ok(Self::File(file.clone())),
+            Self::File(file) => Ok(Self::File(file.try_clone().ok_or(())?)),
             Self::DirIter(coll) => Ok(Self::DirIter(Mutex::new(coll.lock().clone()))),
             Self::SocketDesc {
                 domain,

@@ -111,15 +111,20 @@ extern "x86-interrupt" fn page_fault_handler(frame: TrapFrame) {
 
 #[inline]
 pub fn handle_ps2_keyboard() {
-    use drivers::keyboard::{KEYBOARD, set1::Set1Key};
+    use drivers::keyboard;
+    use keyboard::{KEYBOARD, set1::Set1Key};
+
     let key = inb(0x60);
     // outside of this function the keyboard should only be read from
-    if let Some(encoded) = KEYBOARD
+    if let Some(results) = KEYBOARD
         .try_write()
         .map(|mut writer| writer.process_byte::<Set1Key>(key))
-        .filter(|key| *key != drivers::keyboard::keys::Key::NULL_KEY)
+        .flatten()
     {
-        crate::__navi_key_pressed(encoded);
+        match results {
+            Ok(key) => keyboard::key_pressed(key),
+            Err(keycode) => keyboard::key_release(keycode),
+        }
     }
 }
 

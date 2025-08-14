@@ -65,6 +65,7 @@ pub enum ErrorStatus {
     ///
     /// Used for example with Sockets when you try to connect with a bad Descriptor
     TypeMismatch = 0x24,
+    /// A given buffer is too short to hold full information, this for example is used with the keyboard input event device to indicate that we couldn't fit an event in a buffer
     TooShort = 0x25,
     /// Failed to connect to an address because it wasn't found
     AddressNotFound = 0x26,

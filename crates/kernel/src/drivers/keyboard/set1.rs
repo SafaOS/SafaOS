@@ -2,15 +2,15 @@ use int_enum::IntEnum;
 use macros::EncodeKey;
 
 use super::{
-    keys::{EncodeKey, Key, KeyCode, KeyFlags, ProcessUnencodedKeyByte},
     Keyboard,
+    keys::{EncodeKey, Key, KeyCode, ProcessUnencodedKeyByte},
 };
 
 // you need to add the keycode as a variant below, give it the same name as the key in KeyCode enum
 #[repr(u64)]
 #[derive(IntEnum, Clone, Copy, EncodeKey)]
 pub enum Set1Key {
-    NULL = 0,
+    Null = 0,
 
     // row 0
     F1 = 0x3B,
@@ -108,11 +108,11 @@ pub enum Set1Key {
 }
 
 impl ProcessUnencodedKeyByte for Set1Key {
-    fn process_byte(this: &mut Keyboard, code: u8) -> Key {
+    fn process_byte(this: &mut Keyboard, code: u8) -> Option<Result<Key, KeyCode>> {
         this.current_unencoded_key[this.latest_unencoded_byte] = code;
         if code == 0xE0 {
             this.latest_unencoded_byte += 1;
-            return Key::new(KeyCode::NULL, KeyFlags::empty());
+            return None;
         }
 
         let break_code = this.current_unencoded_key[this.latest_unencoded_byte] & 128 == 128;
@@ -121,17 +121,19 @@ impl ProcessUnencodedKeyByte for Set1Key {
         }
 
         let key: u64 = u64::from_ne_bytes(this.current_unencoded_key);
-        let key = Set1Key::try_from(key).unwrap_or(Set1Key::NULL);
+        let key = Set1Key::try_from(key).unwrap_or(Set1Key::Null);
         let encoded = key.encode();
 
         this.reset_unencoded_buffer();
         if break_code {
-            if encoded != KeyCode::CapsLock {
-                this.remove_pressed_keycode(encoded);
+            if encoded == KeyCode::CapsLock {
+                return None;
             }
-            Key::NULL_KEY
+
+            this.remove_pressed_keycode(encoded);
+            Some(Err(encoded))
         } else {
-            this.add_pressed_keycode(encoded).unwrap_or(Key::NULL_KEY)
+            Some(this.add_pressed_keycode(encoded))
         }
     }
 }

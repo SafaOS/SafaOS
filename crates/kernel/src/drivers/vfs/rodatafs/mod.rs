@@ -9,6 +9,7 @@ mod usbinfo;
 
 use self::{generic_file::GenericRodFSFile, init_system::InitStateItem};
 use crate::{
+    devices::Device,
     drivers::vfs::{FSError, FSObjectID, FSResult, FileSystem, SeekOffset},
     process::{self, Pid},
     scheduler,
@@ -426,12 +427,12 @@ impl FileSystem for RwLock<RodFS> {
         "RodFS"
     }
 
-    fn on_open(&self, id: FSObjectID) -> FSResult<()> {
+    fn on_open(&self, id: FSObjectID) -> FSResult<Option<Box<dyn Device>>> {
         let mut write_guard = self.write();
         let obj_id = RodFSObjID::from_obj_id(id);
         let obj = write_guard.get(obj_id).expect("invalid RodFS Object ID");
         obj.on_open();
-        Ok(())
+        Ok(None)
     }
 
     fn on_close(&self, id: FSObjectID) -> FSResult<()> {

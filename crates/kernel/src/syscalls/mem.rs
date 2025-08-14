@@ -49,7 +49,9 @@ pub fn sysmem_map(
 
     let file_desc = match associated_resource {
         Some(ri) => resources::get_resource_reference(ri, |res| match res.data() {
-            ResourceData::File(fd) => Ok(Some(fd.clone())),
+            ResourceData::File(fd) => Ok(Some(
+                fd.try_clone().ok_or(ErrorStatus::ResourceCloneFailed)?,
+            )),
             _ => Err(ErrorStatus::UnsupportedResource),
         })
         .ok_or(ErrorStatus::UnknownResource)
