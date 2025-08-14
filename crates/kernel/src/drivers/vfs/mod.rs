@@ -2,7 +2,7 @@ use core::fmt::{Debug, Display};
 
 use crate::{
     debug,
-    devices::{self, Device, DeviceInterface},
+    devices::{self, Device},
     error, limine,
     memory::{
         frame_allocator::{self},
@@ -81,6 +81,7 @@ pub enum FSError {
     NotExecutable,
     MMapError,
     OutOfMemory,
+    InvalidSize,
 }
 
 impl Display for FSError {
@@ -110,6 +111,7 @@ impl IntoErr for FSError {
             Self::UnsupportedResource => ErrorStatus::UnsupportedResource,
             Self::MMapError => ErrorStatus::MMapError,
             Self::OutOfMemory => ErrorStatus::OutOfMemory,
+            Self::InvalidSize => ErrorStatus::InvalidSize,
         }
     }
 }
@@ -129,44 +131,20 @@ pub type FSResult<T> = Result<T, FSError>;
 /// Represents the unique identifier for a file system object, that is a unique identifier for each file returned by the path resolution.
 pub type FSObjectID = usize;
 
-enum FSObjectInner {
-    FSObj(VFSObjectID),
-    Device(Box<dyn Device>),
-}
-
-impl FSObjectInner {
-    fn try_clone(&self) -> Option<Self> {
-        match self {
-            FSObjectInner::FSObj(o) => Some(Self::FSObj(o.clone())),
-            FSObjectInner::Device(dev) => dev.try_clone().map(Self::Device),
-        }
-    }
-}
-
+#[derive(Debug, Clone)]
 /// A descriptor for a currently open file system object, that is a combination of a [`VFSObjectID`] and the open options.
 pub struct FSObjectDescriptor {
-    inner: FSObjectInner,
+    inner: VFSObjectID,
     options: OpenOptions,
 }
 
 impl FSObjectDescriptor {
-    /// Attempts to clone this file descriptor, may for example fail if it points to a non-cloneable device
-    pub fn try_clone(&self) -> Option<Self> {
-        Some(Self {
-            inner: self.inner.try_clone()?,
-            options: self.options,
-        })
-    }
-
     pub fn write(&self, offset: SeekOffset, data: &[u8]) -> FSResult<usize> {
         if !self.options.is_write() {
             return Err(FSError::MissingPermission);
         }
 
-        match &self.inner {
-            FSObjectInner::FSObj(fs) => fs.write(offset, data),
-            FSObjectInner::Device(dev) => dev.write(offset, data),
-        }
+        self.inner.write(offset, data)
     }
 
     pub fn truncate(&self, size: usize) -> FSResult<()> {
@@ -174,14 +152,7 @@ impl FSObjectDescriptor {
             return Err(FSError::MissingPermission);
         }
 
-        match &self.inner {
-            FSObjectInner::FSObj(fs) => fs.truncate(size),
-            FSObjectInner::Device(_) =>
-            /* FIXME: we may want to implement that */
-            {
-                Err(FSError::OperationNotSupported)
-            }
-        }
+        self.inner.truncate(size)
     }
 
     pub fn read(&self, offset: SeekOffset, buf: &mut [u8]) -> FSResult<usize> {
@@ -189,31 +160,15 @@ impl FSObjectDescriptor {
             return Err(FSError::MissingPermission);
         }
 
-        match &self.inner {
-            FSObjectInner::FSObj(fs) => fs.read(offset, buf),
-            FSObjectInner::Device(dev) => dev.read(offset, buf),
-        }
+        self.inner.read(offset, buf)
     }
 
     pub fn open_collection_iter(&self) -> FSResult<CollectionIterDescriptor> {
-        match &self.inner {
-            FSObjectInner::FSObj(fs) => fs.open_collection_iter(),
-            FSObjectInner::Device(_) =>
-            /* TODO: We might want to implement that */
-            {
-                Err(FSError::OperationNotSupported)
-            }
-        }
+        self.inner.open_collection_iter()
     }
 
     pub fn attrs(&self) -> FileAttr {
-        match &self.inner {
-            FSObjectInner::FSObj(f) => f.attrs(),
-            FSObjectInner::Device(_) => FileAttr {
-                kind: FSObjectType::Device,
-                size: 0,
-            },
-        }
+        self.inner.attrs()
     }
 
     pub fn kind(&self) -> FSObjectType {
@@ -225,17 +180,11 @@ impl FSObjectDescriptor {
     }
 
     pub fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
-        match &self.inner {
-            FSObjectInner::Device(dev) => dev.send_command(cmd, arg),
-            FSObjectInner::FSObj(fd) => fd.send_command(cmd, arg),
-        }
+        self.inner.send_command(cmd, arg)
     }
 
     pub fn sync(&self) -> FSResult<()> {
-        match &self.inner {
-            FSObjectInner::Device(dev) => dev.sync(),
-            FSObjectInner::FSObj(f) => f.sync(),
-        }
+        self.inner.sync()
     }
 
     pub fn open_mmap_interface(
@@ -243,10 +192,7 @@ impl FSObjectDescriptor {
         offset: SeekOffset,
         page_count: usize,
     ) -> FSResult<Box<dyn MemMappedInterface>> {
-        match &self.inner {
-            FSObjectInner::Device(dev) => dev.mmap(offset, page_count),
-            FSObjectInner::FSObj(f) => f.open_mmap_interface(offset, page_count),
-        }
+        self.inner.open_mmap_interface(offset, page_count)
     }
 }
 
@@ -410,18 +356,6 @@ pub trait FileSystem: Send + Sync {
         Err(FSError::OperationNotSupported)
     }
 
-    fn mount_device_interface(
-        &self,
-        parent_id: FSObjectID,
-        name: &str,
-        interface: &'static dyn DeviceInterface,
-    ) -> FSResult<FSObjectID> {
-        _ = parent_id;
-        _ = name;
-        _ = interface;
-        Err(FSError::OperationNotSupported)
-    }
-
     fn remove(&self, child_name: &str, parent_id: FSObjectID, id: FSObjectID) -> FSResult<()> {
         _ = parent_id;
         _ = child_name;
@@ -454,7 +388,7 @@ pub trait FileSystem: Send + Sync {
     fn resolve_path_rel(&self, parent_id: FSObjectID, path: PathParts) -> FSResult<FSObjectID>;
 
     /// Given an ID do something on open, returns an optional device if the ID points to a non static device, that is different for each open descriptor
-    fn on_open(&self, id: FSObjectID) -> FSResult<Option<Box<dyn Device>>>;
+    fn on_open(&self, id: FSObjectID) -> FSResult<()>;
 
     fn on_close(&self, id: FSObjectID) -> FSResult<()>;
 
@@ -693,7 +627,7 @@ impl VFS {
         Ok(())
     }
 
-    fn open_raw(&self, path: Path, create_file: bool, create_dir: bool) -> FSResult<FSObjectInner> {
+    fn open_raw(&self, path: Path, create_file: bool, create_dir: bool) -> FSResult<VFSObjectID> {
         let (mountpoint, obj_id) = match self.resolve_path(path) {
             Ok((mountpoint, obj_id)) => (mountpoint, obj_id),
             Err(FSError::NotFound) if create_file => {
@@ -709,15 +643,11 @@ impl VFS {
             Err(err) => return Err(err),
         };
 
-        let potential_device = mountpoint.on_open(obj_id)?;
-        let inner = match potential_device {
-            Some(dev) => FSObjectInner::Device(dev),
-            None => FSObjectInner::FSObj(VFSObjectID {
-                fs_obj_id: obj_id,
-                fs: mountpoint.clone(),
-            }),
-        };
-        Ok(inner)
+        mountpoint.on_open(obj_id)?;
+        Ok(VFSObjectID {
+            fs_obj_id: obj_id,
+            fs: mountpoint.clone(),
+        })
     }
 
     pub fn open_all(&self, path: Path) -> FSResult<FSObjectDescriptor> {
@@ -758,17 +688,6 @@ impl VFS {
         let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
         mountpoint
             .mount_device(parent_obj_id, name, device)
-            .map(|_| ())
-    }
-
-    pub fn mount_device_interface(
-        &self,
-        path: Path,
-        interface: &'static dyn DeviceInterface,
-    ) -> FSResult<()> {
-        let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
-        mountpoint
-            .mount_device_interface(parent_obj_id, name, interface)
             .map(|_| ())
     }
 

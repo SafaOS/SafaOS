@@ -1,15 +1,12 @@
-use alloc::boxed::Box;
 use safa_abi::input::{KeyCode, KeyEvent, KeyEventKind};
 
-use crate::{
-    devices::{Device, DeviceInterface},
-    utils::locks::{Mutex, RwLock},
-};
+use crate::{devices::Device, utils::locks::Mutex};
 
 const MAX_KEY_EVENTS: usize = 4096;
 pub struct KeyboardInterface {
     events: [KeyEvent; MAX_KEY_EVENTS],
     tail: usize,
+    head: usize,
 }
 impl KeyboardInterface {
     fn send_event(&mut self, event: KeyEvent) {
@@ -22,24 +19,30 @@ impl KeyboardInterface {
         }
     }
 
-    fn event_buffer_u8(&self) -> &[u8; MAX_KEY_EVENTS * size_of::<KeyEvent>()] {
-        unsafe { core::mem::transmute(&self.events) }
-    }
+    fn next_event(&mut self) -> Option<KeyEvent> {
+        if self.head == self.tail {
+            return None;
+        }
 
-    fn bytes_end(&self) -> usize {
-        self.tail * size_of::<KeyEvent>()
+        let event = self.events[self.head];
+        self.head += 1;
+        if self.head >= MAX_KEY_EVENTS {
+            self.head = 0;
+        }
+        Some(event)
     }
 }
 
 /// Keyboard event queue
-pub static KEYBOARD_EVENT_QUEUE: RwLock<KeyboardInterface> = RwLock::new(KeyboardInterface {
+pub static KEYBOARD_EVENT_QUEUE: Mutex<KeyboardInterface> = Mutex::new(KeyboardInterface {
     events: [KeyEvent::null(); MAX_KEY_EVENTS],
     tail: 0,
+    head: 0,
 });
 
 /// Adds a key press event to the key event queue
 pub fn on_key_press(keycode: KeyCode) {
-    KEYBOARD_EVENT_QUEUE.write().send_event(KeyEvent {
+    KEYBOARD_EVENT_QUEUE.lock().send_event(KeyEvent {
         kind: KeyEventKind::Press,
         code: keycode,
     });
@@ -47,19 +50,15 @@ pub fn on_key_press(keycode: KeyCode) {
 
 /// Adds a key release event to the key event queue
 pub fn on_key_release(keycode: KeyCode) {
-    KEYBOARD_EVENT_QUEUE.write().send_event(KeyEvent {
+    KEYBOARD_EVENT_QUEUE.lock().send_event(KeyEvent {
         kind: KeyEventKind::Release,
         code: keycode,
     });
 }
 
-pub struct KeyboardPoller {
-    curr_position: usize,
-}
-
-impl Device for Mutex<KeyboardPoller> {
+impl Device for Mutex<KeyboardInterface> {
     fn name(&self) -> &'static str {
-        "kbd"
+        "inkbd"
     }
 
     fn read(
@@ -68,41 +67,31 @@ impl Device for Mutex<KeyboardPoller> {
         buffer: &mut [u8],
     ) -> crate::drivers::vfs::FSResult<usize> {
         _ = offset;
-        let mut this = self.lock();
-        let interface = KEYBOARD_EVENT_QUEUE.read();
+        let len = buffer.len();
+        if !len.is_multiple_of(size_of::<KeyEvent>()) {
+            // FIXME: Maybe allow that?
+            return Err(crate::drivers::vfs::FSError::InvalidSize);
+        }
 
-        let raw_keyevents = interface.event_buffer_u8();
-        let tail_off = interface.bytes_end();
-        if tail_off == this.curr_position {
+        let count = len / size_of::<KeyEvent>();
+        if count == 0 {
             return Ok(0);
         }
 
-        let len = buffer.len().min(raw_keyevents.len() - this.curr_position);
-        let len = if tail_off > this.curr_position {
-            len.min(tail_off - this.curr_position)
-        } else {
-            len
-        };
+        let mut read_count = 0;
+        let mut interface = self.lock();
 
-        buffer[..len].copy_from_slice(&raw_keyevents[this.curr_position..this.curr_position + len]);
+        while let Some(event) = interface.next_event()
+            && read_count < count
+        {
+            let raw_event =
+                unsafe { core::mem::transmute::<_, [u8; size_of::<KeyEvent>()]>(event) };
+            let read_bytes = read_count * size_of::<KeyEvent>();
 
-        this.curr_position += len;
-        if this.curr_position >= raw_keyevents.len() {
-            this.curr_position = 0;
+            buffer[read_bytes..read_bytes + size_of::<KeyEvent>()].copy_from_slice(&raw_event);
+            read_count += 1;
         }
 
-        Ok(len)
-    }
-}
-
-impl DeviceInterface for RwLock<KeyboardInterface> {
-    fn name(&self) -> &'static str {
-        "inkbd"
-    }
-    fn open(&self) -> alloc::boxed::Box<dyn Device> {
-        let read = self.read();
-        Box::new(Mutex::new(KeyboardPoller {
-            curr_position: read.bytes_end(),
-        }))
+        Ok(read_count * size_of::<KeyEvent>())
     }
 }

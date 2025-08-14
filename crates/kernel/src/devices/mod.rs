@@ -27,11 +27,6 @@ pub fn add_device(vfs: &VFS, device: &'static dyn Device) {
     vfs.mount_device(path, device).unwrap();
 }
 
-pub fn add_device_interface(vfs: &VFS, interface: &'static dyn DeviceInterface) {
-    let path = make_path!("dev", interface.name());
-    vfs.mount_device_interface(path, interface).unwrap();
-}
-
 /// Mounts devices to the `dev:/` file system in the VFS
 pub fn init(vfs: &mut VFS) {
     debug!(VFS, "Initializing devices ...");
@@ -44,16 +39,9 @@ pub fn init(vfs: &mut VFS) {
     add_device(vfs, &*FRAMEBUFFER_TERMINAL);
     add_device(vfs, &*SERIAL);
     add_device(vfs, &*FRAMEBUFFER_DRIVER);
-    add_device_interface(vfs, &KEYBOARD_EVENT_QUEUE);
+    add_device(vfs, &KEYBOARD_EVENT_QUEUE);
     let elapsed = time!(ms) - now;
     debug!(VFS, "Initialized devices in ({}ms) ...", elapsed);
-}
-
-/// An interface over a non-static Device that is different for each open Instance
-pub trait DeviceInterface: Send + Sync {
-    fn name(&self) -> &'static str;
-    /// Opens a new instance of the device in this interface
-    fn open(&self) -> Box<dyn Device>;
 }
 
 /// A generic Device, can be a static Device where any interaction would apply to all open descriptors or a different interface for each descriptor
@@ -78,10 +66,6 @@ pub trait Device: Send + Sync {
         _ = offset;
         _ = page_count;
         Err(FSError::OperationNotSupported)
-    }
-
-    fn try_clone(&self) -> Option<Box<dyn Device>> {
-        None
     }
 }
 

@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use hashbrown::{DefaultHashBuilder, HashMap};
 use safa_abi::fs::{DirEntry, FileAttr};
 
-use crate::devices::{Device, DeviceInterface};
+use crate::devices::Device;
 
 use super::FileName;
 use super::{FSError, FSResult, FileSystem};
@@ -19,7 +19,6 @@ pub enum RamFSObjectState {
     Data(PageVec<u8>),
     Collection(HashMap<FileName, FSObjectID, DefaultHashBuilder, PageAlloc>),
     StaticDevice(&'static dyn Device),
-    StaticInterface(&'static dyn DeviceInterface),
 }
 
 impl core::fmt::Debug for RamFSObjectState {
@@ -28,7 +27,6 @@ impl core::fmt::Debug for RamFSObjectState {
             Self::Data(data) => write!(f, "Data({})", data.len()),
             Self::Collection(items) => write!(f, "Collection({items:?})"),
             Self::StaticDevice(device) => write!(f, "Device({})", device.name()),
-            Self::StaticInterface(i) => write!(f, "Device({})", i.name()),
         }
     }
 }
@@ -48,7 +46,6 @@ impl RamFSObject {
             RamFSObjectState::Data(_) => FSObjectType::File,
             RamFSObjectState::Collection(_) => FSObjectType::Directory,
             RamFSObjectState::StaticDevice(_) => FSObjectType::Device,
-            RamFSObjectState::StaticInterface(_) => FSObjectType::Device,
         }
     }
 
@@ -56,7 +53,7 @@ impl RamFSObject {
         match self.state {
             RamFSObjectState::Data(ref data) => data.len(),
             RamFSObjectState::Collection(ref collection) => collection.len(),
-            RamFSObjectState::StaticDevice(_) | RamFSObjectState::StaticInterface(_) => 0,
+            RamFSObjectState::StaticDevice(_) => 0,
         }
     }
 
@@ -291,20 +288,6 @@ impl RamFS {
         Ok(id)
     }
 
-    /// Create a new device object and returns its ID
-    fn add_device_interface(
-        &mut self,
-        interface: &'static dyn DeviceInterface,
-    ) -> FSResult<FSObjectID> {
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let object = RamFSObject::new(RamFSObjectState::StaticInterface(interface));
-
-        self.objects.insert(id, object);
-        Ok(id)
-    }
-
     /// Get a reference to a file object, returns an error if the object does not exist, unlike `get` which returns None
     fn fget(&self, id: FSObjectID) -> FSResult<&RamFSObject> {
         self.get(id).ok_or(FSError::NotFound)
@@ -419,30 +402,6 @@ impl RamFS {
         Ok(created_id)
     }
 
-    fn create_device_interface(
-        &mut self,
-        parent_id: FSObjectID,
-        name: &str,
-        interface: &'static dyn DeviceInterface,
-    ) -> FSResult<FSObjectID> {
-        let name = FileName::try_from(name).map_err(|_| FSError::InvalidName)?;
-
-        // ensures that the parent exists and is a collection (directory)
-        let parent = self.fget(parent_id)?;
-        if !parent.is_collection() {
-            return Err(FSError::NotADirectory);
-        }
-
-        // actually create the directory
-        let created_id = self.add_device_interface(interface)?;
-        let parent = self.fget_mut(parent_id)?;
-
-        // append the child to the parent's children collection
-        parent.add_child(created_id, name)?;
-
-        Ok(created_id)
-    }
-
     fn remove(
         &mut self,
         child_name: &str,
@@ -518,16 +477,6 @@ impl FileSystem for RwLock<RamFS> {
         self.write().create_device(parent_id, name, device)
     }
 
-    fn mount_device_interface(
-        &self,
-        parent_id: FSObjectID,
-        name: &str,
-        interface: &'static dyn DeviceInterface,
-    ) -> FSResult<FSObjectID> {
-        self.write()
-            .create_device_interface(parent_id, name, interface)
-    }
-
     fn resolve_path_rel(&self, parent_id: FSObjectID, path: PathParts) -> FSResult<FSObjectID> {
         super::resolve_path_parts(parent_id, path, |_, parent_id, obj_name| {
             let read_guard = self.read();
@@ -536,15 +485,11 @@ impl FileSystem for RwLock<RamFS> {
         })
     }
 
-    fn on_open(&self, id: FSObjectID) -> FSResult<Option<Box<dyn Device>>> {
+    fn on_open(&self, id: FSObjectID) -> FSResult<()> {
         let read_guard = self.read();
         let obj = read_guard.fget(id)?;
         obj.opened_handles.fetch_add(1, Ordering::Relaxed);
-        let results = match obj.state {
-            RamFSObjectState::StaticInterface(i) => Some(i.open()),
-            _ => None,
-        };
-        Ok(results)
+        Ok(())
     }
 
     fn remove(&self, child_name: &str, parent_id: FSObjectID, id: FSObjectID) -> FSResult<()> {

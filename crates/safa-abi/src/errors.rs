@@ -69,17 +69,20 @@ pub enum ErrorStatus {
     TooShort = 0x25,
     /// Failed to connect to an address because it wasn't found
     AddressNotFound = 0x26,
+    /// A given input buffer size is not acceptable by the attempted operation
+    InvalidSize = 0x27,
 }
 
 impl ErrorStatus {
     // update when a new error is added
-    const MAX: u16 = Self::AddressNotFound as u16;
+    const MAX: u16 = Self::InvalidSize as u16;
 
     #[inline(always)]
     /// Gives a string description of the error
     pub fn as_str(&self) -> &'static str {
         use ErrorStatus::*;
         match *self {
+            InvalidSize => "Invalid Size",
             AddressNotFound => "Address Not Found",
             TooShort => "Too Short",
             Generic => "Generic Error",
