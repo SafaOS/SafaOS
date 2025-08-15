@@ -8,3 +8,6 @@
 	path = limine
 	url = https://github.com/limine-bootloader/limine
 	branch = v9.x-binary
+[submodule "crates-user/OpalWM"]
+	path = crates-user/OpalWM
+	url = https://github.com/SafaOS/OpalWM
