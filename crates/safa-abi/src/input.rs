@@ -2,10 +2,51 @@
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u32)]
+pub enum MouseEventKind {
+    Null = 0,
+    ButtonPress = 1,
+    ButtonRelease = 2,
+    AxisChange = 3,
+}
+
+// TODO: should this be 32 bits? for alignment reason it will be anyways but perhaps
+// I can do layout changes to all of this, I guess I need a generic layout for all kind of event producing devices?
+#[derive(Debug, Clone, Copy)]
+#[repr(u32)]
+pub enum MiceBtn {
+    Null = 0,
+    Left = 1,
+    Middle = 2,
+    Right = 3,
+}
+
+/// Describes a Mice change event
+#[derive(Debug, Clone, Copy)]
+pub struct MiceEvent {
+    pub kind: MouseEventKind,
+    pub button_changed: MiceBtn,
+    pub x_rel_change: i16,
+    pub y_rel_change: i16,
+}
+
+impl MiceEvent {
+    /// Constructs a null event
+    pub const fn null() -> Self {
+        Self {
+            kind: MouseEventKind::Null,
+            button_changed: MiceBtn::Null,
+            x_rel_change: 0,
+            y_rel_change: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u32)]
 pub enum KeyEventKind {
     Null = 0,
-    Press,
-    Release,
+    Press = 1,
+    Release = 2,
 }
 
 /// A Key event sent by a Keyboard Driver
