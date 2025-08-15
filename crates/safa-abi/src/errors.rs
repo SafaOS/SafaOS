@@ -46,6 +46,7 @@ pub enum ErrorStatus {
     InvalidCommand = 0x1A,
     /// A given Argument is invalid
     InvalidArgument = 0x1B,
+    /// For example happens when a new error is added here, returned by a syscall and the Userspace App isn't aware of what that error means because it's ABI is out of date
     Unknown = 0x1C,
     /// A panick or a fatal exception occurred, used for example when the rust runtime panics and it wants to exit the process with a value
     Panic = 0x1D,
@@ -123,17 +124,30 @@ impl ErrorStatus {
             WouldBlock => "Operation Would Block",
         }
     }
+
+    /// Try to convert a given `value` into an error code
+    pub const fn try_from_u16(value: u16) -> Result<Self, ()> {
+        if value > 0 && value <= Self::MAX {
+            Ok(unsafe { core::mem::transmute(value) })
+        } else {
+            Err(())
+        }
+    }
+    /// Converts a given `value` into an error code on failure, returns [`Self::Unknown`]
+    pub const fn from_u16(value: u16) -> Self {
+        /* const hack instead of unwrap_or */
+        match Self::try_from_u16(value) {
+            Ok(k) => k,
+            Err(()) => Self::Unknown,
+        }
+    }
 }
 
 impl TryFrom<u16> for ErrorStatus {
     type Error = ();
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
-        if value > 0 && value <= Self::MAX {
-            Ok(unsafe { core::mem::transmute(value) })
-        } else {
-            Err(())
-        }
+        Self::try_from_u16(value)
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
