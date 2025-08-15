@@ -19,7 +19,10 @@ use serial::init_serial;
 use crate::{
     arch::x86_64::{
         gdt::TaskStateSegment,
-        interrupts::handlers::{FLUSH_CACHE_ALL_ID, HALT_ALL_HANDLER_ID},
+        interrupts::{
+            handlers::{FLUSH_CACHE_ALL_ID, HALT_ALL_HANDLER_ID},
+            ps2,
+        },
         registers::RFLAGS,
         utils::TICKS_PER_MS,
     },
@@ -109,7 +112,11 @@ pub(super) fn setup_cpu_generic1(tsc_ticks_per_ms: &mut u64) {
 #[inline]
 pub fn init_phase2() {
     setup_cpu_generic1(unsafe { &mut *TICKS_PER_MS.get() });
+
+    ps2::disable_controller();
+    apic::enable_apic_mouse();
     apic::enable_apic_keyboard();
+    ps2::enable_controller();
 }
 
 /// Executes a function without interrupts enabled

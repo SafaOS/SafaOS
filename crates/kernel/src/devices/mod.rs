@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 use crate::{
     arch::serial::SERIAL,
     debug,
-    devices::input::keyboard::KEYBOARD_EVENT_QUEUE,
+    devices::input::{keyboard::KEYBOARD_EVENT_QUEUE, mouse::MICE_EVENT_QUEUE},
     drivers::{
         framebuffer::FRAMEBUFFER_DRIVER,
         vfs::{self, FSError, FSResult, SeekOffset, VFS},
@@ -40,6 +40,8 @@ pub fn init(vfs: &mut VFS) {
     add_device(vfs, &*SERIAL);
     add_device(vfs, &*FRAMEBUFFER_DRIVER);
     add_device(vfs, &KEYBOARD_EVENT_QUEUE);
+    add_device(vfs, &MICE_EVENT_QUEUE);
+
     let elapsed = time!(ms) - now;
     debug!(VFS, "Initialized devices in ({}ms) ...", elapsed);
 }

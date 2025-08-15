@@ -2,6 +2,7 @@ pub mod apic;
 pub mod handlers;
 mod idt;
 mod pit;
+pub mod ps2;
 
 use core::{arch::asm, fmt::Display};
 use handlers::IDT;

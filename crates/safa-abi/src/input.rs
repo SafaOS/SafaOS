@@ -4,27 +4,44 @@
 #[repr(u32)]
 pub enum MouseEventKind {
     Null = 0,
-    ButtonPress = 1,
-    ButtonRelease = 2,
-    AxisChange = 3,
+    /// Represents a change in the mouse status, for now the mouse doesn't report the exact event change because there could be multiple
+    Change = 3, /* 3 to not collide with the keyboard's */
 }
 
 // TODO: should this be 32 bits? for alignment reason it will be anyways but perhaps
 // I can do layout changes to all of this, I guess I need a generic layout for all kind of event producing devices?
-#[derive(Debug, Clone, Copy)]
-#[repr(u32)]
-pub enum MiceBtn {
-    Null = 0,
-    Left = 1,
-    Middle = 2,
-    Right = 3,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct MiceBtnStatus(u32);
+
+impl MiceBtnStatus {
+    pub const BTN_LEFT: Self = Self(1);
+    pub const BTN_RIGHT: Self = Self(2);
+    pub const BTN_MID: Self = Self(3);
+    pub const NO_BUTTONS: Self = Self(0);
+
+    pub const fn contains(&self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    pub const fn or(&self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub const fn and(&self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    pub const fn not(&self) -> Self {
+        Self(!self.0)
+    }
 }
 
 /// Describes a Mice change event
 #[derive(Debug, Clone, Copy)]
 pub struct MiceEvent {
     pub kind: MouseEventKind,
-    pub button_changed: MiceBtn,
+    pub buttons_status: MiceBtnStatus,
     pub x_rel_change: i16,
     pub y_rel_change: i16,
 }
@@ -34,7 +51,7 @@ impl MiceEvent {
     pub const fn null() -> Self {
         Self {
             kind: MouseEventKind::Null,
-            button_changed: MiceBtn::Null,
+            buttons_status: MiceBtnStatus(0),
             x_rel_change: 0,
             y_rel_change: 0,
         }

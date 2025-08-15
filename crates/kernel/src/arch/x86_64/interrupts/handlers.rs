@@ -8,12 +8,14 @@ use super::idt::{GateDescriptor, IDTT};
 use super::{InterruptFrame, TrapFrame};
 
 use crate::arch::x86_64::interrupts::apic::send_eoi;
-use crate::arch::x86_64::{flush_cache_inner, inb, threading};
-use crate::{drivers, khalt, serial};
+use crate::arch::x86_64::interrupts::ps2::{self};
+use crate::arch::x86_64::{flush_cache_inner, threading};
+use crate::{khalt, serial};
 
 pub const HALT_ALL_HANDLER_ID: u8 = 0x23;
 pub const FLUSH_CACHE_ALL_ID: u8 = 0x24;
 pub const APIC_ERROR_HANDLER_ID: u8 = 0x25;
+pub const MOUSE_HANDLER_ID: u8 = 0x26;
 
 pub const ATTR_TRAP: u8 = 0xF;
 pub const ATTR_INT: u8 = 0xE;
@@ -58,6 +60,7 @@ lazy_static! {
         (HALT_ALL_HANDLER_ID, halt_handler, ATTR_INT),
         (FLUSH_CACHE_ALL_ID, flush_cache_handler, ATTR_INT),
         (APIC_ERROR_HANDLER_ID, apic_err, ATTR_INT),
+        (MOUSE_HANDLER_ID, mice_handler, ATTR_INT),
         (0x80, syscall_base, ATTR_INT | ATTR_RING3),
         (0x81, do_nothing, ATTR_INT)
     );
@@ -109,27 +112,13 @@ extern "x86-interrupt" fn page_fault_handler(frame: TrapFrame) {
     panic!("---- Page Fault ----\naddress: {:#x}\n{}", cr2, frame)
 }
 
-#[inline]
-pub fn handle_ps2_keyboard() {
-    use drivers::keyboard;
-    use keyboard::{KEYBOARD, set1::Set1Key};
-
-    let key = inb(0x60);
-    // outside of this function the keyboard should only be read from
-    if let Some(results) = KEYBOARD
-        .try_write()
-        .map(|mut writer| writer.process_byte::<Set1Key>(key))
-        .flatten()
-    {
-        match results {
-            Ok(key) => keyboard::key_pressed(key),
-            Err(keycode) => keyboard::key_release(keycode),
-        }
-    }
+pub extern "x86-interrupt" fn keyboard_interrupt_handler() {
+    ps2::handle_ps2_keyboard();
+    send_eoi();
 }
 
-pub extern "x86-interrupt" fn keyboard_interrupt_handler() {
-    handle_ps2_keyboard();
+pub extern "x86-interrupt" fn mice_handler() {
+    ps2::mice_handler();
     send_eoi();
 }
 

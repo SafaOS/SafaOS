@@ -5,7 +5,7 @@ use crate::{
         paging::PageTable,
         x86_64::{
             acpi,
-            interrupts::handlers::APIC_ERROR_HANDLER_ID,
+            interrupts::handlers::{APIC_ERROR_HANDLER_ID, MOUSE_HANDLER_ID},
             outb,
             registers::{rdmsr, wrmsr},
             utils::APIC_TIMER_TICKS_PER_MS,
@@ -326,6 +326,22 @@ pub fn enable_apic_keyboard() {
         write_ioapic_irq(1, keyboard);
 
         info!("enabled APIC Keyboard.");
+    }
+}
+
+pub fn enable_apic_mouse() {
+    unsafe {
+        super::ps2::setup_ps2_mouse();
+
+        let lapic_addr = get_lapic_addr();
+        let lapic_id = get_lapic_id(lapic_addr);
+
+        let mouse = IOREDTBL::new()
+            .with_vector(MOUSE_HANDLER_ID)
+            .with_destination(lapic_id);
+        write_ioapic_irq(12, mouse);
+
+        info!("enabled APIC mouse");
     }
 }
 
