@@ -1,10 +1,12 @@
 use core::{
+    mem::ManuallyDrop,
     num::NonZero,
     ptr::NonNull,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use crate::{
+    eve,
     memory::{
         AlignTo, AlignToPage, copy_to_userspace,
         paging::{EntryFlags, Page},
@@ -110,6 +112,17 @@ impl Process {
 
     pub fn ppid(&self) -> Pid {
         self.ppid.load(Ordering::Relaxed)
+    }
+
+    /// Cleans up the Resources and the memory space of self
+    pub unsafe fn cleanup(&self) {
+        unsafe {
+            assert!(!self.vasa.is_locked());
+            assert!(!self.resources.is_locked());
+
+            *self.resources.write() = ResourceManager::new();
+            ManuallyDrop::drop(&mut self.vasa.lock().page_table);
+        }
     }
 
     fn allocate_root_thread_memory_inner(
@@ -600,17 +613,18 @@ impl Process {
         self.vasa.lock()
     }
 
+    // TODO: Implement ArcProcess
     /// kills the process
     /// if `killed_by` is `None` the process will be killed by itself
     /// # Safety
     /// If this function was called on the current process, the caller must call it without interrupts enabled.
-    pub unsafe fn kill(&self, exit_code: usize, killed_by: Option<Pid>) {
-        let pid = self.pid();
+    pub unsafe fn kill(this: &Arc<Process>, exit_code: usize, killed_by: Option<Pid>) {
+        let pid = this.pid();
         let killed_by = killed_by.unwrap_or(pid);
 
-        let threads = self.threads.lock();
+        let threads = this.threads.lock();
         // Set state to dead
-        *self.exit_info.write() = Some(ExitInfo {
+        *this.exit_info.write() = Some(ExitInfo {
             exit_code,
             killed_by,
         });
@@ -625,13 +639,14 @@ impl Process {
             Process,
             "Process {} ({}) TERMINATED with code {} by {}",
             pid,
-            self.name(),
+            this.name(),
             exit_code,
             killed_by
         );
 
         drop(threads);
-        self.is_alive.store(false, Ordering::Release);
+        this.is_alive.store(false, Ordering::Release);
+        eve::schedule_proc_cleanup(this.clone());
     }
 
     pub(super) fn info(&self) -> ProcessInfo {

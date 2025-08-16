@@ -14,7 +14,7 @@ pub fn exit(code: usize) -> ! {
         // current process should be dropped after this
         unsafe {
             let current_process = process::current();
-            current_process.kill(code, None)
+            Process::kill(&current_process, code, None)
         }
         thread::current::yield_now();
         unreachable!("process didn't exit")

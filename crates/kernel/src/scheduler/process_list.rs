@@ -4,7 +4,6 @@ use slab::Slab;
 use crate::{
     debug,
     process::{Pid, Process, ProcessInfo},
-    thread,
     utils::locks::RwLock,
 };
 
@@ -79,24 +78,6 @@ impl ProcessList {
         };
 
         let process = remove_proc()?;
-
-        let mut threads = process.threads.lock();
-        for thread in &*threads {
-            assert!(thread.is_dead());
-            // wait for thread to exit before removing
-            // will be removed on context switch at some point
-            while !thread.is_removed() {
-                // --> thread is removed on thread yield by the scheduler as a part of the thread list iteration
-                // one thread yield should be enough
-                thread::current::yield_now();
-                // however maybe the thread list is in another CPU...
-                core::hint::spin_loop();
-            }
-        }
-        // Because processes are referenced by their own threads, we need to clear the threads so they drop the process reference
-        // TODO: Maybe move this somewhere else
-        threads.clear();
-
         let info = process.info();
 
         self.pids.remove(info.pid as usize);

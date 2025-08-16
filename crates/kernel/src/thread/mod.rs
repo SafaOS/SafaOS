@@ -273,7 +273,7 @@ impl ArcThread {
             self.soft_kill(process_dead);
 
             if process_dead {
-                process.kill(exit_code, None);
+                Process::kill(&process, exit_code, None);
             }
         }
     }

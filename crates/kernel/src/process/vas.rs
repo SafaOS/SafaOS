@@ -1,5 +1,7 @@
 //! Process's Virtual Address Space related things
 
+use core::mem::ManuallyDrop;
+
 use alloc::boxed::Box;
 
 use crate::{
@@ -78,7 +80,7 @@ impl Drop for TrackedMemoryMapping {
 #[derive(Debug)]
 /// Process Virtual Address Space Allocator
 pub struct ProcVASA {
-    pub(super) page_table: PhysPageTable,
+    pub(super) page_table: ManuallyDrop<PhysPageTable>,
     executable_end: VirtAddr,
     lookup_start: VirtAddr,
 
@@ -89,7 +91,7 @@ pub struct ProcVASA {
 impl ProcVASA {
     pub const fn new(page_table: PhysPageTable, executable_end: VirtAddr) -> Self {
         Self {
-            page_table,
+            page_table: ManuallyDrop::new(page_table),
             executable_end,
             data_break: executable_end,
             // Gives sbrk 64 GiB of memory to use
@@ -184,7 +186,7 @@ impl ProcVASA {
         let (start_page, end_page) =
             self.map_n_pages(addr_hint, n, guard_pages, flags, core::iter::empty())?;
         Ok(TrackedMemoryMapping {
-            page_table: &mut *self.page_table,
+            page_table: &mut **self.page_table,
             start_page,
             end_page,
             interface: None,
@@ -220,7 +222,7 @@ impl ProcVASA {
         let (start_page, end_page) =
             self.map_n_pages(addr_hint, n, guard_pages, flags, frames.iter().copied())?;
         Ok(TrackedMemoryMapping {
-            page_table: &mut *self.page_table,
+            page_table: &mut **self.page_table,
             start_page,
             end_page,
             interface,

@@ -5,12 +5,14 @@ use core::cell::SyncUnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::drivers::driver_poll::{self, PolledDriver};
+use crate::process::Process;
 use crate::serial;
 use crate::thread::{self, ArcThread, ContextPriority, Tid};
 use crate::utils::alloc::PageString;
 use crate::utils::locks::Mutex;
 use crate::utils::path::make_path;
 use crate::{debug, fs, logging, process};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use safa_abi::fs::OpenOptions;
@@ -31,10 +33,15 @@ lazy_static! {
         SyncUnsafeCell::new(driver_poll::take_poll());
 }
 
-struct CleanupItem {
-    context_switch_count: &'static AtomicUsize,
-    at_context_switch_count: usize,
-    thread: ArcThread,
+pub enum CleanupItem {
+    Thread {
+        context_switch_count: &'static AtomicUsize,
+        at_context_switch_count: usize,
+        thread: ArcThread,
+    },
+    Process {
+        proc: Arc<Process>,
+    },
 }
 
 unsafe impl Send for CleanupItem {}
@@ -115,13 +122,37 @@ pub fn idle_function() -> ! {
             // TODO: Maybe there is a faster method to handle this
             to_cleanup.retain(|item| {
                 // only remove items that's been around beyond or at `at_context_switch_count`
-                if item.context_switch_count.load(Ordering::Acquire) >= item.at_context_switch_count
-                {
-                    unsafe { item.thread.cleanup() };
-                    SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
-                    false
-                } else {
-                    true
+                match item {
+                    CleanupItem::Thread {
+                        context_switch_count,
+                        at_context_switch_count,
+                        thread,
+                    } => {
+                        if context_switch_count.load(Ordering::Acquire) >= *at_context_switch_count
+                        {
+                            unsafe { thread.cleanup() };
+                            SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    CleanupItem::Process { proc } => {
+                        let mut threads = proc.threads.lock();
+                        let can_clean = threads.iter().all(|t| {
+                            assert!(t.is_dead());
+                            t.is_removed()
+                        });
+
+                        if can_clean {
+                            threads.clear();
+                            drop(threads);
+                            unsafe {
+                                proc.cleanup();
+                            }
+                        }
+                        !can_clean
+                    }
                 }
             });
         }
@@ -141,10 +172,20 @@ pub unsafe fn schedule_thread_cleanup(
     let mut to_cleanup = TO_CLEANUP.lock();
     // reserve space for the new item
     to_cleanup.reserve(1);
-    to_cleanup.push(CleanupItem {
+    to_cleanup.push(CleanupItem::Thread {
         thread,
         context_switch_count: context_switch_count_ref,
         at_context_switch_count: context_switch_count_ref.load(Ordering::Acquire) + 2,
     });
+    SHOULD_WAKEUP.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Schedules a Process for cleanup
+/// when all it's threads are cleaned up
+pub fn schedule_proc_cleanup(proc: Arc<Process>) {
+    let mut to_cleanup = TO_CLEANUP.lock();
+    // reserve space for the new item
+    to_cleanup.reserve(1);
+    to_cleanup.push(CleanupItem::Process { proc });
     SHOULD_WAKEUP.fetch_add(1, Ordering::SeqCst);
 }
