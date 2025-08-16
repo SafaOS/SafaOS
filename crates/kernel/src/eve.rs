@@ -74,12 +74,6 @@ pub fn main() -> ! {
     {
         use crate::process::spawn::{SpawnFlags, pspawn};
         use crate::utils::types::Name;
-        use crate::{info, sleep};
-
-        info!(
-            "kernel finished boot, waiting a delay of 2.5 second(s), FIXME: fix needing hardcoded delay to let the XHCI finish before the Shell"
-        );
-        sleep!(2500 ms);
 
         // start the shell
         pspawn(
