@@ -114,6 +114,30 @@ impl<'a> FrameBuffer<'a> {
         self.sync_pixels(0, self.info.stride * self.info.height);
     }
 
+    pub fn sync_pixels_rect(&mut self, off_x: usize, off_y: usize, width: usize, height: usize) {
+        let bytes_per_pixel = self.info.bytes_per_pixel;
+
+        let pixels = &self.pixel_buffer
+            [self.buffer_display_index..self.buffer_display_index + self.video_buffer.len() / 4];
+
+        for row in 0..height {
+            let start = off_x + ((off_y + row) * self.info.stride);
+            let end = start + width;
+
+            let pixels = &pixels[start..end];
+
+            let start_byte = start * bytes_per_pixel;
+            for (indx, pix) in pixels.iter().copied().enumerate() {
+                let indx = start_byte + (indx * bytes_per_pixel);
+                let pixel_bytes = pix.to_ne_bytes();
+
+                self.video_buffer[indx + 0] = pixel_bytes[0];
+                self.video_buffer[indx + 1] = pixel_bytes[1];
+                self.video_buffer[indx + 2] = pixel_bytes[2];
+            }
+        }
+    }
+
     /// Syncs pixel_count pixels in the buffer to the actual video_buffer starting at pixel_start
     pub fn sync_pixels(&mut self, pixel_start: usize, pixel_count: usize) {
         let width = self.info.stride;

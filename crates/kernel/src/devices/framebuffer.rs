@@ -26,6 +26,7 @@ pub struct FramebufferDevInfo {
 enum Cmd {
     Sync,
     GetInfo,
+    SyncRect,
 }
 
 impl MemMappedInterface for FrameBufferDriver {
@@ -86,6 +87,21 @@ impl Device for FrameBufferDriver {
                 let start_pixel = (arg & (u32::MAX as u64)) as usize;
                 let count = ((arg >> 32) & (u32::MAX as u64)) as usize;
                 self.buffer().sync_pixels(start_pixel, count);
+            }
+            Cmd::SyncRect => {
+                #[derive(Debug, Clone, Copy)]
+                #[repr(C)]
+                struct SyncRect {
+                    off_x: usize,
+                    off_y: usize,
+                    width: usize,
+                    height: usize,
+                }
+
+                let ptr = arg as *const SyncRect;
+                let rect = unsafe { *ptr };
+                self.buffer()
+                    .sync_pixels_rect(rect.off_x, rect.off_y, rect.width, rect.height);
             }
         }
 
