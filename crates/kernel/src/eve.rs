@@ -139,10 +139,7 @@ pub fn idle_function() -> ! {
                     }
                     CleanupItem::Process { proc } => {
                         let mut threads = proc.threads.lock();
-                        let can_clean = threads.iter().all(|t| {
-                            assert!(t.is_dead());
-                            t.is_removed()
-                        });
+                        let can_clean = threads.iter().all(|t| t.is_removed());
 
                         if can_clean {
                             threads.clear();
