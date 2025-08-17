@@ -82,11 +82,7 @@ impl Device for FrameBufferDriver {
                 };
             }
             Cmd::Sync => {
-                // the lower 32 bits of the argument is the start pixel
-                // the higher 32 bits is the amount of pixels to sync
-                let start_pixel = (arg & (u32::MAX as u64)) as usize;
-                let count = ((arg >> 32) & (u32::MAX as u64)) as usize;
-                self.buffer().sync_pixels(start_pixel, count);
+                self.buffer().sync_pixels_full();
             }
             Cmd::SyncRect => {
                 #[derive(Debug, Clone, Copy)]

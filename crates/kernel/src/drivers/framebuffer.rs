@@ -111,7 +111,7 @@ impl<'a> FrameBuffer<'a> {
     }
 
     pub fn sync_pixels_full(&mut self) {
-        self.sync_pixels(0, self.info.stride * self.info.height);
+        self.sync_pixels_rect(0, 0, self.info.stride, self.info.height);
     }
 
     pub fn sync_pixels_rect(&mut self, off_x: usize, off_y: usize, width: usize, height: usize) {
@@ -138,40 +138,12 @@ impl<'a> FrameBuffer<'a> {
         }
     }
 
-    /// Syncs pixel_count pixels in the buffer to the actual video_buffer starting at pixel_start
-    pub fn sync_pixels(&mut self, pixel_start: usize, pixel_count: usize) {
-        let width = self.info.stride;
-        let bytes_per_pixel = self.info.bytes_per_pixel;
-        let pitch = width * bytes_per_pixel;
-
-        let pixels = &self.pixel_buffer
-            [self.buffer_display_index..self.buffer_display_index + self.video_buffer.len() / 4];
-
-        let start = pixel_start.min(pixels.len() - 1);
-        let end = (start + pixel_count).min(pixels.len());
-
-        for i in start..end {
-            let row = i / width;
-            let row_start = row * pitch;
-
-            let col = i % width;
-
-            let indx = row_start + (col * bytes_per_pixel);
-
-            let pixel = pixels[i];
-            let pixel_bytes = pixel.to_ne_bytes();
-
-            self.video_buffer[indx + 0] = pixel_bytes[0];
-            self.video_buffer[indx + 1] = pixel_bytes[1];
-            self.video_buffer[indx + 2] = pixel_bytes[2];
-        }
-    }
-
     #[inline]
-    /// shifts the buffer by `pixels` pixels
+    /// shifts the buffer by `width` * framebuffer width pixels
     /// can be used to achieve scrolling
     /// ensures that there are self.width() * self.height() pixels to draw
-    pub fn shift_buffer(&mut self, pixels: isize) {
+    pub fn shift_buffer(&mut self, width: isize) {
+        let pixels = width * self.info.stride as isize;
         match pixels.cmp(&0) {
             core::cmp::Ordering::Less => {
                 let amount = -pixels as usize;
