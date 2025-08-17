@@ -92,8 +92,12 @@ impl PageAllocator {
                 while byte_ref & mask != 0 && bit <= usize::BITS - page_count as u32 {
                     let trailing_zeros = byte_ref.trailing_zeros();
                     let shift = trailing_zeros + (byte_ref >> trailing_zeros).trailing_ones();
-                    byte_ref >>= shift;
+
                     bit += shift;
+                    byte_ref = match byte_ref.checked_shr(shift) {
+                        Some(b) => b,
+                        None => continue,
+                    };
                 }
 
                 if bit <= usize::BITS - page_count as u32 {
