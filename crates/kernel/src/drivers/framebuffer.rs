@@ -114,6 +114,13 @@ impl<'a> FrameBuffer<'a> {
     }
 
     pub fn sync_pixels_rect(&mut self, off_x: usize, off_y: usize, width: usize, height: usize) {
+        if off_x >= self.info.width || off_y >= self.info.height {
+            return;
+        }
+
+        let width = width.min(self.info.width - off_x);
+        let height = height.min(self.info.height - off_y);
+
         let bytes_per_pixel = self.info.bytes_per_pixel;
 
         let pixels = &self.pixel_buffer[self.buffer_display_index
