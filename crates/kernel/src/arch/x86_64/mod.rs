@@ -26,7 +26,7 @@ use crate::{
         registers::RFLAGS,
         utils::TICKS_PER_MS,
     },
-    info, sleep,
+    info, sleep, warn,
 };
 
 use self::gdt::init_gdt;
@@ -113,10 +113,13 @@ pub(super) fn setup_cpu_generic1(tsc_ticks_per_ms: &mut u64) {
 pub fn init_phase2() {
     setup_cpu_generic1(unsafe { &mut *TICKS_PER_MS.get() });
 
-    ps2::disable_controller();
-    apic::enable_apic_mouse();
-    apic::enable_apic_keyboard();
-    ps2::enable_controller();
+    match ps2::setup_controller() {
+        Ok((true, true)) => (apic::enable_apic_keyboard(), apic::enable_apic_mouse()),
+        Ok((false, false)) => (warn!("No devices found in the PS/2 Controller"), ()),
+        Ok((true, false)) => (apic::enable_apic_keyboard(), ()),
+        Ok((false, true)) => (apic::enable_apic_mouse(), ()),
+        Err(()) => (crate::error!("PS/2 Controller setup failed"), ()),
+    };
 }
 
 /// Executes a function without interrupts enabled

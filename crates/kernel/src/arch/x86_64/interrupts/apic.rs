@@ -331,8 +331,6 @@ pub fn enable_apic_keyboard() {
 
 pub fn enable_apic_mouse() {
     unsafe {
-        super::ps2::setup_ps2_mouse();
-
         let lapic_addr = get_lapic_addr();
         let lapic_id = get_lapic_id(lapic_addr);
 
