@@ -43,7 +43,7 @@ impl MicePacket {
         }
 
         if self.header.x_axis_neg() {
-            -(self.x_axis_mov as i16)
+            (self.x_axis_mov as i16) - 0x100
         } else {
             self.x_axis_mov as i16
         }
@@ -55,7 +55,7 @@ impl MicePacket {
         }
 
         if self.header.y_axis_neg() {
-            -(self.y_axis_mov as i16)
+            (self.y_axis_mov as i16) - 0x100
         } else {
             self.y_axis_mov as i16
         }
