@@ -23,7 +23,8 @@ pub enum PixelFormat {
 #[derive(Debug, Clone, Copy)]
 pub struct FrameBufferInfo {
     /// number of pixels between start of a line and another
-    pub stride: usize,
+    pub width: usize,
+    pub pitch: usize,
     pub height: usize,
     pub bytes_per_pixel: usize,
     pub _pixel_format: PixelFormat,
@@ -42,10 +43,8 @@ impl<'a> FrameBuffer<'a> {
         pixels_buffers_count: usize,
         info: FrameBufferInfo,
     ) -> Self {
-        let mut pixel_buffer = Vec::with_capacity_in(
-            (info.stride * info.height) * pixels_buffers_count,
-            PageAlloc,
-        );
+        let mut pixel_buffer =
+            Vec::with_capacity_in((info.width * info.height) * pixels_buffers_count, PageAlloc);
         unsafe {
             pixel_buffer.set_len(pixel_buffer.capacity());
         }
@@ -67,7 +66,7 @@ impl<'a> FrameBuffer<'a> {
 
     #[inline(always)]
     pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {
-        let index = x + y * self.info.stride;
+        let index = x + y * self.info.width;
         self.pixel_buffer[self.buffer_display_index + index] = color.into_u32();
     }
 
@@ -111,29 +110,43 @@ impl<'a> FrameBuffer<'a> {
     }
 
     pub fn sync_pixels_full(&mut self) {
-        self.sync_pixels_rect(0, 0, self.info.stride, self.info.height);
+        self.sync_pixels_rect(0, 0, self.info.width, self.info.height);
     }
 
     pub fn sync_pixels_rect(&mut self, off_x: usize, off_y: usize, width: usize, height: usize) {
         let bytes_per_pixel = self.info.bytes_per_pixel;
 
-        let pixels = &self.pixel_buffer
-            [self.buffer_display_index..self.buffer_display_index + self.video_buffer.len() / 4];
+        let pixels = &self.pixel_buffer[self.buffer_display_index
+            ..self.buffer_display_index + (self.info.width * self.info.height)];
 
         for row in 0..height {
-            let start = off_x + ((off_y + row) * self.info.stride);
+            let start = off_x + ((off_y + row) * self.info.width);
             let end = start + width;
 
             let pixels = &pixels[start..end];
 
-            let start_byte = start * bytes_per_pixel;
-            for (indx, pix) in pixels.iter().copied().enumerate() {
-                let indx = start_byte + (indx * bytes_per_pixel);
-                let pixel_bytes = pix.to_ne_bytes();
+            let start_byte = (off_x * bytes_per_pixel) + ((off_y + row) * self.info.pitch);
+            let end_byte = start_byte + (width * bytes_per_pixel);
 
-                self.video_buffer[indx + 0] = pixel_bytes[0];
-                self.video_buffer[indx + 1] = pixel_bytes[1];
-                self.video_buffer[indx + 2] = pixel_bytes[2];
+            if self.info.bytes_per_pixel == size_of::<u32>() {
+                let to = &mut self.video_buffer[start_byte..end_byte];
+                let as_u32 = unsafe {
+                    core::slice::from_raw_parts_mut(
+                        to.as_mut_ptr() as *mut u32,
+                        to.len() / size_of::<u32>(),
+                    )
+                };
+                as_u32.copy_from_slice(pixels);
+            } else {
+                for (indx, pix) in pixels.iter().copied().enumerate() {
+                    let indx = (indx * bytes_per_pixel) + start_byte;
+
+                    let pixel_bytes = pix.to_ne_bytes();
+
+                    self.video_buffer[indx + 0] = pixel_bytes[0];
+                    self.video_buffer[indx + 1] = pixel_bytes[1];
+                    self.video_buffer[indx + 2] = pixel_bytes[2];
+                }
             }
         }
     }
@@ -143,7 +156,7 @@ impl<'a> FrameBuffer<'a> {
     /// can be used to achieve scrolling
     /// ensures that there are self.width() * self.height() pixels to draw
     pub fn shift_buffer(&mut self, width: isize) {
-        let pixels = width * self.info.stride as isize;
+        let pixels = width * self.info.width as isize;
         match pixels.cmp(&0) {
             core::cmp::Ordering::Less => {
                 let amount = -pixels as usize;
@@ -152,7 +165,7 @@ impl<'a> FrameBuffer<'a> {
             core::cmp::Ordering::Greater => {
                 let amount = pixels as usize;
                 /* subtracting one screen from the buffer */
-                let max_index = self.pixel_buffer.len() - (self.info.stride * self.info.height);
+                let max_index = self.pixel_buffer.len() - (self.info.width * self.info.height);
                 let new_index = self.buffer_display_index + amount;
 
                 if new_index <= max_index {
@@ -224,7 +237,7 @@ impl FrameBufferDriver {
 
     #[inline(always)]
     pub fn width(&self) -> usize {
-        self.info.stride
+        self.info.width
     }
 
     #[inline(always)]

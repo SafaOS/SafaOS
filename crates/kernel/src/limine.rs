@@ -124,19 +124,19 @@ fn get_framebuffer() -> (&'static mut [u8], FrameBufferInfo) {
     };
 
     let bytes_per_pixel = (first.bpp().to_next_multiple_of(8) / 8) as usize;
-    let stride = first.pitch() as usize / bytes_per_pixel;
     let height = first.height() as usize;
 
     let info = FrameBufferInfo {
         bytes_per_pixel,
-        stride,
+        width: first.width() as usize,
+        pitch: first.pitch() as usize,
         height,
         _pixel_format: pixel_format,
     };
 
     assert_eq!(info.bytes_per_pixel, 4);
 
-    let size = (first.width() * first.height() * first.bpp() as u64 / 8) as usize;
+    let size = first.pitch() as usize * (first.height() as usize * bytes_per_pixel);
     let buffer = unsafe { slice::from_raw_parts_mut(first.addr(), size) };
 
     (buffer, info)
