@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use safa_abi::errors::IntoErr;
 
 use crate::{
+    drivers::vfs::FSResult,
     memory::paging::PAGE_SIZE,
     process::current::kernel_thread_spawn,
     thread::{self, Tid},
@@ -436,6 +437,19 @@ pub struct SocketServerConn {
 }
 
 impl SocketServerConn {
+    /// Handles a `SysIOCommand` operation
+    pub fn handle_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
+        const SET_BLOCKING: u16 = 0;
+        match cmd {
+            SET_BLOCKING => {
+                let can_block = arg != 0;
+                self.set_can_block(can_block);
+                Ok(())
+            }
+            _ => Err(crate::drivers::vfs::FSError::InvalidCmd),
+        }
+    }
+
     pub fn can_block(&self) -> bool {
         self.can_block.load(Ordering::Acquire)
     }
@@ -474,6 +488,18 @@ pub struct SocketClientConn {
 }
 
 impl SocketClientConn {
+    /// Handles a `SysIOCommand` operation
+    pub fn handle_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
+        const SET_BLOCKING: u16 = 0;
+        match cmd {
+            SET_BLOCKING => {
+                let can_block = arg != 0;
+                self.set_can_block(can_block);
+                Ok(())
+            }
+            _ => Err(crate::drivers::vfs::FSError::InvalidCmd),
+        }
+    }
     pub fn can_block(&self) -> bool {
         self.can_block.load(Ordering::Acquire)
     }

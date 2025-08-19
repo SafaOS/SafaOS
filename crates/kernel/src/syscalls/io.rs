@@ -143,6 +143,8 @@ fn sysio_command(ri: Ri, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
     resources::get_resource(ri, |res| match res.data() {
         ResourceData::File(f) => f.send_command(cmd, arg),
         ResourceData::TrackedMapping(m) => m.send_command(cmd, arg),
+        ResourceData::ServerSocketConn(conn) => conn.handle_command(cmd, arg),
+        ResourceData::ClientSocketConn(conn) => conn.handle_command(cmd, arg),
         _ => Err(FSError::OperationNotSupported),
     })
 }
