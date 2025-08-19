@@ -22,14 +22,8 @@ fn syswrite(
 
     let wrote = resources::get_resource::<_, _, ErrorStatus>(fd, |r| match r.data() {
         ResourceData::File(fd) => Ok(fd.write(off, buf)?),
-        ResourceData::ServerSocketConn(conn) => {
-            conn.write(buf)?;
-            Ok(buf.len())
-        }
-        ResourceData::ClientSocketConn(conn) => {
-            conn.write(buf)?;
-            Ok(buf.len())
-        }
+        ResourceData::ServerSocketConn(conn) => Ok(conn.write(buf)?),
+        ResourceData::ClientSocketConn(conn) => Ok(conn.write(buf)?),
         _ => Err(ErrorStatus::UnsupportedResource),
     })?;
 

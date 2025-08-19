@@ -32,8 +32,6 @@ pub enum SocketError {
     WouldBlockFull,
     /// Should Block because of an attempted accept while there are no connection requests pending
     WouldBlockNoConnectionRequests,
-    /// Attempted to write data that is too large
-    TooLarge,
     /// One side closed the connection
     ConnectionClosed,
     /// Connection refused for some reason
@@ -48,7 +46,6 @@ impl IntoErr for SocketError {
             }
             Self::ConnectionRefused => safa_abi::errors::ErrorStatus::ConnectionRefused,
             Self::ConnectionClosed => safa_abi::errors::ErrorStatus::ConnectionClosed,
-            Self::TooLarge => safa_abi::errors::ErrorStatus::StrTooLong,
         }
     }
 }
@@ -87,20 +84,19 @@ impl SocketStreamConn {
         Ok(read_len)
     }
 
-    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
+    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
+        let len = buf.len().min(MAX_STREAM_SIZE);
+
         let mut to_write_to = if IS_SERVER {
             self.server_buf.lock()
         } else {
             self.client_buf.lock()
         };
 
-        if buf.len() >= MAX_STREAM_SIZE {
-            return Err(SocketError::TooLarge);
-        }
-
         to_write_to
-            .extend_from_slice(buf)
-            .map_err(|()| SocketError::WouldBlockFull)
+            .extend_from_slice(&buf[..len])
+            .map_err(|()| SocketError::WouldBlockFull)?;
+        Ok(len)
     }
 }
 
@@ -134,17 +130,20 @@ impl SocketSeqPacketConn {
         self.inner.read_inner::<IS_SERVER>(&mut buf[..amount])
     }
 
-    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
-        if buf.len() == 0 {}
+    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
+        if buf.len() == 0 {
+            return Ok(0);
+        }
+
         let mut to_write_to = if IS_SERVER {
             self.server_packets.lock()
         } else {
             self.client_packets.lock()
         };
 
-        self.inner.write_inner::<IS_SERVER>(buf)?;
-        to_write_to.push_back(buf.len());
-        Ok(())
+        let len = self.inner.write_inner::<IS_SERVER>(buf)?;
+        to_write_to.push_back(len);
+        Ok(len)
     }
 }
 
@@ -157,7 +156,7 @@ trait GenericSockConnTrait {
         Self: Sized;
 
     /// A Write operation
-    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError>;
+    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError>;
     /// A Read operation
     fn read<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError>;
 }
@@ -174,7 +173,7 @@ impl GenericSockConnTrait for SocketStreamConn {
         self.read_inner::<IS_SERVER>(buf)
     }
 
-    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
+    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
         self.write_inner::<TARGETS_SERVER>(buf)
     }
 }
@@ -188,7 +187,7 @@ impl GenericSockConnTrait for SocketSeqPacketConn {
         self.read_inner::<IS_SERVER>(buf)
     }
 
-    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
+    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
         self.write_inner::<TARGETS_SERVER>(buf)
     }
 }
@@ -243,7 +242,7 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
         &self,
         buf: &[u8],
         can_block: bool,
-    ) -> Result<(), SocketError> {
+    ) -> Result<usize, SocketError> {
         if self.conn_dropped.load(Ordering::Acquire) {
             return Err(SocketError::ConnectionClosed);
         }
@@ -256,9 +255,9 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
 
         let results = self.inner_conn.write::<TARGETS_SERVER>(buf);
         match results {
-            Ok(()) => {
-                update.fetch_add(buf.len(), Ordering::SeqCst);
-                Ok(())
+            Ok(len) => {
+                update.fetch_add(len, Ordering::SeqCst);
+                Ok(len)
             }
             Err(SocketError::WouldBlockFull) if can_block => {
                 if self.conn_dropped.load(Ordering::Acquire) {
@@ -345,7 +344,7 @@ impl SocketConnState {
         &self,
         buf: &[u8],
         can_block: bool,
-    ) -> Result<(), SocketError> {
+    ) -> Result<usize, SocketError> {
         match self {
             Self::SeqPacket(seq) => seq.write::<TARGETS_SERVER>(buf, can_block),
             Self::Stream(s) => s.write::<TARGETS_SERVER>(buf, can_block),
@@ -364,7 +363,7 @@ impl SocketConn {
         self.state.read::<IS_SERVER>(buf, self.can_block)
     }
 
-    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<(), SocketError> {
+    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
         self.state.write::<TARGETS_SERVER>(buf, self.can_block)
     }
 }
@@ -437,7 +436,7 @@ impl SocketServerConn {
     }
 
     /// Writes `buf.len()` data to the client's buffer
-    pub fn write(&self, buf: &[u8]) -> Result<(), SocketError> {
+    pub fn write(&self, buf: &[u8]) -> Result<usize, SocketError> {
         self.inner.write::<false>(buf)
     }
 }
@@ -458,7 +457,7 @@ impl SocketClientConn {
     }
 
     /// Writes `buf.len()` data to the server's buffer
-    pub fn write(&self, buf: &[u8]) -> Result<(), SocketError> {
+    pub fn write(&self, buf: &[u8]) -> Result<usize, SocketError> {
         self.inner.write::<true>(buf)
     }
 }
@@ -761,7 +760,8 @@ fn ipc_stream_test_inner() {
             .connect()
             .expect("socket dropped while waiting for connection");
 
-        connection.write(CLIENT_MSG).expect("client write failed");
+        let len = connection.write(CLIENT_MSG).expect("client write failed");
+        assert_eq!(len, CLIENT_MSG.len());
 
         let mut data_buf = [0u8; SERVER_MSG.len()];
         connection
@@ -844,13 +844,15 @@ fn ipc_seqpacket_test_inner() {
                 .connect()
                 .expect("Socket dropped while waiting for connection");
 
-            connection
+            let len = connection
                 .write(CLIENT_MSG0)
                 .expect("Client failed to write the first message");
+            assert_eq!(len, CLIENT_MSG0.len());
 
-            connection
+            let len = connection
                 .write(CLIENT_MSG1)
                 .expect("Client failed to write the second message");
+            assert_eq!(len, CLIENT_MSG1.len());
 
             let mut read_buf = [0u8; SERVER_MSG.len()];
             connection
