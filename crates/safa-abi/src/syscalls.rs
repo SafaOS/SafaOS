@@ -118,6 +118,20 @@ pub enum SyscallTable {
     /// - [crate::mem::MemMapFlags::WRITE]
     /// - [crate::mem::MemMapFlags::DISABLE_EXEC]
     SysMemMap = 36,
+    /// Create a Shared Memory Descriptor, returning a key that points to it,
+    /// The life time of that descriptor is bound to the calling process or the thread if a flag was specified.
+    ///
+    /// The returned Key can then be opened from another process using [`SyscallTable::SysMemShmOpen`] and then [`SyscallTable::SysMemMap`]ped,
+    /// instead of calling [`SysMemShmOpen`] afterwards this returns an Optional Resource ID that can be mapped directly using [`SysMemMap`] from the calling process,
+    /// but the desired Process to communicate with, should use [`SyscallTable::SysMemShmOpen`] to get it's own copy.
+    ///
+    /// The lifetime of the key is extended for each [`SyscallTable::SysMemShmOpen`], so that it isn't dropped until all the threads/processes that owns it are dropped.
+    SysMemShmCreate = 42,
+    /// Creates a Resource that can be [`SyscallTable::SysMemMap`]ped to a Shared Memory Descriptor,
+    /// Takes in a key that was created using [`SyscallTable::SysMemShmCreate`].
+    ///
+    /// The lifetime of the Resource is bound to the process or a single thread if a flag was specified
+    SysMemShmOpen = 43,
     // Sockets
     /// Creates a Socket Descriptor resource
     ///
@@ -141,7 +155,7 @@ pub enum SyscallTable {
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const NEXT_SYSCALL_NUM: u16 = 42;
+const NEXT_SYSCALL_NUM: u16 = 44;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();

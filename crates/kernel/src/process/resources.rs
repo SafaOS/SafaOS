@@ -3,7 +3,9 @@ use core::{fmt::Debug, sync::atomic::AtomicBool};
 use crate::{
     drivers::vfs::{CollectionIterDescriptor, FSResult},
     process::{self, vas::TrackedMemoryMapping},
+    shared_mem::TrackedShmKey,
     sockets::{ServerSocketDesc, SocketClientConn, SocketDomain, SocketKind, SocketServerConn},
+    thread,
     utils::locks::Mutex,
 };
 use alloc::sync::Arc;
@@ -27,6 +29,7 @@ pub enum ResourceData {
     ServerSocket(ServerSocketDesc),
     ServerSocketConn(SocketServerConn),
     ClientSocketConn(SocketClientConn),
+    ShmDesc(TrackedShmKey),
 }
 
 impl ResourceData {
@@ -43,6 +46,7 @@ impl ResourceData {
                 kind: *kind,
                 can_block: *can_block,
             }),
+            Self::ShmDesc(key) => Ok(Self::ShmDesc(key.clone())),
             Self::ServerSocket(_)
             | Self::ClientSocketConn(_)
             | Self::ServerSocketConn(_)
@@ -108,9 +112,8 @@ impl Resource {
             | ResourceData::ServerSocket(_)
             | ResourceData::ClientSocketConn(_)
             | ResourceData::ServerSocketConn(_)
-            | ResourceData::SocketDesc { .. } => {
-                Err(crate::drivers::vfs::FSError::OperationNotSupported)
-            }
+            | ResourceData::SocketDesc { .. }
+            | ResourceData::ShmDesc(_) => Err(crate::drivers::vfs::FSError::OperationNotSupported),
         }
     }
 }
@@ -267,6 +270,17 @@ where
 pub fn add_global_resource(resource_data: ResourceData) -> Ri {
     let this = process::current();
     this.resources_mut().add_global_resource(resource_data)
+}
+
+/// Adds a resource that lives as long as the current thread not the process, to the current process
+pub fn add_local_resource(resource_data: ResourceData) -> Ri {
+    let curr_thread = thread::current();
+    let curr_process = curr_thread.process();
+    let ri = curr_process
+        .resources_mut()
+        .add_local_resource(resource_data);
+    curr_thread.take_resources(&[ri]);
+    ri
 }
 
 /// Duplicates a resource return the new duplicate resource's ID or None if that resource doesn't exist

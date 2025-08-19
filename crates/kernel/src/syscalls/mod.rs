@@ -105,6 +105,8 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysMemMap => {
                 mem::sysmem_map_raw(a as *const _, b, c as *mut _, d as *mut _)
             }
+            SyscallTable::SysMemShmCreate => mem::sysshm_create_raw(a, b, c as *mut _, d as *mut _),
+            SyscallTable::SysMemShmOpen => mem::sysshm_open_raw(a, b, c as *mut _),
             // Sockets
             SyscallTable::SysSockCreate => sockets::syssock_create_raw(a, b, c, d as *mut _),
             SyscallTable::SysSockBind => sockets::syssock_bind_raw(a, b as *const _, c),

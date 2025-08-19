@@ -37,6 +37,7 @@ mod logging;
 mod memory;
 mod process;
 mod scheduler;
+mod shared_mem;
 mod sockets;
 mod syscalls;
 mod terminal;

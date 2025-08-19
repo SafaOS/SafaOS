@@ -7,7 +7,7 @@ use alloc::boxed::Box;
 use crate::{
     VirtAddr,
     arch::paging::PageTable,
-    drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset},
+    drivers::vfs::{FSError, FSResult},
     memory::{
         AlignToPage,
         frame_allocator::{self, Frame},
@@ -198,21 +198,14 @@ impl ProcVASA {
     /// Returns a Tracker that frees the mapping on Drop
     /// # Returns
     /// The start address of the mapping
-    pub fn map_n_pages_tracked_fs(
+    pub fn map_n_pages_tracked_interface(
         &mut self,
         addr_hint: Option<VirtAddr>,
         n: usize,
         guard_pages: usize,
         flags: paging::EntryFlags,
-        tracked_fs_obj: Option<FSObjectDescriptor>,
-        fs_obj_offset: Option<SeekOffset>,
+        interface: Option<Box<dyn MemMappedInterface>>,
     ) -> Result<TrackedMemoryMapping, FSError> {
-        let fs_obj_offset = fs_obj_offset.unwrap_or(SeekOffset::Start(0));
-        let interface = match tracked_fs_obj {
-            Some(d) => Some(d.open_mmap_interface(fs_obj_offset, n)?),
-            None => None,
-        };
-
         let frames = if let Some(ref i) = interface {
             i.frames().unwrap_or(&[])
         } else {

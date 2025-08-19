@@ -54,3 +54,37 @@ impl BitAnd for MemMapFlags {
         Self(self.0 & rhs.0)
     }
 }
+
+/// Flags passed to [`crate::syscalls::SyscallTable::SysMemShmCreate`] and [`crate::syscalls::SyscallTable::SysMemShmOpen`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct ShmFlags(u32);
+
+impl ShmFlags {
+    /// The opened Resource's lifetime is bound by the Current Thread and not the Process
+    pub const LOCAL: Self = Self(1 << 0);
+}
+
+impl ShmFlags {
+    pub const fn from_bits_retaining(bits: u32) -> Self {
+        Self(bits)
+    }
+
+    pub const fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
+
+impl BitOr for ShmFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl BitAnd for ShmFlags {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
