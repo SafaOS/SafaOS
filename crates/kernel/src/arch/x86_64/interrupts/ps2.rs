@@ -448,16 +448,6 @@ pub fn setup_controller() -> Result<(bool, bool), ()> {
             }
         };
 
-    if can_use_port0 {
-        send_command(ENABLE_PORT0);
-        debug!("Enabled Port0");
-    }
-
-    if can_use_port1 {
-        send_command(ENABLE_PORT1);
-        debug!("Eanbled Port1");
-    }
-
     let can_use_device0 = can_use_port0 && reset_devices(true).is_ok();
     if !can_use_device0 {
         warn!("PS/2 Cannot use device 0");
@@ -485,6 +475,16 @@ pub fn setup_controller() -> Result<(bool, bool), ()> {
 
         success
     };
+
+    if can_use_port0 {
+        send_command(ENABLE_PORT0);
+        debug!("Enabled Port0");
+    }
+
+    if can_use_port1 {
+        send_command(ENABLE_PORT1);
+        debug!("Eanbled Port1");
+    }
 
     let conf_byte = read_conf_byte()?;
     let conf_byte = conf_byte
