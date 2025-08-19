@@ -244,6 +244,8 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
         buf: &[u8],
         can_block: bool,
     ) -> Result<usize, SocketError> {
+        let amount = buf.len().min(MAX_STREAM_SIZE);
+        let buf = &buf[..amount];
         if self.conn_dropped.load(Ordering::Acquire) {
             return Err(SocketError::ConnectionClosed);
         }
