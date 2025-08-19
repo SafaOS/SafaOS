@@ -355,16 +355,23 @@ impl SocketConnState {
 #[derive(Clone)]
 struct SocketConn {
     state: SocketConnState,
-    can_block: bool,
 }
 
 impl SocketConn {
-    fn read<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
-        self.state.read::<IS_SERVER>(buf, self.can_block)
+    fn read<const IS_SERVER: bool>(
+        &self,
+        buf: &mut [u8],
+        can_block: bool,
+    ) -> Result<usize, SocketError> {
+        self.state.read::<IS_SERVER>(buf, can_block)
     }
 
-    fn write<const TARGETS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
-        self.state.write::<TARGETS_SERVER>(buf, self.can_block)
+    fn write<const TARGETS_SERVER: bool>(
+        &self,
+        buf: &[u8],
+        can_block: bool,
+    ) -> Result<usize, SocketError> {
+        self.state.write::<TARGETS_SERVER>(buf, can_block)
     }
 }
 
@@ -374,14 +381,13 @@ enum SocketType {
 }
 
 impl SocketType {
-    fn connect(&self, can_block: bool) -> (SocketConn, SockConnID) {
+    fn connect(&self) -> (SocketConn, SockConnID) {
         match self {
             Self::Stream(s) => {
                 let (conn, key) = s.write().connect();
                 (
                     SocketConn {
                         state: SocketConnState::Stream(conn),
-                        can_block,
                     },
                     key,
                 )
@@ -391,7 +397,6 @@ impl SocketType {
                 (
                     SocketConn {
                         state: SocketConnState::SeqPacket(conn),
-                        can_block,
                     },
                     key,
                 )
@@ -427,17 +432,34 @@ pub struct SocketServerConn {
     inner: SocketConn,
     id: SockConnID,
     socket: Arc<Socket>,
+    can_block: AtomicBool,
 }
 
 impl SocketServerConn {
-    /// Reads `buf.len()` or less data from the server's buffer
-    pub fn read(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
-        self.inner.read::<true>(buf)
+    pub fn can_block(&self) -> bool {
+        self.can_block.load(Ordering::Acquire)
     }
 
-    /// Writes `buf.len()` data to the client's buffer
+    /// Sets can_block to value `new_value`
+    pub fn set_can_block(&self, new_value: bool) {
+        match self.can_block.compare_exchange(
+            !new_value,
+            new_value,
+            Ordering::Acquire,
+            Ordering::Acquire,
+        ) {
+            Ok(v) => assert_ne!(v, new_value),
+            Err(v) => assert_eq!(v, new_value),
+        }
+    }
+    /// Reads `buf.len()` or less data from the server's buffer
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+        self.inner.read::<true>(buf, self.can_block())
+    }
+
+    /// Writes `buf.len()` or less data to the client's buffer
     pub fn write(&self, buf: &[u8]) -> Result<usize, SocketError> {
-        self.inner.write::<false>(buf)
+        self.inner.write::<false>(buf, self.can_block())
     }
 }
 
@@ -448,17 +470,35 @@ pub struct SocketClientConn {
     inner: SocketConn,
     id: SockConnID,
     socket: Arc<Socket>,
+    can_block: AtomicBool,
 }
 
 impl SocketClientConn {
+    pub fn can_block(&self) -> bool {
+        self.can_block.load(Ordering::Acquire)
+    }
+
+    /// Sets can_block to value `new_value`
+    pub fn set_can_block(&self, new_value: bool) {
+        match self.can_block.compare_exchange(
+            !new_value,
+            new_value,
+            Ordering::Acquire,
+            Ordering::Acquire,
+        ) {
+            Ok(v) => assert_ne!(v, new_value),
+            Err(v) => assert_eq!(v, new_value),
+        }
+    }
+
     /// Reads `buf.len()` or less data from the client's buffer
     pub fn read(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
-        self.inner.read::<false>(buf)
+        self.inner.read::<false>(buf, self.can_block())
     }
 
     /// Writes `buf.len()` data to the server's buffer
     pub fn write(&self, buf: &[u8]) -> Result<usize, SocketError> {
-        self.inner.write::<true>(buf)
+        self.inner.write::<true>(buf, self.can_block())
     }
 }
 
@@ -478,7 +518,7 @@ pub struct Socket {
     can_block: bool,
     sock_type: SocketType,
 
-    listen_queue: Mutex<Vec<*mut (MaybeUninit<SocketClientConn>, AtomicBool)>>,
+    listen_queue: Mutex<Vec<*mut (MaybeUninit<SocketClientConn>, bool, AtomicBool)>>,
     listen_queue_available: AtomicBool,
     listen_queue_max: AtomicUsize,
 
@@ -494,7 +534,7 @@ impl Socket {
         let queue = self.listen_queue.lock();
         // Wake everyone waiting for connection
         for ptr in &**queue {
-            unsafe { (**ptr).1.store(true, Ordering::Release) }
+            unsafe { (**ptr).2.store(true, Ordering::Release) }
         }
     }
 
@@ -616,18 +656,20 @@ impl Drop for ServerSocketDesc {
 
 impl ServerSocketDesc {
     /// Creates a new socket connection returning both directions
-    fn create_connection(&self) -> (SocketServerConn, SocketClientConn) {
-        let (inner, id) = self.sock_type.connect(self.can_block);
+    fn create_connection(&self, client_can_block: bool) -> (SocketServerConn, SocketClientConn) {
+        let (inner, id) = self.sock_type.connect();
         (
             SocketServerConn {
                 inner: inner.clone(),
                 id,
                 socket: self.reference.clone(),
+                can_block: AtomicBool::new(self.can_block),
             },
             SocketClientConn {
                 inner,
                 id,
                 socket: self.reference.clone(),
+                can_block: AtomicBool::new(client_can_block),
             },
         )
     }
@@ -656,11 +698,13 @@ impl ServerSocketDesc {
             }
         };
 
-        let (server_conn, client_conn) = self.create_connection();
         unsafe {
+            let client_can_block = (*ptr).1;
+            let (server_conn, client_conn) = self.create_connection(client_can_block);
+
             (*ptr).0 = MaybeUninit::new(client_conn);
             // Send wake up signal
-            (*ptr).1.store(true, core::sync::atomic::Ordering::Release);
+            (*ptr).2.store(true, core::sync::atomic::Ordering::Release);
             Ok(server_conn)
         }
     }
@@ -682,21 +726,21 @@ impl Deref for CliSocketDesc {
 impl CliSocketDesc {
     /// As a client connect with the server
     /// returns an Error if the server dropped the socket while we were trying to connect
-    pub fn connect(&self) -> Result<SocketClientConn, SocketError> {
+    pub fn connect(&self, can_block: bool) -> Result<SocketClientConn, SocketError> {
         let mut queue = self.listen_queue.lock();
         if self.listen_queue_max.load(Ordering::Acquire) < queue.len() + 1 {
             return Err(SocketError::ConnectionRefused);
         }
 
         // Create stuff in the higher half
-        let mut boxed = Box::new((MaybeUninit::uninit(), AtomicBool::new(false)));
+        let mut boxed = Box::new((MaybeUninit::uninit(), can_block, AtomicBool::new(false)));
         queue.push(&mut *boxed);
         drop(queue);
         // Wake up the server waiting to accept
         self.listen_queue_available.store(true, Ordering::Release);
 
         unsafe {
-            thread::current().wait_for_wake_signal(&boxed.1);
+            thread::current().wait_for_wake_signal(&boxed.2);
             if self.socket_dropped.load(Ordering::Acquire) {
                 // We got wake signal because the socket was dropped by the server and therefore
                 // We must return an error
@@ -757,7 +801,7 @@ fn ipc_stream_test_inner() {
         let sock = get_client_socket(sock_id).expect("socket binding not associated with any id");
 
         let connection = sock
-            .connect()
+            .connect(true)
             .expect("socket dropped while waiting for connection");
 
         let len = connection.write(CLIENT_MSG).expect("client write failed");
@@ -841,7 +885,7 @@ fn ipc_seqpacket_test_inner() {
                 get_client_socket(sock_id).expect("Socket binding not associated with any id");
 
             let connection = sock
-                .connect()
+                .connect(true)
                 .expect("Socket dropped while waiting for connection");
 
             let len = connection

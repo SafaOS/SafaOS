@@ -117,7 +117,7 @@ fn syssock_connect(
     addr_struct_size: usize,
     out_connection_id: Option<&mut Ri>,
 ) -> Result<(), ErrorStatus> {
-    let (domain, kind, can_block) =
+    let (domain, kind, _) =
         resources::get_resource_reference(sock_resource, |res| match res.data() {
             ResourceData::SocketDesc {
                 domain,
@@ -138,14 +138,11 @@ fn syssock_connect(
     let client_sock = sockets::get_client_socket(sock_id)
         .expect("Socket dropped but the binded address wasn't dropped");
 
-    if (client_sock.can_block() != can_block)
-        || (client_sock.domain() != domain)
-        || (client_sock.sock_type() != kind)
-    {
+    if (client_sock.domain() != domain) || (client_sock.sock_type() != kind) {
         return Err(ErrorStatus::TypeMismatch);
     }
 
-    let client_conn = client_sock.connect()?;
+    let client_conn = client_sock.connect(client_sock.can_block())?;
 
     let ri = resources::add_global_resource(ResourceData::ClientSocketConn(client_conn));
     if let Some(out) = out_connection_id {
