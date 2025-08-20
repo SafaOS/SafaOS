@@ -323,19 +323,21 @@ impl PageTable {
         Some(&mut l3[l3_index])
     }
 
-    /// unmaps a page without flushing the cache
+    /// Unmaps & frees a page without flushing the cache
+    pub unsafe fn free_unmap_uncached(&mut self, page: Page) {
+        let entry = self.get_entry(page);
+        debug_assert!(entry.is_some());
+        if let Some(entry) = entry {
+            unsafe { entry.deallocate() };
+        }
+    }
+
+    /// Unmaps a page without flushing the cache or freeing the frame
     pub unsafe fn unmap_uncached(&mut self, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {
-            if entry
-                .frame()
-                .is_some_and(|frame| frame.start_address() == PhysAddr::from(0xbead2000))
-            {
-                crate::serial!("unmapping faulting frame: {entry:?} from {page:?}\n");
-            }
-
-            unsafe { entry.deallocate() };
+            entry.set(ArchEntryFlags::empty(), PhysAddr::null());
         }
     }
 }

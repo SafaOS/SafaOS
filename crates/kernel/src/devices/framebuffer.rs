@@ -30,8 +30,8 @@ enum Cmd {
 }
 
 impl MemMappedInterface for FrameBufferDriver {
-    fn frames(&self) -> Option<&[crate::memory::frame_allocator::Frame]> {
-        Some(self.frames())
+    fn frames(&self) -> &[crate::memory::frame_allocator::Frame] {
+        self.frames()
     }
 
     fn sync(&self) -> crate::drivers::vfs::FSResult<()> {

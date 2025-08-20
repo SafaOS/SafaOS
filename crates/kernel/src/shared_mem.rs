@@ -69,8 +69,8 @@ struct SharedMemoryMap {
 }
 
 impl MemMappedInterface for SharedMemoryMap {
-    fn frames(&self) -> Option<&[Frame]> {
-        Some(self.descriptor.frames())
+    fn frames(&self) -> &[Frame] {
+        self.descriptor.frames()
     }
 }
 

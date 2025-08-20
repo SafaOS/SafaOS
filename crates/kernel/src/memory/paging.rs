@@ -222,6 +222,20 @@ impl PageTable {
 
         for page in iter {
             unsafe {
+                self.free_unmap_uncached(page);
+            }
+        }
+        self.flush_cache();
+    }
+
+    pub unsafe fn unmap_without_freeing(&mut self, from: VirtAddr, to: VirtAddr) {
+        let from_page = Page::containing_address(from);
+        let to_page = Page::containing_address(to);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            unsafe {
                 self.unmap_uncached(page);
             }
         }

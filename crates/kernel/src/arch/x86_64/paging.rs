@@ -290,12 +290,21 @@ impl PageTable {
         Some(&mut level_1_table[level_1_index])
     }
 
-    /// unmaps a page without flushing the cache
-    pub unsafe fn unmap_uncached(&mut self, page: Page) {
+    /// Unmaps & frees a page without flushing the cache
+    pub unsafe fn free_unmap_uncached(&mut self, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {
             unsafe { entry.deallocate() };
+        }
+    }
+
+    /// Unmaps a page without flushing the cache or freeing the frame
+    pub unsafe fn unmap_uncached(&mut self, page: Page) {
+        let entry = self.get_entry(page);
+        debug_assert!(entry.is_some());
+        if let Some(entry) = entry {
+            entry.set(ArchEntryFlags::empty(), PhysAddr::null());
         }
     }
 }

@@ -16,7 +16,7 @@ use crate::{
 };
 
 pub trait MemMappedInterface {
-    fn frames(&self) -> Option<&[Frame]>;
+    fn frames(&self) -> &[Frame];
     fn sync(&self) -> FSResult<()> {
         Ok(())
     }
@@ -72,7 +72,23 @@ impl Drop for TrackedMemoryMapping {
     fn drop(&mut self) {
         unsafe {
             _ = self.sync();
-            (*self.page_table).free_unmap(self.start_page.virt_addr(), self.end_page.virt_addr());
+
+            let mut start_addr = self.start_page.virt_addr();
+            let end_addr = self.end_page.virt_addr();
+
+            if let Some(ref int) = self.interface {
+                let interface_start = start_addr;
+
+                /* The interface owns it's frames, so we don't need to free them */
+                let frames_to_skip = int.frames().len();
+
+                start_addr = (start_addr + (frames_to_skip * PAGE_SIZE)).min(end_addr);
+                let interface_end = start_addr;
+
+                (*self.page_table).unmap_without_freeing(interface_start, interface_end);
+            }
+
+            (*self.page_table).free_unmap(start_addr, end_addr);
         }
     }
 }
@@ -207,7 +223,7 @@ impl ProcVASA {
         interface: Option<Box<dyn MemMappedInterface>>,
     ) -> Result<TrackedMemoryMapping, FSError> {
         let frames = if let Some(ref i) = interface {
-            i.frames().unwrap_or(&[])
+            i.frames()
         } else {
             &[]
         };
