@@ -440,6 +440,10 @@ impl Process {
             env,
             abi_structures,
         )?;
+
+        assert!(stack_end.is_multiple_of(16));
+        assert!(ke_stack_end.is_multiple_of(16));
+
         let entry_args = [
             args.len(),
             argv_pointers_start.into_raw(),

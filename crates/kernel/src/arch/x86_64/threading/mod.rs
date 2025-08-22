@@ -37,8 +37,8 @@ use crate::{
 use super::gdt::{KERNEL_CODE_SEG, KERNEL_DATA_SEG, USER_CODE_SEG, USER_DATA_SEG};
 
 /// The CPU Status for each thread (registers)
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+#[repr(C, align(16))]
 pub struct CPUStatus {
     fs_base: VirtAddr,
     ring0_rsp: VirtAddr,
@@ -68,23 +68,14 @@ pub struct CPUStatus {
     cr3: PhysAddr,
     rax: u64,
 
-    // ffi-safe alternative for u128
-    xmm15: [u8; 16],
-    xmm14: [u8; 16],
-    xmm13: [u8; 16],
-    xmm12: [u8; 16],
-    xmm11: [u8; 16],
-    xmm10: [u8; 16],
-    xmm9: [u8; 16],
-    xmm8: [u8; 16],
-    xmm7: [u8; 16],
-    xmm6: [u8; 16],
-    xmm5: [u8; 16],
-    xmm4: [u8; 16],
-    xmm3: [u8; 16],
-    xmm2: [u8; 16],
-    xmm1: [u8; 16],
-    xmm0: [u8; 16],
+    __: u64,
+    floating_point: [u8; 512],
+}
+
+impl Default for CPUStatus {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
 }
 
 use crate::thread::ContextPriority;
@@ -202,11 +193,18 @@ unsafe extern "x86-interrupt" {
     pub fn context_switch_stub();
 }
 
+#[repr(C)]
+struct ContextSwitchFrame {
+    capture: CPUStatus,
+    __: u64,
+    int: super::interrupts::InterruptFrame,
+}
+
 #[unsafe(no_mangle)]
-pub extern "C" fn context_switch(
-    mut capture: CPUStatus,
-    frame: super::interrupts::InterruptFrame,
-) -> ! {
+extern "C" fn context_switch(switch_frame: ContextSwitchFrame) -> ! {
+    let mut capture = switch_frame.capture;
+    let frame = switch_frame.int;
+
     capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
     capture.ring0_rsp = if unsafe { *SCHEDULER_INITED.get() } {
         unsafe { get_kernel_tss_stack() }

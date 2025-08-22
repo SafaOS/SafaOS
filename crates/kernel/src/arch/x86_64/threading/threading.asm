@@ -35,22 +35,7 @@
 .equ RAX_OFFSET, CR3_OFFSET + 8
 
 
-.equ XMM15_OFFSET, RAX_OFFSET + 8
-.equ XMM14_OFFSET, XMM15_OFFSET + 16
-.equ XMM13_OFFSET, XMM14_OFFSET + 16
-.equ XMM12_OFFSET, XMM13_OFFSET + 16
-.equ XMM11_OFFSET, XMM12_OFFSET + 16
-.equ XMM10_OFFSET, XMM11_OFFSET + 16
-.equ XMM9_OFFSET, XMM10_OFFSET + 16
-.equ XMM8_OFFSET, XMM9_OFFSET + 16
-.equ XMM7_OFFSET, XMM8_OFFSET + 16
-.equ XMM6_OFFSET, XMM7_OFFSET + 16
-.equ XMM5_OFFSET, XMM6_OFFSET + 16
-.equ XMM4_OFFSET, XMM5_OFFSET + 16
-.equ XMM3_OFFSET, XMM4_OFFSET + 16
-.equ XMM2_OFFSET, XMM3_OFFSET + 16
-.equ XMM1_OFFSET, XMM2_OFFSET + 16
-.equ XMM0_OFFSET, XMM1_OFFSET + 16
+.equ FLOATING_OFFSET, RAX_OFFSET + 16
 
 
 .macro restore_cpu_status_inner
@@ -81,24 +66,9 @@
    push [rdi + RDI_OFFSET] // rdi
    push [rdi + RAX_OFFSET] // rax
 
-   lea rax, [rdi + XMM15_OFFSET]
+   lea rax, [rdi + FLOATING_OFFSET]
    // TODO: implement lazy FPU initialization
-   movdqu xmm15, [rax+0x00]
-   movdqu xmm14, [rax+0x10]
-   movdqu xmm13, [rax+0x20]
-   movdqu xmm12, [rax+0x30]
-   movdqu xmm11, [rax+0x40]
-   movdqu xmm10, [rax+0x50]
-   movdqu xmm9, [rax+0x60]
-   movdqu xmm8, [rax+0x70]
-   movdqu xmm7, [rax+0x80]
-   movdqu xmm6, [rax+0x90]
-   movdqu xmm5, [rax+0xA0]
-   movdqu xmm4, [rax+0xB0]
-   movdqu xmm3, [rax+0xC0]
-   movdqu xmm2, [rax+0xD0]
-   movdqu xmm1, [rax+0xE0]
-   movdqu xmm0, [rax+0xF0]
+   fxrstor [rax]
 .endm
 
 restore_cpu_status_full:
@@ -121,23 +91,12 @@ restore_cpu_status_partial:
     iretq
 
 context_switch_stub:
-    sub rsp, 16*16      // allocate space for xmm registers
-    movdqu [rsp+0x00], xmm0
-    movdqu [rsp+0x10], xmm1
-    movdqu [rsp+0x20], xmm2
-    movdqu [rsp+0x30], xmm3
-    movdqu [rsp+0x40], xmm4
-    movdqu [rsp+0x50], xmm5
-    movdqu [rsp+0x60], xmm6
-    movdqu [rsp+0x70], xmm7
-    movdqu [rsp+0x80], xmm8
-    movdqu [rsp+0x90], xmm9
-    movdqu [rsp+0xA0], xmm10
-    movdqu [rsp+0xB0], xmm11
-    movdqu [rsp+0xC0], xmm12
-    movdqu [rsp+0xD0], xmm13
-    movdqu [rsp+0xE0], xmm14
-    movdqu [rsp+0xF0], xmm15
+    sub rsp, 8        // alignment for the interrupt frame
+    sub rsp, 512      // allocate space for fpu registers
+    fxsave [rsp]
+
+    /* alignment */
+    push rax
 
     push rax
     mov rax, cr3
