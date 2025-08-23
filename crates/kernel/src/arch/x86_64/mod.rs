@@ -58,8 +58,7 @@ pub fn enable_sse() {
             or ax, 3 << 9
             mov cr4, rax
         ",
-            options(nostack)
-        )
+        );
     }
 }
 

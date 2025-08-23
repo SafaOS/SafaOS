@@ -54,6 +54,7 @@ lazy_static! {
         (0xC, stack_segment_fault_handler, ATTR_TRAP, 0),
         (13, general_protection_fault_handler, ATTR_TRAP),
         (14, page_fault_handler, ATTR_TRAP),
+        (0x13, simd_exception_handler, ATTR_TRAP),
         (0x20, threading::context_switch_stub, ATTR_INT, 1),
         (0x21, keyboard_interrupt_handler, ATTR_INT),
         (0x22, pit::pit_handler, ATTR_INT),
@@ -87,6 +88,11 @@ extern "x86-interrupt" fn divide_by_zero_handler(frame: InterruptFrame) {
 
 extern "x86-interrupt" fn invalid_opcode(frame: InterruptFrame) {
     panic!("---- Invalid OPCODE ----\n{}", frame);
+}
+
+extern "x86-interrupt" fn simd_exception_handler(frame: InterruptFrame) {
+    // TODO: print mxcsr
+    panic!("---- SIMD Exception ----\n{}", frame);
 }
 
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptFrame) {

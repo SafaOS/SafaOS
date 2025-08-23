@@ -72,10 +72,16 @@ pub struct CPUStatus {
     floating_point: [u8; 512],
 }
 
-impl Default for CPUStatus {
-    fn default() -> Self {
-        unsafe { core::mem::zeroed() }
-    }
+lazy_static::lazy_static! {
+    static ref DEFAULT_CPU_STATUS: CPUStatus = {
+        let mut results: CPUStatus = unsafe { core::mem::zeroed() };
+             unsafe {
+                 /* HACK to load correct mxcsr */
+                 assert!(((&raw mut results.floating_point) as usize).is_multiple_of(16));
+                 core::arch::asm!("fxsave [{}]", in(reg) &raw mut results.floating_point);
+             }
+             results
+    };
 }
 
 use crate::thread::ContextPriority;
@@ -145,7 +151,7 @@ impl CPUStatus {
             rsp: user_stack_end,
             cs,
             ss,
-            ..Default::default()
+            ..*DEFAULT_CPU_STATUS
         })
     }
 
@@ -173,7 +179,7 @@ impl CPUStatus {
             rsp: user_stack_end,
             cs,
             ss,
-            ..Default::default()
+            ..*DEFAULT_CPU_STATUS
         })
     }
 }
