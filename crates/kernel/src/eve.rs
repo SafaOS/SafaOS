@@ -121,8 +121,8 @@ pub fn idle_function() -> ! {
             let mut to_cleanup = TO_CLEANUP.lock();
             // TODO: Maybe there is a faster method to handle this
             to_cleanup.retain(|item| {
-                // only remove items that's been around beyond or at `at_context_switch_count`
                 match item {
+                    // only remove items that's been around beyond or at `at_context_switch_count`
                     CleanupItem::Thread {
                         context_switch_count,
                         at_context_switch_count,
@@ -138,6 +138,10 @@ pub fn idle_function() -> ! {
                         }
                     }
                     CleanupItem::Process { proc } => {
+                        if proc.is_alive() {
+                            return true;
+                        }
+
                         let mut threads = proc.threads.lock();
                         let can_clean = threads.iter().all(|t| t.is_removed());
 

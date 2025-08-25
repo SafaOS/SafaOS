@@ -7,11 +7,7 @@ use core::{
 
 use crate::{
     eve,
-    memory::{
-        AlignTo, AlignToPage, copy_to_userspace,
-        paging::{EntryFlags, Page},
-        userspace_copy_within,
-    },
+    memory::{AlignTo, AlignToPage, copy_to_userspace, paging::EntryFlags, userspace_copy_within},
     process::{
         resources::ResourceData,
         vas::{ProcVASA, TrackedMemoryMapping},
@@ -454,11 +450,7 @@ impl Process {
 
         let context = unsafe {
             let root_page_table = &mut vasa.page_table;
-            assert!(
-                root_page_table
-                    .get_frame(Page::containing_address(stack_end))
-                    .is_some()
-            );
+
             CPUStatus::create_root(
                 root_page_table,
                 entry_point,
@@ -626,6 +618,9 @@ impl Process {
         let pid = this.pid();
         let killed_by = killed_by.unwrap_or(pid);
 
+        // !!!!! Cleanup must be done before this thread is removed !!!!!
+        eve::schedule_proc_cleanup(this.clone());
+
         let threads = this.threads.lock();
         // Set state to dead
         *this.exit_info.write() = Some(ExitInfo {
@@ -639,6 +634,7 @@ impl Process {
             }
         }
 
+        this.is_alive.store(false, Ordering::Release);
         debug!(
             Process,
             "Process {} ({}) TERMINATED with code {} by {}",
@@ -647,10 +643,6 @@ impl Process {
             exit_code,
             killed_by
         );
-
-        drop(threads);
-        this.is_alive.store(false, Ordering::Release);
-        eve::schedule_proc_cleanup(this.clone());
     }
 
     pub(super) fn info(&self) -> ProcessInfo {
