@@ -16,6 +16,7 @@ use crate::{
         interrupts::{self, IntTrigger, InterruptReceiver},
         keyboard::usb_kbd::USBKeyboard,
         pci::PCICommandReg,
+        usb_mouse::USBMouseDriver,
         xhci::{
             devices::XHCIDevice,
             extended_caps::XHCIUSBSupportedProtocolCap,
@@ -648,6 +649,11 @@ impl<'s> XHCI<'s> {
                         // sets the boot protocol
                         device.set_protocol(&self.manager_queue, false)?;
                         interface.attach_driver::<USBKeyboard>();
+                    }
+                    2 => {
+                        // sets the boot protocol
+                        device.set_protocol(&self.manager_queue, false)?;
+                        interface.attach_driver::<USBMouseDriver>();
                     }
                     _ => {}
                 }

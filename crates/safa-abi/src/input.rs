@@ -41,8 +41,13 @@ impl MiceBtnStatus {
 #[derive(Debug, Clone, Copy)]
 pub struct MiceEvent {
     pub kind: MouseEventKind,
+    /// The buttons status
     pub buttons_status: MiceBtnStatus,
+    /// The X relative change, positive means right, negative means left
     pub x_rel_change: i16,
+    /// The Y relative change, positive means up, negative means down,
+    /// assuming the coordinate system has the bigger Y the more up,
+    /// which isn't true for most computer software so you have to invert the Y axis.
     pub y_rel_change: i16,
 }
 

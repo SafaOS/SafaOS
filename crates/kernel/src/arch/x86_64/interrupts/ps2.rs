@@ -75,6 +75,7 @@ pub fn mice_handler() {
 
     let byte0 = irq_ps2_read();
     if *read_cursor == 0 && (byte0 & 0b1000) == 0 {
+        warn!("Corrupted mouse packet");
         return;
     }
 
@@ -87,10 +88,7 @@ pub fn mice_handler() {
         let last_packet = unsafe { &mut *LAST_PACKET.get() };
         let received_packet: MicePacket = unsafe { core::mem::transmute(*read_data) };
 
-        debug_assert!(
-            received_packet.header.always_true(),
-            "Mice packet corrupted"
-        );
+        debug_assert!(received_packet.header.always_true());
 
         if last_packet.header.btn_left() == received_packet.header.btn_left()
             && last_packet.header.btn_middle() == received_packet.header.btn_middle()

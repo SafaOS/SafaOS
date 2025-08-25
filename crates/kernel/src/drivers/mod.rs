@@ -4,6 +4,7 @@ pub mod interrupts;
 pub mod keyboard;
 pub mod keymapper;
 pub mod pci;
+pub mod usb_mouse;
 mod utils;
 pub mod vfs;
 pub mod xhci;
