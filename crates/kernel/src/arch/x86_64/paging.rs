@@ -7,6 +7,7 @@ use core::{arch::asm, ops::Index};
 use crate::VirtAddr;
 use crate::arch::x86_64::interrupts::apic;
 use crate::arch::x86_64::pci;
+use crate::memory::frame_allocator::RegionListAllocator;
 use crate::memory::paging::{EntryFlags, Page};
 use crate::memory::sorcery::{HEAP, LARGE_HEAP};
 use crate::{
@@ -83,24 +84,24 @@ impl Entry {
     /// otherwise treat the frame as a page table and deallocate it
     /// # Safety
     /// the caller must ensure that the entry is not used anymore
-    unsafe fn free(&mut self, level: u8) {
+    unsafe fn free(&mut self, allocator: &mut RegionListAllocator, level: u8) {
         unsafe {
             let frame = self.frame().unwrap();
 
             if level != 0 {
                 let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
-                table.free(level);
+                table.free(allocator, level);
             }
-            self.deallocate();
+            self.deallocate(allocator);
         }
     }
 
     /// deallocates a page table entry and invalidates it
     /// # Safety
     /// the caller must ensure that the entry is not used anymore
-    unsafe fn deallocate(&mut self) {
+    unsafe fn deallocate(&mut self, allocator: &mut RegionListAllocator) {
         if let Some(frame) = self.frame() {
-            frame_allocator::deallocate_frame(frame);
+            allocator.deallocate_frame(frame);
             self.set(ArchEntryFlags::empty(), PhysAddr::null());
         }
     }
@@ -109,7 +110,11 @@ impl Entry {
     /// changes the entry flags to `flags`
     /// if the entry is not present it allocates a new frame and uses it's address as entry's
     /// then returns the entry address as a pagetable
-    fn map(&mut self, flags: ArchEntryFlags) -> Result<&'static mut PageTable, MapToError> {
+    fn map(
+        &mut self,
+        allocator: &mut RegionListAllocator,
+        flags: ArchEntryFlags,
+    ) -> Result<&'static mut PageTable, MapToError> {
         if let Some(frame) = self.frame() {
             let addr = frame.start_address();
 
@@ -119,8 +124,9 @@ impl Entry {
 
             Ok(unsafe { &mut *(entry_ptr) })
         } else {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+            let frame = allocator
+                .allocate_frame()
+                .ok_or(MapToError::FrameAllocationFailed)?;
 
             let addr = frame.start_address();
             self.set(flags, addr);
@@ -220,7 +226,7 @@ impl PageTable {
         }
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    pub unsafe fn free(&mut self, level: u8) {
+    pub unsafe fn free(&mut self, allocator: &mut RegionListAllocator, level: u8) {
         unsafe {
             // if the table is the pml4 we need not to free the higher half
             // because it is shared with other tables
@@ -232,7 +238,7 @@ impl PageTable {
 
             for entry in &mut self.entries[0..last_entry] {
                 if entry.0 != 0 {
-                    entry.free(level - 1);
+                    entry.free(allocator, level - 1);
                 }
             }
         }
@@ -241,6 +247,7 @@ impl PageTable {
     /// maps a virtual `Page` to physical `Frame`, without flushing the cache
     pub unsafe fn map_to_uncached(
         &mut self,
+        allocator: &mut RegionListAllocator,
         page: Page,
         frame: Frame,
         flags: EntryFlags,
@@ -251,11 +258,11 @@ impl PageTable {
         let outer_flags: ArchEntryFlags = ArchEntryFlags::from_flags_outer_levels(flags);
         let final_flags: ArchEntryFlags = flags.into();
 
-        let level_3_table = self[level_4_index].map(outer_flags)?;
+        let level_3_table = self[level_4_index].map(allocator, outer_flags)?;
 
-        let level_2_table = level_3_table[level_3_index].map(outer_flags)?;
+        let level_2_table = level_3_table[level_3_index].map(allocator, outer_flags)?;
 
-        let level_1_table = level_2_table[level_2_index].map(outer_flags)?;
+        let level_1_table = level_2_table[level_2_index].map(allocator, outer_flags)?;
 
         let entry = &mut level_1_table[level_1_index];
         if entry.frame().is_some() {
@@ -291,11 +298,11 @@ impl PageTable {
     }
 
     /// Unmaps & frees a page without flushing the cache
-    pub unsafe fn free_unmap_uncached(&mut self, page: Page) {
+    pub unsafe fn free_unmap_uncached(&mut self, allocator: &mut RegionListAllocator, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {
-            unsafe { entry.deallocate() };
+            unsafe { entry.deallocate(allocator) };
         }
     }
 
@@ -372,8 +379,10 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
     let (_, _, _, heap_p4_index) = translate(heap_start);
     let (_, _, _, heap_end_p4_index) = translate(heap_end);
 
+    let mut allocator = frame_allocator::allocator();
+
     for entry in &mut table.entries[heap_p4_index..heap_end_p4_index] {
-        entry.map(ArchEntryFlags::from(flags))?;
+        entry.map(&mut allocator, ArchEntryFlags::from(flags))?;
         crate::serial!("entry: {entry:#x?}\n");
     }
 
@@ -381,7 +390,7 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
     let (_, _, _, lheap_end_p4_index) = translate(large_heap_end);
 
     for entry in &mut table.entries[lheap_p4_index..lheap_end_p4_index] {
-        entry.map(ArchEntryFlags::from(flags))?;
+        entry.map(&mut allocator, ArchEntryFlags::from(flags))?;
     }
 
     crate::serial!(

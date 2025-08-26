@@ -35,7 +35,9 @@ pub const LARGE_HEAP: (VirtAddr, VirtAddr) = {
 };
 
 fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
-    let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+    let frame = frame_allocator::allocator()
+        .allocate_frame()
+        .ok_or(MapToError::FrameAllocationFailed)?;
 
     let mut table = unsafe { frame.into_ptr::<PageTable>() };
     table.zeroize();
@@ -100,11 +102,12 @@ unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapTo
         let iter = Page::iter_pages(start, end);
         let flags = EntryFlags::WRITE;
 
+        let mut allocator = frame_allocator::allocator();
         for page in iter {
             let Some(frame) = src.get_frame(page) else {
                 break;
             };
-            dest.map_to(page, frame, flags)?;
+            dest.map_to(&mut allocator, page, frame, flags)?;
         }
         debug!(PageTable, "mapped kernel");
         Ok(())

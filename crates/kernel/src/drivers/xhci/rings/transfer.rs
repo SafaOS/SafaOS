@@ -1,7 +1,7 @@
 use crate::{
-    drivers::xhci::{self, rings::trbs::TRB, utils::XHCIError},
-    memory::frame_allocator::{self, FramePtr},
     PhysAddr, VirtAddr,
+    drivers::xhci::{self, rings::trbs::TRB, utils::XHCIError},
+    memory::frame_allocator::{self, FramePtr, RegionListAllocator},
 };
 
 /// A Transfer Ring exists for each active endpoint or Stream declared by a USB
@@ -28,11 +28,15 @@ impl XHCITransferRing {
         self.curr_ring_cycle_bit
     }
 
-    pub fn create(max_trb_count: usize, doorbell_id: u8) -> Result<Self, XHCIError> {
+    pub fn create(
+        allocator: &mut RegionListAllocator,
+        max_trb_count: usize,
+        doorbell_id: u8,
+    ) -> Result<Self, XHCIError> {
         let curr_ring_cycle_bit = 1;
 
-        let (trbs, trbs_phys_addr) =
-            xhci::utils::allocate_buffers(max_trb_count).ok_or(XHCIError::OutOfMemory)?;
+        let (trbs, trbs_phys_addr) = xhci::utils::allocate_buffers(allocator, max_trb_count)
+            .ok_or(XHCIError::OutOfMemory)?;
         trbs[max_trb_count - 1] = TRB::new_link(trbs_phys_addr, curr_ring_cycle_bit);
 
         let trbs_len = trbs.len();
@@ -84,6 +88,6 @@ impl XHCITransferRing {
 
 impl Drop for XHCITransferRing {
     fn drop(&mut self) {
-        frame_allocator::deallocate_frame(self.trbs_ptr.frame());
+        frame_allocator::allocator().deallocate_frame(self.trbs_ptr.frame());
     }
 }

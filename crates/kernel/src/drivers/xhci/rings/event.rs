@@ -1,4 +1,4 @@
-use crate::{debug, write_ref, PhysAddr};
+use crate::{PhysAddr, debug, memory::frame_allocator, write_ref};
 
 use super::{
     super::{
@@ -43,13 +43,14 @@ pub struct XHCIEventRing<'a> {
 impl<'a> XHCIEventRing<'a> {
     pub fn create(trb_count: usize, interrupter_registers: &'a mut InterrupterRegs) -> Self {
         let curr_ring_cycle_bit = 1;
+        let mut frame_allocator = frame_allocator::allocator();
 
-        let (trbs, trbs_phys_base) = allocate_buffers::<TRB>(trb_count)
+        let (trbs, trbs_phys_base) = allocate_buffers::<TRB>(&mut frame_allocator, trb_count)
             .expect("failed to allocate the XHCI Event Ring TRBs buffer");
 
         let segment_count = 1;
         let (segment_table, segment_table_base_addr) =
-            allocate_buffers::<XHCIEventRingEntry>(segment_count)
+            allocate_buffers::<XHCIEventRingEntry>(&mut frame_allocator, segment_count)
                 .expect("failed too allocate the XHCI Event Ring Segment table");
 
         segment_table[0].ring_segment_base = trbs_phys_base;

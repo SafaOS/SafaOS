@@ -3,7 +3,10 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{memory::AlignToPage, utils::locks::Mutex};
+use crate::{
+    memory::AlignToPage,
+    utils::locks::{Mutex, MutexGuard},
+};
 use lazy_static::lazy_static;
 
 use super::{PhysAddr, VirtAddr, paging::PAGE_SIZE};
@@ -421,26 +424,31 @@ lazy_static! {
         Mutex::new(RegionListAllocator::create());
 }
 
+pub fn allocator() -> MutexGuard<'static, RegionListAllocator> {
+    REGION_ALLOCATOR.lock()
+}
+
+#[allow(unused)]
 #[inline(always)]
-pub fn allocate_frame() -> Option<Frame> {
+fn allocate_frame() -> Option<Frame> {
     REGION_ALLOCATOR.lock().allocate_frame()
 }
 
 #[allow(unused)]
 #[inline(always)]
-pub fn allocate_aligned(align_pages: usize) -> Option<Frame> {
+fn allocate_aligned(align_pages: usize) -> Option<Frame> {
     REGION_ALLOCATOR.lock().allocate_aligned(align_pages)
 }
 
 #[inline(always)]
-pub fn allocate_contiguous(align_pages: usize, num_pages: usize) -> Option<(Frame, Frame)> {
+fn allocate_contiguous(align_pages: usize, num_pages: usize) -> Option<(Frame, Frame)> {
     REGION_ALLOCATOR
         .lock()
         .allocate_contiguous(num_pages, align_pages)
 }
 
 #[inline(always)]
-pub fn deallocate_frame(frame: Frame) {
+fn deallocate_frame(frame: Frame) {
     REGION_ALLOCATOR.lock().deallocate_frame(frame)
 }
 

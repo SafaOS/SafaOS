@@ -1,13 +1,16 @@
 use core::fmt::Debug;
 
 use alloc::{boxed::Box, vec::Vec};
-use serde::{ser::SerializeStruct, Serialize};
+use serde::{Serialize, ser::SerializeStruct};
 
-use crate::drivers::xhci::{
-    usb::{UsbEndpointDescriptor, UsbInterfaceDescriptor},
-    usb_endpoint::USBEndpoint,
-    utils::XHCIError,
-    XHCIResponseQueue,
+use crate::{
+    drivers::xhci::{
+        XHCIResponseQueue,
+        usb::{UsbEndpointDescriptor, UsbInterfaceDescriptor},
+        usb_endpoint::USBEndpoint,
+        utils::XHCIError,
+    },
+    memory::frame_allocator::RegionListAllocator,
 };
 
 pub trait USBInterfaceDriver: Debug {
@@ -48,6 +51,7 @@ impl USBInterface {
     }
 
     pub fn new(
+        allocator: &mut RegionListAllocator,
         descriptor: UsbInterfaceDescriptor,
         endpoints_desc: Vec<UsbEndpointDescriptor>,
         slot_id: u8,
@@ -56,7 +60,7 @@ impl USBInterface {
 
         let mut endpoints = Vec::with_capacity(endpoints_desc.len());
         for endpoint_desc in endpoints_desc {
-            endpoints.push(USBEndpoint::create(endpoint_desc, slot_id)?);
+            endpoints.push(USBEndpoint::create(allocator, endpoint_desc, slot_id)?);
         }
 
         Ok(Self {

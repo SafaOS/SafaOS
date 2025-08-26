@@ -29,14 +29,16 @@ impl SharedMemoryDesc {
     pub fn allocate(pages: usize) -> Result<Self, ()> {
         let mut frames = Vec::with_capacity(pages);
 
+        let mut frame_allocator = frame_allocator::allocator();
+
         for _ in 0..pages {
-            let frame = frame_allocator::allocate_frame();
+            let frame = frame_allocator.allocate_frame();
             if let Some(frame) = frame {
                 frames.push(frame);
             } else {
                 error!(SharedMemoryDesc, "OOM allocating {pages} Page(s)");
                 for frame in frames {
-                    frame_allocator::deallocate_frame(frame);
+                    frame_allocator.deallocate_frame(frame);
                 }
 
                 return Err(());
@@ -57,8 +59,9 @@ impl SharedMemoryDesc {
 
 impl Drop for SharedMemoryDesc {
     fn drop(&mut self) {
+        let mut frame_allocator = frame_allocator::allocator();
         for frame in &self.frames {
-            frame_allocator::deallocate_frame(*frame);
+            frame_allocator.deallocate_frame(*frame);
         }
     }
 }

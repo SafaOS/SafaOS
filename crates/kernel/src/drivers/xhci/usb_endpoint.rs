@@ -1,15 +1,15 @@
 use serde::Serialize;
 
 use crate::{
+    PhysAddr,
     drivers::xhci::{
-        rings::transfer::XHCITransferRing, usb::UsbEndpointDescriptor, utils::XHCIError,
-        MAX_TRB_COUNT,
+        MAX_TRB_COUNT, rings::transfer::XHCITransferRing, usb::UsbEndpointDescriptor,
+        utils::XHCIError,
     },
     memory::{
-        frame_allocator::{self, FramePtr},
+        frame_allocator::{self, FramePtr, RegionListAllocator},
         paging::PAGE_SIZE,
     },
-    PhysAddr,
 };
 
 #[derive(Debug)]
@@ -29,11 +29,15 @@ impl Serialize for USBEndpoint {
 }
 
 impl USBEndpoint {
-    pub fn create(descriptor: UsbEndpointDescriptor, slot_id: u8) -> Result<Self, XHCIError> {
-        let data_frame = frame_allocator::allocate_frame().ok_or(XHCIError::OutOfMemory)?;
+    pub fn create(
+        allocator: &mut RegionListAllocator,
+        descriptor: UsbEndpointDescriptor,
+        slot_id: u8,
+    ) -> Result<Self, XHCIError> {
+        let data_frame = allocator.allocate_frame().ok_or(XHCIError::OutOfMemory)?;
         Ok(Self {
             descriptor,
-            transfer_ring: XHCITransferRing::create(MAX_TRB_COUNT, slot_id)?,
+            transfer_ring: XHCITransferRing::create(allocator, MAX_TRB_COUNT, slot_id)?,
             data_buffer: unsafe { data_frame.into_ptr() },
         })
     }
@@ -57,6 +61,6 @@ impl USBEndpoint {
 
 impl Drop for USBEndpoint {
     fn drop(&mut self) {
-        frame_allocator::deallocate_frame(self.data_buffer.frame());
+        frame_allocator::allocator().deallocate_frame(self.data_buffer.frame());
     }
 }

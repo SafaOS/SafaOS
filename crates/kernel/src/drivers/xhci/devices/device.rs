@@ -1,7 +1,7 @@
 use crate::{
-    debug,
+    PhysAddr, debug,
     drivers::xhci::{
-        self,
+        self, MAX_TRB_COUNT, XHCIResponseQueue,
         devices::{
             DeviceEndpointState, DeviceEndpointType, XHCIDeviceCtx32, XHCIEndpointDeviceCtx32,
             XHCIInputControlCtx32, XHCIInputCtx32, XHCIInputCtx64, XHCISlotDeviceCtx32,
@@ -12,14 +12,16 @@ use crate::{
             trbs::{PacketRecipient, PacketType, XHCIDeviceRequestPacket},
         },
         usb::{
+            USB_DESCRIPTOR_CONFIGURATION_TYPE, USB_DESCRIPTOR_DEVICE_TYPE,
             UsbConfigurationDescriptor, UsbDescriptorHeader, UsbDeviceDescriptor,
-            UsbStringDescriptor, USB_DESCRIPTOR_CONFIGURATION_TYPE, USB_DESCRIPTOR_DEVICE_TYPE,
+            UsbStringDescriptor,
         },
         usb_endpoint::USBEndpoint,
         utils::XHCIError,
-        XHCIResponseQueue, MAX_TRB_COUNT,
     },
-    error, write_ref, PhysAddr,
+    error,
+    memory::frame_allocator::RegionListAllocator,
+    write_ref,
 };
 
 pub const REQUEST_GET_DESCRIPTOR: u8 = 6;
@@ -113,6 +115,7 @@ impl XHCIDevice {
     }
 
     pub fn create(
+        allocator: &mut RegionListAllocator,
         use_64byte_ctx: bool,
         port_index: u8,
         slot_id: u8,
@@ -125,7 +128,7 @@ impl XHCIDevice {
         };
 
         let (input_ctx_bytes, input_ctx_base_addr) =
-            xhci::utils::allocate_buffers(input_ctx_sz).ok_or(XHCIError::OutOfMemory)?;
+            xhci::utils::allocate_buffers(allocator, input_ctx_sz).ok_or(XHCIError::OutOfMemory)?;
 
         let input_ctx_ptr_raw: *mut u8 = input_ctx_bytes.as_mut_ptr();
         let input_ctx_ptr = if use_64byte_ctx {
@@ -137,7 +140,7 @@ impl XHCIDevice {
         Ok(Self {
             input_ctx_ptr,
             input_ctx_base_addr,
-            xhci_transfer_ring: XHCITransferRing::create(MAX_TRB_COUNT, slot_id)?,
+            xhci_transfer_ring: XHCITransferRing::create(allocator, MAX_TRB_COUNT, slot_id)?,
             port_index,
             slot_id,
             port_speed,
@@ -269,7 +272,12 @@ impl XHCIDevice {
 
         endpoint_ctx.max_esit_payload_low = 0;
         endpoint_ctx.average_trb_length = 8;
-        debug!(XHCIDevice, "configured cntrl endpoint for device with slot {} and port {}, set max packet size to {max_packet_size}", self.slot_id(), self.port_id());
+        debug!(
+            XHCIDevice,
+            "configured cntrl endpoint for device with slot {} and port {}, set max packet size to {max_packet_size}",
+            self.slot_id(),
+            self.port_id()
+        );
     }
 
     /// Disables the control endpoint
@@ -365,7 +373,11 @@ impl XHCIDevice {
             // read the additional bytes for interface descriptors as well
             let total_len = (*ptr).w_total_len as usize;
             if total_len > size_of::<UsbConfigurationDescriptor>() - 1 {
-                error!(XHCIDevice, "USB Configuration descriptor size {total_len} is more then the supported size {}", size_of::<UsbConfigurationDescriptor>() - 1);
+                error!(
+                    XHCIDevice,
+                    "USB Configuration descriptor size {total_len} is more then the supported size {}",
+                    size_of::<UsbConfigurationDescriptor>() - 1
+                );
                 return Err(XHCIError::Other);
             }
 
