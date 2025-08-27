@@ -236,8 +236,8 @@ impl RegionListAllocator {
     #[inline(always)]
     pub fn allocate_contiguous(
         &mut self,
-        num_pages: usize,
         align_pages: usize,
+        num_pages: usize,
     ) -> Option<(Frame, Frame)> {
         if num_pages <= 1 {
             let frame = self.allocate_aligned(align_pages);
@@ -444,7 +444,7 @@ fn allocate_aligned(align_pages: usize) -> Option<Frame> {
 fn allocate_contiguous(align_pages: usize, num_pages: usize) -> Option<(Frame, Frame)> {
     REGION_ALLOCATOR
         .lock()
-        .allocate_contiguous(num_pages, align_pages)
+        .allocate_contiguous(align_pages, num_pages)
 }
 
 #[inline(always)]
