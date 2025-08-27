@@ -4,8 +4,10 @@
 use core::cell::SyncUnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::arch::threading::cpu_local_storages;
 use crate::drivers::driver_poll::{self, PolledDriver};
 use crate::process::Process;
+use crate::process::current::kernel_thread_spawn;
 use crate::serial;
 use crate::thread::{self, ArcThread, ContextPriority, Tid};
 use crate::utils::alloc::PageString;
@@ -63,6 +65,15 @@ fn poll_driver_thread(tid: Tid, driver: &&dyn PolledDriver) -> ! {
 pub fn main() -> ! {
     *logging::SERIAL_LOG.write() = Some(PageString::new());
     crate::info!("eve has been awaken ...");
+    for cpu in 0..unsafe { cpu_local_storages().len().div_ceil(2) } {
+        kernel_thread_spawn(
+            cleanup_thread,
+            &(),
+            Some(ContextPriority::Medium),
+            Some(cpu),
+        )
+        .expect("Failed to spawn a cleanup thread");
+    }
     // TODO: make a macro or a const function to do this automatically
     serial!("Hello, world!, running tests...\n",);
 
@@ -113,8 +124,8 @@ pub fn main() -> ! {
     thread::current::exit(0)
 }
 
-pub fn idle_function() -> ! {
-    crate::serial!("entered idle\n");
+fn cleanup_thread(tid: Tid, _arg: &()) -> ! {
+    debug!("Clean-up thread running with id: {}\n", tid);
     loop {
         if SHOULD_WAKEUP.load(Ordering::Acquire) > 0 {
             // A thread yield during this would deadlock if [`schedule_thread_cleanup`] is called
@@ -157,7 +168,13 @@ pub fn idle_function() -> ! {
                 }
             });
         }
+        core::hint::spin_loop();
+    }
+}
 
+pub fn idle_function() -> ! {
+    crate::serial!("entered idle\n");
+    loop {
         core::hint::spin_loop();
     }
 }
