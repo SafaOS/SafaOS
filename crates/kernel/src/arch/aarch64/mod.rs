@@ -156,8 +156,9 @@ pub unsafe fn flush_cache() {
     unsafe {
         asm!(
             "
-            tlbi VMALLE1
-            dsb SY
+            dsb ishst
+            tlbi vmalle1is
+            dsb ish
             isb
             "
         );
