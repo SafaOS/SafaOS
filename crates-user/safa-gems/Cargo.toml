@@ -1,0 +1,8 @@
+[package]
+name = "safa-gems"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+safa-api = { version = "0.4.1", features = ["std"] }
+libgem = { path = "../OpalWM/libgem" }
