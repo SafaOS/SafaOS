@@ -130,6 +130,10 @@ fn cleanup_thread(tid: Tid, _arg: &()) -> ! {
         if SHOULD_WAKEUP.load(Ordering::Acquire) > 0 {
             // A thread yield during this would deadlock if [`schedule_thread_cleanup`] is called
             let mut to_cleanup = TO_CLEANUP.lock();
+            if SHOULD_WAKEUP.load(Ordering::SeqCst) == 0 {
+                continue;
+            }
+
             // TODO: Maybe there is a faster method to handle this
             to_cleanup.retain(|item| {
                 match item {
@@ -162,6 +166,8 @@ fn cleanup_thread(tid: Tid, _arg: &()) -> ! {
                             unsafe {
                                 proc.cleanup();
                             }
+
+                            SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
                         }
                         !can_clean
                     }
