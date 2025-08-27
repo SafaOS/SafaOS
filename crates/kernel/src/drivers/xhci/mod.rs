@@ -38,7 +38,7 @@ use crate::{
     },
     error,
     memory::{
-        frame_allocator::{self, RegionListAllocator},
+        frame_allocator::{self},
         paging::{EntryFlags, PAGE_SIZE},
     },
     sleep_until,
@@ -142,9 +142,7 @@ impl<'s> PolledDriver for XHCI<'s> {
             };
 
             if reset_successful && !event.disconnected {
-                if let Err(e) =
-                    self.setup_device(&mut frame_allocator::allocator(), event.port_index)
-                {
+                if let Err(e) = self.setup_device(event.port_index) {
                     error!(
                         XHCI,
                         "failed to connect port {}, err: {e}...", event.port_index
@@ -348,6 +346,7 @@ impl<'s> XHCIResponseQueue<'s> {
         packet: XHCIDeviceRequestPacket,
         output: &mut [u8],
     ) -> Result<(), XHCIError> {
+        // We don't want to waste any frame allocator time here that is why we acquire a lock for each operation
         let frame = frame_allocator::allocator()
             .allocate_frame()
             .ok_or(XHCIError::OutOfMemory)?;
@@ -508,11 +507,7 @@ impl<'s> XHCI<'s> {
 
     /// Setups and initializes a USB Device with the port id `port_index` + 1
     /// you can find the steps done here at 4.3 of the XHCI Specification
-    pub fn setup_device(
-        &self,
-        allocator: &mut RegionListAllocator,
-        port_index: u8,
-    ) -> Result<(), XHCIError> {
+    pub fn setup_device(&self, port_index: u8) -> Result<(), XHCIError> {
         let regs = unsafe { self.regs.as_mut_unchecked() };
         let cap_regs = unsafe { regs.captabilities() };
         let op_regs = unsafe { regs.operational_regs() };
@@ -532,13 +527,14 @@ impl<'s> XHCI<'s> {
         let slot_id = self.enable_device_slot()?;
         debug!(XHCI, "slot {slot_id} was chosen for port {port_index}");
 
-        let device_context_base = devices::allocate_device_ctx(allocator, context_sz_64bytes);
+        let device_context_base =
+            devices::allocate_device_ctx(&mut frame_allocator::allocator(), context_sz_64bytes);
         unsafe {
             regs.set_dcbaa_entry(slot_id, device_context_base);
         }
 
         let mut device = XHCIDevice::create(
-            allocator,
+            &mut frame_allocator::allocator(),
             context_sz_64bytes,
             port_index,
             slot_id,
@@ -645,7 +641,12 @@ impl<'s> XHCI<'s> {
                 .take(interface_desc.b_num_endpoints as usize);
 
             let endpoints = endpoints_descriptors.collect::<Vec<_>>();
-            let mut interface = USBInterface::new(allocator, interface_desc, endpoints, slot_id)?;
+            let mut interface = USBInterface::new(
+                &mut frame_allocator::allocator(),
+                interface_desc,
+                endpoints,
+                slot_id,
+            )?;
 
             for endpoint in interface.endpoints_mut() {
                 unsafe {
