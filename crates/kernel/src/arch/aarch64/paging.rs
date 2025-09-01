@@ -44,8 +44,7 @@ impl From<EntryFlags> for ArchEntryFlags {
         }
 
         if value.contains(EntryFlags::FRAMEBUFFER_CACHED) {
-            // treat the framebuffer as uncached for now
-            flags |= ArchEntryFlags::MAIR1;
+            flags |= ArchEntryFlags::MAIR2;
         }
 
         if !value.contains(EntryFlags::WRITE) {

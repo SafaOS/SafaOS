@@ -295,6 +295,9 @@ pub const SYS_MAIR: MAIR = {
     // TODO: configure caching better, especially for devices
     this.set(0, MAIRAttr::Normal(MAIRNormal::all()));
     this.set(1, MAIRAttr::Device(MAIRDeviceAttr::empty()));
+    // Framebuffer for now is given the same caching as normal memory
+    // Normal memory, Outer Write-Back Non-transient read-write
+    this.set(2, MAIRAttr::Normal(MAIRNormal::all()));
     this
 };
 
@@ -316,6 +319,14 @@ impl MAIR {
 
     /// Sets MAIR_EL1 register to `self`
     pub unsafe fn sync(self) {
+        let crr_mair: u64;
+        unsafe {
+            asm!("mrs {}, mair_el1", out(reg) crr_mair);
+        }
+        crate::serial!("MAIR was {:#x?}\n", unsafe {
+            core::mem::transmute::<u64, MAIR>(crr_mair).attributes
+        });
+
         let mair_el1: u64 = unsafe { core::mem::transmute(self) };
         unsafe {
             asm!("msr mair_el1, {}", in(reg) mair_el1);
