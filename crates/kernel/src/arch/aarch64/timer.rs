@@ -10,7 +10,7 @@ use crate::{
 
 use super::exceptions::InterruptFrame;
 
-const TIMER_TICK_PER_MS: usize = 5;
+const TIMER_TICK_PER_MS: usize = 10;
 // TODO: only works on qemu virt
 pub const TIMER_IRQ: IntID = IntID::from_int_id(30);
 
