@@ -126,6 +126,10 @@ impl<'a> FrameBuffer<'a> {
         let pixels = &self.pixel_buffer[self.buffer_display_index
             ..self.buffer_display_index + (self.info.width * self.info.height)];
 
+        if self.info.bytes_per_pixel != size_of::<u32>() {
+            unimplemented!("Unsupported bpp {}", self.info.bytes_per_pixel * 8)
+        }
+
         for row in 0..height {
             let start = off_x + ((off_y + row) * self.info.width);
             let end = start + width;
@@ -135,26 +139,14 @@ impl<'a> FrameBuffer<'a> {
             let start_byte = (off_x * bytes_per_pixel) + ((off_y + row) * self.info.pitch);
             let end_byte = start_byte + (width * bytes_per_pixel);
 
-            if self.info.bytes_per_pixel == size_of::<u32>() {
-                let to = &mut self.video_buffer[start_byte..end_byte];
-                let as_u32 = unsafe {
-                    core::slice::from_raw_parts_mut(
-                        to.as_mut_ptr() as *mut u32,
-                        to.len() / size_of::<u32>(),
-                    )
-                };
-                as_u32.copy_from_slice(pixels);
-            } else {
-                for (indx, pix) in pixels.iter().copied().enumerate() {
-                    let indx = (indx * bytes_per_pixel) + start_byte;
-
-                    let pixel_bytes = pix.to_ne_bytes();
-
-                    self.video_buffer[indx + 0] = pixel_bytes[0];
-                    self.video_buffer[indx + 1] = pixel_bytes[1];
-                    self.video_buffer[indx + 2] = pixel_bytes[2];
-                }
-            }
+            let to = &mut self.video_buffer[start_byte..end_byte];
+            let as_u32 = unsafe {
+                core::slice::from_raw_parts_mut(
+                    to.as_mut_ptr() as *mut u32,
+                    to.len() / size_of::<u32>(),
+                )
+            };
+            as_u32.copy_from_slice(pixels);
         }
     }
 
