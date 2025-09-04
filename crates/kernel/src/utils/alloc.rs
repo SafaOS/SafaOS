@@ -123,7 +123,7 @@ pub struct PageString {
 }
 
 impl PageString {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             inner: PageVec::new(),
         }

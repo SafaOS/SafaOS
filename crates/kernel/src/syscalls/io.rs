@@ -24,6 +24,8 @@ fn syswrite(
         ResourceData::File(fd) => Ok(fd.write(off, buf)?),
         ResourceData::ServerSocketConn(conn) => Ok(conn.write(buf)?),
         ResourceData::ClientSocketConn(conn) => Ok(conn.write(buf)?),
+        ResourceData::MotherVTTY(vtty) => Ok(vtty.write(str::from_utf8(buf)?)),
+        ResourceData::ChildVTTY(vtty) => Ok(vtty.write(str::from_utf8(buf)?)),
         _ => Err(ErrorStatus::UnsupportedResource),
     })?;
 
@@ -47,6 +49,10 @@ fn sysread(
         ResourceData::File(fd) => Ok(fd.read(off, buf)?),
         ResourceData::ServerSocketConn(conn) => Ok(conn.read(buf)?),
         ResourceData::ClientSocketConn(conn) => Ok(conn.read(buf)?),
+        ResourceData::ChildVTTY(vtty) => Ok(vtty.read(buf)),
+        ResourceData::MotherVTTY(vtty) => {
+            vtty.read(off, buf).map_err(|_| ErrorStatus::InvalidOffset)
+        }
         _ => Err(ErrorStatus::UnsupportedResource),
     })?;
 

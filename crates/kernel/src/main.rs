@@ -43,6 +43,7 @@ mod syscalls;
 mod terminal;
 mod thread;
 mod utils;
+mod vtty;
 
 extern crate alloc;
 use arch::serial;

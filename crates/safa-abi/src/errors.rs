@@ -217,6 +217,14 @@ impl<T: IntoErr> From<T> for ErrorStatus {
     }
 }
 
+impl From<core::str::Utf8Error> for ErrorStatus {
+    fn from(value: core::str::Utf8Error) -> Self {
+        match value {
+            core::str::Utf8Error { .. } => Self::InvalidStr,
+        }
+    }
+}
+
 #[cfg(feature = "std")]
 mod std_only {
     use super::SysResult;

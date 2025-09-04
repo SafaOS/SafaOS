@@ -7,6 +7,7 @@ use crate::{
     sockets::{ServerSocketDesc, SocketClientConn, SocketDomain, SocketKind, SocketServerConn},
     thread,
     utils::locks::Mutex,
+    vtty::{ChildVTTY, MotherVTTY},
 };
 use alloc::sync::Arc;
 use hashbrown::HashMap;
@@ -30,11 +31,15 @@ pub enum ResourceData {
     ServerSocketConn(SocketServerConn),
     ClientSocketConn(SocketClientConn),
     ShmDesc(TrackedShmKey),
+    MotherVTTY(MotherVTTY),
+    ChildVTTY(ChildVTTY),
 }
 
 impl ResourceData {
     pub fn try_clone(&self) -> Result<Self, ()> {
         match self {
+            Self::ChildVTTY(v) => Ok(Self::ChildVTTY(v.clone())),
+            Self::MotherVTTY(v) => Ok(Self::MotherVTTY(v.clone())),
             Self::File(file) => Ok(Self::File(file.clone())),
             Self::DirIter(coll) => Ok(Self::DirIter(Mutex::new(coll.lock().clone()))),
             Self::SocketDesc {
@@ -113,7 +118,11 @@ impl Resource {
             | ResourceData::ClientSocketConn(_)
             | ResourceData::ServerSocketConn(_)
             | ResourceData::SocketDesc { .. }
-            | ResourceData::ShmDesc(_) => Err(crate::drivers::vfs::FSError::OperationNotSupported),
+            | ResourceData::ShmDesc(_)
+            | ResourceData::ChildVTTY(_)
+            | ResourceData::MotherVTTY(_) => {
+                Err(crate::drivers::vfs::FSError::OperationNotSupported)
+            }
         }
     }
 }
