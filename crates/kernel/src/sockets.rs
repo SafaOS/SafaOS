@@ -267,14 +267,12 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
                     return Err(SocketError::ConnectionClosed);
                 }
 
-                unsafe {
-                    thread::current().wait_for_full_socket(
-                        &update,
-                        &self.conn_dropped,
-                        MAX_STREAM_SIZE,
-                        buf.len(),
-                    );
-                }
+                thread::current().wait_for_full_socket(
+                    &update,
+                    &self.conn_dropped,
+                    MAX_STREAM_SIZE,
+                    buf.len(),
+                );
 
                 self.write::<TARGETS_SERVER>(buf, can_block)
             }
@@ -716,9 +714,7 @@ impl ServerSocketDesc {
                 self.listen_queue_available.store(false, Ordering::Release);
                 drop(listen_queue);
 
-                unsafe {
-                    thread::current().wait_for_wake_signal(&self.listen_queue_available);
-                }
+                thread::current().wait_for_wake_signal(&self.listen_queue_available);
                 debug_assert!(!self.socket_dropped.load(Ordering::Acquire));
                 return self.accept();
             } else {

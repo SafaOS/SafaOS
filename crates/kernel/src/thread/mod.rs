@@ -2,6 +2,7 @@
 
 use core::{
     cell::UnsafeCell,
+    fmt::Debug,
     ops::Deref,
     ptr::NonNull,
     sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
@@ -12,6 +13,7 @@ use crate::{
     debug, eve,
     process::{Pid, Process, resources::Ri},
     scheduler::Scheduler,
+    syscalls::ffi::ptr_is_kernel,
     thread, time,
     utils::locks::{Mutex, SpinLock, SpinLockGuard},
 };
@@ -496,8 +498,14 @@ impl Thread {
     /// Waits for an empty socket to have data to read
     ///
     /// # Safety
-    /// very safe to call from the current thread as long as the references are in the higher half
+    /// very safe to call from the current thread as long as the references are in the higher half, panicks otherwise
     pub fn wait_for_empty_socket(&self, data_ava_info: &AtomicUsize, conn_dropped: &AtomicBool) {
+        assert!(
+            ptr_is_kernel(data_ava_info),
+            "Reference isn't in the kernel"
+        );
+        assert!(ptr_is_kernel(conn_dropped), "Reference isn't in the kernel");
+
         without_interrupts(|| {
             self.set_status(ContextStatus::Blocked(BlockedReason::BlockSocketEmpty {
                 conn_dropped,
@@ -511,14 +519,23 @@ impl Thread {
     /// Waits for a full socket to have `required_data_to_write` more data to read
     ///
     /// # Safety
-    /// Very safe to call from the current thread as long as the references are in the higher half
-    pub unsafe fn wait_for_full_socket(
+    /// Very safe to call from the current thread as long as the references are in the higher half otherwise panicks, so it is safe.
+    pub fn wait_for_full_socket(
         &self,
         data_ava_info: &AtomicUsize,
         conn_dropped: &AtomicBool,
         max_data_to_write: usize,
         required_data_to_write: usize,
     ) {
+        assert!(
+            ptr_is_kernel(data_ava_info),
+            "Reference isn't in the kernelspace"
+        );
+        assert!(
+            ptr_is_kernel(conn_dropped),
+            "Reference isn't in the kernelspace"
+        );
+
         without_interrupts(|| {
             self.set_status(ContextStatus::Blocked(BlockedReason::BlockSocketFull {
                 conn_dropped,
@@ -531,8 +548,10 @@ impl Thread {
     /// Waits for `wakeup` to be true
     ///
     /// # Safety
-    /// Very safe to call from the current thread as long as the references are in the higher half
-    pub unsafe fn wait_for_wake_signal(&self, wakeup: &AtomicBool) {
+    /// Very safe to call from the current thread as long as the references are in the higher half, otherwise panicks so safe.
+    pub fn wait_for_wake_signal(&self, wakeup: &AtomicBool) {
+        assert!(ptr_is_kernel(wakeup), "Reference isn't in the kernel space");
+
         without_interrupts(|| {
             self.set_status(ContextStatus::Blocked(BlockedReason::WaitForSignal {
                 wakeup,
