@@ -151,11 +151,14 @@ pub enum SyscallTable {
     /// and attempts to connect to a Server Socket binded using [`SyscallTable::SysSockBind`],
     /// returns a Resource describing the client's end of the connection
     SysSockConnect = 41,
+    /// Allocates a single new pair of Mother VTTY interface and a child VTTY Interface.
+    /// TODO: Write VTTY docs.
+    SysVTTYAlloc = 44,
 }
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const NEXT_SYSCALL_NUM: u16 = 44;
+const NEXT_SYSCALL_NUM: u16 = 45;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();

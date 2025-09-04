@@ -55,6 +55,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysFSize => io::sysfsize_raw(a, b as *mut usize),
             SyscallTable::SysFAttrs => io::sysattrs_raw(a, b as *mut FileAttr),
             SyscallTable::SysIOCommand => io::sysio_command_raw(a, b, c),
+            SyscallTable::SysVTTYAlloc => io::sysvtty_alloc_raw(a as *mut usize, b as *mut usize),
             // Resources related syscalls
             SyscallTable::SysRDestroy => {
                 if !resources::remove_resource(a) {

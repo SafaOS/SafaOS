@@ -3,6 +3,7 @@ use crate::{
     drivers::vfs::{FSError, SeekOffset},
     process::resources::{self, ResourceData, Ri},
     utils::locks::Mutex,
+    vtty,
 };
 
 use macros::syscall_handler;
@@ -153,4 +154,14 @@ fn sysio_command(ri: Ri, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
         ResourceData::ClientSocketConn(conn) => conn.handle_command(cmd, arg),
         _ => Err(FSError::OperationNotSupported),
     })
+}
+
+#[syscall_handler]
+fn sysvtty_alloc(mother_ri: &mut Ri, child_ri: &mut Ri) {
+    let (mother, child) = vtty::alloc_vtty();
+    let m = resources::add_global_resource(ResourceData::MotherVTTY(mother));
+    let c = resources::add_global_resource(ResourceData::ChildVTTY(child));
+
+    *mother_ri = m;
+    *child_ri = c;
 }
