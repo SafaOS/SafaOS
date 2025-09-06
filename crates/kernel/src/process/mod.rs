@@ -660,7 +660,7 @@ impl Process {
 
         for thread in &*self.threads.lock() {
             let mut status = thread.status_mut();
-            if status.try_lift_futex(target_addr) {
+            if unsafe { status.try_lift_futex(target_addr) } {
                 count += 1;
                 if count >= n {
                     break;

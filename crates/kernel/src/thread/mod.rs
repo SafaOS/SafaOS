@@ -59,8 +59,9 @@ pub enum BlockedReason {
     WaitingForProcess(Arc<Process>),
     WaitingForThread(ArcThread),
     WaitOnFutex {
+        // Only ever accessed from the current address space,
+        // so it is safe if it is in the lower half.
         addr: *const AtomicU32,
-        value: u32,
         timeout_wake_at: u128,
     },
     BlockedForever,
@@ -123,11 +124,12 @@ impl ContextStatus {
         }
     }
 
-    pub fn try_lift_futex(&mut self, target_addr: *const AtomicU32) -> bool {
+    #[inline]
+    /// # Safety
+    /// target_addr must be a valid pointer
+    pub unsafe fn try_lift_futex(&mut self, target_addr: *const AtomicU32) -> bool {
         match *self {
-            Self::Blocked(BlockedReason::WaitOnFutex { addr, value, .. })
-                if target_addr == addr && unsafe { (*addr).load(Ordering::SeqCst) != value } =>
-            {
+            Self::Blocked(BlockedReason::WaitOnFutex { addr, .. }) if target_addr == addr => {
                 *self = Self::Runnable;
                 true
             }
@@ -484,11 +486,10 @@ impl Thread {
     }
 
     /// Should only be called by the current thread
-    pub fn wait_for_futex(&self, addr: *const AtomicU32, with_value: u32, timeout_ms: u64) -> u128 {
+    pub fn wait_for_futex(&self, addr: *const AtomicU32, timeout_ms: u64) -> u128 {
         let timeout_at = time!(ms) as u128 + timeout_ms as u128;
         self.set_status(ContextStatus::Blocked(BlockedReason::WaitOnFutex {
             addr,
-            value: with_value,
             timeout_wake_at: timeout_at,
         }));
 
