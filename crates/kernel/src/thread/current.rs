@@ -112,14 +112,21 @@ pub fn wait_for_thread(tid: Tid) -> Option<()> {
 /// # Safety
 /// The caller must ensure that the address `addr` is valid and points to a valid futex.
 pub unsafe fn wait_for_futex(addr: &AtomicU32, with_value: u32, timeout_ms: u64) -> bool {
-    if addr.load(core::sync::atomic::Ordering::SeqCst) != with_value {
-        return true;
-    }
-
     let this_thread = thread::current();
-    let timeout_at = this_thread.wait_for_futex(addr, timeout_ms);
+    let this_proc = this_thread.process();
+    let wait_id = {
+        let mut futex_wait_queue = this_proc.futex_wait_queue.lock();
 
+        if addr.load(core::sync::atomic::Ordering::SeqCst) != with_value {
+            return true;
+        }
+
+        futex_wait_queue.insert(this_thread.clone())
+    };
+
+    let timeout_at = this_thread.wait_for_futex(addr, timeout_ms);
     self::yield_now();
     let timeouted = time!(ms) as u128 >= timeout_at;
+    this_proc.futex_wait_queue.lock().remove(wait_id);
     !timeouted
 }

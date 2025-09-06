@@ -25,6 +25,7 @@ use safa_abi::{
     process::{AbiStructures, ProcessStdio},
 };
 use serde::Serialize;
+use slab::Slab;
 use thread::{ContextPriority, Thread};
 
 use crate::{
@@ -84,6 +85,7 @@ pub struct Process {
     master_tls: Option<(VirtAddr, usize, usize, usize)>,
     next_tid: AtomicU32,
     pub(super) threads: Mutex<Vec<ArcThread>>,
+    pub(crate) futex_wait_queue: Mutex<Slab<ArcThread>>,
     pub context_count: AtomicU32,
 }
 
@@ -383,6 +385,7 @@ impl Process {
             ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
             threads: Mutex::new(Vec::new()),
+            futex_wait_queue: Mutex::new(Slab::new()),
 
             next_tid: AtomicU32::new(1),
             master_tls,
@@ -658,7 +661,7 @@ impl Process {
 
         let mut count = 0;
 
-        for thread in &*self.threads.lock() {
+        for (_, thread) in &*self.futex_wait_queue.lock() {
             let mut status = thread.status_mut();
             if unsafe { status.try_lift_futex(target_addr) } {
                 count += 1;
