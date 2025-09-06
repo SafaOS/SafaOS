@@ -132,6 +132,18 @@ pub fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
+pub fn with_interrupts<R>(f: impl FnOnce() -> R) -> R {
+    let daif = get_daif();
+    unsafe {
+        enable_interrupts();
+    }
+
+    let result = f();
+
+    set_daif(daif);
+    result
+}
+
 #[inline(always)]
 pub unsafe fn enable_interrupts() {
     unsafe { asm!("msr DAIFClr, #0b1111") }

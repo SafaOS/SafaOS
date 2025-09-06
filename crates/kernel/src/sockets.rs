@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use safa_abi::errors::IntoErr;
 
 use crate::{
+    arch::with_interrupts,
     drivers::vfs::FSResult,
     memory::paging::PAGE_SIZE,
     process::current::kernel_thread_spawn,
@@ -978,10 +979,10 @@ fn ipc_seqpacket_test_inner() {
 // TODO: Tests are ordered alphatically so we want to run this last, in my framework some modules do have a priority over other tho so I could use that
 #[test_case]
 fn z_ipc0_stream() {
-    ipc_stream_test_inner()
+    with_interrupts(|| ipc_stream_test_inner());
 }
 
 #[test_case]
 fn z_ipc1_seqpacket() {
-    ipc_seqpacket_test_inner();
+    with_interrupts(|| ipc_seqpacket_test_inner());
 }
