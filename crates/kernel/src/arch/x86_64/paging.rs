@@ -109,7 +109,10 @@ impl Entry {
     /// changes the entry flags to `flags`
     /// if the entry is not present it allocates a new frame and uses it's address as entry's
     /// then returns the entry address as a pagetable
-    fn map(&mut self, flags: ArchEntryFlags) -> Result<&'static mut PageTable, MapToError> {
+    fn map(&mut self) -> Result<&'static mut PageTable, MapToError> {
+        let flags =
+            ArchEntryFlags::PRESENT | ArchEntryFlags::WRITABLE | ArchEntryFlags::USER_ACCESSIBLE;
+
         if let Some(frame) = self.frame() {
             let addr = frame.start_address();
 
@@ -251,11 +254,11 @@ impl PageTable {
         let outer_flags: ArchEntryFlags = ArchEntryFlags::from_flags_outer_levels(flags);
         let final_flags: ArchEntryFlags = flags.into();
 
-        let level_3_table = self[level_4_index].map(outer_flags)?;
+        let level_3_table = self[level_4_index].map()?;
 
-        let level_2_table = level_3_table[level_3_index].map(outer_flags)?;
+        let level_2_table = level_3_table[level_3_index].map()?;
 
-        let level_1_table = level_2_table[level_2_index].map(outer_flags)?;
+        let level_1_table = level_2_table[level_2_index].map()?;
 
         let entry = &mut level_1_table[level_1_index];
         if entry.frame().is_some() {
@@ -373,7 +376,7 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
     let (_, _, _, heap_end_p4_index) = translate(heap_end);
 
     for entry in &mut table.entries[heap_p4_index..heap_end_p4_index] {
-        entry.map(ArchEntryFlags::from(flags))?;
+        entry.map()?;
         crate::serial!("entry: {entry:#x?}\n");
     }
 
@@ -381,7 +384,7 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
     let (_, _, _, lheap_end_p4_index) = translate(large_heap_end);
 
     for entry in &mut table.entries[lheap_p4_index..lheap_end_p4_index] {
-        entry.map(ArchEntryFlags::from(flags))?;
+        entry.map()?;
     }
 
     crate::serial!(
