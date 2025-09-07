@@ -697,8 +697,7 @@ impl<'s> XHCIRegisters<'s> {
                 caps_regs: caps,
                 op_regs: (*caps).operational_regs_ptr(),
                 runtime_regs: (*caps).runtime_regs_ptr(),
-                buffers_frame: frame_allocator::allocator()
-                    .allocate_frame()
+                buffers_frame: frame_allocator::allocate_frame()
                     .expect("failed to allocate frame for the XHCI buffers"),
                 scratchpad_buffers: None,
                 dcbaa: &mut [],
@@ -859,10 +858,8 @@ impl<'s> XHCIRegisters<'s> {
                 caps.max_scratchpad_buffers(),
             );
 
-            let mut frame_allocator = frame_allocator::allocator();
             for phys_addr in scratchpad_buffers.iter_mut() {
-                *phys_addr = frame_allocator
-                    .allocate_frame()
+                *phys_addr = frame_allocator::allocate_frame()
                     .expect("XHCI: failed to allocate a page for a scratchpad buffer");
             }
             self.scratchpad_buffers = Some(scratchpad_buffers);

@@ -2,7 +2,7 @@ pub const PAGE_SIZE: usize = 4096;
 use crate::{
     arch,
     drivers::vfs::FSError,
-    memory::{AlignToPage, PhysAddr, frame_allocator::RegionListAllocator},
+    memory::{AlignToPage, PhysAddr},
 };
 use bitflags::bitflags;
 use core::{
@@ -93,13 +93,12 @@ impl PageTable {
     /// flushes the cache if necessary
     pub unsafe fn map_to(
         &mut self,
-        allocator: &mut RegionListAllocator,
         page: Page,
         frame: Frame,
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
         unsafe {
-            self.map_to_uncached(allocator, page, frame, flags)?;
+            self.map_to_uncached(page, frame, flags)?;
             self.flush_cache();
             Ok(())
         }
@@ -107,19 +106,13 @@ impl PageTable {
 
     /// maps a virtual `Page` to a new physical `Frame` filling the frame with zeros
     /// flushes the cache if necessary
-    pub unsafe fn map_zeroed(
-        &mut self,
-        frame_allocator: &mut RegionListAllocator,
-        page: Page,
-        flags: EntryFlags,
-    ) -> Result<(), MapToError> {
+    pub unsafe fn map_zeroed(&mut self, page: Page, flags: EntryFlags) -> Result<(), MapToError> {
         unsafe {
-            let frame = frame_allocator
-                .allocate_frame()
-                .ok_or(MapToError::FrameAllocationFailed)?;
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
-            if let Err(e) = self.map_zeroed_to_uncached(frame_allocator, page, frame, flags) {
-                frame_allocator.deallocate_frame(frame);
+            if let Err(e) = self.map_zeroed_to_uncached(page, frame, flags) {
+                frame_allocator::deallocate_frame(frame);
                 return Err(e);
             }
 
@@ -133,13 +126,12 @@ impl PageTable {
     /// Doesn't flush the cache
     pub unsafe fn map_zeroed_to_uncached(
         &mut self,
-        allocator: &mut RegionListAllocator,
         page: Page,
         frame: Frame,
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
         unsafe {
-            self.map_to_uncached(allocator, page, frame, flags)?;
+            self.map_to_uncached(page, frame, flags)?;
 
             let addr = frame.virt_addr();
             let ptr = addr.into_ptr::<[u8; PAGE_SIZE]>();
@@ -174,10 +166,9 @@ impl PageTable {
         let frame_iter = Frame::iter_frames(start_frame, end_frame);
         let iter = page_iter.zip(frame_iter);
 
-        let mut allocator = frame_allocator::allocator();
         for (page, frame) in iter {
             unsafe {
-                self.map_to_uncached(&mut allocator, page, frame, flags)?;
+                self.map_to_uncached(page, frame, flags)?;
             }
         }
 
@@ -205,15 +196,13 @@ impl PageTable {
         let to_page = Page::containing_address(end_addr);
 
         let iter = Page::iter_pages(from_page, to_page);
-        let mut frame_allocator = frame_allocator::allocator();
 
         for page in iter {
-            let frame = frame_allocator
-                .allocate_frame()
-                .ok_or(MapToError::FrameAllocationFailed)?;
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
             let virt_addr = frame.virt_addr();
             unsafe {
-                self.map_to_uncached(&mut frame_allocator, page, frame, flags)?;
+                self.map_to_uncached(page, frame, flags)?;
             }
 
             unsafe {
@@ -232,10 +221,9 @@ impl PageTable {
 
         let iter = Page::iter_pages(from_page, to_page);
 
-        let mut frame_allocator = frame_allocator::allocator();
         for page in iter {
             unsafe {
-                self.free_unmap_uncached(&mut frame_allocator, page);
+                self.free_unmap_uncached(page);
             }
         }
         self.flush_cache();
@@ -295,9 +283,7 @@ bitflags! {
 
 /// allocates a pml4 and returns its physical address
 fn allocate_pml4<'a>() -> Result<FramePtr<PageTable>, MapToError> {
-    let frame = frame_allocator::allocator()
-        .allocate_frame()
-        .ok_or(MapToError::FrameAllocationFailed)?;
+    let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
     let mut table: FramePtr<PageTable> = unsafe { frame.into_ptr() };
 
     table.zeroize();
@@ -350,11 +336,10 @@ impl PhysPageTable {
 impl Drop for PhysPageTable {
     fn drop(&mut self) {
         unsafe {
-            let mut allocator = frame_allocator::allocator();
-            self.free(&mut allocator, 4);
+            self.free(4);
             // actually deallocating the page table
             let frame = self.inner.frame();
-            allocator.deallocate_frame(frame);
+            frame_allocator::deallocate_frame(frame);
         }
     }
 }

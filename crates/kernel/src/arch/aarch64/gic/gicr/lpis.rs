@@ -124,13 +124,11 @@ impl LPIManager {
         // each entry is 1 byte or 8 bits
         let conf_t_len = conf_t_size / size_of::<LPIConfEntry>();
 
-        let mut allocator = frame_allocator::allocator();
-        let (conf_start_frame, _) = allocator
-            .allocate_contiguous(
-                1,
-                conf_t_size.next_multiple_of(PAGE_SIZE).div_ceil(PAGE_SIZE),
-            )
-            .expect("failed to allocate space for the LPI configuration table");
+        let (conf_start_frame, _) = frame_allocator::allocate_contiguous(
+            1,
+            conf_t_size.next_multiple_of(PAGE_SIZE).div_ceil(PAGE_SIZE),
+        )
+        .expect("failed to allocate space for the LPI configuration table");
 
         let lpi_configuration_table = unsafe {
             let ptr: *mut LPIConfEntry = conf_start_frame.into_ptr::<LPIConfEntry>().as_ptr();
@@ -144,14 +142,13 @@ impl LPIManager {
         let pending_t_size = (2usize.pow(id_bits as u32) - 8192) / 8;
         let pending_t_len = pending_t_size;
 
-        let (pending_t_start_frame, _) = allocator
-            .allocate_contiguous(
-                SIZE_64K_PAGES,
-                pending_t_size
-                    .next_multiple_of(PAGE_SIZE)
-                    .div_ceil(PAGE_SIZE),
-            )
-            .expect("failed to allocate space for the pending table");
+        let (pending_t_start_frame, _) = frame_allocator::allocate_contiguous(
+            SIZE_64K_PAGES,
+            pending_t_size
+                .next_multiple_of(PAGE_SIZE)
+                .div_ceil(PAGE_SIZE),
+        )
+        .expect("failed to allocate space for the pending table");
 
         let lpi_pending_table = unsafe {
             let ptr: *mut u8 = pending_t_start_frame.into_ptr::<u8>().as_ptr();

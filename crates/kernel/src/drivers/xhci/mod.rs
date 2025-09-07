@@ -347,9 +347,7 @@ impl<'s> XHCIResponseQueue<'s> {
         output: &mut [u8],
     ) -> Result<(), XHCIError> {
         // We don't want to waste any frame allocator time here that is why we acquire a lock for each operation
-        let frame = frame_allocator::allocator()
-            .allocate_frame()
-            .ok_or(XHCIError::OutOfMemory)?;
+        let frame = frame_allocator::allocate_frame().ok_or(XHCIError::OutOfMemory)?;
 
         let (descriptor_buffer, descriptor_buffer_addr) =
             self::utils::allocate_buffers_frame::<u8>(frame, 0, 256);
@@ -415,13 +413,13 @@ impl<'s> XHCIResponseQueue<'s> {
                 device.slot_id(),
                 device.port_id(),
             );
-            frame_allocator::allocator().deallocate_frame(frame);
+            frame_allocator::deallocate_frame(frame);
             return Err(e);
         }
 
         // copy the output
         output.copy_from_slice(&descriptor_buffer[..output.len()]);
-        frame_allocator::allocator().deallocate_frame(frame);
+        frame_allocator::deallocate_frame(frame);
         Ok(())
     }
 }
@@ -527,19 +525,12 @@ impl<'s> XHCI<'s> {
         let slot_id = self.enable_device_slot()?;
         debug!(XHCI, "slot {slot_id} was chosen for port {port_index}");
 
-        let device_context_base =
-            devices::allocate_device_ctx(&mut frame_allocator::allocator(), context_sz_64bytes);
+        let device_context_base = devices::allocate_device_ctx(context_sz_64bytes);
         unsafe {
             regs.set_dcbaa_entry(slot_id, device_context_base);
         }
 
-        let mut device = XHCIDevice::create(
-            &mut frame_allocator::allocator(),
-            context_sz_64bytes,
-            port_index,
-            slot_id,
-            port_speed,
-        )?;
+        let mut device = XHCIDevice::create(context_sz_64bytes, port_index, slot_id, port_speed)?;
         // Configure and enable the control endpoint, with an initial size
         device.configure_ctrl_ep_input_ctx(max_initial_packet_size);
 
@@ -641,12 +632,7 @@ impl<'s> XHCI<'s> {
                 .take(interface_desc.b_num_endpoints as usize);
 
             let endpoints = endpoints_descriptors.collect::<Vec<_>>();
-            let mut interface = USBInterface::new(
-                &mut frame_allocator::allocator(),
-                interface_desc,
-                endpoints,
-                slot_id,
-            )?;
+            let mut interface = USBInterface::new(interface_desc, endpoints, slot_id)?;
 
             for endpoint in interface.endpoints_mut() {
                 unsafe {

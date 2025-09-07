@@ -518,14 +518,12 @@ impl<'a, T: Readable> Elf<'a, T> {
             let end_page = Page::containing_address(end_addr);
 
             unsafe {
-                let mut frame_allocator = frame_allocator::allocator();
                 for page in Page::iter_pages(start_page, end_page) {
                     if page_table.get_frame(page).is_none() {
-                        let frame = frame_allocator
-                            .allocate_frame()
-                            .ok_or(ElfError::MapToError)?;
+                        let frame =
+                            frame_allocator::allocate_frame().ok_or(ElfError::MapToError)?;
 
-                        page_table.map_to(&mut frame_allocator, page, frame, entry_flags)?;
+                        page_table.map_to(page, frame, entry_flags)?;
 
                         let slice = slice::from_raw_parts_mut(
                             frame.virt_addr().into_ptr::<usize>(),

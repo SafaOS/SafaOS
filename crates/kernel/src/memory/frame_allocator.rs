@@ -424,31 +424,32 @@ lazy_static! {
         Mutex::new(RegionListAllocator::create());
 }
 
-pub fn allocator() -> MutexGuard<'static, RegionListAllocator> {
+#[allow(unused)]
+fn allocator() -> MutexGuard<'static, RegionListAllocator> {
     REGION_ALLOCATOR.lock()
 }
 
-#[allow(unused)]
 #[inline(always)]
-fn allocate_frame() -> Option<Frame> {
+pub fn allocate_frame() -> Option<Frame> {
     REGION_ALLOCATOR.lock().allocate_frame()
 }
 
 #[allow(unused)]
 #[inline(always)]
-fn allocate_aligned(align_pages: usize) -> Option<Frame> {
+pub fn allocate_aligned(align_pages: usize) -> Option<Frame> {
     REGION_ALLOCATOR.lock().allocate_aligned(align_pages)
 }
 
+#[allow(unused)]
 #[inline(always)]
-fn allocate_contiguous(align_pages: usize, num_pages: usize) -> Option<(Frame, Frame)> {
+pub fn allocate_contiguous(align_pages: usize, num_pages: usize) -> Option<(Frame, Frame)> {
     REGION_ALLOCATOR
         .lock()
         .allocate_contiguous(align_pages, num_pages)
 }
 
 #[inline(always)]
-fn deallocate_frame(frame: Frame) {
+pub fn deallocate_frame(frame: Frame) {
     REGION_ALLOCATOR.lock().deallocate_frame(frame)
 }
 

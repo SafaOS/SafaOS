@@ -4,7 +4,7 @@ use crate::{
     PhysAddr,
     drivers::xhci::rings::trbs::CompletionStatusCode,
     memory::{
-        frame_allocator::{Frame, RegionListAllocator},
+        frame_allocator::{self, Frame},
         paging::{MapToError, PAGE_SIZE},
     },
 };
@@ -30,13 +30,8 @@ pub fn allocate_buffers_frame<'a, T: Clone>(
 // FIXME: make a DMA allocator that doesn't waste memory like this
 /// allocates a frame then calls [`allocate_buffers_frame`] on it
 /// returns None if frame allocation failed
-pub fn allocate_buffers<'a, T: Clone>(
-    allocator: &mut RegionListAllocator,
-    len: usize,
-) -> Option<(&'a mut [T], PhysAddr)> {
-    allocator
-        .allocate_frame()
-        .map(|frame| allocate_buffers_frame(frame, 0, len))
+pub fn allocate_buffers<'a, T: Clone>(len: usize) -> Option<(&'a mut [T], PhysAddr)> {
+    frame_allocator::allocate_frame().map(|frame| allocate_buffers_frame(frame, 0, len))
 }
 
 #[derive(Debug, Clone, Copy)]

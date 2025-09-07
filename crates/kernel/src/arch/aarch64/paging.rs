@@ -4,7 +4,7 @@ use crate::{
     PhysAddr, VirtAddr,
     arch::aarch64::registers::SYS_MAIR,
     memory::{
-        frame_allocator::{self, Frame, FramePtr, RegionListAllocator},
+        frame_allocator::{self, Frame, FramePtr},
         paging::{EntryFlags, MapToError, Page},
     },
 };
@@ -125,10 +125,7 @@ impl Entry {
     #[inline(always)]
     /// if the entry is not present it allocates a new frame and uses it's address as entry's
     /// then returns the entry address as a pagetable
-    fn map(
-        &mut self,
-        allocator: &mut RegionListAllocator,
-    ) -> Result<&'static mut PageTable, MapToError> {
+    fn map(&mut self) -> Result<&'static mut PageTable, MapToError> {
         let flags = ArchEntryFlags::TABLE_DESC | ArchEntryFlags::PRESENT;
         if let Some(frame) = self.frame() {
             let addr = frame.start_address();
@@ -138,9 +135,8 @@ impl Entry {
 
             Ok(unsafe { &mut *(entry_ptr) })
         } else {
-            let frame = allocator
-                .allocate_frame()
-                .ok_or(MapToError::FrameAllocationFailed)?;
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
             let addr = frame.start_address();
             self.set(flags, addr);
@@ -171,24 +167,24 @@ impl Entry {
     /// otherwise treat the frame as a page table and deallocate it
     /// # Safety
     /// the caller must ensure that the entry is not used anymore
-    unsafe fn free(&mut self, allocator: &mut RegionListAllocator, level: u8) {
+    unsafe fn free(&mut self, level: u8) {
         unsafe {
             let frame = self.frame().unwrap();
 
             if level != 0 {
                 let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
-                table.free(allocator, level);
+                table.free(level);
             }
-            self.deallocate(allocator);
+            self.deallocate();
         }
     }
 
     /// deallocates a page table entry and invalidates it
     /// # Safety
     /// the caller must ensure that the entry is not used anymore
-    unsafe fn deallocate(&mut self, allocator: &mut RegionListAllocator) {
+    unsafe fn deallocate(&mut self) {
         if let Some(frame) = self.frame() {
-            allocator.deallocate_frame(frame);
+            frame_allocator::deallocate_frame(frame);
             self.set(ArchEntryFlags::empty(), PhysAddr::null());
         }
     }
@@ -273,11 +269,11 @@ impl PageTable {
     }
 
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    pub unsafe fn free(&mut self, allocator: &mut RegionListAllocator, level: u8) {
+    pub unsafe fn free(&mut self, level: u8) {
         unsafe {
             for entry in &mut self.0 {
                 if entry.flags().contains(ArchEntryFlags::PRESENT) {
-                    entry.free(allocator, level - 1);
+                    entry.free(level - 1);
                 }
             }
         }
@@ -286,16 +282,15 @@ impl PageTable {
     /// maps a virtual `Page` to physical `Frame` without flushing the cache
     pub unsafe fn map_to_uncached(
         &mut self,
-        allocator: &mut RegionListAllocator,
         page: Page,
         frame: Frame,
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
         let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.virt_addr());
         let flags: ArchEntryFlags = flags.into();
-        let l1 = self[l0_index].map(allocator)?;
-        let l2 = l1[l1_index].map(allocator)?;
-        let l3 = l2[l2_index].map(allocator)?;
+        let l1 = self[l0_index].map()?;
+        let l2 = l1[l1_index].map()?;
+        let l3 = l2[l2_index].map()?;
         let entry = &mut l3[l3_index];
 
         if entry.frame().is_some() {
@@ -328,11 +323,11 @@ impl PageTable {
     }
 
     /// Unmaps & frees a page without flushing the cache
-    pub unsafe fn free_unmap_uncached(&mut self, allocator: &mut RegionListAllocator, page: Page) {
+    pub unsafe fn free_unmap_uncached(&mut self, page: Page) {
         let entry = self.get_entry(page);
         debug_assert!(entry.is_some());
         if let Some(entry) = entry {
-            unsafe { entry.deallocate(allocator) };
+            unsafe { entry.deallocate() };
         }
     }
 
@@ -351,7 +346,6 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
     unsafe {
         let flags = EntryFlags::WRITE;
         table.map_to(
-            &mut frame_allocator::allocator(),
             Page::containing_address(super::cpu::PL011BASE.into_virt()),
             Frame::containing_address(*super::cpu::PL011BASE),
             flags,

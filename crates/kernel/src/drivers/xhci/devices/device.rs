@@ -19,9 +19,7 @@ use crate::{
         usb_endpoint::USBEndpoint,
         utils::XHCIError,
     },
-    error,
-    memory::frame_allocator::RegionListAllocator,
-    write_ref,
+    error, write_ref,
 };
 
 pub const REQUEST_GET_DESCRIPTOR: u8 = 6;
@@ -115,7 +113,6 @@ impl XHCIDevice {
     }
 
     pub fn create(
-        allocator: &mut RegionListAllocator,
         use_64byte_ctx: bool,
         port_index: u8,
         slot_id: u8,
@@ -128,7 +125,7 @@ impl XHCIDevice {
         };
 
         let (input_ctx_bytes, input_ctx_base_addr) =
-            xhci::utils::allocate_buffers(allocator, input_ctx_sz).ok_or(XHCIError::OutOfMemory)?;
+            xhci::utils::allocate_buffers(input_ctx_sz).ok_or(XHCIError::OutOfMemory)?;
 
         let input_ctx_ptr_raw: *mut u8 = input_ctx_bytes.as_mut_ptr();
         let input_ctx_ptr = if use_64byte_ctx {
@@ -140,7 +137,7 @@ impl XHCIDevice {
         Ok(Self {
             input_ctx_ptr,
             input_ctx_base_addr,
-            xhci_transfer_ring: XHCITransferRing::create(allocator, MAX_TRB_COUNT, slot_id)?,
+            xhci_transfer_ring: XHCITransferRing::create(MAX_TRB_COUNT, slot_id)?,
             port_index,
             slot_id,
             port_speed,

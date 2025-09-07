@@ -338,8 +338,7 @@ impl GITSBaser {
 
         // Y its pages = X system pages (Y / 4)
         let page_size = its_page_size / (PAGE_SIZE / SIZE_1K);
-        let (devices_start, _) = frame_allocator::allocator()
-            .allocate_contiguous(page_size, page_size)
+        let (devices_start, _) = frame_allocator::allocate_contiguous(page_size, page_size)
             .expect("failed to allocate space for the its device collection");
 
         let devices_size = page_size * PAGE_SIZE;
@@ -447,16 +446,14 @@ pub fn allocate_itt() -> (VirtAddr, usize, u8) {
     let size = itt_entry_size as usize * event_id_bits as usize;
     let pages = size.to_next_page() / PAGE_SIZE;
 
-    let (start_frame, _) = frame_allocator::allocator()
-        .allocate_contiguous(1, pages)
-        .expect("failed to allocate an ITT");
+    let (start_frame, _) =
+        frame_allocator::allocate_contiguous(1, pages).expect("failed to allocate an ITT");
 
     (start_frame.virt_addr(), size, event_id_bits)
 }
 
 fn map_command_quene() -> (VirtAddr, usize) {
-    let frame = frame_allocator::allocator()
-        .allocate_aligned(SIZE_64K_PAGES)
+    let frame = frame_allocator::allocate_aligned(SIZE_64K_PAGES)
         .expect("failed to allocate a 64KiB aligned page for ITS command queue");
     unsafe {
         let addr = frame.virt_addr();

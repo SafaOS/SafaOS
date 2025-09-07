@@ -1,5 +1,5 @@
 use super::super::utils::allocate_buffers;
-use crate::{PhysAddr, debug, drivers::xhci::rings::trbs::TRB, memory::frame_allocator};
+use crate::{PhysAddr, debug, drivers::xhci::rings::trbs::TRB};
 
 #[derive(Debug)]
 pub struct XHCICommandRing<'s> {
@@ -12,9 +12,8 @@ pub struct XHCICommandRing<'s> {
 
 impl<'s> XHCICommandRing<'s> {
     pub fn create(trb_count: usize) -> Self {
-        let (trbs, trbs_phys_addr) =
-            allocate_buffers::<TRB>(&mut frame_allocator::allocator(), trb_count)
-                .expect("failed to allocated the XHCI Command Ring TRBs buffer");
+        let (trbs, trbs_phys_addr) = allocate_buffers::<TRB>(trb_count)
+            .expect("failed to allocated the XHCI Command Ring TRBs buffer");
 
         let link_trb = &mut trbs[trb_count - 1];
         *link_trb = TRB::new_link(trbs_phys_addr, 1);

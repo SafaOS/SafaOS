@@ -166,21 +166,15 @@ impl ProcVASA {
         };
 
         let pages = Page::iter_pages(map_start, map_end);
-        let mut frame_allocator = frame_allocator::allocator();
         for page in pages {
             let frame = frames_to_use
                 .next()
-                .or_else(|| frame_allocator.allocate_frame())
+                .or_else(|| frame_allocator::allocate_frame())
                 .ok_or(MapToError::FrameAllocationFailed)?;
 
             unsafe {
                 assert_ne!(
-                    self.page_table.map_zeroed_to_uncached(
-                        &mut frame_allocator,
-                        page,
-                        frame,
-                        flags
-                    ),
+                    self.page_table.map_zeroed_to_uncached(page, frame, flags),
                     Err(MapToError::AlreadyMapped)
                 );
             }
@@ -251,14 +245,9 @@ impl ProcVASA {
         let page_end = self.executable_end + PAGE_SIZE * self.data_break_pages;
         let new_page = Page::containing_address(page_end);
 
-        let mut frame_allocator = frame_allocator::allocator();
-
         unsafe {
-            self.page_table.map_zeroed(
-                &mut frame_allocator,
-                new_page,
-                EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE,
-            )?;
+            self.page_table
+                .map_zeroed(new_page, EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE)?;
         }
 
         self.data_break_pages += 1;

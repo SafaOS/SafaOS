@@ -7,7 +7,7 @@ use crate::{
         utils::XHCIError,
     },
     memory::{
-        frame_allocator::{self, FramePtr, RegionListAllocator},
+        frame_allocator::{self, FramePtr},
         paging::PAGE_SIZE,
     },
 };
@@ -29,15 +29,11 @@ impl Serialize for USBEndpoint {
 }
 
 impl USBEndpoint {
-    pub fn create(
-        allocator: &mut RegionListAllocator,
-        descriptor: UsbEndpointDescriptor,
-        slot_id: u8,
-    ) -> Result<Self, XHCIError> {
-        let data_frame = allocator.allocate_frame().ok_or(XHCIError::OutOfMemory)?;
+    pub fn create(descriptor: UsbEndpointDescriptor, slot_id: u8) -> Result<Self, XHCIError> {
+        let data_frame = frame_allocator::allocate_frame().ok_or(XHCIError::OutOfMemory)?;
         Ok(Self {
             descriptor,
-            transfer_ring: XHCITransferRing::create(allocator, MAX_TRB_COUNT, slot_id)?,
+            transfer_ring: XHCITransferRing::create(MAX_TRB_COUNT, slot_id)?,
             data_buffer: unsafe { data_frame.into_ptr() },
         })
     }
@@ -61,6 +57,6 @@ impl USBEndpoint {
 
 impl Drop for USBEndpoint {
     fn drop(&mut self) {
-        frame_allocator::allocator().deallocate_frame(self.data_buffer.frame());
+        frame_allocator::deallocate_frame(self.data_buffer.frame());
     }
 }
