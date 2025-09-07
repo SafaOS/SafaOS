@@ -11,8 +11,8 @@ use crate::{
         self,
         paging::{current_higher_root_table, set_current_higher_page_table},
     },
-    debug,
-    limine::{self, HHDM},
+    debug, info,
+    limine::{self, HHDM, executable_phys_address, executable_virt_address},
     memory::{AlignToPage, frame_allocator},
 };
 
@@ -70,7 +70,7 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
             let flags = if entry.entry_type == EntryType::FRAMEBUFFER {
                 flags | EntryFlags::FRAMEBUFFER_CACHED
             } else {
-                flags | EntryFlags::DEVICE_UNCACHEABLE
+                flags
             };
 
             let virt_addr = phys_addr.into_virt();
@@ -92,20 +92,64 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
     Ok(largest_addr_virt + PAGE_SIZE)
 }
 
+unsafe extern "C" {
+    static section_text_begin: u8;
+    static section_data_begin: u8;
+    static section_rodata_begin: u8;
+    static section_text_end: u8;
+    static section_data_end: u8;
+    static section_rodata_end: u8;
+}
+
 unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> {
     unsafe {
         debug!(PageTable, "mapping kernel");
-        let start = Page::containing_address(VirtAddr::from(0xffffffff80000000));
-        let end = Page::containing_address(VirtAddr::from(0xffffffffffffffff));
-        let iter = Page::iter_pages(start, end);
-        let flags = EntryFlags::WRITE;
+        let virt_addr = executable_virt_address();
+        let phys_addr = executable_phys_address();
 
-        for page in iter {
-            let Some(frame) = src.get_frame(page) else {
-                break;
-            };
-            dest.map_to(page, frame, flags)?;
-        }
+        let mut map_section = |name: &'static str,
+                               section_virt_begin: VirtAddr,
+                               section_virt_end: VirtAddr,
+                               flags: EntryFlags| {
+            crate::serial!("virt {virt_addr:?}, {section_virt_begin:?}, {section_virt_end:?}\n");
+            let section_off = section_virt_begin - virt_addr;
+            let section_phys_begin = phys_addr + section_off;
+            let section_size = section_virt_end - section_virt_begin;
+            debug!(
+                PageTable,
+                "Mapping {name}: {section_virt_begin:?} => {section_phys_begin:?} ({section_size}bytes) with flags {flags:?}"
+            );
+
+            dest.map_contiguous_pages(
+                section_virt_begin,
+                section_phys_begin,
+                section_size.div_ceil(PAGE_SIZE),
+                flags,
+            )?;
+
+            debug!(PageTable, "Mapped {name}");
+            Ok(())
+        };
+
+        map_section(
+            ".text",
+            VirtAddr::from_ptr(&section_text_begin),
+            VirtAddr::from_ptr(&section_text_end),
+            EntryFlags::empty(),
+        )?;
+        map_section(
+            ".rodata",
+            VirtAddr::from_ptr(&section_rodata_begin),
+            VirtAddr::from_ptr(&section_rodata_end),
+            EntryFlags::DISABLE_EXEC,
+        )?;
+        map_section(
+            ".data",
+            VirtAddr::from_ptr(&section_data_begin),
+            VirtAddr::from_ptr(&section_data_end),
+            EntryFlags::WRITE | EntryFlags::DISABLE_EXEC,
+        )?;
+
         debug!(PageTable, "mapped kernel");
         Ok(())
     }

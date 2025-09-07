@@ -20,6 +20,8 @@ use limine::BaseRevision;
 use limine::response::MemoryMapResponse;
 use limine::response::MpResponse;
 
+use crate::PhysAddr;
+use crate::VirtAddr;
 use crate::drivers::framebuffer::FrameBufferInfo;
 use crate::drivers::framebuffer::PixelFormat;
 use crate::memory::AlignTo;
@@ -99,6 +101,26 @@ pub fn rsdp_addr() -> usize {
 
 pub fn kernel_file() -> &'static File {
     KERNEL_FILE_REQUEST.get_response().unwrap().file()
+}
+
+#[inline(always)]
+pub fn executable_virt_address() -> VirtAddr {
+    VirtAddr::from(
+        KERNEL_ADDRESS_REQUEST
+            .get_response()
+            .expect("no executable address request response")
+            .virtual_base() as usize,
+    )
+}
+
+#[inline(always)]
+pub fn executable_phys_address() -> PhysAddr {
+    PhysAddr::from(
+        KERNEL_ADDRESS_REQUEST
+            .get_response()
+            .expect("No executable address request response")
+            .physical_base() as usize,
+    )
 }
 
 /// returns addr to the kernel image and it's size
