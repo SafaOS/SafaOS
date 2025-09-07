@@ -9,8 +9,9 @@ use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use safa_abi::errors::IntoErr;
 
+#[allow(unused)]
+use crate::arch::with_interrupts;
 use crate::{
-    arch::with_interrupts,
     drivers::vfs::FSResult,
     memory::paging::PAGE_SIZE,
     process::current::kernel_thread_spawn,
