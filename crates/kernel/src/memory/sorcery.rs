@@ -7,16 +7,13 @@ use ::limine::memory_map::EntryType;
 
 use crate::{
     PhysAddr,
-    arch::{
-        self,
-        paging::{current_higher_root_table, set_current_higher_page_table},
-    },
-    debug, info,
+    arch::{self, paging::set_current_higher_page_table},
+    debug,
     limine::{self, HHDM, executable_phys_address, executable_virt_address},
     memory::{AlignToPage, frame_allocator},
 };
 
-use super::paging::{MapToError, Page, PageTable};
+use super::paging::{MapToError, PageTable};
 
 pub const HEAP: (VirtAddr, VirtAddr) = {
     // assuming HHDM starts at 0xffff000000000000
@@ -40,14 +37,11 @@ fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
     let mut table = unsafe { frame.into_ptr::<PageTable>() };
     table.zeroize();
     unsafe {
-        let current = current_higher_root_table();
-
-        let current = &*current;
         let dest = &mut *table;
 
         map_hhdm(dest)?;
         arch::paging::map_devices(dest)?;
-        map_top_2gb(current, dest)?;
+        map_top_2gb(dest)?;
     }
 
     Ok(table)
@@ -101,7 +95,7 @@ unsafe extern "C" {
     static section_rodata_end: u8;
 }
 
-unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapToError> {
+unsafe fn map_top_2gb(dest: &mut PageTable) -> Result<(), MapToError> {
     unsafe {
         debug!(PageTable, "mapping kernel");
         let virt_addr = executable_virt_address();
@@ -111,13 +105,13 @@ unsafe fn map_top_2gb(src: &PageTable, dest: &mut PageTable) -> Result<(), MapTo
                                section_virt_begin: VirtAddr,
                                section_virt_end: VirtAddr,
                                flags: EntryFlags| {
-            crate::serial!("virt {virt_addr:?}, {section_virt_begin:?}, {section_virt_end:?}\n");
             let section_off = section_virt_begin - virt_addr;
             let section_phys_begin = phys_addr + section_off;
             let section_size = section_virt_end - section_virt_begin;
             debug!(
                 PageTable,
-                "Mapping {name}: {section_virt_begin:?} => {section_phys_begin:?} ({section_size}bytes) with flags {flags:?}"
+                "Mapping {name}: {section_virt_begin:?}..{section_virt_end:?} => {section_phys_begin:?}..{:?} ({section_size}bytes) with flags {flags:?}",
+                section_phys_begin + section_size
             );
 
             dest.map_contiguous_pages(
