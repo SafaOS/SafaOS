@@ -180,9 +180,7 @@ fn cleanup_thread(tid: Tid, _arg: &()) -> ! {
 
 pub fn idle_function() -> ! {
     crate::serial!("entered idle\n");
-    loop {
-        core::hint::spin_loop();
-    }
+    crate::khalt()
 }
 
 /// Schedules a thread's Context for cleanup
