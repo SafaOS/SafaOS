@@ -389,3 +389,90 @@ fn vtty_canonical_mode_test() {
         while !WROTE.load(Ordering::Acquire) {}
     });
 }
+
+#[allow(unused_assignments)]
+#[test_case]
+fn vtty_non_canonical_mode_test() {
+    const MSG0: &str = "Hello, world!\n";
+    const SPEC_MSG: &str = "hi\x7flol\n";
+    const SPEC_MSG_REPLY: &str = "hi\x7flol\n";
+    const SPEC_MSG_REPLY_STDOUT0: &str = "hi\x7flol\n";
+    const SPEC_MSG_REPLY_STDOUT1: &str = "hi\x7flol\n";
+    const MSG1: &str = ":cvvv\x08\x082222";
+
+    let mut read_buf = [0u8; 2048];
+    let (mother, child) = alloc_vtty();
+
+    mother.set_flags(TTYFlags::ECHO);
+    child.write(MSG0);
+    mother.write(MSG0);
+    mother.write(SPEC_MSG);
+    mother.set_flags(TTYFlags::ECHO | TTYFlags::ECHO_ERASE);
+    mother.write(SPEC_MSG);
+    mother.write(MSG1);
+    // No echo
+    mother.set_flags(TTYFlags::empty());
+    mother.write(MSG1);
+
+    let mut mo_off = 0;
+    macro_rules! assert_child {
+        ($buf: ident, $c: ident, $o: expr) => {{
+            let read_buf = &mut $buf;
+            let child = &$c;
+            let o: &[u8] = $o;
+
+            let len_half0 = child.read(&mut read_buf[..o.len() / 2]);
+            let len_half1 = child.read(&mut read_buf[o.len() / 2..o.len()]);
+            let len = len_half0 + len_half1;
+            let read = &read_buf[..len];
+            unsafe {
+                assert_eq!(
+                    read,
+                    $o,
+                    "read: '{}', expected: '{}'; from child",
+                    str::from_utf8_unchecked(read),
+                    str::from_utf8_unchecked($o)
+                );
+            }
+        }};
+        ($o: expr) => {
+            assert_child!(read_buf, child, $o)
+        };
+    }
+
+    macro_rules! assert_mother {
+        ($o: expr) => {{
+            let o = $o as &[u8];
+            let len = mother
+                .read(SeekOffset::Start(mo_off), &mut read_buf[..o.len()])
+                .expect("Failed to read from stdout: InvalidOffset");
+            let read = &read_buf[..len];
+            unsafe {
+                assert_eq!(
+                    read,
+                    o,
+                    "read: '{}', expected: '{}'; from mother",
+                    str::from_utf8_unchecked(read),
+                    str::from_utf8_unchecked(o)
+                );
+            }
+            mo_off += len;
+        }};
+    }
+
+    assert_mother!(MSG0.as_bytes());
+    // Echoed
+    assert_mother!(MSG0.as_bytes());
+    assert_mother!(SPEC_MSG_REPLY_STDOUT0.as_bytes());
+    assert_mother!(SPEC_MSG_REPLY_STDOUT1.as_bytes());
+    assert_mother!(MSG1.as_bytes());
+    // we wrote MSG1 but without echoing
+    assert_mother!(&[]);
+
+    assert_child!(MSG0.as_bytes());
+    assert_child!(SPEC_MSG_REPLY.as_bytes());
+    assert_child!(SPEC_MSG_REPLY.as_bytes());
+
+    assert_child!(MSG1.as_bytes());
+    assert_child!(MSG1.as_bytes());
+}
