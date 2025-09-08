@@ -251,7 +251,6 @@ impl PageTable {
         let (level_1_index, level_2_index, level_3_index, level_4_index) =
             translate(page.virt_addr());
 
-        let outer_flags: ArchEntryFlags = ArchEntryFlags::from_flags_outer_levels(flags);
         let final_flags: ArchEntryFlags = flags.into();
 
         let level_3_table = self[level_4_index].map()?;
@@ -371,7 +370,6 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
     let (heap_start, heap_end) = HEAP;
     let (large_heap_start, large_heap_end) = LARGE_HEAP;
 
-    let flags = EntryFlags::WRITE;
     let (_, _, _, heap_p4_index) = translate(heap_start);
     let (_, _, _, heap_end_p4_index) = translate(heap_end);
 
