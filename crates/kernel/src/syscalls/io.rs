@@ -148,11 +148,13 @@ fn sysdup(resource: Ri, dest_resource: &mut Ri) -> Result<(), ErrorStatus> {
 #[syscall_handler]
 fn sysio_command(ri: Ri, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
     resources::get_resource(ri, |res| match res.data() {
-        ResourceData::File(f) => f.send_command(cmd, arg),
-        ResourceData::TrackedMapping(m) => m.send_command(cmd, arg),
-        ResourceData::ServerSocketConn(conn) => conn.handle_command(cmd, arg),
-        ResourceData::ClientSocketConn(conn) => conn.handle_command(cmd, arg),
-        _ => Err(FSError::OperationNotSupported),
+        ResourceData::File(f) => Ok(f.send_command(cmd, arg)?),
+        ResourceData::TrackedMapping(m) => Ok(m.send_command(cmd, arg)?),
+        ResourceData::ServerSocketConn(conn) => Ok(conn.handle_command(cmd, arg)?),
+        ResourceData::ClientSocketConn(conn) => Ok(conn.handle_command(cmd, arg)?),
+        ResourceData::ChildVTTY(v) => v.process_command(cmd, arg),
+        ResourceData::MotherVTTY(v) => v.process_command(cmd, arg),
+        _ => Err(ErrorStatus::OperationNotSupported),
     })
 }
 
