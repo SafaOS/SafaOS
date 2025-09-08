@@ -36,7 +36,7 @@ impl ContextPriority {
         match self {
             Self::Low => 1,
             Self::Medium => 3,
-            Self::High => 5,
+            Self::High => 4,
         }
     }
 }
