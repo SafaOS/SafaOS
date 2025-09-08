@@ -1,8 +1,0 @@
-[package]
-name = "desktop"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-libopal = { path = "../OpalWM/libopal" }
-libgem = { path = "../OpalWM/libgem" }

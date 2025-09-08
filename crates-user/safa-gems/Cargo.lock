@@ -261,6 +261,7 @@ name = "safa-gems"
 version = "0.1.0"
 dependencies = [
  "libgem",
+ "libopal",
  "safa-api 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

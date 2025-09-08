@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 safa-api = { version = "0.4.1", features = ["std"] }
 libgem = { path = "../OpalWM/libgem" }
+libopal = { path = "../OpalWM/libopal" }
