@@ -179,11 +179,42 @@ impl USBHIDDriver for USBKeyboard {
 
         keyboard.clear_keys();
 
+        let last_modifiers = USBKeyModifiers::from_bits_retain(last_report[0]);
+        let modifiers = USBKeyModifiers::from_bits_retain(report_buffer[0]);
+
+        // Release all the keys that has been released
+        if last_report != [0u8; 8] {
+            for item in last_report[1..7].iter().filter(|i| **i != 0) {
+                let dereport_key = !report_buffer[1..7].contains(item);
+
+                let usb_keycode = USBKey::try_from(*item).unwrap_or_else(|_| {
+                    warn!("unknown key byte with code: {:#x} encotoured", item);
+                    USBKey::Null
+                });
+
+                if usb_keycode != USBKey::CapsLock && dereport_key {
+                    let keycode = usb_keycode.encode();
+                    super::key_release(keycode);
+                }
+            }
+
+            if last_modifiers.ctrl_pressed() && !modifiers.ctrl_pressed() {
+                super::key_release(KeyCode::Ctrl);
+            }
+
+            if last_modifiers.shift_pressed() && !modifiers.shift_pressed() {
+                super::key_release(KeyCode::Shift);
+            }
+
+            if last_modifiers.super_pressed() && !modifiers.super_pressed() {
+                super::key_release(KeyCode::Super);
+            }
+        }
+
         if report_buffer == [0; 8] {
             return;
         }
 
-        let modifiers = USBKeyModifiers::from_bits_retain(report_buffer[0]);
         let mut keycodes = heapless::Vec::<
             _,
             {
@@ -192,15 +223,21 @@ impl USBHIDDriver for USBKeyboard {
         >::new();
 
         if modifiers.ctrl_pressed() {
-            keycodes.push((KeyCode::Ctrl, false)).unwrap();
+            keycodes
+                .push((KeyCode::Ctrl, !last_modifiers.ctrl_pressed()))
+                .unwrap();
         }
 
         if modifiers.shift_pressed() {
-            keycodes.push((KeyCode::Shift, false)).unwrap();
+            keycodes
+                .push((KeyCode::Shift, !last_modifiers.shift_pressed()))
+                .unwrap();
         }
 
         if modifiers.super_pressed() {
-            keycodes.push((KeyCode::Super, false)).unwrap();
+            keycodes
+                .push((KeyCode::Super, !last_modifiers.super_pressed()))
+                .unwrap();
         }
 
         if self.caps_lock_toggle {
@@ -231,23 +268,6 @@ impl USBHIDDriver for USBKeyboard {
 
             let keycode = usb_keycode.encode();
             keycodes.push((keycode, report_key)).unwrap();
-        }
-
-        // Release all the keys that has been released
-        if self.last_report_buffer != [0u8; 8] {
-            for item in &last_report[1..7] {
-                let dereport_key = !report_buffer[1..7].contains(item);
-
-                let usb_keycode = USBKey::try_from(*item).unwrap_or_else(|_| {
-                    warn!("unknown key byte with code: {:#x} encotoured", item);
-                    USBKey::Null
-                });
-
-                if usb_keycode != USBKey::CapsLock && dereport_key {
-                    let keycode = usb_keycode.encode();
-                    super::key_release(keycode);
-                }
-            }
         }
 
         for (keycode, report_key) in keycodes {
