@@ -4,8 +4,8 @@ use libgem::{
     Gem,
     canvas::{DrawingCanvas, Pixel},
     cosmic_text::{
-        Action, Attrs, AttrsList, Buffer, BufferRef, Color, Cursor, Edit, Editor, FontSystem,
-        Metrics, SwashCache, Weight,
+        Action, Attrs, AttrsList, Buffer, Color, Cursor, Edit, Editor, FontSystem, Metrics, Motion,
+        SwashCache, Weight,
     },
     element::Element,
     text::{FONT_SYSTEM, SWASH_CACHE},
@@ -26,6 +26,29 @@ fn swash_cache() -> MutexGuard<'static, SwashCache> {
 const DEFAULT_WEIGHT: Weight = Weight::NORMAL;
 const DEFAULT_TEXT_PIXEL: Pixel = Pixel::from_rgb(0xFF, 0xFF, 0xFF);
 const DEFAULT_SELECTION_PIXEL: Pixel = Pixel::from_rgb_with_alpha(0xFF, 0xFF, 0xFF, 0x80);
+pub const BLACK: Pixel = Pixel::from_hex_rgb(0x282828);
+pub const BRIGHT_BLACK: Pixel = Pixel::from_hex_rgb(0x928374);
+
+pub const WHITE: Pixel = Pixel::from_hex_rgb(0xa89984);
+pub const BRIGHT_WHITE: Pixel = Pixel::from_hex_rgb(0xebdbb2);
+
+pub const RED: Pixel = Pixel::from_hex_rgb(0xcc241d);
+pub const BRIGHT_RED: Pixel = Pixel::from_hex_rgb(0xfb4934);
+
+pub const GREEN: Pixel = Pixel::from_hex_rgb(0x98971a);
+pub const BRIGHT_GREEN: Pixel = Pixel::from_hex_rgb(0xb8bb26);
+
+pub const BLUE: Pixel = Pixel::from_hex_rgb(0x458588);
+pub const BRIGHT_BLUE: Pixel = Pixel::from_hex_rgb(0x83a598);
+
+pub const YELLOW: Pixel = Pixel::from_hex_rgb(0xd79921);
+pub const BRIGHT_YELLOW: Pixel = Pixel::from_hex_rgb(0xfabd2f);
+
+pub const CYAN: Pixel = Pixel::from_hex_rgb(0x689d6a);
+pub const BRIGHT_CYAN: Pixel = Pixel::from_hex_rgb(0x8ec07c);
+
+pub const MAGENTA: Pixel = Pixel::from_hex_rgb(0xb16286);
+pub const BRIGHT_MAGENTA: Pixel = Pixel::from_hex_rgb(0xd3869b);
 
 /// Converts a pixel to a cosmic_text::Color
 /// Pixel is premultiplied-alpha while a color is the opposite
@@ -86,6 +109,36 @@ impl ConsoleElement {
             .insert_string(str, Some(AttrsList::new(&self.current_attr)));
     }
 
+    #[inline(always)]
+    pub fn move_cursor_lines(&mut self, lines: i32) {
+        let am_unsigned = lines.unsigned_abs();
+        let motion = if lines.is_negative() {
+            Motion::Down
+        } else {
+            Motion::Up
+        };
+
+        let font_system = &mut font_system();
+        for _ in 0..am_unsigned {
+            self.editor.action(font_system, Action::Motion(motion));
+        }
+    }
+
+    #[inline(always)]
+    pub fn move_cursor_chars(&mut self, amount: i32) {
+        let am_unsigned = amount.unsigned_abs();
+        let motion = if amount.is_negative() {
+            Motion::Previous
+        } else {
+            Motion::Next
+        };
+
+        let font_system = &mut font_system();
+        for _ in 0..am_unsigned {
+            self.editor.action(font_system, Action::Motion(motion));
+        }
+    }
+
     pub fn backspace(&mut self) {
         let mut font_system = font_system();
         self.editor.action(&mut font_system, Action::Backspace);
@@ -111,12 +164,8 @@ impl ConsoleElement {
     }
 
     pub fn curr_height(&self) -> u32 {
-        match self.editor.buffer_ref() {
-            BufferRef::Owned(o) => {
-                o.layout_runs().map(|l| l.line_height).sum::<f32>().ceil() as u32
-            }
-            _ => todo!(),
-        }
+        self.editor
+            .with_buffer(|buf| buf.layout_runs().map(|l| l.line_height).sum::<f32>().ceil() as u32)
     }
 
     pub fn curr_width(&self) -> u32 {
@@ -290,6 +339,10 @@ impl vte::Perform for ConsoleElement {
     }
 
     fn csi_dispatch(&mut self, params: &vte::Params, intermediates: &[u8], ignore: bool, c: char) {
+        println!(
+            "[csi_dispatch] params={:#?}, intermediates={:?}, ignore={:?}, char={:?}",
+            params, intermediates, ignore, c
+        );
         match c {
             'J' => self.clear(),
             'H' => {
@@ -298,6 +351,19 @@ impl vte::Perform for ConsoleElement {
                 let y = iter.next().unwrap_or(&[0])[0] as usize;
                 self.set_cursor(x, y)
             }
+            'A' | 'B' | 'D' | 'C' => {
+                let mut params = params.into_iter();
+                let amount = params.next().unwrap_or(&[1])[0] as usize;
+
+                match c {
+                    'A' => self.move_cursor_lines(amount as i32),
+                    'B' => self.move_cursor_lines(-(amount as i32)),
+                    'C' => self.move_cursor_chars(-(amount as i32)),
+                    'D' => self.move_cursor_chars(amount as i32),
+                    _ => unreachable!(),
+                }
+            }
+
             'm' => {
                 let params = params.into_iter();
                 let mut params_single = params.map(|p| p.get(0).copied().unwrap_or_default());
@@ -310,6 +376,43 @@ impl vte::Perform for ConsoleElement {
                     Some(22) => {
                         self.current_attr = self.current_attr.clone().weight(default_attrs().weight)
                     }
+                    Some(color @ 30..=37) | Some(color @ 90..=97) | Some(color @ 39) => {
+                        let pix = match color {
+                            30 => BLACK,
+                            90 => BRIGHT_BLACK,
+                            31 => RED,
+                            91 => BRIGHT_RED,
+                            32 => GREEN,
+                            92 => BRIGHT_GREEN,
+                            33 => YELLOW,
+                            93 => BRIGHT_YELLOW,
+                            34 => BLUE,
+                            94 => BRIGHT_BLUE,
+                            35 => MAGENTA,
+                            95 => BRIGHT_MAGENTA,
+                            36 => CYAN,
+                            96 => BRIGHT_CYAN,
+                            37 => WHITE,
+                            97 => BRIGHT_WHITE,
+                            39 => DEFAULT_TEXT_PIXEL,
+                            _ => unreachable!(),
+                        };
+
+                        self.current_attr = self.current_attr.clone().color(pix_to_color(pix));
+                    }
+
+                    Some(38) => match params_single.next() {
+                        Some(2) => {
+                            let red = params_single.next().unwrap_or_default();
+                            let green = params_single.next().unwrap_or_default();
+                            let blue = params_single.next().unwrap_or_default();
+
+                            let color = Pixel::from_rgb(red as u8, green as u8, blue as u8);
+                            self.current_attr =
+                                self.current_attr.clone().color(pix_to_color(color));
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
             }

@@ -18,8 +18,8 @@ use libgem::{
 
 use crate::console::ConsoleElement;
 
-const WIDTH: u32 = 400;
-const HEIGHT: u32 = 400;
+const WIDTH: u32 = 800;
+const HEIGHT: u32 = 600;
 const TITLE: &str = "Terminal";
 const BG_COLOR: Pixel = Pixel::from_rgb(0, 0, 0).with_alpha(0xE0);
 
@@ -122,6 +122,7 @@ fn main() {
     let mut write_to = mother
         .try_clone()
         .expect("Cloning mother should never fail");
+    let mut write = move |b: &[u8]| write_to.write(b).expect("Failed to write to stdin");
     let mut read_from = mother;
 
     let mut statemechaine = vte::Parser::new();
@@ -147,18 +148,20 @@ fn main() {
                                 let mut tmp = [0u8; 4];
                                 let s = c.encode_utf8(&mut tmp);
 
-                                write_to
-                                    .write(s.as_bytes())
-                                    .expect("Failed to write to stdin");
+                                write(s.as_bytes());
                             } else {
                                 match k_eve.code {
+                                    KeyCode::Left => {
+                                        write(b"\x1b[D");
+                                    }
+                                    KeyCode::Right => {
+                                        write(b"\x1b[A");
+                                    }
                                     KeyCode::Backspace => {
-                                        write_to
-                                            .write(&[ERASE_CHAR])
-                                            .expect("Failed to write to stdin");
+                                        write(&[ERASE_CHAR]);
                                     }
                                     KeyCode::Return => {
-                                        write_to.write(b"\n").expect("Failed to write to stdin");
+                                        write(b"\n");
                                     }
                                     _ => {}
                                 }
