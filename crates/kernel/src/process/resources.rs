@@ -113,16 +113,13 @@ impl Resource {
         match self.data() {
             ResourceData::File(f) => f.sync(),
             ResourceData::TrackedMapping(m) => unsafe { m.sync().map(|_| ()) },
+            ResourceData::ChildVTTY(_) | ResourceData::MotherVTTY(_) => Ok(()),
             ResourceData::DirIter(_)
             | ResourceData::ServerSocket(_)
             | ResourceData::ClientSocketConn(_)
             | ResourceData::ServerSocketConn(_)
             | ResourceData::SocketDesc { .. }
-            | ResourceData::ShmDesc(_)
-            | ResourceData::ChildVTTY(_)
-            | ResourceData::MotherVTTY(_) => {
-                Err(crate::drivers::vfs::FSError::OperationNotSupported)
-            }
+            | ResourceData::ShmDesc(_) => Err(crate::drivers::vfs::FSError::OperationNotSupported),
         }
     }
 }
