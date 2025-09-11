@@ -19,8 +19,8 @@ use libgem::{
 
 use crate::term_display::TerminalElement;
 
-const WIDTH: u32 = 800;
-const HEIGHT: u32 = 600;
+const WIDTH: u32 = 640;
+const HEIGHT: u32 = 560;
 const TITLE: &str = "Terminal";
 const BG_COLOR: Pixel = Pixel::from_rgb(0x28, 0x28, 0x28).with_alpha(0xF0);
 

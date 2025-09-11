@@ -190,7 +190,8 @@ pub struct TerminalElement {
     current_attr: Attrs<'static>,
     width: u32,
     height: u32,
-    last_recorded_cursor_pos: Option<(i32, i32)>,
+    cursor_change: Option<(Cursor, Cursor)>,
+
     cursor: Cursor,
 }
 
@@ -211,24 +212,15 @@ impl TerminalElement {
             width,
             height,
             current_attr: default_attrs(),
-            last_recorded_cursor_pos: None,
+            cursor_change: None,
             cursor: Cursor::new(0, 0),
         }
-    }
-
-    fn first_idx(&self) -> Option<usize> {
-        self.buffer.layout_runs().next().map(|s| s.line_i)
     }
 
     pub fn insert_char(&mut self, c: char) {
         // replace the cursor
         let new_cursor = self.insert_char_at(self.cursor, c);
-
-        // the new cursor
-        // We need to insert it to get the position of it as a glyph...
-        self.cursor = new_cursor;
-
-        self.buffer.set_redraw(true);
+        self.set_cursor(new_cursor.index, new_cursor.line);
     }
 
     /// Returns the position of the cursor as a glyph if it exist
@@ -236,6 +228,28 @@ impl TerminalElement {
         self.buffer
             .layout_runs()
             .find_map(|run| cursor_position(&self.cursor, &run))
+    }
+
+    /// Takes the cursor changes that were done since the last redraw, returns None if no changes were done,
+    /// Some and a tuple of the first recorded and last recorded position within the change otherwise.
+    fn take_cursor_change(&mut self) -> Option<(Option<(i32, i32)>, Option<(i32, i32)>)> {
+        let (begin, end) = self.cursor_change.take()?;
+
+        let mut begin_pos = None;
+        let mut end_pos = None;
+        for run in self.buffer.layout_runs() {
+            if begin_pos.is_none()
+                && let Some(found_pos) = cursor_position(&begin, &run)
+            {
+                begin_pos = Some(found_pos);
+            } else if end_pos.is_none()
+                && let Some(found_pos) = cursor_position(&end, &run)
+            {
+                end_pos = Some(found_pos);
+            }
+        }
+
+        Some((begin_pos, end_pos))
     }
 
     fn max_chars_len(&self) -> usize {
@@ -401,11 +415,10 @@ impl TerminalElement {
             return;
         }
 
-        self.cursor = Cursor::new(
-            self.cursor.line.saturating_add_signed(lines as isize),
+        self.set_cursor(
             self.cursor.index,
+            self.cursor.line.saturating_add_signed(lines as isize),
         );
-        self.buffer.set_redraw(true);
     }
 
     #[inline(always)]
@@ -415,15 +428,13 @@ impl TerminalElement {
         }
 
         let max_chars = self.max_chars_len();
-        self.cursor = Cursor::new(
-            self.cursor.line,
+        self.set_cursor(
             self.cursor
                 .index
                 .saturating_add_signed(amount as isize)
                 .min(max_chars - 1),
+            self.cursor.line,
         );
-
-        self.buffer.set_redraw(true);
     }
 
     pub fn backspace(&mut self) {
@@ -440,7 +451,19 @@ impl TerminalElement {
     }
 
     pub fn set_cursor(&mut self, x: usize, y: usize) {
-        self.cursor = Cursor::new(y, x);
+        let new_cursor = Cursor::new(y, x);
+
+        match self.cursor_change {
+            Some((ref mut begin, ref mut end)) => {
+                *begin = self.cursor.max(*begin).min(new_cursor);
+                *end = self.cursor.max(*end).max(new_cursor);
+            }
+            ref mut c @ None => {
+                *c = Some((self.cursor.min(new_cursor), self.cursor.max(new_cursor)));
+            }
+        }
+
+        self.cursor = new_cursor;
         self.buffer.set_redraw(true);
     }
 
@@ -483,25 +506,20 @@ impl TerminalElement {
             let line_y = run.line_y;
             let line_y_i32 = line_y as i32;
 
-            if draw_bounds
-                .is_some_and(|((_, min_y), (_, max_y))| line_y_i32 < min_y || line_y_i32 > max_y)
-            {
+            let line_top = run.line_top;
+            let line_top_i32 = line_top as i32;
+
+            if draw_bounds.is_some_and(|((_, min_y), (_, max_y))| {
+                line_top_i32 < min_y || line_top_i32 > max_y
+            }) {
                 continue;
             }
 
-            let run_glyphs = run
-                .glyphs
-                .iter()
-                .map(|gly| (gly, gly.physical((0., 0.), 1.0)));
-
-            for (glyph, physical_glyph) in run_glyphs {
+            for glyph in run.glyphs.iter() {
                 let metadata = ExtraAttributes::from_usize(glyph.metadata);
                 if metadata.should_skip()
-                    || draw_bounds.is_some_and(|((min_x, min_y), (max_x, max_y))| {
-                        physical_glyph.x < min_x
-                            || (physical_glyph.y + line_y_i32) < min_y
-                            || physical_glyph.x > max_x
-                            || (physical_glyph.y + line_y_i32) > max_y
+                    || draw_bounds.is_some_and(|((min_x, _), (max_x, _))| {
+                        (glyph.x as i32) < min_x || (glyph.x as i32) > max_x
                     })
                 {
                     continue;
@@ -517,6 +535,7 @@ impl TerminalElement {
                     )
                 }
 
+                let physical_glyph = glyph.physical((0., 0.), 1.0);
                 let glyph_color = match glyph.color_opt {
                     Some(some) => some,
                     None => text_color,
@@ -529,7 +548,7 @@ impl TerminalElement {
                     |x, y, color| {
                         f(
                             physical_glyph.x + x,
-                            line_y as i32 + physical_glyph.y + y,
+                            line_y_i32 + physical_glyph.y + y,
                             1,
                             1,
                             color_to_pix(color),
@@ -574,34 +593,24 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
         bg_color: Pixel,
     ) -> Option<(u32, u32)> {
         let line_height = self.buffer.metrics().line_height.ceil() as i32;
-
-        let old_first_line_idx = self.first_idx();
-        let old_curr_pos = self.last_recorded_cursor_pos;
-
         self.buffer
             .shape_until_cursor(&mut font_system(), self.cursor, false);
 
-        let new_first_line_idx = self.first_idx();
-        let new_curr_pos = self.cursor_position();
-        self.last_recorded_cursor_pos = new_curr_pos;
+        let (min_cursor_pos, max_cursor_pos) = self.take_cursor_change().unwrap_or_default();
 
-        let didnt_scroll = new_first_line_idx == old_first_line_idx;
-        let redraw_bounds = didnt_scroll.then(|| {
-            let (s_x, s_y) = old_curr_pos.unwrap_or_default();
-            let (e_x, e_y) = new_curr_pos.unwrap_or((self.width as i32, self.height as i32));
+        let redraw_bounds = (min_cursor_pos.is_some() || max_cursor_pos.is_some()).then(|| {
+            let (s_x, s_y) = min_cursor_pos.unwrap_or_default();
+            let (e_x, e_y) = max_cursor_pos.unwrap_or((self.width as i32, self.height as i32));
 
             let min_y = s_y.min(e_y);
             let max_y = e_y.max(s_y);
+
             let min_x = s_x.min(e_x);
             let max_x = e_x.max(s_x);
 
-            // If the ys aren't equal, we moved a few lines down so the max X should be a line worth
-            let max_x = if min_y == max_y {
-                max_x + 1 /* include cursor */
-            } else {
-                self.width as i32
-            };
-            // Include the cursor
+            let min_y = min_y.min(0);
+            let min_x = min_x.saturating_sub_unsigned(FONT_WIDTH).min(0);
+            let max_x = max_x + CURSOR_WIDTH as i32 /* include the cursor */;
             let max_y = max_y + line_height /* include cursor */;
 
             ((min_x, min_y), (max_x, max_y))
@@ -627,7 +636,8 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
             Some(bg_color),
         );
 
-        self.draw_inner(new_curr_pos, redraw_bounds, |x, y, w, h, pixel| {
+        let curr_pos = self.cursor_position();
+        self.draw_inner(curr_pos, redraw_bounds, |x, y, w, h, pixel| {
             if x.is_negative() || y.is_negative() {
                 return;
             }
