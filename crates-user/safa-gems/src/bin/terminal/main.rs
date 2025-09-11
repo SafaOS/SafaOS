@@ -5,6 +5,7 @@ use std::{
     os::safaos::io::IoUtils,
     process::Command,
     str,
+    time::Instant,
 };
 
 use libgem::{
@@ -126,8 +127,10 @@ fn main() {
     let mut read_from = mother;
 
     let mut statemechaine = vte::Parser::new();
+
     loop {
         term.redraw();
+
         let events = term.try_handle_events();
         let console: &mut ConsoleElement = term.body().get_element_as_mut(id).expect("SDASsada??");
 
@@ -135,7 +138,10 @@ fn main() {
             .read_to_end(&mut buf)
             .expect("Failed to read stdout");
         if len != 0 {
+            let instant = Instant::now();
             statemechaine.advance(console, &buf);
+            let elapsed = instant.elapsed();
+            println!("elapsed: {}ms, parsing {}", elapsed.as_millis(), buf.len());
             buf.clear();
         }
 

@@ -8,3 +8,5 @@ safa-api = { version = "0.4.3", features = ["std"], git = "https://github.com/Sa
 libgem = { path = "../OpalWM/libgem" }
 libopal = { path = "../OpalWM/libopal" }
 vte = "0.15.0"
+arrayvec = "0.7.6"
+unicode-segmentation = "1.12.0"

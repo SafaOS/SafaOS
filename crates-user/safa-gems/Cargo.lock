@@ -257,9 +257,11 @@ dependencies = [
 name = "safa-gems"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "libgem",
  "libopal",
  "safa-api",
+ "unicode-segmentation",
  "vte",
 ]
 

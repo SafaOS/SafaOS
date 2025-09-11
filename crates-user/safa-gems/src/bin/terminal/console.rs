@@ -4,8 +4,8 @@ use libgem::{
     Gem,
     canvas::{DrawingCanvas, Pixel},
     cosmic_text::{
-        Action, Attrs, AttrsList, Buffer, Color, Cursor, Edit, Editor, FontSystem, Metrics, Motion,
-        SwashCache, Weight,
+        Attrs, AttrsList, Buffer, BufferLine, Color, Cursor, FontSystem, LayoutRun, Metrics,
+        Shaping, SwashCache, Weight,
     },
     element::Element,
     text::{FONT_SYSTEM, SWASH_CACHE},
@@ -23,9 +23,84 @@ fn swash_cache() -> MutexGuard<'static, SwashCache> {
         .expect("Failed to acquire lock on SwashCache for console")
 }
 
+/// Stolen from [`libgem::cosmic_text::Editor`]
+fn cursor_glyph_opt(cursor: &Cursor, run: &LayoutRun) -> Option<(usize, f32)> {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    if cursor.line == run.line_i {
+        for (glyph_i, glyph) in run.glyphs.iter().enumerate() {
+            if cursor.index == glyph.start {
+                return Some((glyph_i, 0.0));
+            } else if cursor.index > glyph.start && cursor.index < glyph.end {
+                // Guess x offset based on characters
+                let mut before = 0;
+                let mut total = 0;
+
+                let cluster = &run.text[glyph.start..glyph.end];
+                for (i, _) in cluster.grapheme_indices(true) {
+                    if glyph.start + i < cursor.index {
+                        before += 1;
+                    }
+                    total += 1;
+                }
+
+                let offset = glyph.w * (before as f32) / (total as f32);
+                return Some((glyph_i, offset));
+            }
+        }
+        match run.glyphs.last() {
+            Some(glyph) => {
+                if cursor.index == glyph.end {
+                    return Some((run.glyphs.len(), 0.0));
+                }
+            }
+            None => {
+                return Some((0, 0.0));
+            }
+        }
+    }
+    None
+}
+
+/// Stolen from [`libgem::cosmic_text::Editor`], returns the cooridations of the cursor if it is visible.
+fn cursor_position(cursor: &Cursor, run: &LayoutRun) -> Option<(i32, i32)> {
+    let (cursor_glyph, cursor_glyph_offset) = cursor_glyph_opt(cursor, run)?;
+    let x = match run.glyphs.get(cursor_glyph) {
+        Some(glyph) => {
+            // Start of detected glyph
+            if glyph.level.is_rtl() {
+                (glyph.x + glyph.w - cursor_glyph_offset) as i32
+            } else {
+                (glyph.x + cursor_glyph_offset) as i32
+            }
+        }
+        None => match run.glyphs.last() {
+            Some(glyph) => {
+                // End of last glyph
+                if glyph.level.is_rtl() {
+                    glyph.x as i32
+                } else {
+                    (glyph.x + glyph.w) as i32
+                }
+            }
+            None => {
+                // Start of empty line
+                0
+            }
+        },
+    };
+
+    Some((x, run.line_top as i32))
+}
+
 const DEFAULT_WEIGHT: Weight = Weight::NORMAL;
 const DEFAULT_TEXT_PIXEL: Pixel = Pixel::from_rgb(0xFF, 0xFF, 0xFF);
-const DEFAULT_SELECTION_PIXEL: Pixel = Pixel::from_rgb_with_alpha(0xFF, 0xFF, 0xFF, 0x80);
+const CURSOR_WIDTH: u32 = 2;
+const CURSOR_COLOR_PIX: Pixel = DEFAULT_TEXT_PIXEL;
+const FONT_HEIGHT: u32 = 12;
+const FONT_WIDTH: u32 = 8;
+const CHAR_AMOUNT_LIMIT: usize = 400;
+
 pub const BLACK: Pixel = Pixel::from_hex_rgb(0x282828);
 pub const BRIGHT_BLACK: Pixel = Pixel::from_hex_rgb(0x928374);
 
@@ -68,138 +143,322 @@ fn default_attrs() -> Attrs<'static> {
 }
 
 pub struct ConsoleElement {
-    editor: Editor<'static>,
+    buffer: Buffer,
     current_attr: Attrs<'static>,
     width: u32,
     height: u32,
-    last_recorded_cursor: Option<(i32, i32)>,
+    last_recorded_cursor_pos: Option<(i32, i32)>,
+    cursor: Cursor,
 }
 
 impl ConsoleElement {
     pub fn new(width: u32, height: u32) -> Self {
         let mut font_system = font_system();
 
-        let mut buffer = Buffer::new(&mut font_system, Metrics::new(12.0, 14.0));
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(FONT_HEIGHT as f32, 14.0));
         buffer.set_size(
             &mut font_system,
-            Some(width as f32 - 12.),
+            Some(width as f32 - FONT_HEIGHT as f32),
             Some(height as f32 - (14. * 2.)),
         );
-        let editor = Editor::new(buffer);
+        buffer.set_monospace_width(&mut font_system, Some(FONT_WIDTH as f32));
+
         Self {
-            editor,
+            buffer,
             width,
             height,
             current_attr: default_attrs(),
-            last_recorded_cursor: None,
+            last_recorded_cursor_pos: None,
+            cursor: Cursor::new(0, 0),
         }
     }
 
     fn first_idx(&self) -> Option<usize> {
-        self.editor
-            .with_buffer(|buf| buf.layout_runs().next().map(|s| s.line_i))
+        self.buffer.layout_runs().next().map(|s| s.line_i)
     }
 
-    fn redraw_whole_screen(&self) -> ((usize, usize), (usize, usize)) {
-        ((0, 0), (self.width as usize, self.height as usize))
+    pub fn insert_char(&mut self, c: char) {
+        // replace the cursor
+        let new_cursor = self.insert_char_at(self.cursor, c);
+
+        // the new cursor
+        // We need to insert it to get the position of it as a glyph...
+        self.cursor = new_cursor;
+
+        self.buffer.set_redraw(true);
     }
 
-    pub fn insert_string(&mut self, str: &str) {
-        self.editor
-            .insert_string(str, Some(AttrsList::new(&self.current_attr)));
+    /// Returns the position of the cursor as a glyph if it exist
+    fn cursor_position(&self) -> Option<(i32, i32)> {
+        self.buffer
+            .layout_runs()
+            .find_map(|run| cursor_position(&self.cursor, &run))
+    }
+
+    fn max_chars_len(&self) -> usize {
+        ((self.width / FONT_WIDTH) as usize).min(CHAR_AMOUNT_LIMIT)
+    }
+
+    /// Insert a character at cursor `cursor`, returns the new cursor position, also handles both newline '\n' and backspace '\x08'.
+    fn insert_char_at(&mut self, cursor: Cursor, data: char) -> Cursor {
+        let max_char_len = self.max_chars_len();
+
+        let mut curr_line = cursor.line;
+        let mut curr_col = cursor.index;
+
+        let buf = &mut self.buffer;
+        while curr_col >= max_char_len {
+            curr_col -= max_char_len;
+            curr_line += 1;
+        }
+
+        while curr_line >= buf.lines.len() {
+            let ending = buf.lines.last().map(|l| l.ending()).unwrap_or_default();
+
+            buf.lines.push(BufferLine::new(
+                String::new(),
+                ending,
+                AttrsList::new(&self.current_attr),
+                Shaping::Advanced,
+            ));
+        }
+
+        if data == '\x08' {
+            if let Some(prev_col) = curr_col.checked_sub(1) {
+                // go back a single column
+                curr_col = prev_col;
+            } else {
+                return Cursor::new(curr_line, 0);
+            }
+        } else if data == '\n' {
+            let last_line = buf
+                .lines
+                .last_mut()
+                .expect("curr_line lines should be created before this.");
+
+            let ending = last_line.ending();
+            let col_to_indx = last_line
+                .text()
+                .char_indices()
+                .enumerate()
+                .map(|(i, (col, _))| (i, col))
+                .find(|(_, col)| *col == curr_col)
+                .map(|(i, _)| i);
+
+            // if the \n interrupts an existing position
+            return if let Some(idx) = col_to_indx {
+                let new_line = last_line.split_off(idx);
+                buf.lines.push(new_line);
+                Cursor::new(curr_line + 1, 0)
+            } else {
+                // String::from(" ") to make sure the cursor is valid
+                buf.lines.push(BufferLine::new(
+                    String::from(" "),
+                    ending,
+                    AttrsList::new(&self.current_attr),
+                    Shaping::Advanced,
+                ));
+                Cursor::new(curr_line + 1, 0)
+            };
+        }
+
+        let line_ref = buf.lines.get_mut(curr_line as usize).unwrap();
+        let line: BufferLine = std::mem::replace(
+            line_ref,
+            BufferLine::new(
+                String::new(),
+                Default::default(),
+                AttrsList::new(&Attrs::new()),
+                Shaping::Basic,
+            ),
+        );
+
+        let ending = line.ending();
+        let mut attr_list = line.attrs_list().clone();
+        attr_list.add_span(curr_col as usize..curr_col as usize + 1, &self.current_attr);
+        let line_text = line.into_text();
+        let mut result_string: arrayvec::ArrayString<{ CHAR_AMOUNT_LIMIT * 4 }> =
+            arrayvec::ArrayString::new_const();
+
+        let mut last_col = None;
+        let mut inserted = false;
+
+        for (_, (col, c)) in line_text.char_indices().enumerate() {
+            last_col = Some(col);
+
+            if col == curr_col {
+                if data != '\x08'
+                /* backspace just removes a single character */
+                {
+                    result_string.push(data);
+                }
+                inserted = true;
+                break;
+            } else {
+                result_string.push(c);
+            }
+        }
+
+        assert!(last_col.is_some() || line_text.len() <= 0);
+        if !inserted && data != '\x08' {
+            let cols_missing = last_col.map(|l| curr_col - l - 1).unwrap_or(curr_col);
+            for _ in 0..cols_missing {
+                result_string.push(' ');
+            }
+
+            result_string.push(data);
+        }
+
+        let mut new_string = line_text;
+        new_string.clear();
+        new_string.insert_str(0, &result_string);
+
+        *line_ref = BufferLine::new(new_string, ending, attr_list, Shaping::Advanced);
+        line_ref.reset();
+
+        if data == '\x08' {
+            Cursor::new(curr_line, curr_col /* we went back a col remember */)
+        } else if curr_col + 1 < max_char_len {
+            Cursor::new(curr_line, curr_col + 1)
+        } else {
+            Cursor::new(curr_line + 1, 0)
+        }
     }
 
     #[inline(always)]
     pub fn move_cursor_lines(&mut self, lines: i32) {
-        let am_unsigned = lines.unsigned_abs();
-        let motion = if lines.is_negative() {
-            Motion::Down
-        } else {
-            Motion::Up
-        };
-
-        let font_system = &mut font_system();
-        for _ in 0..am_unsigned {
-            self.editor.action(font_system, Action::Motion(motion));
+        if lines == 0 {
+            return;
         }
+
+        self.cursor = Cursor::new(
+            self.cursor.line.saturating_add_signed(lines as isize),
+            self.cursor.index,
+        );
+        self.buffer.set_redraw(true);
     }
 
     #[inline(always)]
     pub fn move_cursor_chars(&mut self, amount: i32) {
-        let am_unsigned = amount.unsigned_abs();
-        let motion = if amount.is_negative() {
-            Motion::Previous
-        } else {
-            Motion::Next
-        };
-
-        let font_system = &mut font_system();
-        for _ in 0..am_unsigned {
-            self.editor.action(font_system, Action::Motion(motion));
+        if amount == 0 {
+            return;
         }
+
+        let max_chars = self.max_chars_len();
+        self.cursor = Cursor::new(
+            self.cursor.line,
+            self.cursor
+                .index
+                .saturating_add_signed(amount as isize)
+                .min(max_chars - 1),
+        );
+
+        self.buffer.set_redraw(true);
     }
 
     pub fn backspace(&mut self) {
-        let mut font_system = font_system();
-        self.editor.action(&mut font_system, Action::Backspace);
+        self.insert_char('\x08');
     }
 
     pub fn enter(&mut self) {
-        let mut font_system = font_system();
-        self.editor.action(&mut font_system, Action::Enter);
+        self.insert_char('\n');
     }
 
     pub fn clear(&mut self) {
-        self.editor
-            .delete_range(Cursor::new(0, 0), self.editor.cursor());
-    }
-
-    pub fn get_cursor(&self) -> (usize, usize) {
-        let cur = self.editor.cursor();
-        (cur.index, cur.line)
+        self.buffer.lines.clear();
+        self.buffer.set_redraw(true);
     }
 
     pub fn set_cursor(&mut self, x: usize, y: usize) {
-        self.editor.set_cursor(Cursor::new(x, y));
+        self.cursor = Cursor::new(y, x);
+        self.buffer.set_redraw(true);
     }
 
     pub fn curr_height(&self) -> u32 {
-        self.editor
-            .with_buffer(|buf| buf.layout_runs().map(|l| l.line_height).sum::<f32>().ceil() as u32)
+        self.buffer
+            .layout_runs()
+            .map(|l| l.line_height)
+            .sum::<f32>()
+            .ceil() as u32
     }
 
     pub fn curr_width(&self) -> u32 {
-        self.editor.with_buffer(|buf| {
-            buf.layout_runs()
-                .map(|l| l.line_w)
-                .max_by(|s, o| s.partial_cmp(o).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|f| f.ceil() as u32)
-                .unwrap_or(0)
-        })
+        self.buffer
+            .layout_runs()
+            .map(|l| l.line_w)
+            .max_by(|s, o| s.partial_cmp(o).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|f| f.ceil() as u32)
+            .unwrap_or(0)
     }
 
     /// Draw the editor ()
     #[allow(clippy::too_many_arguments)]
-    fn draw_inner<F>(&self, draw_bounds: Option<((i32, i32), (i32, i32))>, mut f: F)
-    where
+    fn draw_inner<F>(
+        &self,
+        cursor_pos: Option<(i32, i32)>,
+        draw_bounds: Option<((i32, i32), (i32, i32))>,
+        mut f: F,
+    ) where
         F: FnMut(i32, i32, u32, u32, Pixel),
     {
-        const CURSOR_PIXEL: Pixel = Pixel::from_rgb(0xff, 0xff, 0xff);
-        self.editor.draw(
-            &mut font_system(),
-            &mut swash_cache(),
-            pix_to_color(DEFAULT_TEXT_PIXEL),
-            pix_to_color(CURSOR_PIXEL),
-            pix_to_color(DEFAULT_SELECTION_PIXEL),
-            pix_to_color(DEFAULT_TEXT_PIXEL),
-            |x, y, width, height, color| {
-                if draw_bounds.is_none_or(|((min_x, min_y), (max_x, max_y))| {
-                    x >= min_x && y >= min_y && x <= max_x && y <= max_y
+        let buf = &self.buffer;
+        let line_height = buf.metrics().line_height;
+
+        let text_color = pix_to_color(DEFAULT_TEXT_PIXEL);
+
+        let cache = &mut swash_cache();
+        let font_system = &mut font_system();
+
+        for run in buf.layout_runs() {
+            let line_y = run.line_y;
+            let line_y_i32 = line_y as i32;
+
+            if draw_bounds
+                .is_some_and(|((_, min_y), (_, max_y))| line_y_i32 < min_y || line_y_i32 > max_y)
+            {
+                continue;
+            }
+
+            let run_glyphs = run
+                .glyphs
+                .iter()
+                .map(|gly| (gly, gly.physical((0., 0.), 1.0)));
+
+            for (glyph, physical_glyph) in run_glyphs {
+                if draw_bounds.is_some_and(|((min_x, min_y), (max_x, max_y))| {
+                    physical_glyph.x < min_x
+                        || (physical_glyph.y + line_y_i32) < min_y
+                        || physical_glyph.x > max_x
+                        || (physical_glyph.y + line_y_i32) > max_y
                 }) {
-                    f(x, y, width, height, color_to_pix(color))
+                    continue;
                 }
-            },
-        );
+
+                let glyph_color = match glyph.color_opt {
+                    Some(some) => some,
+                    None => text_color,
+                };
+
+                cache.with_pixels(
+                    font_system,
+                    physical_glyph.cache_key,
+                    glyph_color,
+                    |x, y, color| {
+                        f(
+                            physical_glyph.x + x,
+                            line_y as i32 + physical_glyph.y + y,
+                            1,
+                            1,
+                            color_to_pix(color),
+                        );
+                    },
+                );
+            }
+        }
+        // Draw cursor
+        if let Some((x, y)) = cursor_pos {
+            f(x, y, CURSOR_WIDTH, line_height as u32, CURSOR_COLOR_PIX);
+        }
     }
 }
 
@@ -221,7 +480,7 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for ConsoleElement {
     }
 
     fn needs_redraw(&self) -> bool {
-        self.editor.redraw()
+        self.buffer.redraw()
     }
 
     fn draw(
@@ -231,18 +490,17 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for ConsoleElement {
         start_y: u32,
         bg_color: Pixel,
     ) -> Option<(u32, u32)> {
-        let line_height = self
-            .editor
-            .with_buffer(|buf| buf.metrics().line_height.ceil() as i32);
+        let line_height = self.buffer.metrics().line_height.ceil() as i32;
 
         let old_first_line_idx = self.first_idx();
-        let old_curr_pos = self.last_recorded_cursor;
+        let old_curr_pos = self.last_recorded_cursor_pos;
 
-        self.editor.shape_as_needed(&mut font_system(), false);
+        self.buffer
+            .shape_until_cursor(&mut font_system(), self.cursor, false);
 
         let new_first_line_idx = self.first_idx();
-        let new_curr_pos = self.editor.cursor_position();
-        self.last_recorded_cursor = new_curr_pos;
+        let new_curr_pos = self.cursor_position();
+        self.last_recorded_cursor_pos = new_curr_pos;
 
         let didnt_scroll = new_first_line_idx == old_first_line_idx;
         let redraw_bounds = didnt_scroll.then(|| {
@@ -271,8 +529,8 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for ConsoleElement {
                 (
                     start_x.saturating_add_signed(min_x),
                     start_y.saturating_add_signed(min_y),
-                    (max_x - min_x) as u32,
-                    (max_y - min_y) as u32,
+                    (max_x - min_x + 1) as u32,
+                    (max_y - min_y + 1) as u32,
                 )
             })
             .unwrap_or((start_x, start_y, self.width, self.height));
@@ -286,7 +544,7 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for ConsoleElement {
             Some(bg_color),
         );
 
-        self.draw_inner(redraw_bounds, |x, y, w, h, pixel| {
+        self.draw_inner(new_curr_pos, redraw_bounds, |x, y, w, h, pixel| {
             if x.is_negative() || y.is_negative() {
                 return;
             }
@@ -296,16 +554,14 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for ConsoleElement {
             canvas.draw_rect(draw_x, draw_y, w, h, pixel, Some(bg_color));
         });
 
-        self.editor.set_redraw(false);
+        self.buffer.set_redraw(false);
         Some((c_start_x + c_width, c_start_y + c_height))
     }
 }
 
 impl vte::Perform for ConsoleElement {
     fn print(&mut self, c: char) {
-        let mut tmp = [0u8; 4];
-        let s = c.encode_utf8(&mut tmp);
-        self.insert_string(s);
+        self.insert_char(c);
     }
 
     fn execute(&mut self, byte: u8) {
@@ -356,10 +612,10 @@ impl vte::Perform for ConsoleElement {
                 let amount = params.next().unwrap_or(&[1])[0] as usize;
 
                 match c {
-                    'A' => self.move_cursor_lines(amount as i32),
-                    'B' => self.move_cursor_lines(-(amount as i32)),
-                    'C' => self.move_cursor_chars(-(amount as i32)),
-                    'D' => self.move_cursor_chars(amount as i32),
+                    'A' => self.move_cursor_lines(-(amount as i32)),
+                    'B' => self.move_cursor_lines(amount as i32),
+                    'C' => self.move_cursor_chars(amount as i32),
+                    'D' => self.move_cursor_chars(-(amount as i32)),
                     _ => unreachable!(),
                 }
             }
@@ -398,7 +654,7 @@ impl vte::Perform for ConsoleElement {
                             _ => unreachable!(),
                         };
 
-                        self.current_attr = self.current_attr.clone().color(pix_to_color(pix));
+                        self.current_attr.color_opt = Some(pix_to_color(pix));
                     }
 
                     Some(38) => match params_single.next() {
@@ -407,9 +663,8 @@ impl vte::Perform for ConsoleElement {
                             let green = params_single.next().unwrap_or_default();
                             let blue = params_single.next().unwrap_or_default();
 
-                            let color = Pixel::from_rgb(red as u8, green as u8, blue as u8);
-                            self.current_attr =
-                                self.current_attr.clone().color(pix_to_color(color));
+                            let color = Color::rgb(red as u8, green as u8, blue as u8);
+                            self.current_attr.color_opt = Some(color);
                         }
                         _ => {}
                     },
