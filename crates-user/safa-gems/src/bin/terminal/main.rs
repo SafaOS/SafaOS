@@ -1,4 +1,4 @@
-mod console;
+mod term_display;
 
 use std::{
     io::{Read, Write},
@@ -17,12 +17,12 @@ use libgem::{
     },
 };
 
-use crate::console::ConsoleElement;
+use crate::term_display::TerminalElement;
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 const TITLE: &str = "Terminal";
-const BG_COLOR: Pixel = Pixel::from_rgb(0, 0, 0).with_alpha(0xE0);
+const BG_COLOR: Pixel = Pixel::from_rgb(0x28, 0x28, 0x28).with_alpha(0xF0);
 
 const fn keycode_to_char(code: KeyCode) -> Option<char> {
     match code {
@@ -116,7 +116,7 @@ fn main() {
         .expect("Failed to spawn shell");
 
     let mut term = Terminal::init();
-    let console_editor = ConsoleElement::new(WIDTH, HEIGHT);
+    let console_editor = TerminalElement::new(WIDTH, HEIGHT);
     let id = term.add_element(console_editor);
 
     let mut buf = Vec::with_capacity(4096);
@@ -132,7 +132,7 @@ fn main() {
         term.redraw();
 
         let events = term.try_handle_events();
-        let console: &mut ConsoleElement = term.body().get_element_as_mut(id).expect("SDASsada??");
+        let console: &mut TerminalElement = term.body().get_element_as_mut(id).expect("SDASsada??");
 
         let len = read_from
             .read_to_end(&mut buf)

@@ -11,6 +11,48 @@ use libgem::{
     text::{FONT_SYSTEM, SWASH_CACHE},
 };
 
+/// Extra attributes for a glyph
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExtraAttributes {
+    extra_flags: u32,
+    background_color: Pixel,
+}
+
+impl ExtraAttributes {
+    pub const fn from_usize(u: usize) -> Self {
+        unsafe { core::mem::transmute(u) }
+    }
+
+    pub const fn raw(self) -> usize {
+        unsafe { core::mem::transmute(self) }
+    }
+
+    /// Returns the background color of the cell containing the glyph or None if the background is transparent
+    pub const fn bg(&self) -> Option<Pixel> {
+        if unsafe { core::mem::transmute::<Pixel, u32>(self.background_color) } != 0 {
+            Some(self.background_color)
+        } else {
+            None
+        }
+    }
+
+    /// Whether or not we can skip rendering this glyph
+    pub const fn should_skip(&self) -> bool {
+        unsafe { core::mem::transmute::<_, usize>(self) == 1 }
+    }
+
+    pub const fn new_skip_rendering() -> Self {
+        unsafe { core::mem::transmute(1usize) }
+    }
+
+    pub const fn with_bg(mut self, bg: Pixel) -> Self {
+        self.background_color = bg;
+        self
+    }
+}
+
+const _: () = assert!(size_of::<ExtraAttributes>() == size_of::<usize>());
+
 fn font_system() -> MutexGuard<'static, FontSystem> {
     FONT_SYSTEM
         .lock()
@@ -142,7 +184,7 @@ fn default_attrs() -> Attrs<'static> {
         .weight(DEFAULT_WEIGHT)
 }
 
-pub struct ConsoleElement {
+pub struct TerminalElement {
     buffer: Buffer,
     current_attr: Attrs<'static>,
     width: u32,
@@ -151,7 +193,7 @@ pub struct ConsoleElement {
     cursor: Cursor,
 }
 
-impl ConsoleElement {
+impl TerminalElement {
     pub fn new(width: u32, height: u32) -> Self {
         let mut font_system = font_system();
 
@@ -275,8 +317,12 @@ impl ConsoleElement {
 
         let ending = line.ending();
         let mut attr_list = line.attrs_list().clone();
-        attr_list.add_span(curr_col as usize..curr_col as usize + 1, &self.current_attr);
+        if data != '\x08' {
+            attr_list.add_span(curr_col as usize..curr_col as usize + 1, &self.current_attr);
+        }
+
         let line_text = line.into_text();
+
         let mut result_string: arrayvec::ArrayString<{ CHAR_AMOUNT_LIMIT * 4 }> =
             arrayvec::ArrayString::new_const();
 
@@ -302,8 +348,17 @@ impl ConsoleElement {
         assert!(last_col.is_some() || line_text.len() <= 0);
         if !inserted && data != '\x08' {
             let cols_missing = last_col.map(|l| curr_col - l - 1).unwrap_or(curr_col);
-            for _ in 0..cols_missing {
-                result_string.push(' ');
+            if cols_missing != 0 {
+                for _ in 0..cols_missing {
+                    result_string.push(' ');
+                }
+                let start_col = last_col.unwrap_or_default();
+                // Skip rendering of spaces
+                // FIXME: add_span is hella unefficent because the people who made this decided so...
+                attr_list.add_span(
+                    start_col..curr_col,
+                    &Attrs::new().metadata(ExtraAttributes::new_skip_rendering().raw()),
+                );
             }
 
             result_string.push(data);
@@ -425,13 +480,26 @@ impl ConsoleElement {
                 .map(|gly| (gly, gly.physical((0., 0.), 1.0)));
 
             for (glyph, physical_glyph) in run_glyphs {
-                if draw_bounds.is_some_and(|((min_x, min_y), (max_x, max_y))| {
-                    physical_glyph.x < min_x
-                        || (physical_glyph.y + line_y_i32) < min_y
-                        || physical_glyph.x > max_x
-                        || (physical_glyph.y + line_y_i32) > max_y
-                }) {
+                let metadata = ExtraAttributes::from_usize(glyph.metadata);
+                if metadata.should_skip()
+                    || draw_bounds.is_some_and(|((min_x, min_y), (max_x, max_y))| {
+                        physical_glyph.x < min_x
+                            || (physical_glyph.y + line_y_i32) < min_y
+                            || physical_glyph.x > max_x
+                            || (physical_glyph.y + line_y_i32) > max_y
+                    })
+                {
                     continue;
+                }
+
+                if let Some(bg_color) = metadata.bg() {
+                    f(
+                        glyph.x as i32,
+                        run.line_top as i32,
+                        FONT_WIDTH,
+                        line_height as u32,
+                        bg_color,
+                    )
                 }
 
                 let glyph_color = match glyph.color_opt {
@@ -462,7 +530,7 @@ impl ConsoleElement {
     }
 }
 
-impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for ConsoleElement {
+impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
     fn draw_height(&self) -> u32 {
         self.curr_height()
     }
@@ -551,7 +619,7 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for ConsoleElement {
 
             let draw_x = start_x.saturating_add(x as u32);
             let draw_y = start_y.saturating_add(y as u32);
-            canvas.draw_rect(draw_x, draw_y, w, h, pixel, Some(bg_color));
+            canvas.draw_rect(draw_x, draw_y, w, h, pixel, None);
         });
 
         self.buffer.set_redraw(false);
@@ -559,7 +627,7 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for ConsoleElement {
     }
 }
 
-impl vte::Perform for ConsoleElement {
+impl vte::Perform for TerminalElement {
     fn print(&mut self, c: char) {
         self.insert_char(c);
     }
@@ -623,52 +691,90 @@ impl vte::Perform for ConsoleElement {
             'm' => {
                 let params = params.into_iter();
                 let mut params_single = params.map(|p| p.get(0).copied().unwrap_or_default());
-                match params_single.next() {
-                    Some(0) => {
-                        // reset all
-                        self.current_attr = default_attrs();
-                    }
-                    Some(1) => self.current_attr = self.current_attr.clone().weight(Weight::BOLD),
-                    Some(22) => {
-                        self.current_attr = self.current_attr.clone().weight(default_attrs().weight)
-                    }
-                    Some(color @ 30..=37) | Some(color @ 90..=97) | Some(color @ 39) => {
-                        let pix = match color {
-                            30 => BLACK,
-                            90 => BRIGHT_BLACK,
-                            31 => RED,
-                            91 => BRIGHT_RED,
-                            32 => GREEN,
-                            92 => BRIGHT_GREEN,
-                            33 => YELLOW,
-                            93 => BRIGHT_YELLOW,
-                            34 => BLUE,
-                            94 => BRIGHT_BLUE,
-                            35 => MAGENTA,
-                            95 => BRIGHT_MAGENTA,
-                            36 => CYAN,
-                            96 => BRIGHT_CYAN,
-                            37 => WHITE,
-                            97 => BRIGHT_WHITE,
-                            39 => DEFAULT_TEXT_PIXEL,
-                            _ => unreachable!(),
-                        };
-
-                        self.current_attr.color_opt = Some(pix_to_color(pix));
-                    }
-
-                    Some(38) => match params_single.next() {
-                        Some(2) => {
-                            let red = params_single.next().unwrap_or_default();
-                            let green = params_single.next().unwrap_or_default();
-                            let blue = params_single.next().unwrap_or_default();
-
-                            let color = Color::rgb(red as u8, green as u8, blue as u8);
-                            self.current_attr.color_opt = Some(color);
+                while let Some(param) = params_single.next() {
+                    match param {
+                        0 => {
+                            // reset all
+                            self.current_attr = default_attrs();
                         }
+                        1 => self.current_attr.weight = Weight::BOLD,
+                        22 => self.current_attr.weight = default_attrs().weight,
+                        color @ 30..=37
+                        | color @ 40..=47
+                        | color @ 90..=97
+                        | color @ 100..=107
+                        | color @ 39
+                        | color @ 49 => {
+                            let is_bright = color >= 90;
+                            let is_bg = color > 39 && (color < 90 || color >= 100);
+
+                            let generic = if is_bg && is_bright {
+                                color - 100
+                            } else if is_bg {
+                                color - 40
+                            } else if is_bright {
+                                color - 90
+                            } else {
+                                color - 30
+                            };
+
+                            let pix = match (generic, is_bright) {
+                                (0, false) => BLACK,
+                                (0, true) => BRIGHT_BLACK,
+                                (1, false) => RED,
+                                (1, true) => BRIGHT_RED,
+                                (2, false) => GREEN,
+                                (2, true) => BRIGHT_GREEN,
+                                (3, false) => YELLOW,
+                                (3, true) => BRIGHT_YELLOW,
+                                (4, false) => BLUE,
+                                (4, true) => BRIGHT_BLUE,
+                                (5, false) => MAGENTA,
+                                (5, true) => BRIGHT_MAGENTA,
+                                (6, false) => CYAN,
+                                (6, true) => BRIGHT_CYAN,
+                                (7, false) => WHITE,
+                                (7, true) => BRIGHT_WHITE,
+                                (9, false) if !is_bg => DEFAULT_TEXT_PIXEL,
+                                (9, false) if is_bg => Pixel::from_hex_argb(0),
+                                (g, b) => {
+                                    unreachable!("color value is {g}, bright: {b}, is_bg: {is_bg}")
+                                }
+                            };
+
+                            if !is_bg {
+                                self.current_attr.color_opt = Some(pix_to_color(pix))
+                            } else {
+                                self.current_attr.metadata =
+                                    ExtraAttributes::from_usize(self.current_attr.metadata)
+                                        .with_bg(pix)
+                                        .raw()
+                            }
+                        }
+
+                        v @ 38 | v @ 48 => match params_single.next() {
+                            Some(2) => {
+                                let is_bg = v == 48;
+                                let r = params_single.next().unwrap_or_default() as u8;
+                                let g = params_single.next().unwrap_or_default() as u8;
+                                let b = params_single.next().unwrap_or_default() as u8;
+
+                                let pix = Pixel::from_rgb(r, g, b);
+                                let color = Color::rgb(r, g, b);
+
+                                if !is_bg {
+                                    self.current_attr.color_opt = Some(color)
+                                } else {
+                                    self.current_attr.metadata =
+                                        ExtraAttributes::from_usize(self.current_attr.metadata)
+                                            .with_bg(pix)
+                                            .raw()
+                                }
+                            }
+                            _ => {}
+                        },
                         _ => {}
-                    },
-                    _ => {}
+                    }
                 }
             }
             _ => println!(
