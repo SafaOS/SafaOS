@@ -142,6 +142,7 @@ const CURSOR_COLOR_PIX: Pixel = DEFAULT_TEXT_PIXEL;
 const FONT_HEIGHT: u32 = 12;
 const FONT_WIDTH: u32 = 8;
 const CHAR_AMOUNT_LIMIT: usize = 400;
+const MAX_HISTORY_LINES: usize = 200;
 
 pub const BLACK: Pixel = Pixel::from_hex_rgb(0x282828);
 pub const BRIGHT_BLACK: Pixel = Pixel::from_hex_rgb(0x928374);
@@ -257,6 +258,21 @@ impl TerminalElement {
         while curr_line >= buf.lines.len() {
             let ending = buf.lines.last().map(|l| l.ending()).unwrap_or_default();
 
+            if buf.lines.len() + 1 >= MAX_HISTORY_LINES {
+                unsafe {
+                    // We drop the first line which we are going to remove
+                    std::ptr::drop_in_place(buf.lines.as_mut_ptr());
+                    // We copy from the second line to the end, to take place of the first line
+                    std::ptr::copy(
+                        buf.lines.as_ptr().add(1),
+                        buf.lines.as_mut_ptr(),
+                        buf.lines.len() - 1,
+                    );
+                    // We adjust length
+                    buf.lines.set_len(buf.lines.len() - 1);
+                }
+                curr_line -= 1;
+            }
             buf.lines.push(BufferLine::new(
                 String::new(),
                 ending,
@@ -354,7 +370,6 @@ impl TerminalElement {
                 }
                 let start_col = last_col.unwrap_or_default();
                 // Skip rendering of spaces
-                // FIXME: add_span is hella unefficent because the people who made this decided so...
                 attr_list.add_span(
                     start_col..curr_col,
                     &Attrs::new().metadata(ExtraAttributes::new_skip_rendering().raw()),
