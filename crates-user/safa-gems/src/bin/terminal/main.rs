@@ -99,15 +99,15 @@ fn main() {
     const ECHO_ERASE: u64 = 1 << 2;
     const ERASE_CHAR: u8 = 0x7f;
 
-    // let shell = std::env::var("SHELL").expect("Failed to get SHELL");
-    // println!("Using the shell: {shell}");
+    let shell = std::env::var("SHELL").expect("Failed to get SHELL");
+    println!("Using the shell: {shell}");
 
     let (mother, child) = std::os::safaos::io::create_vtty().expect("Failed to create VTTY");
     mother
         .send_command(SET_FLAGS, ECHO | CANONICAL | ECHO_ERASE)
         .expect("Failed to setup VTTY");
 
-    Command::new("sys:/bin/safa")
+    Command::new(shell)
         .arg("-i")
         .stdin(child.try_clone().unwrap())
         .stderr(child.try_clone().unwrap())
