@@ -246,7 +246,9 @@ impl TerminalElement {
                 && let Some(found_pos) = cursor_position(&begin, &run)
             {
                 begin_pos = Some(found_pos);
-            } else if end_pos.is_none()
+            }
+
+            if end_pos.is_none()
                 && let Some(found_pos) = cursor_position(&end, &run)
             {
                 end_pos = Some(found_pos);
@@ -629,8 +631,15 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
         let (min_cursor_pos, max_cursor_pos) = self.take_cursor_change().unwrap_or_default();
 
         let redraw_bounds = (new_first_line_idx == old_first_line_idx).then(|| {
+            if min_cursor_pos.is_none() && max_cursor_pos.is_none() {
+                return ((0, 0), (CURSOR_WIDTH as i32, line_height));
+            }
+
             let (s_x, s_y) = min_cursor_pos.unwrap_or_default();
-            let (e_x, e_y) = max_cursor_pos.unwrap_or((self.width as i32, self.height as i32));
+            let (e_x, e_y) = max_cursor_pos.unwrap_or((
+                (self.width - CURSOR_WIDTH) as i32,
+                (self.height as i32) - s_y - line_height,
+            ));
 
             let min_y = s_y.min(e_y);
             let max_y = e_y.max(s_y);
@@ -639,7 +648,7 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
             let max_x = e_x.max(s_x);
 
             let (min_x, max_x) = if min_y != max_y {
-                (0i32, self.width as i32)
+                (0i32, (self.width - CURSOR_WIDTH) as i32)
             } else {
                 (min_x, max_x)
             };
@@ -655,8 +664,8 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
                 (
                     start_x.saturating_add_signed(min_x),
                     start_y.saturating_add_signed(min_y),
-                    (max_x - min_x + 1) as u32,
-                    (max_y - min_y + 1) as u32,
+                    (max_x - min_x) as u32,
+                    (max_y - min_y) as u32,
                 )
             })
             .unwrap_or((start_x, start_y, self.width, self.height));
