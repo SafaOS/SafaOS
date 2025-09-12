@@ -190,9 +190,12 @@ pub struct TerminalElement {
     current_attr: Attrs<'static>,
     width: u32,
     height: u32,
+    /// Changes that were done to the insert cursor since the last redraw.
     cursor_change: Option<(Cursor, Cursor)>,
-
-    cursor: Cursor,
+    /// The position at where we insert the next character ^-^
+    insert_cursor: Cursor,
+    /// The position at where viewing the screen ends *-*
+    view_cursor: Cursor,
 }
 
 impl TerminalElement {
@@ -213,21 +216,22 @@ impl TerminalElement {
             height,
             current_attr: default_attrs(),
             cursor_change: None,
-            cursor: Cursor::new(0, 0),
+            insert_cursor: Cursor::new(0, 0),
+            view_cursor: Cursor::new(0, 0),
         }
     }
 
     pub fn insert_char(&mut self, c: char) {
         // replace the cursor
-        let new_cursor = self.insert_char_at(self.cursor, c);
-        self.set_cursor(new_cursor.index, new_cursor.line);
+        let new_cursor = self.insert_char_at(self.insert_cursor, c);
+        self.set_cursor_and_view(new_cursor);
     }
 
-    /// Returns the position of the cursor as a glyph if it exist
-    fn cursor_position(&self) -> Option<(i32, i32)> {
+    /// Returns the position of the insert cursor as a glyph if it exist in the current view.
+    fn insert_cursor_position(&self) -> Option<(i32, i32)> {
         self.buffer
             .layout_runs()
-            .find_map(|run| cursor_position(&self.cursor, &run))
+            .find_map(|run| cursor_position(&self.insert_cursor, &run))
     }
 
     /// Takes the cursor changes that were done since the last redraw, returns None if no changes were done,
@@ -415,10 +419,14 @@ impl TerminalElement {
             return;
         }
 
-        self.set_cursor(
-            self.cursor.index,
-            self.cursor.line.saturating_add_signed(lines as isize),
+        let new_cursor = Cursor::new(
+            self.insert_cursor
+                .line
+                .saturating_add_signed(lines as isize)
+                .min(MAX_HISTORY_LINES),
+            self.insert_cursor.index,
         );
+        self.set_cursor(new_cursor);
     }
 
     #[inline(always)]
@@ -428,13 +436,14 @@ impl TerminalElement {
         }
 
         let max_chars = self.max_chars_len();
-        self.set_cursor(
-            self.cursor
+        let new_cursor = Cursor::new(
+            self.insert_cursor.line,
+            self.insert_cursor
                 .index
                 .saturating_add_signed(amount as isize)
                 .min(max_chars - 1),
-            self.cursor.line,
         );
+        self.set_cursor(new_cursor);
     }
 
     pub fn backspace(&mut self) {
@@ -447,23 +456,41 @@ impl TerminalElement {
 
     pub fn clear(&mut self) {
         self.buffer.lines.clear();
+        // We may or may not want to insert at the same old position
+        self.view_cursor = Cursor::new(0, 0);
+        self.cursor_change = None;
+
         self.buffer.set_redraw(true);
     }
 
-    pub fn set_cursor(&mut self, x: usize, y: usize) {
-        let new_cursor = Cursor::new(y, x);
+    fn first_idx(&self) -> Option<usize> {
+        self.buffer.layout_runs().next().map(|s| s.line_i)
+    }
+
+    /// Updates the position of the insert cursor
+    pub fn set_cursor(&mut self, new_cursor: Cursor) {
+        let old_cursor = self.insert_cursor;
+        self.insert_cursor = new_cursor;
 
         match self.cursor_change {
             Some((ref mut begin, ref mut end)) => {
-                *begin = self.cursor.max(*begin).min(new_cursor);
-                *end = self.cursor.max(*end).max(new_cursor);
+                *begin = old_cursor.min(*begin).min(new_cursor);
+                *end = old_cursor.max(*end).max(new_cursor);
             }
             ref mut c @ None => {
-                *c = Some((self.cursor.min(new_cursor), self.cursor.max(new_cursor)));
+                *c = Some((new_cursor.min(old_cursor), new_cursor.max(old_cursor)));
             }
         }
+    }
 
-        self.cursor = new_cursor;
+    /// Sets the cursor at which we insert characters and updates the view cursor if necessary to put the insert cursor into view
+    pub fn set_cursor_and_view(&mut self, new_cursor: Cursor) {
+        self.set_cursor(new_cursor);
+
+        let old_view = self.view_cursor;
+        let new_view = old_view.max(self.insert_cursor);
+        self.view_cursor = new_view;
+
         self.buffer.set_redraw(true);
     }
 
@@ -593,12 +620,15 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
         bg_color: Pixel,
     ) -> Option<(u32, u32)> {
         let line_height = self.buffer.metrics().line_height.ceil() as i32;
+
+        let old_first_line_idx = self.first_idx();
         self.buffer
-            .shape_until_cursor(&mut font_system(), self.cursor, false);
+            .shape_until_cursor(&mut font_system(), self.view_cursor, false);
+        let new_first_line_idx = self.first_idx();
 
         let (min_cursor_pos, max_cursor_pos) = self.take_cursor_change().unwrap_or_default();
 
-        let redraw_bounds = (min_cursor_pos.is_some() || max_cursor_pos.is_some()).then(|| {
+        let redraw_bounds = (new_first_line_idx == old_first_line_idx).then(|| {
             let (s_x, s_y) = min_cursor_pos.unwrap_or_default();
             let (e_x, e_y) = max_cursor_pos.unwrap_or((self.width as i32, self.height as i32));
 
@@ -608,8 +638,12 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
             let min_x = s_x.min(e_x);
             let max_x = e_x.max(s_x);
 
-            let min_y = min_y.min(0);
-            let min_x = min_x.saturating_sub_unsigned(FONT_WIDTH).min(0);
+            let (min_x, max_x) = if min_y != max_y {
+                (0i32, self.width as i32)
+            } else {
+                (min_x, max_x)
+            };
+
             let max_x = max_x + CURSOR_WIDTH as i32 /* include the cursor */;
             let max_y = max_y + line_height /* include cursor */;
 
@@ -636,16 +670,19 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
             Some(bg_color),
         );
 
-        let curr_pos = self.cursor_position();
-        self.draw_inner(curr_pos, redraw_bounds, |x, y, w, h, pixel| {
-            if x.is_negative() || y.is_negative() {
-                return;
-            }
+        self.draw_inner(
+            self.insert_cursor_position(),
+            redraw_bounds,
+            |x, y, w, h, pixel| {
+                if x.is_negative() || y.is_negative() {
+                    return;
+                }
 
-            let draw_x = start_x.saturating_add(x as u32);
-            let draw_y = start_y.saturating_add(y as u32);
-            canvas.draw_rect(draw_x, draw_y, w, h, pixel, None);
-        });
+                let draw_x = start_x.saturating_add(x as u32);
+                let draw_y = start_y.saturating_add(y as u32);
+                canvas.draw_rect(draw_x, draw_y, w, h, pixel, None);
+            },
+        );
 
         self.buffer.set_redraw(false);
         Some((c_start_x + c_width, c_start_y + c_height))
@@ -698,7 +735,7 @@ impl vte::Perform for TerminalElement {
                 let mut iter = params.into_iter();
                 let x = iter.next().unwrap_or(&[0])[0] as usize;
                 let y = iter.next().unwrap_or(&[0])[0] as usize;
-                self.set_cursor(x, y)
+                self.set_cursor(Cursor::new(y, x))
             }
             'A' | 'B' | 'D' | 'C' => {
                 let mut params = params.into_iter();
