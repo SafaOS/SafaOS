@@ -66,8 +66,6 @@ impl MicePacket {
 pub fn mice_handler() {
     static READ_DATA: SyncUnsafeCell<[u8; 3]> = SyncUnsafeCell::new([0u8; 3]);
     static READ_CURSOR: SyncUnsafeCell<usize> = SyncUnsafeCell::new(0);
-    static LAST_PACKET: SyncUnsafeCell<MicePacket> =
-        SyncUnsafeCell::new(unsafe { core::mem::zeroed() });
 
     // SAFETY: only one thread will call this function at a time
     let read_data = unsafe { &mut *READ_DATA.get() };
@@ -85,19 +83,9 @@ pub fn mice_handler() {
     if *read_cursor >= 3 {
         *read_cursor = 0;
 
-        let last_packet = unsafe { &mut *LAST_PACKET.get() };
         let received_packet: MicePacket = unsafe { core::mem::transmute(*read_data) };
 
         debug_assert!(received_packet.header.always_true());
-
-        if last_packet.header.btn_left() == received_packet.header.btn_left()
-            && last_packet.header.btn_middle() == received_packet.header.btn_middle()
-            && last_packet.header.btn_right() == received_packet.header.btn_right()
-            && received_packet.x_axis_mov == 0
-            && received_packet.y_axis_mov == 0
-        {
-            return;
-        }
 
         let x_diff = received_packet.x_axis_change();
         let y_diff = received_packet.y_axis_change();
