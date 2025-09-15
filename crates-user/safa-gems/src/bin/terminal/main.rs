@@ -146,7 +146,11 @@ fn main() {
         }
 
         if let Some(events) = events {
-            for event in &*events {
+            for event in events
+                .iter()
+                .filter(|w_eve| w_eve.win() == term.win().id())
+                .map(|w_eve| w_eve.event())
+            {
                 match event {
                     Event::Key(k_eve) => {
                         if k_eve.kind == KeyEventKind::Press {
