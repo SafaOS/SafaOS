@@ -22,7 +22,7 @@ use crate::term_display::TerminalElement;
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 560;
 const TITLE: &str = "Terminal";
-const BG_COLOR: Pixel = Pixel::from_rgb(0x28, 0x28, 0x28).with_alpha(0xF0);
+const BG_COLOR: Pixel = Pixel::rgb(0x28, 0x28, 0x28).with_alpha(0xF0);
 
 const fn keycode_to_char(code: KeyCode) -> Option<char> {
     match code {

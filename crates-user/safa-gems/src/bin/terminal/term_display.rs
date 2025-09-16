@@ -136,7 +136,7 @@ fn cursor_position(cursor: &Cursor, run: &LayoutRun) -> Option<(i32, i32)> {
 }
 
 const DEFAULT_WEIGHT: Weight = Weight::NORMAL;
-const DEFAULT_TEXT_PIXEL: Pixel = Pixel::from_rgb(0xFF, 0xFF, 0xFF);
+const DEFAULT_TEXT_PIXEL: Pixel = Pixel::WHITE;
 const CURSOR_WIDTH: u32 = 2;
 const CURSOR_COLOR_PIX: Pixel = DEFAULT_TEXT_PIXEL;
 const FONT_HEIGHT: u32 = 12;
@@ -144,40 +144,40 @@ const FONT_WIDTH: u32 = 8;
 const CHAR_AMOUNT_LIMIT: usize = 400;
 const MAX_HISTORY_LINES: usize = 200;
 
-pub const BLACK: Pixel = Pixel::from_hex_rgb(0x282828);
-pub const BRIGHT_BLACK: Pixel = Pixel::from_hex_rgb(0x928374);
+pub const BLACK: Pixel = Pixel::hex_rgb(0x282828);
+pub const BRIGHT_BLACK: Pixel = Pixel::hex_rgb(0x928374);
 
-pub const WHITE: Pixel = Pixel::from_hex_rgb(0xa89984);
-pub const BRIGHT_WHITE: Pixel = Pixel::from_hex_rgb(0xebdbb2);
+pub const WHITE: Pixel = Pixel::hex_rgb(0xa89984);
+pub const BRIGHT_WHITE: Pixel = Pixel::hex_rgb(0xebdbb2);
 
-pub const RED: Pixel = Pixel::from_hex_rgb(0xcc241d);
-pub const BRIGHT_RED: Pixel = Pixel::from_hex_rgb(0xfb4934);
+pub const RED: Pixel = Pixel::hex_rgb(0xcc241d);
+pub const BRIGHT_RED: Pixel = Pixel::hex_rgb(0xfb4934);
 
-pub const GREEN: Pixel = Pixel::from_hex_rgb(0x98971a);
-pub const BRIGHT_GREEN: Pixel = Pixel::from_hex_rgb(0xb8bb26);
+pub const GREEN: Pixel = Pixel::hex_rgb(0x98971a);
+pub const BRIGHT_GREEN: Pixel = Pixel::hex_rgb(0xb8bb26);
 
-pub const BLUE: Pixel = Pixel::from_hex_rgb(0x458588);
-pub const BRIGHT_BLUE: Pixel = Pixel::from_hex_rgb(0x83a598);
+pub const BLUE: Pixel = Pixel::hex_rgb(0x458588);
+pub const BRIGHT_BLUE: Pixel = Pixel::hex_rgb(0x83a598);
 
-pub const YELLOW: Pixel = Pixel::from_hex_rgb(0xd79921);
-pub const BRIGHT_YELLOW: Pixel = Pixel::from_hex_rgb(0xfabd2f);
+pub const YELLOW: Pixel = Pixel::hex_rgb(0xd79921);
+pub const BRIGHT_YELLOW: Pixel = Pixel::hex_rgb(0xfabd2f);
 
-pub const CYAN: Pixel = Pixel::from_hex_rgb(0x689d6a);
-pub const BRIGHT_CYAN: Pixel = Pixel::from_hex_rgb(0x8ec07c);
+pub const CYAN: Pixel = Pixel::hex_rgb(0x689d6a);
+pub const BRIGHT_CYAN: Pixel = Pixel::hex_rgb(0x8ec07c);
 
-pub const MAGENTA: Pixel = Pixel::from_hex_rgb(0xb16286);
-pub const BRIGHT_MAGENTA: Pixel = Pixel::from_hex_rgb(0xd3869b);
+pub const MAGENTA: Pixel = Pixel::hex_rgb(0xb16286);
+pub const BRIGHT_MAGENTA: Pixel = Pixel::hex_rgb(0xd3869b);
 
 /// Converts a pixel to a cosmic_text::Color
 /// Pixel is premultiplied-alpha while a color is the opposite
 const fn pix_to_color(pix: Pixel) -> Color {
-    Color::rgba(pix.red(), pix.green(), pix.blue(), pix.alpha())
+    Color::rgba(pix.r(), pix.g(), pix.b(), pix.a())
 }
 
 /// Converts a cosmic_text::color to a Pixel
 /// Pixel is premultiplied-alpha while a color is the opposite
 const fn color_to_pix(color: Color) -> Pixel {
-    Pixel::from_hex_argb(color.0)
+    Pixel::hex_rgba(color.0)
 }
 fn default_attrs() -> Attrs<'static> {
     Attrs::new()
@@ -675,7 +675,7 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
             c_start_y,
             c_width,
             c_height,
-            Pixel::from_hex_argb(0x0),
+            Pixel::NONE,
             Some(bg_color),
         );
 
@@ -810,7 +810,7 @@ impl vte::Perform for TerminalElement {
                                 (7, false) => WHITE,
                                 (7, true) => BRIGHT_WHITE,
                                 (9, false) if !is_bg => DEFAULT_TEXT_PIXEL,
-                                (9, false) if is_bg => Pixel::from_hex_argb(0),
+                                (9, false) if is_bg => Pixel::NONE,
                                 (g, b) => {
                                     unreachable!("color value is {g}, bright: {b}, is_bg: {is_bg}")
                                 }
@@ -833,7 +833,7 @@ impl vte::Perform for TerminalElement {
                                 let g = params_single.next().unwrap_or_default() as u8;
                                 let b = params_single.next().unwrap_or_default() as u8;
 
-                                let pix = Pixel::from_rgb(r, g, b);
+                                let pix = Pixel::rgb(r, g, b);
                                 let color = Color::rgb(r, g, b);
 
                                 if !is_bg {
