@@ -13,8 +13,7 @@ const WINDOW_WIDTH: u32 = 220;
 const WINDOW_HEIGHT: u32 = 280;
 
 const DESCRIPTION: &str = "The SafaOS Operating System\nVersion v0.4.0 (x86_64)\nCopyright © 2024 SafaOS\nLicensed under the MIT License\nhttps://github.com/SafaOS/SafaOS\n\nMade with ❤️ by safiworks";
-const DESCRIPTION_STYLES: TextBoxStyles =
-    TextBoxStyles::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32);
+const DESCRIPTION_STYLES: TextBoxStyles = TextBoxStyles::new(WINDOW_WIDTH as f32, 120.);
 
 const HEADER_STYLES: TextBoxStyles = TextBoxStyles::new(80., 25.)
     .with_font_size(16.0)
