@@ -620,7 +620,7 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
         start_x: u32,
         start_y: u32,
         bg_color: Pixel,
-    ) -> Option<(u32, u32)> {
+    ) -> (Option<(u32, u32)>, Option<(u32, u32)>) {
         let line_height = self.buffer.metrics().line_height.ceil() as i32;
 
         let old_first_line_idx = self.first_idx();
@@ -694,7 +694,10 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for TerminalElement {
         );
 
         self.buffer.set_redraw(false);
-        Some((c_start_x + c_width, c_start_y + c_height))
+        (
+            Some((c_start_x, c_start_y)),
+            Some((c_start_x + c_width, c_start_y + c_height)),
+        )
     }
 }
 
