@@ -1,8 +1,6 @@
 use core::arch::asm;
 
-use crate::{arch::x86_64::gdt, println, serial};
-
-use super::{acpi, outb};
+use crate::{arch::x86_64::gdt, println};
 
 // const SLP_TYP_S5: u16 = 0x1C00;
 // const SLP_EN: u16 = 1 << 13;
@@ -28,12 +26,6 @@ pub fn shutdown() -> ! {
 
 pub fn reboot() -> ! {
     unsafe { asm!("cli") };
-
-    let fadt = *acpi::FADT_DESC;
-    match fadt.reset_reg.address_space {
-        1 => outb(fadt.reset_reg.address as u16, fadt.reset_value),
-        _ => serial!("unknown fadt reset_reg? {:#?}\n", fadt.reset_reg),
-    }
 
     // force-reboot because acpi sucks!
     let x = 0;

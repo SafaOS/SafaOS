@@ -4,7 +4,7 @@ use core::{fmt::Debug, u32, u64};
 use lazy_static::lazy_static;
 use msi::{MSIXCap, MSIXInfo};
 
-use crate::{drivers::pci::extended_caps::CaptabilitiesIter, PhysAddr};
+use crate::{PhysAddr, drivers::pci::extended_caps::CaptabilitiesIter};
 pub mod extended_caps;
 pub mod msi;
 
@@ -384,14 +384,18 @@ impl PCI {
 }
 
 lazy_static! {
-    pub static ref HOST_PCI: PCI = crate::arch::pci::init();
+    pub static ref HOST_PCI: Option<PCI> = crate::arch::pci::init();
     // No complicated device management necessary for now.
-    pub static ref XHCI_DEVICE: Option<XHCI<'static>> =
-        HOST_PCI.create_device::<XHCI>();
+    pub static ref XHCI_DEVICE: Option<XHCI<'static>> = {
+        let host_pci = HOST_PCI.as_ref()?;
+        host_pci.create_device::<XHCI>()
+    };
 }
 
 /// Initializes drivers and devices that uses the PCI
 pub fn init() {
-    HOST_PCI.print();
+    if let Some(host_pci) = HOST_PCI.as_ref() {
+        host_pci.print();
+    }
     XHCI_DEVICE.as_ref().map(|device| device.start());
 }

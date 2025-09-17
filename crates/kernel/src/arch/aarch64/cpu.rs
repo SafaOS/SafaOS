@@ -276,11 +276,12 @@ lazy_static! {
         }
         (r.base, r.size)
     };
-    pub static ref PCIE: (PhysAddr, usize, u32, u32) = unsafe {
+    pub static ref PCIE: Option<(PhysAddr, usize, u32, u32)> = unsafe {
         let r = &mut *PCIERAW.get();
         if !r.populated() {
             init();
         }
-        (r.base, r.size, r.bus_start, r.bus_end)
+
+        r.populated().then_some((r.base, r.size, r.bus_start, r.bus_end))
     };
 }
