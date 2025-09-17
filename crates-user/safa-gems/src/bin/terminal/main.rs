@@ -10,6 +10,7 @@ use std::{
 
 use libgem::{
     App, Gem, GemConfig,
+    image::BMPImage,
     libopal::{
         Event,
         event::{KeyCode, KeyEventKind},
@@ -23,6 +24,8 @@ const WIDTH: u32 = 640;
 const HEIGHT: u32 = 560;
 const TITLE: &str = "Terminal";
 const BG_COLOR: Pixel = Pixel::rgb(0x28, 0x28, 0x28).with_alpha(0xF0);
+
+static ICON: &[u8] = include_bytes!("../../../assets/terminal.bmp");
 
 const fn keycode_to_char(code: KeyCode) -> Option<char> {
     match code {
@@ -88,7 +91,11 @@ impl Gem for Terminal {}
 
 impl Terminal {
     fn init() -> App<Self> {
-        Self.init(GemConfig::new(TITLE, WIDTH, HEIGHT).with_bg_color(BG_COLOR))
+        Self.init(
+            GemConfig::new(TITLE, WIDTH, HEIGHT)
+                .with_bg_color(BG_COLOR)
+                .with_icon(BMPImage::from_slice(ICON).expect("Failed to parse icon bmp")),
+        )
     }
 }
 

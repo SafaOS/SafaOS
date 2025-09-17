@@ -5,10 +5,12 @@ use libgem::{
         image::{Image, ImageData},
         text_box::{TextBox, TextBoxStyles},
     },
-    image::{QOIImage, ScaleType},
+    image::{BMPImage, QOIImage, ScaleType},
 };
 
 static LOGO: &[u8] = include_bytes!("../../assets/logo.qoi");
+static ICON: &[u8] = include_bytes!("../../assets/logo.bmp");
+
 const WINDOW_WIDTH: u32 = 220;
 const WINDOW_HEIGHT: u32 = 280;
 
@@ -26,8 +28,9 @@ const BODY_STYLES: ContainerStyles = ContainerStyles::new().with_layout(Containe
 ));
 
 fn main_io() {
-    let app_styles =
-        GemConfig::new("SysVer", WINDOW_WIDTH, WINDOW_HEIGHT).with_body_styles(BODY_STYLES);
+    let app_styles = GemConfig::new("SysVer", WINDOW_WIDTH, WINDOW_HEIGHT)
+        .with_body_styles(BODY_STYLES)
+        .with_icon(BMPImage::from_slice(ICON).expect("Failed to parse icon BMP for the logo"));
     let mut app = SysVer.init(app_styles);
 
     let header = TextBox::new("SafaOS", HEADER_STYLES);

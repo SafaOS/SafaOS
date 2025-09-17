@@ -1,7 +1,20 @@
 use std::path::PathBuf;
 
-use libgem::image::QOIImage;
-use libopal::window::{Window, WindowFlags};
+use libgem::{
+    App, Gem, GemConfig,
+    canvas::Pixel,
+    element::container::{ContainerLayout, ContainerStyles, VerticalLayout},
+    image::QOIImage,
+};
+use libopal::{
+    Event,
+    window::{Window, WindowFlags},
+};
+
+use crate::main_dock::MainDock;
+
+mod main_dock;
+mod task_button;
 
 const WALLPAPERS_DIR: &str = "sys:/usr/pictures/wallpapers";
 
@@ -39,7 +52,8 @@ fn init_wallpaper() -> Option<Window> {
             let elapsed = now.elapsed();
             println!("Scaling took {}ms", elapsed.as_millis());
 
-            let mut wall_window = Window::create(WindowFlags::BG_WINDOW, width, height);
+            let mut wall_window =
+                Window::create("", WindowFlags::BG_WINDOW, width, height, None, None);
             wall_window
                 .pixels_mut()
                 .copy_from_slice(unsafe { std::mem::transmute(scaled.get_pixels()) });
@@ -57,7 +71,53 @@ fn init_wallpaper() -> Option<Window> {
     }
 }
 
+struct TaskBar;
+impl Gem for TaskBar {}
+impl TaskBar {
+    pub fn init() -> App<Self> {
+        let (screen_width, screen_height) = libopal::get_screen_dimensions();
+
+        let config = GemConfig::new("Taskbar", screen_width, 48)
+            .with_border(None)
+            .with_position(0, (screen_height - (40 * 2) - 16) as i32)
+            .with_win_flags(WindowFlags::OVERLAY_WINDOW)
+            .with_bg_color(Pixel::NONE);
+        Self.init(config)
+    }
+}
+
 fn main() {
     let _ = init_wallpaper();
-    loop {}
+    let mut taskbar = TaskBar::init();
+    taskbar.body().set_styles(
+        ContainerStyles::new().with_layout(ContainerLayout::Vertical(
+            VerticalLayout::new().with_align_center(true),
+        )),
+    );
+
+    let main_dock = MainDock::new();
+    let main_dock_id = taskbar.add_element(main_dock);
+    let win_id = taskbar.win().id();
+
+    loop {
+        taskbar.redraw();
+        let events = taskbar.handle_events_blocking();
+        let main_dock: &mut MainDock = unsafe {
+            taskbar
+                .body()
+                .get_element_as_mut(main_dock_id)
+                .unwrap_unchecked()
+        };
+        println!("taskbar events: {events:?}");
+        for win_even in (&*events).iter().filter(|win_eve| win_eve.win() == win_id) {
+            let event = win_even.event();
+            match event {
+                Event::GlobalWindowAttached(win) => main_dock.attached(win.win_id()),
+                Event::GlobalWindowDeatached(win) => main_dock.deatached(win.win_id()),
+                Event::GlobalWindowFocused(eve) => main_dock.focus_changed(eve.win_id(), true),
+                Event::GlobalWindowUnfocused(eve) => main_dock.focus_changed(eve.win_id(), false),
+                _ => {}
+            }
+        }
+    }
 }
