@@ -9,8 +9,8 @@ use crate::{
     PhysAddr,
     arch::{self, paging::set_current_higher_page_table},
     debug,
-    limine::{self, HHDM, executable_phys_address, executable_virt_address},
-    memory::{AlignToPage, frame_allocator},
+    limine::{self, executable_phys_address, executable_virt_address},
+    memory::{AlignToPage, HHDM, frame_allocator},
 };
 
 use super::paging::{MapToError, PageTable};
@@ -78,10 +78,11 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
 
     // last possible virtual HHDM address
     // FIXME: hardcoded because if I rely on the memory map there are still some stuff out of the range of the last entry
-    let largest_addr_virt = VirtAddr::from(*HHDM | 0x10000000000);
+
+    let largest_addr_virt = PhysAddr::from(0x10000000000).into_virt();
     debug!(
         PageTable,
-        "mapped HHDM from {:#x} to {:?}", *HHDM, largest_addr_virt
+        "mapped HHDM from {:#x} to {:?}", HHDM, largest_addr_virt
     );
     Ok(largest_addr_virt + PAGE_SIZE)
 }

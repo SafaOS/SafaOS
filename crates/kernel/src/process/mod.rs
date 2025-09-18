@@ -143,6 +143,14 @@ impl Process {
         ),
         MapToError,
     > {
+        for v in env {
+            crate::serial!("env: ");
+            for ch in v.utf8_chunks() {
+                crate::serial!("{}", ch.valid());
+                crate::serial!("{:?}", ch.invalid());
+            }
+            crate::serial!("\n");
+        }
         let env_bytes: usize = env.iter().map(|x| x.len() + 1).sum();
         let args_bytes: usize = env.iter().map(|x| x.len() + 1).sum();
 

@@ -1,9 +1,8 @@
 use core::fmt::{self, Write};
 use core::hint::unlikely;
 
-use crate::VirtAddr;
-use crate::limine::HHDM;
 use crate::utils::locks::SpinLock;
+use crate::{PhysAddr, VirtAddr};
 use lazy_static::lazy_static;
 lazy_static! {
     static ref PL011: VirtAddr = super::cpu::PL011BASE.into_virt();
@@ -13,8 +12,9 @@ lazy_static! {
 fn putbyte(c: u8) {
     unsafe {
         if unlikely(!super::cpu::serial_ready()) {
-            let qemu_addr = *HHDM | 0x09000000;
-            core::ptr::write_volatile(qemu_addr as *mut u8, c);
+            // hack to allow debug prints before the DTB is parsed
+            let qemu_addr = PhysAddr::from(0x09000000).into_virt();
+            core::ptr::write_volatile(qemu_addr.into_ptr::<u8>(), c);
         } else {
             core::ptr::write_volatile(PL011.into_ptr(), c);
         }

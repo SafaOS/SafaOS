@@ -52,10 +52,6 @@ static DEVICE_TREE_REQUEST: DeviceTreeBlobRequest = DeviceTreeBlobRequest::new()
 #[unsafe(link_section = ".requests")]
 static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
-lazy_static! {
-    pub static ref HHDM: usize = get_phy_offset();
-}
-
 #[used]
 #[unsafe(link_section = ".requests")]
 static RSDP_REQUEST: RsdpRequest = RsdpRequest::with_revision(3);

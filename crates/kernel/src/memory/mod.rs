@@ -4,6 +4,20 @@ pub mod page_allocator;
 pub mod paging;
 pub mod sorcery;
 
+// FIXME: relays on unstable limine behaviour by assuming limine maps the HHDM at 0xffff800000000000 for x86_64
+// The reason why I cannot do my own HHDM offset is because of the framebuffer which limine returns a virtual pointer to, so I don't know how I should map to a different address,
+cfg_if::cfg_if! {
+    if #[cfg(target_arch = "x86_64")] {
+        /// The base offset of the HHDM in virtual memory
+        pub const HHDM: VirtAddr = VirtAddr::from(0xffff800000000000);
+    } else if #[cfg(target_arch = "aarch64")]{
+        /// The base offset of the HHDM in virtual memory
+        pub const HHDM: VirtAddr = VirtAddr::from(0xffff000000000000);
+    } else {
+        compile_error!("Setup HHDM base for your arch");
+    }
+}
+
 use core::{
     fmt::{Debug, LowerHex},
     ops::{Add, AddAssign, Deref, DerefMut, Sub, SubAssign},
@@ -11,8 +25,6 @@ use core::{
 
 use paging::{PAGE_SIZE, Page, PageTable};
 use serde::Serialize;
-
-use crate::limine::HHDM;
 
 // FIXME: Implementition of serialize should serialize as hex string because memory addresses don't fit in json's int
 /// A virtual memory address
