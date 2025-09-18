@@ -9,9 +9,9 @@ safa-abi = { path = "../safa-abi" }
 noto-sans-mono-bitmap = { version = "0.3.0", features = ["size_20"] }
 
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
-spin = { version = "0.9.8", default-features = false, features = [
+spin = { version = "0.10.0", default-features = false, features = [
     "lazy",
-] }
+], git = "https://github.com/safiworks/spin-fork" }
 bitflags = "2.6.0"
 macros = { path = "../macros" }
 int-enum = "1.1"

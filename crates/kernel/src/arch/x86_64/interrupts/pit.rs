@@ -1,8 +1,8 @@
 use core::sync::atomic::{AtomicI16, AtomicU8, Ordering};
 
-use crate::arch::x86_64::outb;
+use crate::arch::x86_64::{interrupts::apic::APIC, outb};
 
-use super::apic::{IOREDTBL, send_eoi, write_ioapic_irq};
+use super::apic::{IOREDTBL, send_eoi};
 
 const PIT_CHANNEL_0: u16 = 0x40;
 const PIT_COMMAND_CHANNEL: u16 = 0x43;
@@ -56,7 +56,7 @@ pub fn enable(lapic_id: u8) {
     unsafe {
         let pit = IOREDTBL::new().with_vector(0x22).with_destination(lapic_id);
         crate::serial!("enabled!\n");
-        write_ioapic_irq(irq, pit);
+        APIC.write_ioapic_irq(irq, pit);
     }
 }
 
@@ -66,7 +66,7 @@ pub fn disable(_lapic_id: u8) {
 
     unsafe {
         let pit = IOREDTBL::new().with_vector(0x0).with_masked(true);
-        write_ioapic_irq(irq, pit);
+        APIC.write_ioapic_irq(irq, pit);
     }
 }
 

@@ -151,7 +151,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -292,7 +292,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slab",
- "spin",
+ "spin 0.10.0",
  "thiserror",
 ]
 
@@ -350,6 +350,11 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+
+[[package]]
+name = "spin"
+version = "0.10.0"
+source = "git+https://github.com/safiworks/spin-fork#6d7f87c143f27e83208dc61477368f479049b4b6"
 
 [[package]]
 name = "stable_deref_trait"

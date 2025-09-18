@@ -1,13 +1,13 @@
-use core::ptr::addr_of;
+use core::{mem::offset_of, ptr::addr_of};
 
 use lazy_static::lazy_static;
 
-use crate::{PhysAddr, RSDP_ADDR, limine::HHDM};
+use crate::{PhysAddr, RSDP_ADDR, VirtAddr};
 
 lazy_static! {
-    pub static ref PSDT_DESC: &'static dyn PTSD = get_sdt();
-    pub static ref MADT_DESC: &'static MADT = MADT::get(*PSDT_DESC);
-    pub static ref MCFG_DESC: Option<&'static MCFG> = MCFG::get(*PSDT_DESC);
+    pub static ref PSDT_DESC: Option<GenericRootSDT> = get_sdt();
+    pub static ref MADT_DESC: Option<&'static MADT> = MADT::get((*PSDT_DESC).as_ref()?);
+    pub static ref MCFG_DESC: Option<&'static MCFG> = MCFG::get((*PSDT_DESC).as_ref()?);
 }
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
@@ -18,14 +18,16 @@ pub struct RSDPDesc {
     revision: u8,
     rsdt_addr: u32,
     len: u32,
-    xsdt_addr: u64,
+    xsdt_addr: PhysAddr,
     extended_checksum: u8,
     reserved: [u8; 3],
 }
 
+const _: () = assert!(size_of::<RSDPDesc>() == 36);
+
 impl RSDPDesc {
     pub fn vaildate(&self) -> bool {
-        let size = size_of::<Self>();
+        let size = if self.revision == 2 { 36 } else { 20 };
         let byte_array = (self) as *const RSDPDesc as *const u8;
         let mut sum: usize = 0;
 
@@ -53,16 +55,16 @@ pub struct ACPIHeader {
     creator_revision: u32,
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
-pub struct RSDT {
+pub struct RawRSDT {
     pub header: ACPIHeader,
     table: [u32; 0], // uint32_t table[];?
 }
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
-pub struct XSDT {
+pub struct RawXSDT {
     pub header: ACPIHeader,
     table: [u64; 0],
 }
@@ -101,26 +103,64 @@ pub struct MADTRecord {
 
 // any sdt
 pub trait SDT: Send + Sync {
-    fn header(&self) -> &ACPIHeader;
+    type Element;
+    fn header(&self) -> *const ACPIHeader;
 
     fn len(&self) -> u32 {
-        self.header().len
+        unsafe { self.header().read_unaligned().len }
     }
 
     /// returns the address of element number n and it's size
-    unsafe fn nth(&self, n: usize) -> (usize, usize);
+    unsafe fn nth(&self, n: usize) -> (*const Self::Element, usize);
 }
 
-// RSDT and RSDT
-// stands for Parent Table of System Descriptors (yes it gave me ptsd)
-pub trait PTSD: SDT + Send + Sync {
+/// Generic wrapper around the root SDT eg. XSDT or RSDT
+pub enum GenericRootSDT {
+    RSDT(*const RawRSDT),
+    XSDT(*const RawXSDT),
+}
+
+unsafe impl Send for GenericRootSDT {}
+unsafe impl Sync for GenericRootSDT {}
+
+impl SDT for GenericRootSDT {
+    type Element = ACPIHeader;
+    fn header(&self) -> *const ACPIHeader {
+        match self {
+            Self::RSDT(rsdt) => unsafe { rsdt.byte_add(offset_of!(RawRSDT, header)).cast() },
+            Self::XSDT(xsdt) => unsafe { xsdt.byte_add(offset_of!(RawXSDT, header)).cast() },
+        }
+    }
+
+    unsafe fn nth(&self, n: usize) -> (*const ACPIHeader, usize) {
+        unsafe {
+            let phys_addr = match self {
+                Self::RSDT(rsdt) => PhysAddr::from(
+                    (rsdt.byte_add(offset_of!(RawRSDT, table)) as *mut u32)
+                        .add(n)
+                        .read_unaligned() as usize,
+                ),
+                Self::XSDT(xsdt) => PhysAddr::from(
+                    (xsdt.byte_add(offset_of!(RawXSDT, table)) as *mut u64)
+                        .add(n)
+                        .read_unaligned() as usize,
+                ),
+            };
+
+            (phys_addr.into_virt().into_ptr(), 0)
+        }
+    }
+}
+
+impl GenericRootSDT {
     unsafe fn get_entry(&self, signatrue: [u8; 4]) -> Option<*const ACPIHeader> {
         unsafe {
             for i in 0..(self.count()) {
-                let item_ptr = self.nth(i).0 as *const ACPIHeader;
+                let (item_ptr, _) = self.nth(i);
                 let item = item_ptr.read_unaligned();
 
                 let sign = item.signatrue;
+                crate::serial!("sign is {sign:?}\n");
                 if sign == signatrue {
                     return Some(item_ptr);
                 }
@@ -130,58 +170,16 @@ pub trait PTSD: SDT + Send + Sync {
     }
 
     // table item count
-    fn count(&self) -> usize;
-}
+    fn count(&self) -> usize {
+        let unit_size = match self {
+            Self::RSDT(_) => size_of::<u32>(),
+            Self::XSDT(_) => size_of::<u64>(),
+        };
 
-impl<'a> dyn PTSD + 'a {
-    unsafe fn get_entry_cast<T: SDT>(&self, signatrue: [u8; 4]) -> Option<*const T> {
-        unsafe { self.get_entry(signatrue).map(|p| p as *const T) }
+        (self.len() as usize - size_of::<ACPIHeader>()) / unit_size
     }
     unsafe fn get_entry_cast_ref<T: SDT>(&self, signatrue: [u8; 4]) -> Option<&T> {
         unsafe { self.get_entry(signatrue).map(|p| &*(p as *const T)) }
-    }
-}
-
-impl SDT for RSDT {
-    fn header(&self) -> &ACPIHeader {
-        &self.header
-    }
-
-    unsafe fn nth(&self, n: usize) -> (usize, usize) {
-        unsafe {
-            let addr = *self.table.as_ptr().add(n) as usize;
-            let addr = addr | *HHDM;
-
-            (addr, 0)
-        }
-    }
-}
-
-impl SDT for XSDT {
-    fn header(&self) -> &ACPIHeader {
-        &self.header
-    }
-
-    unsafe fn nth(&self, n: usize) -> (usize, usize) {
-        unsafe {
-            let table_ptr = addr_of!(self.table) as *const u64;
-            let addr = table_ptr.add(n);
-            let addr = core::ptr::read_unaligned(addr) as usize;
-            let addr = addr | *HHDM;
-
-            (addr, 0)
-        }
-    }
-}
-
-impl PTSD for XSDT {
-    fn count(&self) -> usize {
-        (self.len() as usize - size_of::<ACPIHeader>()) / size_of::<u64>()
-    }
-}
-impl PTSD for RSDT {
-    fn count(&self) -> usize {
-        (self.len() as usize - size_of::<ACPIHeader>()) / size_of::<u32>()
     }
 }
 
@@ -198,8 +196,8 @@ impl MCFG {
         }
     }
 
-    fn get(ptsd: &dyn PTSD) -> Option<&Self> {
-        unsafe { ptsd.get_entry_cast_ref(*b"MCFG") }
+    fn get(from: &GenericRootSDT) -> Option<&Self> {
+        unsafe { from.get_entry_cast_ref(*b"MCFG") }
     }
     /// Returns the number of entries in [`Self`]
     pub fn count(&self) -> usize {
@@ -209,38 +207,38 @@ impl MCFG {
 }
 
 impl SDT for MCFG {
-    fn header(&self) -> &ACPIHeader {
+    type Element = ();
+    fn header(&self) -> *const ACPIHeader {
         &self.header
     }
-    unsafe fn nth(&self, _: usize) -> (usize, usize) {
+    unsafe fn nth(&self, _: usize) -> (*const (), usize) {
         unimplemented!()
     }
 }
 
 impl SDT for MADT {
-    fn header(&self) -> &ACPIHeader {
+    type Element = MADTRecord;
+    fn header(&self) -> *const ACPIHeader {
         &self.header
     }
 
-    unsafe fn nth(&self, n: usize) -> (usize, usize) {
+    unsafe fn nth(&self, n: usize) -> (*const MADTRecord, usize) {
         unsafe {
-            let addr = self as *const Self;
-
             if n == 0 {
-                let base = (addr).byte_add(size_of::<MADT>());
-                return (base as usize, base as usize - addr as usize);
+                let self_base = VirtAddr::from_ptr(self as *const Self);
+                let base = self_base + size_of::<MADT>();
+                return (base.into_ptr(), base - self_base);
             }
 
-            let base = self.nth(0).0;
-            let mut record = base + (*(base as *const MADTRecord)).length as usize;
+            let (base_ptr, _) = self.nth(0);
+            let mut record = base_ptr.byte_add(base_ptr.read_unaligned().length as usize);
 
-            for _ in 1..n - 1 {
-                let next_record = record as *const MADTRecord;
-                let len = (*next_record).length;
-                record += len as usize;
+            for _ in 1..n {
+                let len = record.read_unaligned().length;
+                record = record.byte_add(len as usize);
             }
 
-            (record, record - addr as usize)
+            (record, record.byte_offset_from_unsigned(self))
         }
     }
 }
@@ -268,32 +266,34 @@ impl MADT {
         }
     }
 
-    pub fn get(ptsd: &dyn PTSD) -> &MADT {
-        unsafe { &*(ptsd.get_entry_cast(*b"APIC").unwrap()) }
+    pub fn get(from: &GenericRootSDT) -> Option<&MADT> {
+        unsafe { from.get_entry_cast_ref(*b"APIC") }
     }
 }
 
-fn get_rsdp() -> RSDPDesc {
-    let addr = *RSDP_ADDR | *HHDM;
-    let ptr = addr as *mut RSDPDesc;
+fn get_rsdp() -> Option<RSDPDesc> {
+    let addr = (*RSDP_ADDR)?.into_virt();
+    let ptr = addr.into_ptr::<RSDPDesc>();
 
     let desc = unsafe { *ptr };
     assert!(desc.vaildate());
-    desc
+    Some(desc)
 }
 
-fn get_sdt() -> &'static dyn PTSD {
-    let rsdp = get_rsdp();
+fn get_sdt() -> Option<GenericRootSDT> {
+    let rsdp = get_rsdp()?;
 
-    if rsdp.xsdt_addr != 0 {
-        let xsdt_addr = rsdp.xsdt_addr as usize | *HHDM;
-        let xsdt_ptr = xsdt_addr as *const XSDT;
+    if rsdp.revision == 2 {
+        let xsdt_addr = rsdp.xsdt_addr;
+        assert_ne!(xsdt_addr, PhysAddr::null());
 
-        return unsafe { &*xsdt_ptr };
+        let xsdt_addr = xsdt_addr.into_virt();
+        let xsdt_ptr = xsdt_addr.into_ptr::<RawXSDT>();
+
+        Some(GenericRootSDT::XSDT(xsdt_ptr))
+    } else {
+        let rsdt_addr = PhysAddr::from(rsdp.rsdt_addr as usize).into_virt();
+        let rsdt_ptr = rsdt_addr.into_ptr::<RawRSDT>();
+        Some(GenericRootSDT::RSDT(rsdt_ptr))
     }
-
-    let rsdt_addr = rsdp.rsdt_addr as usize | *HHDM;
-    let rsdt_ptr = rsdt_addr as *const RSDT;
-
-    unsafe { &*rsdt_ptr }
 }

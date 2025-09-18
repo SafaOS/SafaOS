@@ -14,27 +14,11 @@ use crate::{
     info,
     memory::paging::{EntryFlags, MapToError},
     serial,
-    utils::locks::SpinLock,
+    utils::locks::{LazyLock, SpinLock},
 };
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
 use core::arch::asm;
-use lazy_static::lazy_static;
-
-/// Maps the IOAPIC and the Local APIC to the `dest` page table
-pub unsafe fn map_apic(dest: &mut PageTable) -> Result<(), MapToError> {
-    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
-    let lapic_phys = *LAPIC_PHYS_ADDR;
-    let lapic_virt = lapic_phys.into_virt();
-    let ioapic_phys = *IOAPIC_PHYS_ADDR;
-    let ioapic_virt = ioapic_phys.into_virt();
-
-    unsafe {
-        dest.map_contiguous_pages(lapic_virt, lapic_phys, 1, flags)?;
-        dest.map_contiguous_pages(ioapic_virt, ioapic_phys, 1, flags)?;
-    }
-    Ok(())
-}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -120,44 +104,296 @@ pub struct APICICReg {
     destination_field: u8,
 }
 
-pub fn write_ic_reg(value: APICICReg) {
-    let lapic_addr = get_lapic_addr();
-    let low = get_lapic_reg(lapic_addr, 0x300);
-    let high = get_lapic_reg(lapic_addr, 0x310);
+/// The APIC driver
+pub struct Apic {
+    lapic_phys_addr: PhysAddr,
+    lapic_virt_addr: VirtAddr,
+    ioapic_phys_addr: PhysAddr,
+    ioapic_virt_addr: VirtAddr,
+}
 
-    let value_bits = value.into_bits();
-    let (value_low, value_high) = (value_bits as u32, (value_bits >> 32) as u32);
-    unsafe {
-        low.write_volatile(value_low);
-        high.write_volatile(value_high);
+impl Apic {
+    /// Gets the APIC if it is there
+    pub fn get() -> Option<Self> {
+        let lapic_phys = rdmsr(0x1B) & 0xFFFFF000;
+        let lapic_phys_addr = PhysAddr::from(lapic_phys);
+        let lapic_virt_addr = lapic_phys_addr.into_virt();
+
+        let ioapic_phys_addr = unsafe {
+            let madt = (*acpi::MADT_DESC)?;
+            let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
+
+            let addr = PhysAddr::from((*record).ioapic_address as usize);
+            addr
+        };
+        let ioapic_virt_addr = ioapic_phys_addr.into_virt();
+        Some(Self {
+            ioapic_phys_addr,
+            ioapic_virt_addr,
+            lapic_virt_addr,
+            lapic_phys_addr,
+        })
+    }
+    /// Maps the IOAPIC and the Local APIC to the `dest` page table
+    pub fn map(&self, dest: &mut PageTable) -> Result<(), MapToError> {
+        let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+
+        unsafe {
+            dest.map_contiguous_pages(self.lapic_virt_addr, self.lapic_phys_addr, 1, flags)?;
+            dest.map_contiguous_pages(self.ioapic_virt_addr, self.ioapic_phys_addr, 1, flags)?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    const fn get_lapic_reg_addr(&self, lapic_reg: u16) -> VirtAddr {
+        self.lapic_virt_addr + lapic_reg as usize
+    }
+
+    #[inline(always)]
+    fn get_lapic_reg(&self, lapic_off: u16) -> *mut u32 {
+        self.get_lapic_reg_addr(lapic_off).into_ptr::<u32>()
+    }
+
+    #[inline(always)]
+    fn read_lapic_reg(&self, lapic_off: u16) -> u32 {
+        unsafe {
+            // performs a dword read as expected from the local APIC
+            self.get_lapic_reg(lapic_off).read_volatile()
+        }
+    }
+
+    /// CPU local APIC ID.
+    #[inline]
+    pub fn lapic_id(&self) -> u8 {
+        (self.read_lapic_reg(0x20) >> 24) as u8
+    }
+
+    pub unsafe fn write_ioapic_val_to_reg(&self, reg: u8, val: u32) {
+        unsafe {
+            let ioregsel_addr = self.ioapic_virt_addr.into_ptr::<u32>();
+            let iowin_addr = (self.ioapic_virt_addr + 0x10).into_ptr::<u32>();
+
+            core::ptr::write_volatile(ioregsel_addr, reg as u32);
+            core::ptr::write_volatile(iowin_addr, val);
+        }
+    }
+
+    pub fn read_ioapic_reg(&self, reg: u8) -> u32 {
+        unsafe {
+            let ioregsel_addr = self.ioapic_virt_addr.into_ptr::<u32>();
+            let iowin_addr = (self.ioapic_virt_addr + 0x10).into_ptr::<u32>();
+
+            core::ptr::write_volatile(ioregsel_addr, reg as u32);
+            core::ptr::read_volatile(iowin_addr)
+        }
+    }
+
+    #[inline]
+    pub fn ioapic_id(&self) -> u8 {
+        (self.read_ioapic_reg(0) >> 24) as u8
+    }
+
+    pub fn write_ic_reg(&self, value: APICICReg) {
+        let low = self.get_lapic_reg(0x300);
+        let high = self.get_lapic_reg(0x310);
+
+        let value_bits = value.into_bits();
+        let (value_low, value_high) = (value_bits as u32, (value_bits >> 32) as u32);
+        unsafe {
+            low.write_volatile(value_low);
+            high.write_volatile(value_high);
+        }
+    }
+
+    pub fn read_ic_reg(&self) -> APICICReg {
+        let low = self.get_lapic_reg(0x300);
+        let high = self.get_lapic_reg(0x310);
+        unsafe {
+            let low_bits = low.read_volatile();
+            let high_bits = high.read_volatile();
+            let bits: u64 = low_bits as u64 | (high_bits as u64) << 32;
+            APICICReg::from_bits(bits)
+        }
+    }
+
+    #[inline]
+    pub fn send_eoi(&self) {
+        unsafe {
+            let eoi_reg = self.get_lapic_reg(0xB0);
+            eoi_reg.write_volatile(0);
+        }
+    }
+
+    #[inline]
+    /// Sends an NMI to all processors
+    pub fn send_nmi_all(&self, vector: u8) {
+        static _NMI_SEND: SpinLock<()> = SpinLock::new(());
+        let _guard = _NMI_SEND.lock();
+
+        self.write_ic_reg(
+            APICICReg::new()
+                .with_destination_shorthand(APICDestShorthand::ExcludingSelf)
+                .with_vector(vector),
+        );
+
+        while self.read_ic_reg().delivery_send_pending() {
+            core::hint::spin_loop();
+        }
+    }
+
+    #[inline]
+    pub unsafe fn write_ioapic_irq(&self, n: u8, table: IOREDTBL) {
+        unsafe {
+            let offset1 = 0x10 + (n * 2);
+            let offset2 = offset1 + 1;
+
+            let (lower, higher) = table.into_regs();
+            self.write_ioapic_val_to_reg(offset1, lower);
+            self.write_ioapic_val_to_reg(offset2, higher);
+        }
+    }
+
+    pub fn enable_apic_keyboard(&self) {
+        unsafe {
+            let lapic_id = self.lapic_id();
+
+            let keyboard = IOREDTBL::new().with_vector(0x21).with_destination(lapic_id);
+            self.write_ioapic_irq(1, keyboard);
+
+            info!("enabled APIC Keyboard for lapic {lapic_id}.");
+        }
+    }
+
+    pub fn enable_apic_mouse(&self) {
+        unsafe {
+            let lapic_id = self.lapic_id();
+
+            let mouse = IOREDTBL::new()
+                .with_vector(MOUSE_HANDLER_ID)
+                .with_destination(lapic_id);
+            self.write_ioapic_irq(12, mouse);
+
+            info!("enabled APIC mouse for lapic {lapic_id}.");
+        }
+    }
+
+    fn configure_error(&self) {
+        let addr = self.get_lapic_reg(0x370);
+        let entry = LVTEntry::new(APIC_ERROR_HANDLER_ID, LVTEntryFlags::empty());
+        unsafe {
+            addr.write_volatile(entry.encode_u32());
+        }
+    }
+
+    pub fn enable_apic_timer(&self) {
+        let lapic_id = self.lapic_id();
+        static _CALIBRATE_LOCK: SpinLock<()> = SpinLock::new(());
+        let _guard = _CALIBRATE_LOCK.lock();
+
+        info!("enabling apic timer for lapic: {lapic_id}...");
+        fn apic_timer_ms_to_ticks(ms: u64) -> u32 {
+            let ticks_per_ms = unsafe { core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) };
+            (ms * ticks_per_ms) as u32
+        }
+
+        let addr = self.get_lapic_reg(0x320);
+        let init = self.get_lapic_reg(0x380);
+        let divide = self.get_lapic_reg(0x3E0).cast::<u8>();
+        let current_counter = self.get_lapic_reg(0x390);
+
+        // calibrate the timer
+        unsafe {
+            serial!("calibrating the apic timer\n");
+            let timer = LVTEntry::new(0x81, LVTEntryFlags::empty());
+
+            core::ptr::write_volatile(addr, timer.encode_u32());
+            core::ptr::write_volatile(divide, 0x3);
+            pit::prepare_sleep(100);
+
+            core::ptr::write_volatile(init, u32::MAX);
+
+            asm!("sti");
+            let diff_tick = pit::calibrate_sleep(
+                lapic_id,
+                || (),
+                |()| u32::MAX - current_counter.read_volatile(),
+            );
+            asm!("cli");
+
+            core::ptr::write_volatile(APIC_TIMER_TICKS_PER_MS.get(), diff_tick as u64 / 100);
+            info!(
+                "APIC Timer calibrated with {} ticks in 100ms",
+                core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) * 100
+            );
+        }
+
+        // enable the timer
+        unsafe {
+            let timer = LVTEntry::new(0x20, LVTEntryFlags::TIMER_PERIODIC);
+            core::ptr::write_volatile(addr, timer.encode_u32());
+            core::ptr::write_volatile(divide, 0x3);
+
+            core::ptr::write_volatile(init, apic_timer_ms_to_ticks(5));
+        }
+    }
+
+    fn enable_apic(&self) {
+        const PIC1_DATA: u16 = 0x0021;
+        const PIC2_DATA: u16 = 0x00A1;
+
+        // Disable PIC
+        outb(PIC1_DATA, 0xff);
+        outb(PIC2_DATA, 0xff);
+
+        let lapic_base = self.lapic_phys_addr;
+        const IA32_APIC_BASE_MSR: u32 = 0x1B;
+        const IA32_APIC_BASE_MSR_ENABLE: u32 = 0x800;
+        unsafe {
+            wrmsr(
+                IA32_APIC_BASE_MSR,
+                lapic_base.into_raw() as u64 | IA32_APIC_BASE_MSR_ENABLE as u64,
+            );
+        }
+    }
+
+    /// Setups the APIC and related devices for the current CPU
+    fn setup_local(&self, tsc_ticks_per_ms_output: &mut u64) {
+        self.enable_apic();
+        let sivr = self.get_lapic_reg(0xF0);
+
+        unsafe {
+            core::ptr::write_volatile(sivr, 0x1ff);
+
+            let lapic_id = self.lapic_id();
+            let ioapic_id = self.ioapic_id();
+
+            info!(
+                "enabled APIC, lapic_id is {lapic_id}, ioapic_id is {ioapic_id}, IO APIC is at {:#x}, local APIC is at {:#x}",
+                self.ioapic_virt_addr, self.lapic_virt_addr
+            );
+            static _ENABLE_LOCK: SpinLock<()> = SpinLock::new(());
+            let _guard = _ENABLE_LOCK.lock();
+
+            self.configure_error();
+            calibrate_tsc(lapic_id, tsc_ticks_per_ms_output);
+            self.enable_apic_timer();
+        }
+    }
+
+    /// Returns the base addr of the lapic
+    pub const fn lapic_base(&self) -> PhysAddr {
+        self.lapic_phys_addr
     }
 }
 
-pub fn read_ic_reg() -> APICICReg {
-    let lapic_addr = get_lapic_addr();
-    let low = get_lapic_reg(lapic_addr, 0x300);
-    let high = get_lapic_reg(lapic_addr, 0x310);
-    unsafe {
-        let low_bits = low.read_volatile();
-        let high_bits = high.read_volatile();
-        let bits: u64 = low_bits as u64 | (high_bits as u64) << 32;
-        APICICReg::from_bits(bits)
-    }
-}
+pub static APIC: LazyLock<Apic> = LazyLock::new(|| Apic::get().expect("Apic not supported"));
 
 /// Sends an NMI to all processors
 pub fn send_nmi_all(vector: u8) {
-    static _NMI_SEND: SpinLock<()> = SpinLock::new(());
-    let _guard = _NMI_SEND.lock();
-
-    write_ic_reg(
-        APICICReg::new()
-            .with_destination_shorthand(APICDestShorthand::ExcludingSelf)
-            .with_vector(vector),
-    );
-
-    while read_ic_reg().delivery_send_pending() {
-        core::hint::spin_loop();
+    // If not then the apic isn't initialized and so is other processors
+    if let Some(apic) = APIC.get() {
+        apic.send_nmi_all(vector)
     }
 }
 
@@ -188,11 +424,7 @@ bitflags! {
 
 #[inline]
 pub fn send_eoi() {
-    unsafe {
-        let address = get_lapic_addr();
-        let eoi_reg = get_lapic_reg(address, 0xB0);
-        eoi_reg.write_volatile(0);
-    }
+    APIC.send_eoi()
 }
 
 #[repr(C, packed)]
@@ -203,79 +435,6 @@ pub struct MADTIOApic {
     _r: u8,
     pub ioapic_address: u32,
     global_system_interrupt_base: u32,
-}
-
-#[inline(always)]
-pub fn get_io_apic_addr() -> VirtAddr {
-    *IOAPIC_ADDR
-}
-
-lazy_static! {
-    pub static ref LAPIC_PHYS_ADDR: PhysAddr = {
-        let phys = rdmsr(0x1B) & 0xFFFFF000;
-        let phys = PhysAddr::from(phys);
-        phys
-    };
-    static ref LAPIC_ADDR: VirtAddr = LAPIC_PHYS_ADDR.into_virt();
-    pub static ref IOAPIC_PHYS_ADDR: PhysAddr = unsafe {
-        let madt = *acpi::MADT_DESC;
-        let record = madt.get_record_of_type(1).unwrap() as *const MADTIOApic;
-
-        let addr = PhysAddr::from((*record).ioapic_address as usize);
-        addr
-    };
-    static ref IOAPIC_ADDR: VirtAddr = IOAPIC_PHYS_ADDR.into_virt();
-}
-
-#[inline(always)]
-pub fn get_lapic_addr() -> VirtAddr {
-    *LAPIC_ADDR
-}
-
-#[inline(always)]
-const fn get_lapic_reg_addr(lapic_addr: VirtAddr, lapic_reg: u16) -> VirtAddr {
-    lapic_addr + lapic_reg as usize
-}
-#[inline(always)]
-fn get_lapic_reg(lapic_addr: VirtAddr, lapic_off: u16) -> *mut u32 {
-    get_lapic_reg_addr(lapic_addr, lapic_off).into_ptr::<u32>()
-}
-
-#[inline(always)]
-fn read_lapic_reg(lapic_addr: VirtAddr, lapic_off: u16) -> u32 {
-    unsafe {
-        // performs a dword read as expected from the local APIC
-        get_lapic_reg(lapic_addr, lapic_off).read_volatile()
-    }
-}
-
-#[inline(always)]
-pub fn get_lapic_id(lapic_addr: VirtAddr) -> u8 {
-    (read_lapic_reg(lapic_addr, 0x20) >> 24) as u8
-}
-
-pub unsafe fn write_ioapic_val_to_reg(ioapic_addr: VirtAddr, reg: u8, val: u32) {
-    unsafe {
-        let ioregsel_addr = ioapic_addr.into_ptr::<u32>();
-        let iowin_addr = (ioapic_addr + 0x10).into_ptr::<u32>();
-
-        core::ptr::write_volatile(ioregsel_addr, reg as u32);
-        core::ptr::write_volatile(iowin_addr, val);
-    }
-}
-
-pub unsafe fn read_ioapic_reg(ioapic_addr: VirtAddr, reg: u8) -> u32 {
-    unsafe {
-        let ioregsel_addr = ioapic_addr.into_ptr::<u32>();
-        let iowin_addr = (ioapic_addr + 0x10).into_ptr::<u32>();
-
-        core::ptr::write_volatile(ioregsel_addr, reg as u32);
-        core::ptr::read_volatile(iowin_addr)
-    }
-}
-
-pub fn get_ioapic_id(ioapic_addr: VirtAddr) -> u8 {
-    unsafe { (read_ioapic_reg(ioapic_addr, 0) >> 24) as u8 }
 }
 
 #[bitfield(u64)]
@@ -305,101 +464,14 @@ impl IOREDTBL {
     }
 }
 
-pub unsafe fn write_ioapic_irq(n: u8, table: IOREDTBL) {
-    unsafe {
-        let ioapic_addr = get_io_apic_addr();
-        let offset1 = 0x10 + (n * 2);
-        let offset2 = offset1 + 1;
-
-        let (lower, higher) = table.into_regs();
-        write_ioapic_val_to_reg(ioapic_addr, offset1, lower);
-        write_ioapic_val_to_reg(ioapic_addr, offset2, higher);
-    }
-}
-
+/// Setups APIC interrupts for the PS/2 keyboard
 pub fn enable_apic_keyboard() {
-    unsafe {
-        let lapic_addr = get_lapic_addr();
-        let lapic_id = get_lapic_id(lapic_addr);
-
-        let keyboard = IOREDTBL::new().with_vector(0x21).with_destination(lapic_id);
-        write_ioapic_irq(1, keyboard);
-
-        info!("enabled APIC Keyboard.");
-    }
+    APIC.enable_apic_keyboard()
 }
 
+/// Setups APIC interrupts for the PS/2 mouse
 pub fn enable_apic_mouse() {
-    unsafe {
-        let lapic_addr = get_lapic_addr();
-        let lapic_id = get_lapic_id(lapic_addr);
-
-        let mouse = IOREDTBL::new()
-            .with_vector(MOUSE_HANDLER_ID)
-            .with_destination(lapic_id);
-        write_ioapic_irq(12, mouse);
-
-        info!("enabled APIC mouse");
-    }
-}
-
-fn configure_error(lapic_addr: VirtAddr) {
-    let addr = get_lapic_reg(lapic_addr, 0x370);
-    let entry = LVTEntry::new(APIC_ERROR_HANDLER_ID, LVTEntryFlags::empty());
-    unsafe {
-        addr.write_volatile(entry.encode_u32());
-    }
-}
-
-fn enable_apic_timer(local_apic_addr: VirtAddr, lapic_id: u8) {
-    static _CALIBRATE_LOCK: SpinLock<()> = SpinLock::new(());
-    let _guard = _CALIBRATE_LOCK.lock();
-
-    info!("enabling apic timer for lapic: {lapic_id}...");
-    fn apic_timer_ms_to_ticks(ms: u64) -> u32 {
-        let ticks_per_ms = unsafe { core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) };
-        (ms * ticks_per_ms) as u32
-    }
-
-    let addr = get_lapic_reg(local_apic_addr, 0x320);
-    let init = get_lapic_reg(local_apic_addr, 0x380);
-    let divide = get_lapic_reg(local_apic_addr, 0x3E0).cast::<u8>();
-    let current_counter = get_lapic_reg(local_apic_addr, 0x390);
-
-    // calibrate the timer
-    unsafe {
-        serial!("calibrating the apic timer\n");
-        let timer = LVTEntry::new(0x81, LVTEntryFlags::empty());
-
-        core::ptr::write_volatile(addr, timer.encode_u32());
-        core::ptr::write_volatile(divide, 0x3);
-        pit::prepare_sleep(100);
-
-        core::ptr::write_volatile(init, u32::MAX);
-
-        asm!("sti");
-        let diff_tick = pit::calibrate_sleep(
-            lapic_id,
-            || (),
-            |()| u32::MAX - current_counter.read_volatile(),
-        );
-        asm!("cli");
-
-        core::ptr::write_volatile(APIC_TIMER_TICKS_PER_MS.get(), diff_tick as u64 / 100);
-        info!(
-            "APIC Timer calibrated with {} ticks in 100ms",
-            core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) * 100
-        );
-    }
-
-    // enable the timer
-    unsafe {
-        let timer = LVTEntry::new(0x20, LVTEntryFlags::TIMER_PERIODIC);
-        core::ptr::write_volatile(addr, timer.encode_u32());
-        core::ptr::write_volatile(divide, 0x3);
-
-        core::ptr::write_volatile(init, apic_timer_ms_to_ticks(5));
-    }
+    APIC.enable_apic_mouse()
 }
 
 pub fn calibrate_tsc(lapic_id: u8, ticks_per_ms: &mut u64) {
@@ -422,47 +494,12 @@ pub fn calibrate_tsc(lapic_id: u8, ticks_per_ms: &mut u64) {
     }
 }
 
-const PIC1_DATA: u16 = 0x0021;
-const PIC2_DATA: u16 = 0x00A1;
-
-fn disable_pic() {
-    outb(PIC1_DATA, 0xff);
-    outb(PIC2_DATA, 0xff);
-}
-fn enable_apic() {
-    let lapic_base = *LAPIC_PHYS_ADDR;
-    const IA32_APIC_BASE_MSR: u32 = 0x1B;
-    const IA32_APIC_BASE_MSR_ENABLE: u32 = 0x800;
-    unsafe {
-        wrmsr(
-            IA32_APIC_BASE_MSR,
-            lapic_base.into_raw() as u64 | IA32_APIC_BASE_MSR_ENABLE as u64,
-        );
-    }
-}
 /// Genericly enables APIC interrupts and the APIC timer for the current CPU, fills `tsc_ticks_per_ms_output` with the amount of ticks per a ms in the TSC
 pub fn enable_apic_interrupts_generic(tsc_ticks_per_ms_output: &mut u64) {
-    disable_pic();
-    enable_apic();
-    let lapic_addr = get_lapic_addr();
-    let sivr = get_lapic_reg(lapic_addr, 0xF0);
+    APIC.setup_local(tsc_ticks_per_ms_output)
+}
 
-    unsafe {
-        core::ptr::write_volatile(sivr, 0x1ff);
-
-        let ioapic_addr = get_io_apic_addr();
-
-        let lapic_id = get_lapic_id(lapic_addr);
-        let ioapic_id = get_ioapic_id(ioapic_addr);
-
-        info!(
-            "enabled APIC, lapic_id is {lapic_id}, ioapic_id is {ioapic_id}, IO APIC is at {ioapic_addr:#x}, local APIC is at {lapic_addr:#x}"
-        );
-        static _ENABLE_LOCK: SpinLock<()> = SpinLock::new(());
-        let _guard = _ENABLE_LOCK.lock();
-
-        configure_error(lapic_addr);
-        calibrate_tsc(lapic_id, tsc_ticks_per_ms_output);
-        enable_apic_timer(lapic_addr, lapic_id);
-    }
+/// Maps the IOAPIC and the Local APIC to the `dest` page table
+pub fn map_apic(dest: &mut PageTable) -> Result<(), MapToError> {
+    APIC.map(dest)
 }

@@ -58,7 +58,7 @@ lazy_static! {
 
 #[used]
 #[unsafe(link_section = ".requests")]
-static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
+static RSDP_REQUEST: RsdpRequest = RsdpRequest::with_revision(3);
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -95,8 +95,12 @@ pub fn get_phy_offset() -> usize {
 }
 
 #[allow(unused)]
-pub fn rsdp_addr() -> usize {
-    RSDP_REQUEST.get_response().unwrap().address() as usize
+pub fn rsdp_addr() -> Option<PhysAddr> {
+    RSDP_REQUEST
+        .get_response()
+        .map(|res| res.address())
+        .filter(|addr| *addr != 0)
+        .map(|addr| PhysAddr::from(addr))
 }
 
 pub fn kernel_file() -> &'static File {

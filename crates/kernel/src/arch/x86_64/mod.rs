@@ -26,7 +26,7 @@ use crate::{
         registers::RFLAGS,
         utils::TICKS_PER_MS,
     },
-    info, sleep, warn,
+    info, warn,
 };
 
 use self::gdt::init_gdt;
@@ -197,5 +197,4 @@ pub unsafe fn flush_cache() {
 
 pub unsafe fn halt_all() {
     apic::send_nmi_all(HALT_ALL_HANDLER_ID);
-    sleep!(100 ms)
 }

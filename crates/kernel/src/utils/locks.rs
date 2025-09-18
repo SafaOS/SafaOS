@@ -230,4 +230,10 @@ impl<T> LazyLock<T> {
     pub const fn new(f: fn() -> T) -> Self {
         Self(Lazy::new(f))
     }
+
+    #[allow(unused)]
+    /// Gets a reference to the data if it has been initialized.
+    pub fn get(&self) -> Option<&T> {
+        self.0.get()
+    }
 }

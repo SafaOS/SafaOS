@@ -1,6 +1,7 @@
-use crate::arch::x86_64::interrupts::apic::{get_lapic_addr, get_lapic_id};
 use bitflags::bitflags;
 use core::{arch::asm, fmt::Display};
+
+use crate::arch::x86_64::interrupts::apic::APIC;
 
 bitflags! {
     #[derive(Default, Debug, Clone, Copy)]
@@ -60,7 +61,8 @@ pub struct CPUID(u8);
 
 impl CPUID {
     pub fn get() -> Self {
-        Self(get_lapic_id(get_lapic_addr()))
+        // If there is no APIC it means there is no CPUs yet except for the boot cpu
+        Self(APIC.get().map(|a| a.lapic_id()).unwrap_or(0))
     }
 }
 

@@ -1,7 +1,7 @@
 use lazy_static::lazy_static;
 
 use crate::{
-    limine,
+    PhysAddr, limine,
     utils::{self, elf::Elf},
 };
 
@@ -12,7 +12,7 @@ lazy_static! {
     };
     pub static ref KERNEL_ELF: Elf<'static, &'static [u8]> =
         utils::elf::Elf::new(&*KERNEL_ELF_BYTES).unwrap();
-    pub static ref RSDP_ADDR: usize = limine::rsdp_addr();
+    pub static ref RSDP_ADDR: Option<PhysAddr> = limine::rsdp_addr();
 }
 
 pub const KERNEL_CODE_NAME: &str = env!("CARGO_PKG_NAME");
