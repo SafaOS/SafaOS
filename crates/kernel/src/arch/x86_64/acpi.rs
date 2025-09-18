@@ -27,7 +27,7 @@ const _: () = assert!(size_of::<RSDPDesc>() == 36);
 
 impl RSDPDesc {
     pub fn vaildate(&self) -> bool {
-        let size = if self.revision == 2 { 36 } else { 20 };
+        let size = if self.revision >= 2 { 36 } else { 20 };
         let byte_array = (self) as *const RSDPDesc as *const u8;
         let mut sum: usize = 0;
 
@@ -283,7 +283,7 @@ fn get_rsdp() -> Option<RSDPDesc> {
 fn get_sdt() -> Option<GenericRootSDT> {
     let rsdp = get_rsdp()?;
 
-    if rsdp.revision == 2 {
+    if rsdp.revision >= 2 {
         let xsdt_addr = rsdp.xsdt_addr;
         assert_ne!(xsdt_addr, PhysAddr::null());
 
