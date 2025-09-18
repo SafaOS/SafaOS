@@ -1,11 +1,12 @@
 use crate::{
+    PhysAddr,
     arch::pci::{build_msi_addr, build_msi_data},
     debug,
     drivers::{
         interrupts::{IRQInfo, IntTrigger},
-        pci::extended_caps::ExtendedCaptability,
+        pci::{Bar, extended_caps::ExtendedCaptability},
     },
-    write_ref, PhysAddr,
+    write_ref,
 };
 
 use super::extended_caps::GenericCaptability;
@@ -80,7 +81,7 @@ impl MSIXInfo {
         device_id: u16,
         vendor_id: u16,
         requester_id: u32,
-        bars: &[(PhysAddr, usize)],
+        bars: &[Bar],
     ) -> Self {
         let msix_cap = unsafe { &mut *cap_ptr };
         let table_bar = msix_cap.table.bir();
@@ -94,11 +95,22 @@ impl MSIXInfo {
             bars.len()
         );
 
-        let table_base_addr = bars[table_bar].0 + table_off as usize;
-        let pab_base_addr = bars[pending_bit_bar].0 + pending_bit_off as usize;
+        let table_bar = bars[table_bar];
+        let pending_table_bar = bars[pending_bit_bar];
 
-        assert!(table_base_addr < bars[table_bar].0 + bars[table_bar].1);
-        assert!(pab_base_addr < bars[pending_bit_bar].0 + bars[pending_bit_bar].1);
+        let Bar::Memory(table_bar_base, table_bar_size) = table_bar else {
+            unreachable!("MSI Table bar isn't a memory bar")
+        };
+
+        let Bar::Memory(pending_table_bar_base, pending_table_bar_size) = pending_table_bar else {
+            unreachable!("MSI Pending Table bar isn't a memory bar")
+        };
+
+        let table_base_addr = table_bar_base + table_off as usize;
+        let pab_base_addr = pending_table_bar_base + pending_bit_off as usize;
+
+        assert!(table_base_addr < table_bar_base + table_bar_size);
+        assert!(pab_base_addr < pending_table_bar_base + pending_table_bar_size);
 
         let table_size = msix_cap.msg_ctrl.table_size();
 
@@ -178,7 +190,15 @@ impl MSIXInfo {
         write_ref!(msix_cap.msg_ctrl, msg.with_enable(true));
 
         self.clear_pending_interrupts(vector);
-        debug!(MSIXInfo, "enabled MSI-X for device id {:#x} with vendor id {:#x}: {:#x?}, table base: {:?}, pba base: {:?}", self.device_id, self.vendor_id, msix_cap, self.table_base_addr, self.pab_base_addr);
+        debug!(
+            MSIXInfo,
+            "enabled MSI-X for device id {:#x} with vendor id {:#x}: {:#x?}, table base: {:?}, pba base: {:?}",
+            self.device_id,
+            self.vendor_id,
+            msix_cap,
+            self.table_base_addr,
+            self.pab_base_addr
+        );
     }
 
     pub const fn into_irq_info(self) -> IRQInfo {

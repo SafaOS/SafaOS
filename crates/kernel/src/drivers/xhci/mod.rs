@@ -15,7 +15,7 @@ use crate::{
         driver_poll::{self, PolledDriver},
         interrupts::{self, IntTrigger, InterruptReceiver},
         keyboard::usb_kbd::USBKeyboard,
-        pci::PCICommandReg,
+        pci::{Bar, PCICommandReg},
         usb_mouse::USBMouseDriver,
         xhci::{
             devices::XHCIDevice,
@@ -711,20 +711,25 @@ impl<'s> PCIDevice for XHCI<'s> {
         );
 
         let bars = info.get_bars();
-        let (base_addr, _) = bars[0];
+        let Bar::Memory(base_addr, _) = bars[0] else {
+            unreachable!("XHCI Base bar should always be a memory bar")
+        };
+
         let virt_base_addr = base_addr.into_virt();
 
         unsafe {
-            for (bar_base_addr, bar_size) in bars {
-                let page_num = bar_size.div_ceil(PAGE_SIZE);
-                current_higher_root_table()
-                    .map_contiguous_pages(
-                        bar_base_addr.into_virt(),
-                        bar_base_addr,
-                        page_num,
-                        EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
-                    )
-                    .expect("failed to map the XHCI");
+            for bar in bars {
+                if let Bar::Memory(bar_base_addr, bar_size) = bar {
+                    let page_num = bar_size.div_ceil(PAGE_SIZE);
+                    current_higher_root_table()
+                        .map_contiguous_pages(
+                            bar_base_addr.into_virt(),
+                            bar_base_addr,
+                            page_num,
+                            EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
+                        )
+                        .expect("failed to map the XHCI");
+                }
             }
         }
         // Create the XHCI Driver
