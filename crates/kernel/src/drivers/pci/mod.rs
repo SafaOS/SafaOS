@@ -9,15 +9,20 @@ pub mod extended_caps;
 pub mod msi;
 
 pub trait PCIDevice: Send + Sync + Debug {
+    /// PCI lookup filter by class-subclass
+    const CLASS_SUBCLASS: (u8, u8);
+    /// PCI lookup filter by prog_if
+    const PROG_IF: Option<u8> = None;
+    /// PCI lookup filter by vendor IDs
+    const VENDOR_ID: Option<&[u16]> = None;
+    /// PCI lookup filter by device IDs
+    const DEVICE_ID: Option<&[u16]> = None;
+
     fn create(info: PCIDeviceInfo) -> Self
     where
         Self: Sized;
     /// Starts the PCI Device returning true if successful
     fn start(&'static self) -> bool;
-    /// Returns the devices class, subclass and prog_if
-    fn class() -> (u8, u8, u8)
-    where
-        Self: Sized;
 }
 
 pub struct PCI {
@@ -284,8 +289,8 @@ impl PCI {
     }
 
     fn create_device<T: PCIDevice + Sized>(&self) -> Option<T> {
-        let (class, subclass, prog_if) = T::class();
-        let header = self.lookup(class, subclass, prog_if);
+        let (class, subclass) = T::CLASS_SUBCLASS;
+        let header = self.lookup(class, subclass, T::PROG_IF, T::VENDOR_ID, T::DEVICE_ID);
         header.map(|header| T::create(header))
     }
 
@@ -358,10 +363,21 @@ impl PCI {
         None
     }
 
-    fn lookup<'s>(&'s self, class: u8, subclass: u8, prog_if: u8) -> Option<PCIDeviceInfo<'s>> {
+    fn lookup<'s>(
+        &'s self,
+        class: u8,
+        subclass: u8,
+        prog_if: Option<u8>,
+        vendor_id: Option<&[u16]>,
+        device_id: Option<&[u16]>,
+    ) -> Option<PCIDeviceInfo<'s>> {
         self.enum_all(&|info| {
             let common = info.header.common();
-            common.class == class && common.subclass == subclass && common.prog_if == prog_if
+            common.class == class
+                && common.subclass == subclass
+                && prog_if.is_none_or(|i| i == common.prog_if)
+                && vendor_id.is_none_or(|ids| ids.contains(&common.vendor_id))
+                && device_id.is_none_or(|ids| ids.contains(&common.device_id))
         })
     }
 

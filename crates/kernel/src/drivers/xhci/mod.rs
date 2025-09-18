@@ -683,9 +683,8 @@ impl<'s> XHCI<'s> {
     }
 }
 impl<'s> PCIDevice for XHCI<'s> {
-    fn class() -> (u8, u8, u8) {
-        (0xc, 0x3, 0x30)
-    }
+    const CLASS_SUBCLASS: (u8, u8) = (0xc, 0x3);
+    const PROG_IF: Option<u8> = Some(0x30);
 
     fn create(mut info: super::pci::PCIDeviceInfo) -> Self {
         // Collect extended captability information
