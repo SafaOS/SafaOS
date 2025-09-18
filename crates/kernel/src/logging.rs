@@ -163,6 +163,11 @@ macro_rules! debug {
 
 #[macro_export]
 macro_rules! info {
+    ($mod: ty, $($arg:tt)*) => {{
+        // makes sure $mod is a valid type
+        let _ = core::marker::PhantomData::<$mod>;
+        $crate::loglnboot_ext!("info", 92, as stringify!($mod), $($arg)*)
+    }};
     ($($arg:tt)*) => ($crate::logln_ext!("info", 92, $($arg)*));
 }
 
