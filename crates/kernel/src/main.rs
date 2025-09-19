@@ -111,6 +111,9 @@ macro_rules! sleep {
 /// sleep_until!(timeout ms, condition)
 ///
 /// both returns true if condition happened to be successful, on timeout returns false
+///
+/// sleep_until(timeout ms, let var = expr; until condition)
+/// returns Some(var) if not timeouted, condition may use that var also.
 macro_rules! sleep_until {
     ($cond: tt) => {{
         while !$cond {
@@ -135,6 +138,23 @@ macro_rules! sleep_until {
         }
 
         success
+    }};
+
+    ($timeout_ms: literal ms, let $name: ident = $expr: expr; until $cond: expr) => {{
+        let start_time = $crate::time!(ms);
+        let timeout_time = start_time + $timeout_ms;
+
+        let mut $name = $expr;
+        while !$cond {
+            if $crate::time!(ms) >= timeout_time {
+                break;
+            }
+
+            $name = $expr;
+            core::hint::spin_loop();
+        }
+
+        $cond.then_some($name)
     }};
 }
 
