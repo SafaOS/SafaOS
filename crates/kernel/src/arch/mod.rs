@@ -54,7 +54,7 @@ pub mod interrupts {
 
 pub mod io {
     #[allow(unused)]
-    pub use super::arch::io::{inb, inl, outb, outl, outw};
+    pub use super::arch::io::{inb, inl, inw, outb, outl, outw};
 }
 
 pub use arch::paging;
