@@ -4,10 +4,7 @@ use core::{fmt::Debug, u32, u64};
 use lazy_static::lazy_static;
 use msi::{MSIXCap, MSIXInfo};
 
-use crate::{
-    PhysAddr,
-    drivers::{net::e1000::E1000NetCard, pci::extended_caps::CaptabilitiesIter},
-};
+use crate::{PhysAddr, drivers::pci::extended_caps::CaptabilitiesIter};
 pub mod extended_caps;
 pub mod msi;
 
@@ -20,6 +17,8 @@ pub trait PCIDevice: Send + Sync + Debug {
     const VENDOR_ID: Option<&[u16]> = None;
     /// PCI lookup filter by device IDs
     const DEVICE_ID: Option<&[u16]> = None;
+    /// PCI lookup filter by vendor-device ID tuples
+    const VENDOR_ID_DEVICE_ID: Option<&[(u16, u16)]> = None;
 
     fn create(info: PCIDeviceInfo) -> Self
     where
@@ -128,7 +127,7 @@ impl GeneralPCIHeader {
             }
 
             let info_bits: u8 = raw_bar as u8 & 0xF;
-            let result =             /* I/O Space bars */ if info_bits & 1 == 1 {
+            let result = /* I/O Space bars */ if info_bits & 1 == 1 {
                 unsafe {
                     let io_base = raw_bar & 0xFFFFFFFC;
                     core::ptr::write_volatile(raw_bar_ptr as *mut u32, u32::MAX);
@@ -315,7 +314,14 @@ impl PCI {
 
     fn create_device<T: PCIDevice + Sized>(&self) -> Option<T> {
         let (class, subclass) = T::CLASS_SUBCLASS;
-        let header = self.lookup(class, subclass, T::PROG_IF, T::VENDOR_ID, T::DEVICE_ID);
+        let header = self.lookup(
+            class,
+            subclass,
+            T::PROG_IF,
+            T::VENDOR_ID,
+            T::DEVICE_ID,
+            T::VENDOR_ID_DEVICE_ID,
+        );
         header.map(|header| T::create(header))
     }
 
@@ -395,6 +401,7 @@ impl PCI {
         prog_if: Option<u8>,
         vendor_id: Option<&[u16]>,
         device_id: Option<&[u16]>,
+        vendor_device_ids: Option<&[(u16, u16)]>,
     ) -> Option<PCIDeviceInfo<'s>> {
         self.enum_all(&|info| {
             let common = info.header.common();
@@ -403,6 +410,8 @@ impl PCI {
                 && prog_if.is_none_or(|i| i == common.prog_if)
                 && vendor_id.is_none_or(|ids| ids.contains(&common.vendor_id))
                 && device_id.is_none_or(|ids| ids.contains(&common.device_id))
+                && vendor_device_ids
+                    .is_none_or(|ids| ids.contains(&(common.vendor_id, common.device_id)))
         })
     }
 
