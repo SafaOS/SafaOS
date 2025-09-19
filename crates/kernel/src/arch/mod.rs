@@ -52,6 +52,11 @@ pub mod interrupts {
     pub use super::arch::interrupts::{IRQS, register_irq_handler};
 }
 
+pub mod io {
+    #[allow(unused)]
+    pub use super::arch::io::{inb, inl, outb, outl, outw};
+}
+
 pub use arch::paging;
 use lazy_static::lazy_static;
 

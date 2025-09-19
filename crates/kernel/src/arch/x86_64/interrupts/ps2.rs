@@ -4,7 +4,7 @@ use bitfield_struct::bitfield;
 use safa_abi::input::{MiceBtnStatus, MiceEvent, MouseEventKind};
 
 use crate::{
-    arch::x86_64::{inb, outb},
+    arch::x86_64::io::{inb, outb},
     debug,
     devices::input,
     error, info, sleep_until, warn,
@@ -138,11 +138,11 @@ fn read_response_inner() -> Result<u8, ()> {
         return Err(());
     }
 
-    Ok(inb(PS2_DATA_PORT))
+    Ok(unsafe { inb(PS2_DATA_PORT) })
 }
 /// Sends a single byte command to the controller with no response
 fn send_command(cmd: u8) {
-    outb(PS2_COMMAND_PORT, cmd);
+    unsafe { outb(PS2_COMMAND_PORT, cmd) };
 }
 
 /// Sends a single byte command to the controller with a response
@@ -151,17 +151,17 @@ fn send_command1(cmd: u8) -> Result<u8, ()> {
         return Err(());
     }
 
-    outb(PS2_COMMAND_PORT, cmd);
+    unsafe { outb(PS2_COMMAND_PORT, cmd) };
     read_response_inner()
 }
 
 /// Sends a 2 byte command to the controller without a response
 fn send_command2(cmd0: u8, cmd1: u8) -> Result<(), ()> {
-    outb(PS2_COMMAND_PORT, cmd0);
+    unsafe { outb(PS2_COMMAND_PORT, cmd0) };
     if !wait_for_write() {
         return Err(());
     }
-    outb(PS2_DATA_PORT, cmd1);
+    unsafe { outb(PS2_DATA_PORT, cmd1) };
     Ok(())
 }
 /// returns Err(()) on timeout
@@ -169,7 +169,7 @@ fn send_port0_command(cmd0: u8) -> Result<(), ()> {
     if !wait_for_write() {
         return Err(());
     }
-    outb(PS2_DATA_PORT, cmd0);
+    unsafe { outb(PS2_DATA_PORT, cmd0) };
     Ok(())
 }
 
@@ -197,14 +197,16 @@ fn disable_controller() {
     send_command(DISABLE_PORT1);
     send_command(DISABLE_PORT2);
     // flush output buffer
-    while inb(PS2_STATUS_PORT) & 1 == 1 {
-        inb(PS2_DATA_PORT);
+    unsafe {
+        while inb(PS2_STATUS_PORT) & 1 == 1 {
+            inb(PS2_DATA_PORT);
+        }
     }
 }
 
 #[must_use = "Must handle timeout if it returns false"]
 fn wait_for_read() -> bool {
-    let success = sleep_until!(1000 ms, inb(PS2_STATUS_PORT) & 1 == 1);
+    let success = sleep_until!(1000 ms, unsafe { inb(PS2_STATUS_PORT) & 1 == 1 });
     if !success {
         error!("PS/2 Controller timeout waiting for read");
     }
@@ -214,7 +216,7 @@ fn wait_for_read() -> bool {
 
 #[must_use = "Must handle timeout if it returns false"]
 fn wait_for_write() -> bool {
-    let success = sleep_until!(1000 ms, inb(PS2_STATUS_PORT) & 2 == 0);
+    let success = sleep_until!(1000 ms, unsafe { inb(PS2_STATUS_PORT) & 2 == 0 });
     if !success {
         error!("PS/2 Controller timeout waiting for write");
     }
@@ -224,7 +226,7 @@ fn wait_for_write() -> bool {
 
 /// From an interrupt (ex PS/2 keyboard or a PS/2 mouse) read a single byte from the controller
 fn irq_ps2_read() -> u8 {
-    inb(PS2_DATA_PORT)
+    unsafe { inb(PS2_DATA_PORT) }
 }
 
 #[must_use = "Returns false if not successful"]

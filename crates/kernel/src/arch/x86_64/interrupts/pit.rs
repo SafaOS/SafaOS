@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicI16, AtomicU8, Ordering};
 
-use crate::arch::x86_64::{interrupts::apic::APIC, outb};
+use crate::arch::x86_64::{interrupts::apic::APIC, io::outb};
 
 use super::apic::{IOREDTBL, send_eoi};
 
@@ -9,10 +9,11 @@ const PIT_COMMAND_CHANNEL: u16 = 0x43;
 
 fn set_freq(freq: u32) {
     let command: u8 = 0b00_11_010_0;
-
-    outb(PIT_COMMAND_CHANNEL, command);
-    outb(PIT_CHANNEL_0, (freq & 0xFF) as u8);
-    outb(PIT_CHANNEL_0, (freq >> 8) as u8);
+    unsafe {
+        outb(PIT_COMMAND_CHANNEL, command);
+        outb(PIT_CHANNEL_0, (freq & 0xFF) as u8);
+        outb(PIT_CHANNEL_0, (freq >> 8) as u8);
+    }
 }
 
 pub static PIT_IRQ: AtomicU8 = AtomicU8::new(2);

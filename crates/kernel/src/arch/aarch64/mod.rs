@@ -6,6 +6,7 @@ mod cpu;
 mod exceptions;
 mod gic;
 pub(super) mod interrupts;
+pub(super) mod io;
 pub mod paging;
 pub(super) mod pci;
 pub(super) mod power;

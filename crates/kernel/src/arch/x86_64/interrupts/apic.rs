@@ -6,7 +6,7 @@ use crate::{
         x86_64::{
             acpi,
             interrupts::handlers::{APIC_ERROR_HANDLER_ID, MOUSE_HANDLER_ID},
-            outb,
+            io::outb,
             registers::{rdmsr, wrmsr},
             utils::APIC_TIMER_TICKS_PER_MS,
         },
@@ -343,8 +343,10 @@ impl Apic {
         const PIC2_DATA: u16 = 0x00A1;
 
         // Disable PIC
-        outb(PIC1_DATA, 0xff);
-        outb(PIC2_DATA, 0xff);
+        unsafe {
+            outb(PIC1_DATA, 0xff);
+            outb(PIC2_DATA, 0xff);
+        }
 
         let lapic_base = self.lapic_phys_addr;
         const IA32_APIC_BASE_MSR: u32 = 0x1B;

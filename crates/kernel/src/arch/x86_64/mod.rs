@@ -1,6 +1,7 @@
 mod acpi;
 mod gdt;
 pub(super) mod interrupts;
+pub(super) mod io;
 pub mod paging;
 pub(super) mod pci;
 pub(super) mod power;
@@ -30,20 +31,6 @@ use crate::{
 };
 
 use self::gdt::init_gdt;
-
-pub fn inb(port: u16) -> u8 {
-    let value: u8;
-    unsafe {
-        asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    }
-    value
-}
-
-pub fn outb(port: u16, value: u8) {
-    unsafe {
-        asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
-    }
-}
 
 #[inline]
 pub fn enable_sse() {
