@@ -130,6 +130,10 @@ impl GeneralPCIHeader {
             let result = /* I/O Space bars */ if info_bits & 1 == 1 {
                 unsafe {
                     let io_base = raw_bar & 0xFFFFFFFC;
+                    if io_base == 0 {
+                        continue
+                    }
+
                     core::ptr::write_volatile(raw_bar_ptr as *mut u32, u32::MAX);
                     let neg_size = core::ptr::read_volatile(raw_bar_ptr) & 0xFFFFFFFC;
                     let size = (!neg_size) + 1;
@@ -181,6 +185,10 @@ impl GeneralPCIHeader {
 
                 } else {
                     unimplemented!()
+                }
+
+                if addr == PhysAddr::null() {
+                    continue
                 }
 
                 Bar::Memory(addr, size)
