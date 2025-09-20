@@ -368,9 +368,12 @@ impl<T: TTYInterface> HandleKey for TTY<T> {
             };
         }
         match key.code {
-            KeyCode::PageDown => self.interface.scroll_down(),
-            KeyCode::PageUp => self.interface.scroll_up(),
-            KeyCode::KeyC if key.flags.contains(KeyFlags::CTRL | KeyFlags::SHIFT) => {
+            KeyCode::PageDown if self.is_interactive() => self.interface.scroll_down(),
+            KeyCode::PageUp if self.is_interactive() => self.interface.scroll_up(),
+            KeyCode::KeyC
+                if key.flags.contains(KeyFlags::CTRL | KeyFlags::SHIFT)
+                    && self.is_interactive() =>
+            {
                 self.clear();
                 self.interface.set_cursor(1, 1);
             }
