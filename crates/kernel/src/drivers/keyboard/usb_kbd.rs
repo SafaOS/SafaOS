@@ -140,6 +140,7 @@ const IGNORED_REPEATED_REPORTS: u8 = 2;
 #[derive(Debug)]
 pub struct USBKeyboard {
     last_report_buffer: [u8; 8],
+    last_caps_lock_state: bool,
     repeated_reports_to_ignore: u8,
     caps_lock_toggle: bool,
 }
@@ -153,6 +154,7 @@ impl USBHIDDriver for USBKeyboard {
             last_report_buffer: [0u8; 8],
             repeated_reports_to_ignore: IGNORED_REPEATED_REPORTS,
             caps_lock_toggle: false,
+            last_caps_lock_state: false,
         }
     }
     fn on_event(&mut self, data: &[u8]) {
@@ -241,7 +243,7 @@ impl USBHIDDriver for USBKeyboard {
         }
 
         if self.caps_lock_toggle {
-            keycodes.push((KeyCode::CapsLock, false)).unwrap();
+            keycodes.push((KeyCode::CapsLock, true)).unwrap();
         }
 
         for item in &report_buffer[1..7] {
@@ -260,6 +262,7 @@ impl USBHIDDriver for USBKeyboard {
 
             if usb_keycode == USBKey::CapsLock {
                 if report_key {
+                    self.last_caps_lock_state = self.caps_lock_toggle;
                     self.caps_lock_toggle = !self.caps_lock_toggle;
                 }
 
@@ -283,6 +286,10 @@ impl USBHIDDriver for USBKeyboard {
                     Err(keycode) => super::key_release(keycode),
                 }
             }
+        }
+
+        if self.last_caps_lock_state != self.caps_lock_toggle && !self.caps_lock_toggle {
+            super::key_release(KeyCode::CapsLock);
         }
     }
 }
