@@ -17,6 +17,7 @@ use libgem::{
         window::Pixel,
     },
 };
+use libopal::event::KeyModifiers;
 
 use crate::term_display::TerminalElement;
 
@@ -27,60 +28,63 @@ const BG_COLOR: Pixel = Pixel::rgb(0x28, 0x28, 0x28).with_alpha(0xF0);
 
 static ICON: &[u8] = include_bytes!("../../../assets/terminal.bmp");
 
-const fn keycode_to_char(code: KeyCode) -> Option<char> {
+// Given a keycode returns all the possible characters that can be typed with that key:
+// normal char - capslock char - shift char
+const fn keycode_to_char(code: KeyCode) -> Option<(char, char, char)> {
     match code {
         // letters
-        KeyCode::KeyA => Some('a'),
-        KeyCode::KeyB => Some('b'),
-        KeyCode::KeyC => Some('c'),
-        KeyCode::KeyD => Some('d'),
-        KeyCode::KeyE => Some('e'),
-        KeyCode::KeyF => Some('f'),
-        KeyCode::KeyG => Some('g'),
-        KeyCode::KeyH => Some('h'),
-        KeyCode::KeyI => Some('i'),
-        KeyCode::KeyJ => Some('j'),
-        KeyCode::KeyK => Some('k'),
-        KeyCode::KeyL => Some('l'),
-        KeyCode::KeyM => Some('m'),
-        KeyCode::KeyN => Some('n'),
-        KeyCode::KeyO => Some('o'),
-        KeyCode::KeyP => Some('p'),
-        KeyCode::KeyQ => Some('q'),
-        KeyCode::KeyR => Some('r'),
-        KeyCode::KeyS => Some('s'),
-        KeyCode::KeyT => Some('t'),
-        KeyCode::KeyU => Some('u'),
-        KeyCode::KeyV => Some('v'),
-        KeyCode::KeyW => Some('w'),
-        KeyCode::KeyX => Some('x'),
-        KeyCode::KeyY => Some('y'),
-        KeyCode::KeyZ => Some('z'),
+        KeyCode::KeyA => Some(('a', 'A', 'A')),
+        KeyCode::KeyB => Some(('b', 'B', 'B')),
+        KeyCode::KeyC => Some(('c', 'C', 'C')),
+        KeyCode::KeyD => Some(('d', 'D', 'D')),
+        KeyCode::KeyE => Some(('e', 'E', 'E')),
+        KeyCode::KeyF => Some(('f', 'F', 'F')),
+        KeyCode::KeyG => Some(('g', 'G', 'G')),
+        KeyCode::KeyH => Some(('h', 'H', 'H')),
+        KeyCode::KeyI => Some(('i', 'I', 'I')),
+        KeyCode::KeyJ => Some(('j', 'J', 'J')),
+        KeyCode::KeyK => Some(('k', 'K', 'K')),
+        KeyCode::KeyL => Some(('l', 'L', 'L')),
+        KeyCode::KeyM => Some(('m', 'M', 'M')),
+        KeyCode::KeyN => Some(('n', 'N', 'N')),
+        KeyCode::KeyO => Some(('o', 'O', 'O')),
+        KeyCode::KeyP => Some(('p', 'P', 'P')),
+        KeyCode::KeyQ => Some(('q', 'Q', 'Q')),
+        KeyCode::KeyR => Some(('r', 'R', 'R')),
+        KeyCode::KeyS => Some(('s', 'S', 'S')),
+        KeyCode::KeyT => Some(('t', 'T', 'T')),
+        KeyCode::KeyU => Some(('u', 'U', 'U')),
+        KeyCode::KeyV => Some(('v', 'V', 'V')),
+        KeyCode::KeyW => Some(('w', 'W', 'W')),
+        KeyCode::KeyX => Some(('x', 'X', 'X')),
+        KeyCode::KeyY => Some(('y', 'Y', 'Y')),
+        KeyCode::KeyZ => Some(('z', 'Z', 'Z')),
 
         // digits
-        KeyCode::Key0 => Some('0'),
-        KeyCode::Key1 => Some('1'),
-        KeyCode::Key2 => Some('2'),
-        KeyCode::Key3 => Some('3'),
-        KeyCode::Key4 => Some('4'),
-        KeyCode::Key5 => Some('5'),
-        KeyCode::Key6 => Some('6'),
-        KeyCode::Key7 => Some('7'),
-        KeyCode::Key8 => Some('8'),
-        KeyCode::Key9 => Some('9'),
+        KeyCode::Key0 => Some(('0', ')', '0')),
+        KeyCode::Key1 => Some(('1', '!', '1')),
+        KeyCode::Key2 => Some(('2', '@', '2')),
+        KeyCode::Key3 => Some(('3', '#', '3')),
+        KeyCode::Key4 => Some(('4', '$', '4')),
+        KeyCode::Key5 => Some(('5', '%', '5')),
+        KeyCode::Key6 => Some(('6', '^', '6')),
+        KeyCode::Key7 => Some(('7', '&', '7')),
+        KeyCode::Key8 => Some(('8', '*', '8')),
+        KeyCode::Key9 => Some(('9', '(', '9')),
 
-        KeyCode::Space => Some(' '),
-        KeyCode::Comma => Some(','),
-        KeyCode::Dot => Some('.'),
-        KeyCode::Slash => Some('/'),
-        KeyCode::Semicolon => Some(';'),
-        KeyCode::BackQuote => Some('`'),
-        KeyCode::LeftBrace => Some('['),
-        KeyCode::RightBrace => Some(']'),
-        KeyCode::BackSlash => Some('\\'),
-        KeyCode::Minus => Some('-'),
-        KeyCode::Equals => Some('='),
-        KeyCode::DoubleQuote => Some('"'),
+        KeyCode::Space => Some((' ', ' ', ' ')),
+        KeyCode::Comma => Some((',', '<', ',')),
+        KeyCode::Dot => Some(('.', '<', '.')),
+        KeyCode::Slash => Some(('/', '?', '/')),
+        KeyCode::Semicolon => Some((';', ':', ';')),
+        KeyCode::BackQuote => Some(('`', '~', '`')),
+        KeyCode::LeftBrace => Some(('[', '{', '[')),
+        KeyCode::RightBrace => Some((']', '}', ']')),
+        KeyCode::BackSlash => Some(('\\', '|', '\\')),
+        KeyCode::Minus => Some(('-', '_', '-')),
+        KeyCode::Equals => Some(('=', '+', '=')),
+        // FIXME: it isn't a double quote is it?
+        KeyCode::DoubleQuote => Some(('\'', '"', '\'')),
 
         _ => None,
     }
@@ -161,7 +165,17 @@ fn main() {
                 match event {
                     Event::Key(k_eve) => {
                         if k_eve.kind == KeyEventKind::Press {
-                            if let Some(c) = keycode_to_char(k_eve.code) {
+                            if let Some((normi_c, shifted_c, capslock_c)) =
+                                keycode_to_char(k_eve.code)
+                            {
+                                let c = if k_eve.modifiers.contains(KeyModifiers::SHIFT) {
+                                    shifted_c
+                                } else if k_eve.modifiers.contains(KeyModifiers::CAPSLOCK) {
+                                    capslock_c
+                                } else {
+                                    normi_c
+                                };
+
                                 let mut tmp = [0u8; 4];
                                 let s = c.encode_utf8(&mut tmp);
 
