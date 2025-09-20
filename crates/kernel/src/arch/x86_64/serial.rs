@@ -42,6 +42,9 @@ pub fn write_serial(byte: u8) {
     // Wait for the FIFO buffer to be empty
     while !serial_is_transmit_fifo_empty() {}
     unsafe {
+        if byte == b'\n' {
+            outb(SERIAL_DATA_PORT, b'\r');
+        }
         outb(SERIAL_DATA_PORT, byte);
     }
 }

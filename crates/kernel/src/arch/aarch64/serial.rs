@@ -11,6 +11,10 @@ lazy_static! {
 #[inline(always)]
 fn putbyte(c: u8) {
     unsafe {
+        if c == b'\n' {
+            putbyte(b'\r');
+        }
+
         if unlikely(!super::cpu::serial_ready()) {
             // hack to allow debug prints before the DTB is parsed
             let qemu_addr = PhysAddr::from(0x09000000).into_virt();
