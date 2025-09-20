@@ -42,14 +42,14 @@ impl<T: ?Sized> FramePtr<T> {
     }
 }
 
-impl<T> Deref for FramePtr<T> {
+impl<T: ?Sized> Deref for FramePtr<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.0 }
     }
 }
 
-impl<T> DerefMut for FramePtr<T> {
+impl<T: ?Sized> DerefMut for FramePtr<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.0 }
     }
