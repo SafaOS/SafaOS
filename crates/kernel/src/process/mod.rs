@@ -12,7 +12,10 @@ use crate::{
         resources::ResourceData,
         vas::{ProcVASA, TrackedMemoryMapping},
     },
-    scheduler,
+    scheduler::{
+        self,
+        wait_queue::{WaitQueue, WaitQueueWithTimeout},
+    },
     thread::{self, ArcThread, Tid},
     utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
@@ -25,7 +28,6 @@ use safa_abi::{
     process::{AbiStructures, ProcessStdio},
 };
 use serde::Serialize;
-use slab::Slab;
 use thread::{ContextPriority, Thread};
 
 use crate::{
@@ -61,6 +63,13 @@ pub const PROCESS_AREA_END_ADDR: VirtAddr = VirtAddr::from(0x00007F0000000000);
 const DEFAULT_STACK_SIZE: usize = 8 * PAGE_SIZE;
 const GUARD_PAGES_COUNT: usize = 2;
 
+/// Reason for waiting inside a process's wait queue.
+pub enum WaitOnProcReason {
+    WaitingOnSelf,
+    WaitingOnChild(Tid),
+    WaitingOnFutex(*const AtomicU32),
+}
+
 pub struct Process {
     name: Name,
     /// constant
@@ -85,7 +94,7 @@ pub struct Process {
     master_tls: Option<(VirtAddr, usize, usize, usize)>,
     next_tid: AtomicU32,
     pub(super) threads: Mutex<Vec<ArcThread>>,
-    pub(crate) futex_wait_queue: Mutex<Slab<ArcThread>>,
+    wait_queue: Mutex<WaitQueueWithTimeout<3, WaitOnProcReason>>,
     pub context_count: AtomicU32,
 }
 
@@ -375,7 +384,7 @@ impl Process {
         Self::allocate_thread_memory_inner(&mut *self.vasa(), custom_stack_size, self.master_tls, 0)
     }
 
-    fn new(
+    const fn new(
         name: Name,
         pid: Pid,
         ppid: Pid,
@@ -393,8 +402,7 @@ impl Process {
             ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
             threads: Mutex::new(Vec::new()),
-            futex_wait_queue: Mutex::new(Slab::new()),
-
+            wait_queue: Mutex::new(WaitQueue::new()),
             next_tid: AtomicU32::new(1),
             master_tls,
             context_count: AtomicU32::new(0),
@@ -667,19 +675,25 @@ impl Process {
             return 0;
         }
 
-        let mut count = 0;
-
-        for (_, thread) in &*self.futex_wait_queue.lock() {
-            let mut status = thread.status_mut();
-            if unsafe { status.try_lift_futex(target_addr) } {
-                count += 1;
-                if count >= n {
-                    break;
-                }
-            }
-        }
+        let count = self.wait_queue.lock().wake_n_on_condition(
+            |reason| match reason {
+                WaitOnProcReason::WaitingOnFutex(addr) => *addr == target_addr,
+                _ => false,
+            },
+            n,
+        );
 
         return count;
+    }
+
+    /// Sleeps the current thread in the process's wait queue.
+    pub fn sleep_thread(
+        &self,
+        thread: ArcThread,
+        reason: WaitOnProcReason,
+        duration: Option<NonZero<u64>>,
+    ) -> Option<NonZero<u64>> {
+        self.wait_queue.lock().push(thread, reason, duration)
     }
 
     fn at(&self) -> VirtAddr {

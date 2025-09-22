@@ -1,8 +1,9 @@
 //! This module defines Functions and Operations related to the current thread.
 
+use core::num::NonZero;
 use core::sync::atomic::AtomicU32;
 
-use crate::process::Pid;
+use crate::process::{self, Pid, WaitOnProcReason};
 use crate::thread::Tid;
 use crate::time;
 use crate::{
@@ -29,13 +30,20 @@ pub fn exit(code: usize) -> ! {
 
 /// Sleeps the current thread for `ms` milliseconds.
 pub fn sleep_for_ms(ms: u64) {
+    let Some(ms) = NonZero::new(ms) else {
+        return;
+    };
+
     without_interrupts(|| {
         let curr_time = time!(ms);
 
         let current = thread::current();
         current.sleep_for_ms(ms);
         yield_now();
-        assert!(curr_time + ms <= time!(ms), "thread didn't sleep");
+        assert!(
+            ms.saturating_add(curr_time).get() <= time!(ms),
+            "thread didn't sleep"
+        );
     });
 }
 
@@ -112,21 +120,35 @@ pub fn wait_for_thread(tid: Tid) -> Option<()> {
 /// # Safety
 /// The caller must ensure that the address `addr` is valid and points to a valid futex.
 pub unsafe fn wait_for_futex(addr: &AtomicU32, with_value: u32, timeout_ms: u64) -> bool {
-    let this_thread = thread::current();
-    let this_proc = this_thread.process();
-    let wait_id = {
-        let mut futex_wait_queue = this_proc.futex_wait_queue.lock();
-
-        if addr.load(core::sync::atomic::Ordering::SeqCst) != with_value {
-            return true;
-        }
-
-        futex_wait_queue.insert(this_thread.clone())
+    let Some(timeout_ms) = NonZero::new(timeout_ms) else {
+        return false;
+    };
+    let duration = if timeout_ms.get() == u64::MAX {
+        None
+    } else {
+        Some(timeout_ms)
     };
 
-    let timeout_at = this_thread.wait_for_futex(addr, timeout_ms);
-    self::yield_now();
-    let timeouted = time!(ms) as u128 >= timeout_at;
-    this_proc.futex_wait_queue.lock().remove(wait_id);
+    let this_thread = thread::current();
+    let this_proc = process::current();
+
+    if addr.load(core::sync::atomic::Ordering::SeqCst) != with_value {
+        return true;
+    }
+
+    let timeouted = without_interrupts(move || {
+        let timeout_at = this_proc.sleep_thread(
+            this_thread,
+            WaitOnProcReason::WaitingOnFutex(addr),
+            duration,
+        );
+        self::yield_now();
+
+        if let Some(timeout_at) = timeout_at {
+            time!(ms) >= timeout_at.get()
+        } else {
+            false
+        }
+    });
     !timeouted
 }

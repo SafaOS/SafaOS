@@ -3,9 +3,10 @@
 use core::{
     cell::UnsafeCell,
     fmt::Debug,
+    num::NonZero,
     ops::Deref,
     ptr::NonNull,
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use crate::{
@@ -54,25 +55,16 @@ impl From<RawContextPriority> for ContextPriority {
 #[derive(Debug, Clone)]
 pub enum BlockedReason {
     /// The thread is sleeping until [`.0`] ms of boot time is reached
-    SleepingUntil(u128),
+    SleepingUntil(u64),
     WaitingForProcess(Arc<Process>),
     WaitingForThread(ArcThread),
-    WaitOnFutex {
-        // Only ever accessed from the current address space,
-        // so it is safe if it is in the lower half.
-        addr: *const AtomicU32,
-        timeout_wake_at: u128,
-    },
     BlockedForever,
 }
 
 impl BlockedReason {
     pub fn block_lifted(&self) -> bool {
         match self {
-            Self::SleepingUntil(n)
-            | Self::WaitOnFutex {
-                timeout_wake_at: n, ..
-            } => time!(ms) as u128 >= *n,
+            Self::SleepingUntil(n) => time!(ms) >= *n,
             Self::WaitingForProcess(process) => !process.is_alive(),
             Self::WaitingForThread(thread) => thread.is_dead(),
             Self::BlockedForever => false,
@@ -91,19 +83,6 @@ impl ContextStatus {
     pub const fn is_running(&self) -> bool {
         match self {
             Self::Running => true,
-            _ => false,
-        }
-    }
-
-    #[inline]
-    /// # Safety
-    /// target_addr must be a valid pointer
-    pub unsafe fn try_lift_futex(&mut self, target_addr: *const AtomicU32) -> bool {
-        match *self {
-            Self::Blocked(BlockedReason::WaitOnFutex { addr, .. }) if target_addr == addr => {
-                *self = Self::Runnable;
-                true
-            }
             _ => false,
         }
     }
@@ -469,10 +448,12 @@ impl Thread {
     }
 
     /// Should only be called by the current thread
-    pub fn sleep_for_ms(&self, ms: u64) {
-        self.set_status(ContextStatus::Blocked(BlockedReason::SleepingUntil(
-            (time!(ms) as u128) + ms as u128,
-        )));
+    pub fn sleep_for_ms(&self, ms: NonZero<u64>) -> NonZero<u64> {
+        let mut status_mut = self.status_mut();
+        let timeout_at =
+            unsafe { NonZero::new_unchecked(time!(ms) as u64) }.saturating_add(ms.get());
+        *status_mut = ContextStatus::Blocked(BlockedReason::SleepingUntil(timeout_at.get()));
+        timeout_at
     }
 
     /// Should only be called by the current thread
@@ -487,17 +468,6 @@ impl Thread {
         self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForThread(
             thread,
         )));
-    }
-
-    /// Should only be called by the current thread
-    pub fn wait_for_futex(&self, addr: *const AtomicU32, timeout_ms: u64) -> u128 {
-        let timeout_at = time!(ms) as u128 + timeout_ms as u128;
-        self.set_status(ContextStatus::Blocked(BlockedReason::WaitOnFutex {
-            addr,
-            timeout_wake_at: timeout_at,
-        }));
-
-        timeout_at
     }
 }
 
