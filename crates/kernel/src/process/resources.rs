@@ -4,7 +4,11 @@ use crate::{
     drivers::vfs::{CollectionIterDescriptor, FSResult},
     process::{self, vas::TrackedMemoryMapping},
     shared_mem::TrackedShmKey,
-    sockets::{ServerSocketDesc, SocketClientConn, SocketDomain, SocketKind, SocketServerConn},
+    sockets::{
+        SocketDomain, SocketKind,
+        conn::{SocketClientConn, SocketServerConn},
+        desc::ServerSocketDesc,
+    },
     thread,
     utils::locks::Mutex,
     vtty::{ChildVTTY, MotherVTTY},

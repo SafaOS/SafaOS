@@ -18,6 +18,7 @@ use crate::{VirtAddr, arch};
 use alloc::boxed::Box;
 
 pub mod process_list;
+pub mod wait_queue;
 
 use crate::{
     arch::threading::{CPUStatus, restore_cpu_status},
@@ -131,24 +132,24 @@ unsafe fn switch_inner(
             }
         }
 
-        let try_choose_thread = |thread: &ArcThread| {
-            assert!(!thread.is_dead());
+        let try_choose_thread = |choose: &ArcThread| {
+            assert!(!choose.is_dead());
 
-            let process = thread.process();
+            let process = choose.process();
             let process_pid = process.pid();
             let address_space_changed = process_pid != current_pid;
 
-            let mut status = thread.status_mut();
+            let mut status = choose.status_mut();
 
             macro_rules! choose_context {
                 () => {{
                     *status = ContextStatus::Running;
-                    let priority = thread.priority();
+                    let priority = choose.priority();
 
-                    let context = thread.context_unchecked();
+                    let context = choose.context_unchecked();
                     let cpu_status = context.cpu_status();
                     drop(status);
-                    *current_thread_ptr = thread.clone();
+                    *current_thread_ptr = choose.clone();
                     Some((cpu_status, priority, address_space_changed))
                 }};
             }

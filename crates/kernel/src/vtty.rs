@@ -1,14 +1,13 @@
-use core::{
-    ops::Deref,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use core::ops::Deref;
 
 use alloc::sync::Arc;
 use bitflags::bitflags;
 use safa_abi::errors::ErrorStatus;
 
 use crate::{
+    arch::without_interrupts,
     drivers::vfs::SeekOffset,
+    scheduler::wait_queue::WaitQueue,
     syscalls::ffi::SyscallFFI,
     thread::{self},
     utils::{
@@ -34,6 +33,26 @@ const fn ascii_is_ctrl(c: u8) -> bool {
     c <= 0x20 || c == 0x7F
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaitReason {
+    CanonicalRead,
+}
+
+#[derive(Debug)]
+struct Waiter {
+    newlines_count: usize,
+    wait_queue: WaitQueue<2, WaitReason>,
+}
+
+impl Waiter {
+    const fn new() -> Self {
+        Self {
+            newlines_count: 0,
+            wait_queue: WaitQueue::new(),
+        }
+    }
+}
+
 /// A Virtual TTY is similar to PTYs in unix-like systems.
 /// It is one of the methods of IPC through a Terminal-like interface,
 /// The idea is you got a:
@@ -53,8 +72,7 @@ pub struct VirtualTTY {
     stdout: Mutex<PageVec<u8>>,
     stdin: Mutex<PageVec<u8>>,
     flags: RwLock<TTYFlags>,
-    newlines_count: AtomicUsize,
-    should_drop: AtomicBool,
+    waiter: Mutex<Waiter>,
 }
 
 impl VirtualTTY {
@@ -63,8 +81,7 @@ impl VirtualTTY {
             stdout: Mutex::new(PageVec::new()),
             stdin: Mutex::new(PageVec::new()),
             flags: RwLock::new(TTYFlags::CANONICAL.union(TTYFlags::ECHO)),
-            newlines_count: AtomicUsize::new(0),
-            should_drop: AtomicBool::new(false),
+            waiter: Mutex::new(Waiter::new()),
         }
     }
 
@@ -85,6 +102,7 @@ impl VirtualTTY {
         const ERASE: u8 = 0x7f;
 
         let bytes = s.as_bytes();
+        let mut waiter = self.waiter.lock();
         let mut stdin = self.stdin.lock();
         let stdin = &mut *stdin;
 
@@ -111,8 +129,6 @@ impl VirtualTTY {
                 echo(b'\x08');
             }};
         }
-
-        let mut newlines_count = self.newlines_count.load(Ordering::Acquire);
 
         for b in bytes {
             match *b {
@@ -141,12 +157,15 @@ impl VirtualTTY {
                     echo(o);
 
                     if o == b'\n' {
-                        newlines_count += 1;
+                        waiter.newlines_count += 1;
                     }
                 }
             }
         }
-        self.newlines_count.store(newlines_count, Ordering::Release);
+
+        if flags.contains(TTYFlags::CANONICAL) && waiter.newlines_count > 0 {
+            waiter.wait_queue.wake_equals(&WaitReason::CanonicalRead);
+        }
     }
 
     /// Reads `buf`.len() or less bytes from stdout starting from `offset`,
@@ -167,16 +186,29 @@ impl VirtualTTY {
     /// Reads buf.len() bytes from stdin, may block if there is no data to read, data is defined as a single line, an incomplete line doesn't count as data
     pub fn read_stdin(&self, buf: &mut [u8]) -> usize {
         let mut stdin = self.stdin.lock();
-        let canonical = self.flags.read().contains(TTYFlags::CANONICAL);
+        let mut canonical = self
+            .flags
+            .read()
+            .contains(TTYFlags::CANONICAL)
+            .then(|| self.waiter.lock());
 
-        if canonical && self.newlines_count.load(Ordering::Acquire) == 0 {
-            drop(stdin);
-            thread::current().wait_for_empty_socket(&self.newlines_count, &self.should_drop);
-            return self.read_stdin(buf);
+        if let Some(ref mut waiter) = canonical {
+            if waiter.newlines_count == 0 {
+                drop(stdin);
+                without_interrupts(move || {
+                    let mut waiter = canonical.unwrap();
+                    thread::current()
+                        .sleep_in_queue(&mut waiter.wait_queue, WaitReason::CanonicalRead);
+
+                    drop(waiter);
+                    thread::current::yield_now();
+                });
+                return self.read_stdin(buf);
+            }
         }
 
         let stdin_bytes = stdin.as_mut_slice();
-        let max_read = if canonical {
+        let max_read = if canonical.is_some() {
             let first_newline = stdin_bytes.iter().position(|c| *c == b'\n').unwrap();
             first_newline + 1
         } else {
@@ -184,8 +216,10 @@ impl VirtualTTY {
         };
 
         let read_len = buf.len().min(max_read);
-        if canonical && read_len == max_read {
-            self.newlines_count.fetch_sub(1, Ordering::Acquire);
+        if let Some(ref mut waiter) = canonical
+            && read_len == max_read
+        {
+            waiter.newlines_count -= 1;
         }
 
         buf[..read_len].copy_from_slice(&stdin_bytes[..read_len]);
@@ -284,6 +318,7 @@ pub fn alloc_vtty() -> (MotherVTTY, ChildVTTY) {
 #[allow(unused_assignments)]
 #[test_case]
 fn vtty_canonical_mode_test() {
+    use core::sync::atomic::{AtomicBool, Ordering};
     const MSG0: &str = "Hello, world!\n";
     const SPEC_MSG: &str = "hi\x7flol\n";
     const SPEC_MSG_REPLY: &str = "hlol\n";

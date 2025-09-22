@@ -5,16 +5,15 @@ use core::{
     fmt::Debug,
     ops::Deref,
     ptr::NonNull,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use crate::{
     arch::{threading::CPUStatus, without_interrupts},
     debug, eve,
     process::{Pid, Process, resources::Ri},
-    scheduler::Scheduler,
-    syscalls::ffi::ptr_is_kernel,
-    thread, time,
+    scheduler::{Scheduler, wait_queue::WaitQueue},
+    time,
     utils::locks::{Mutex, SpinLock, SpinLockGuard},
 };
 
@@ -65,19 +64,6 @@ pub enum BlockedReason {
         timeout_wake_at: u128,
     },
     BlockedForever,
-    BlockSocketEmpty {
-        conn_dropped: *const AtomicBool,
-        update: *const AtomicUsize,
-    },
-    BlockSocketFull {
-        conn_dropped: *const AtomicBool,
-        update: *const AtomicUsize,
-        required_value: usize,
-    },
-    /// Waits until wakeup is true
-    WaitForSignal {
-        wakeup: *const AtomicBool,
-    },
 }
 
 impl BlockedReason {
@@ -90,21 +76,6 @@ impl BlockedReason {
             Self::WaitingForProcess(process) => !process.is_alive(),
             Self::WaitingForThread(thread) => thread.is_dead(),
             Self::BlockedForever => false,
-            Self::BlockSocketEmpty {
-                conn_dropped,
-                update,
-            } => unsafe {
-                (**conn_dropped).load(Ordering::Acquire) || (**update).load(Ordering::SeqCst) > 0
-            },
-            Self::BlockSocketFull {
-                conn_dropped,
-                update,
-                required_value,
-            } => unsafe {
-                (**conn_dropped).load(Ordering::Acquire)
-                    || (**update).load(Ordering::SeqCst) <= *required_value
-            },
-            Self::WaitForSignal { wakeup } => unsafe { (**wakeup).load(Ordering::Acquire) },
         }
     }
 }
@@ -144,6 +115,7 @@ use safa_abi::process::RawContextPriority;
 /// A shared reference to a Thread, provides extra safety checks and methods over an Arc<Thread>
 #[derive(Debug, Clone)]
 pub struct ArcThread(Arc<Thread>);
+unsafe impl Send for ArcThread {}
 
 impl ArcThread {
     pub fn new(thread: Thread) -> Self {
@@ -177,7 +149,7 @@ impl ArcThread {
             // meaning that we don't have to worry about keeping a dangling next pointer
             // However in case we are the current thread, we will be accessed the next time we yield so we need to keep the next pointer
             // but it is safe to do so because no other thread should be removed or switched to during the removal of self
-            self.block_forever();
+            self.block_not_running_forever();
         }
 
         if is_current {
@@ -290,6 +262,19 @@ impl ArcThread {
                 Process::kill(&process, exit_code, None);
             }
         }
+    }
+
+    /// Puts this thread to sleep in the given wait queue, for the given reason [`reason`],
+    /// doesn't immediately begin sleeping until the next thread yield.
+    ///
+    /// # Safety
+    /// This function is safe but if used incorrectly can lead to deadlocks, please run without interrupts and then drop any local locks after calling this function, before yielding to begin the sleep.
+    pub fn sleep_in_queue<const AVERAGE: usize, Reason>(
+        self,
+        queue: &mut WaitQueue<AVERAGE, Reason>,
+        reason: Reason,
+    ) {
+        queue.push(self, reason);
     }
 }
 
@@ -446,7 +431,7 @@ impl Thread {
     }
 
     /// Blocks the current thread forever, making sure it is not running first
-    pub fn block_forever(&self) {
+    pub fn block_not_running_forever(&self) {
         loop {
             let mut status = self.status.lock();
             if status.is_running() {
@@ -457,6 +442,25 @@ impl Thread {
                 break;
             }
         }
+    }
+
+    /// Blocks the current thread temporarily without a condition to wake up at, doesn't begin sleeping until the next thread yield.
+    /// # Safety
+    /// Safe to call, but may cause a deadlock if not used correctly,
+    /// make sure to disable interrupts before calling this and drop all the local locks after calling this, then thread yield.
+    pub fn temp_block_forever(&self) {
+        without_interrupts(|| {
+            let mut status = self.status.lock();
+            *status = ContextStatus::Blocked(BlockedReason::BlockedForever)
+        });
+    }
+
+    /// Wakes up a blocked thread, whatever the block reason is.
+    pub fn wake_up(&self) {
+        without_interrupts(|| {
+            let mut status = self.status.lock();
+            *status = ContextStatus::Runnable;
+        });
     }
 
     /// Should only be called by the current thread or the scheduler or on a sleeping thread
@@ -494,71 +498,6 @@ impl Thread {
         }));
 
         timeout_at
-    }
-
-    /// Waits for an empty socket to have data to read
-    ///
-    /// # Safety
-    /// very safe to call from the current thread as long as the references are in the higher half, panicks otherwise
-    pub fn wait_for_empty_socket(&self, data_ava_info: &AtomicUsize, conn_dropped: &AtomicBool) {
-        assert!(
-            ptr_is_kernel(data_ava_info),
-            "Reference isn't in the kernel"
-        );
-        assert!(ptr_is_kernel(conn_dropped), "Reference isn't in the kernel");
-
-        without_interrupts(|| {
-            self.set_status(ContextStatus::Blocked(BlockedReason::BlockSocketEmpty {
-                conn_dropped,
-                update: data_ava_info,
-            }));
-
-            thread::current::yield_now();
-        });
-    }
-
-    /// Waits for a full socket to have `required_data_to_write` more data to read
-    ///
-    /// # Safety
-    /// Very safe to call from the current thread as long as the references are in the higher half otherwise panicks, so it is safe.
-    pub fn wait_for_full_socket(
-        &self,
-        data_ava_info: &AtomicUsize,
-        conn_dropped: &AtomicBool,
-        max_data_to_write: usize,
-        required_data_to_write: usize,
-    ) {
-        assert!(
-            ptr_is_kernel(data_ava_info),
-            "Reference isn't in the kernelspace"
-        );
-        assert!(
-            ptr_is_kernel(conn_dropped),
-            "Reference isn't in the kernelspace"
-        );
-
-        without_interrupts(|| {
-            self.set_status(ContextStatus::Blocked(BlockedReason::BlockSocketFull {
-                conn_dropped,
-                update: data_ava_info,
-                required_value: max_data_to_write - required_data_to_write,
-            }));
-            thread::current::yield_now();
-        });
-    }
-    /// Waits for `wakeup` to be true
-    ///
-    /// # Safety
-    /// Very safe to call from the current thread as long as the references are in the higher half, otherwise panicks so safe.
-    pub fn wait_for_wake_signal(&self, wakeup: &AtomicBool) {
-        assert!(ptr_is_kernel(wakeup), "Reference isn't in the kernel space");
-
-        without_interrupts(|| {
-            self.set_status(ContextStatus::Blocked(BlockedReason::WaitForSignal {
-                wakeup,
-            }));
-            thread::current::yield_now();
-        })
     }
 }
 

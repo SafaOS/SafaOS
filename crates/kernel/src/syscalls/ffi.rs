@@ -205,9 +205,3 @@ pub fn ptr_is_allowed<T: ?Sized>(ptr: *const T) -> bool {
 pub fn ptr_is_valid<T>(ptr: *const T) -> bool {
     !ptr.is_null() && ptr.is_aligned() && ptr_is_allowed(ptr)
 }
-
-/// Returns whether or not the pointer references a kernel object
-#[inline(always)]
-pub fn ptr_is_kernel<T>(ptr: *const T) -> bool {
-    (ptr as usize) >= 0xffff000000000000
-}
