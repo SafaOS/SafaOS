@@ -16,7 +16,7 @@ use crate::{
         self,
         wait_queue::{WaitQueue, WaitQueueWithTimeout},
     },
-    thread::{self, ArcThread, Tid},
+    thread::{self, ArcThread},
     utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
@@ -28,12 +28,10 @@ use safa_abi::{
     process::{AbiStructures, ProcessStdio},
 };
 use serde::Serialize;
-use thread::{ContextPriority, Thread};
+use thread::ContextPriority;
 
 use crate::{
-    VirtAddr,
-    arch::threading::CPUStatus,
-    debug,
+    VirtAddr, debug,
     memory::paging::{PAGE_SIZE, PhysPageTable},
     utils::{
         elf::{Elf, ElfError},
