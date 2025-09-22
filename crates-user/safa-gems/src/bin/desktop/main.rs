@@ -17,6 +17,8 @@ mod main_dock;
 mod task_button;
 
 const WALLPAPERS_DIR: &str = "sys:/usr/pictures/wallpapers";
+/// Slow without SMP, prints some events
+const REALLY_VERBOSE: bool = false;
 
 fn get_wallpapers() -> Vec<PathBuf> {
     let Ok(dir) = std::fs::read_dir(WALLPAPERS_DIR) else {
@@ -108,7 +110,11 @@ fn main() {
                 .get_element_as_mut(main_dock_id)
                 .unwrap_unchecked()
         };
-        println!("taskbar events: {events:?}");
+
+        if REALLY_VERBOSE {
+            println!("taskbar events: {events:?}");
+        }
+
         for win_even in (&*events).iter().filter(|win_eve| win_eve.win() == win_id) {
             let event = win_even.event();
             match event {

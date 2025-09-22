@@ -4,7 +4,7 @@ use std::{
     io::{Read, Write},
     os::safaos::io::IoUtils,
     process::Command,
-    str,
+    str, thread,
     time::Instant,
 };
 
@@ -203,5 +203,7 @@ fn main() {
                 }
             }
         }
+
+        thread::yield_now();
     }
 }
