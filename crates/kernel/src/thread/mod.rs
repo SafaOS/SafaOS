@@ -56,8 +56,6 @@ impl From<RawContextPriority> for ContextPriority {
 pub enum BlockedReason {
     /// The thread is sleeping until [`.0`] ms of boot time is reached
     SleepingUntil(u64),
-    WaitingForProcess(Arc<Process>),
-    WaitingForThread(ArcThread),
     BlockedForever,
 }
 
@@ -65,8 +63,6 @@ impl BlockedReason {
     pub fn block_lifted(&self) -> bool {
         match self {
             Self::SleepingUntil(n) => time!(ms) >= *n,
-            Self::WaitingForProcess(process) => !process.is_alive(),
-            Self::WaitingForThread(thread) => thread.is_dead(),
             Self::BlockedForever => false,
         }
     }
@@ -229,18 +225,7 @@ impl ArcThread {
     /// The caller must handle the case that this is the current thread carefully, interrupts must be disabled and all caller resources shall be dropped.
     pub unsafe fn kill(&self, exit_code: usize) {
         let process = &self.parent_process;
-        let process_dead = process
-            .context_count
-            .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
-            <= 1;
-
-        unsafe {
-            self.soft_kill(process_dead);
-
-            if process_dead {
-                Process::kill(&process, exit_code, None);
-            }
-        }
+        unsafe { Process::on_thread_exit(process, self, exit_code) };
     }
 
     /// Puts this thread to sleep in the given wait queue, for the given reason [`reason`],
@@ -454,20 +439,6 @@ impl Thread {
             unsafe { NonZero::new_unchecked(time!(ms) as u64) }.saturating_add(ms.get());
         *status_mut = ContextStatus::Blocked(BlockedReason::SleepingUntil(timeout_at.get()));
         timeout_at
-    }
-
-    /// Should only be called by the current thread
-    pub fn wait_for_process(&self, process: Arc<Process>) {
-        self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForProcess(
-            process,
-        )));
-    }
-
-    /// Should only be called by the current thread
-    pub fn wait_for_thread(&self, thread: ArcThread) {
-        self.set_status(ContextStatus::Blocked(BlockedReason::WaitingForThread(
-            thread,
-        )));
     }
 }
 

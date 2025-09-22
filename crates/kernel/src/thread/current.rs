@@ -69,10 +69,21 @@ pub fn wait_for_process(pid: Pid) -> Option<usize> {
     let found_proc =
         scheduler::process_list::find(|process| process.pid() == pid, |process| process.clone())?;
 
-    let this_thread = thread::current();
-    this_thread.wait_for_process(found_proc.clone());
+    if !found_proc.is_alive() {
+        let Some(process_info) = scheduler::process_list::remove(|p| p.pid() == pid) else {
+            warn!("process with `{pid}` was already cleaned up by another wait operation");
+            return None;
+        };
 
-    self::yield_now();
+        return process_info.exit_code;
+    }
+
+    let this_thread = thread::current();
+    without_interrupts(|| {
+        found_proc.sleep_thread(this_thread, WaitOnProcReason::WaitingOnSelf, None);
+        self::yield_now();
+    });
+
     assert!(
         !found_proc.is_alive(),
         "Thread didn't wait for process to exit"
@@ -100,12 +111,17 @@ pub fn wait_for_thread(tid: Tid) -> Option<()> {
         .threads
         .lock()
         .iter()
-        .find(|thread| thread.tid() == tid)
+        .find(|thread| thread.tid() == tid && !thread.is_dead())
         .cloned()?;
 
-    this_thread.wait_for_thread(thread.clone());
-
-    self::yield_now();
+    without_interrupts(|| {
+        this_process.sleep_thread(
+            this_thread.clone(),
+            WaitOnProcReason::WaitingOnChild(thread.clone()),
+            None,
+        );
+        self::yield_now();
+    });
     assert!(thread.is_dead(), "Thread didn't wait for thread to exit");
 
     Some(())

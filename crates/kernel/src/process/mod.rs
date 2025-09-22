@@ -64,9 +64,10 @@ const DEFAULT_STACK_SIZE: usize = 8 * PAGE_SIZE;
 const GUARD_PAGES_COUNT: usize = 2;
 
 /// Reason for waiting inside a process's wait queue.
+#[derive(Debug, Clone)]
 pub enum WaitOnProcReason {
     WaitingOnSelf,
-    WaitingOnChild(Tid),
+    WaitingOnChild(ArcThread),
     WaitingOnFutex(*const AtomicU32),
 }
 
@@ -384,6 +385,35 @@ impl Process {
         Self::allocate_thread_memory_inner(&mut *self.vasa(), custom_stack_size, self.master_tls, 0)
     }
 
+    /// Called when a thread exits.
+    /// # Safety
+    /// This function is unsafe because it can be called from any thread, and it can cause the process to exit, also it requires interrupts to be disabled if from the current process.
+    pub unsafe fn on_thread_exit(
+        this: &Arc<Process>,
+        thread: &ArcThread,
+        exit_code: usize,
+    ) -> bool {
+        let tid = thread.tid();
+
+        let process_dead = this
+            .context_count
+            .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
+            <= 1;
+
+        unsafe {
+            thread.soft_kill(process_dead);
+            this.wait_queue.lock().wake_on_condition(|r| match r {
+                WaitOnProcReason::WaitingOnChild(child) => child.tid() == tid,
+                _ => false,
+            });
+        }
+        if process_dead {
+            unsafe { Process::kill(this, exit_code, None) };
+        }
+
+        process_dead
+    }
+
     const fn new(
         name: Name,
         pid: Pid,
@@ -654,6 +684,8 @@ impl Process {
         }
 
         this.is_alive.store(false, Ordering::Release);
+        this.wait_queue.lock().wake_all();
+
         debug!(
             Process,
             "Process {} ({}) TERMINATED with code {} by {}",
@@ -693,7 +725,14 @@ impl Process {
         reason: WaitOnProcReason,
         duration: Option<NonZero<u64>>,
     ) -> Option<NonZero<u64>> {
-        self.wait_queue.lock().push(thread, reason, duration)
+        let mut queue = self.wait_queue.lock();
+        if let WaitOnProcReason::WaitingOnChild(ref child) = reason {
+            if child.is_dead() {
+                return None;
+            }
+        }
+
+        queue.push(thread, reason, duration)
     }
 
     fn at(&self) -> VirtAddr {
