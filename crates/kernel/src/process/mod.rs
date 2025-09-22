@@ -9,7 +9,7 @@ use crate::{
     eve,
     memory::{AlignTo, AlignToPage, copy_to_userspace, paging::EntryFlags, userspace_copy_within},
     process::{
-        resources::ResourceData,
+        threads::ThreadsManager,
         vas::{ProcVASA, TrackedMemoryMapping},
     },
     scheduler::{
@@ -21,7 +21,7 @@ use crate::{
 };
 
 use crate::{memory::paging::MapToError, utils::types::Name};
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc};
 use cfg_if::cfg_if;
 use safa_abi::{
     ffi::{slice::Slice, str::Str},
@@ -47,6 +47,7 @@ use resources::ResourceManager;
 pub mod current;
 pub mod resources;
 pub mod spawn;
+pub mod threads;
 pub mod vas;
 
 /// Process ID, a unique identifier for a process (process)
@@ -81,20 +82,15 @@ pub struct Process {
     resources: RwLock<ResourceManager>,
     cwd: RwLock<Box<PathBuf>>,
     /// The Virtual address space allocator
-    vasa: Mutex<ProcVASA>,
+    pub(super) vasa: Mutex<ProcVASA>,
 
     is_alive: AtomicBool,
     /// The exit information of the Process if it has exited
     exit_info: RwLock<Option<ExitInfo>>,
 
-    userspace_process: bool,
-
     /// The priortiy of the root thread, that other threads will inherit unless otherwise specified
     default_priority: ContextPriority,
-    /// Information about the master TLS if it exits
-    master_tls: Option<(VirtAddr, usize, usize, usize)>,
-    next_tid: AtomicU32,
-    pub(super) threads: Mutex<Vec<ArcThread>>,
+    threads_manager: Mutex<ThreadsManager>,
     wait_queue: Mutex<WaitQueueWithTimeout<3, WaitOnProcReason>>,
     pub context_count: AtomicU32,
 }
@@ -123,7 +119,10 @@ impl Process {
     }
 
     /// Cleans up the Resources and the memory space of self
-    pub unsafe fn cleanup(&self) {
+    /// # Safety
+    ///
+    /// All threads must first be removed, switched from and cleaned-up.
+    unsafe fn cleanup(&self) {
         unsafe {
             assert!(!self.vasa.is_locked());
             assert!(!self.resources.is_locked());
@@ -249,7 +248,7 @@ impl Process {
     /// Allocates the thread stack, thread local area, and the kernel thread stack, the kernel thread stack will have `extra_stack_bytes` extra bytes
     /// # Returns
     /// (the kernel thread stack and thread local copy tracker, the thread stack end, the TP, the kernel thread stack tracker)
-    fn allocate_thread_memory_inner(
+    pub(super) fn allocate_thread_memory_inner(
         vasa: &mut ProcVASA,
         custom_stack_size: Option<NonZero<usize>>,
         master_tls: Option<(VirtAddr, usize, usize, usize)>,
@@ -369,22 +368,6 @@ impl Process {
         ))
     }
 
-    fn allocate_thread_memory(
-        &self,
-        custom_stack_size: Option<NonZero<usize>>,
-    ) -> Result<
-        (
-            TrackedMemoryMapping,
-            VirtAddr,
-            Option<VirtAddr>,
-            TrackedMemoryMapping,
-            VirtAddr,
-        ),
-        MapToError,
-    > {
-        Self::allocate_thread_memory_inner(&mut *self.vasa(), custom_stack_size, self.master_tls, 0)
-    }
-
     /// Called when a thread exits.
     /// # Safety
     /// This function is unsafe because it can be called from any thread, and it can cause the process to exit, also it requires interrupts to be disabled if from the current process.
@@ -422,8 +405,6 @@ impl Process {
         cwd: Box<PathBuf>,
         vasa: ProcVASA,
         resources: ResourceManager,
-        master_tls: Option<(VirtAddr, usize, usize, usize)>,
-        userspace_process: bool,
     ) -> Self {
         Self {
             name,
@@ -431,17 +412,14 @@ impl Process {
 
             ppid: AtomicU32::new(ppid),
             is_alive: AtomicBool::new(true),
-            threads: Mutex::new(Vec::new()),
+            threads_manager: Mutex::new(ThreadsManager::new_uninit()),
             wait_queue: Mutex::new(WaitQueue::new()),
-            next_tid: AtomicU32::new(1),
-            master_tls,
             context_count: AtomicU32::new(0),
             default_priority,
             exit_info: RwLock::new(None),
             vasa: Mutex::new(vasa),
             resources: RwLock::new(resources),
             cwd: RwLock::new(cwd),
-            userspace_process,
         }
     }
 
@@ -464,57 +442,11 @@ impl Process {
         with_resources: Option<ResourceManager>,
     ) -> Result<(Arc<Self>, ArcThread), MapToError> {
         let data_break = data_break.to_next_page();
-        let mut vasa = ProcVASA::new(root_page_table, data_break);
-        let mut resources = with_resources.unwrap_or(ResourceManager::new());
+        let vasa = ProcVASA::new(root_page_table, data_break);
+        let resources = with_resources.unwrap_or(ResourceManager::new());
         let abi_structures = AbiStructures::new(stdio, pid, crate::arch::available_cpus());
 
-        let (
-            thread_mem_tracker,
-            stack_end,
-            tp_addr,
-            envv_pointers_start,
-            argv_pointers_start,
-            abi_structers_start,
-            ke_stack_tracker,
-            ke_stack_end,
-        ) = Self::allocate_root_thread_memory_inner(
-            &mut vasa,
-            custom_stack_size,
-            master_tls,
-            args,
-            env,
-            abi_structures,
-        )?;
-
-        assert!(stack_end.is_multiple_of(16));
-        assert!(ke_stack_end.is_multiple_of(16));
-
-        let entry_args = [
-            args.len(),
-            argv_pointers_start.into_raw(),
-            env.len(),
-            envv_pointers_start.into_raw(),
-            abi_structers_start.into_raw(),
-        ];
-
-        let context = unsafe {
-            let root_page_table = &mut vasa.page_table;
-
-            CPUStatus::create_root(
-                root_page_table,
-                entry_point,
-                entry_args,
-                tp_addr.unwrap_or(VirtAddr::null()),
-                stack_end,
-                ke_stack_end,
-                userspace_process,
-            )?
-        };
-
-        resources.add_global_resource(ResourceData::TrackedMapping(thread_mem_tracker));
-        resources.add_global_resource(ResourceData::TrackedMapping(ke_stack_tracker));
-
-        let process = Arc::new(Self::new(
+        let mut process = Arc::new(Self::new(
             name,
             pid,
             ppid,
@@ -522,77 +454,23 @@ impl Process {
             cwd,
             vasa,
             resources,
-            master_tls,
-            userspace_process,
         ));
 
-        let root_thread = ArcThread::new(Self::create_thread(&process, 0, context, None));
-        process.add_thread(root_thread.clone());
-
-        Ok((process, root_thread))
-    }
-
-    fn create_thread(
-        process: &Arc<Process>,
-        tid: Tid,
-        cpu_status: CPUStatus,
-        priority: Option<ContextPriority>,
-    ) -> Thread {
-        Thread::new(
-            tid,
-            cpu_status,
-            process,
-            priority.unwrap_or(process.default_priority),
-        )
-    }
-
-    fn add_thread(&self, thread: ArcThread) {
-        self.threads.lock().push(thread);
-        self.context_count.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// Creates a new thread from a CPU status giving it a `cid` and everything
-    /// adds to the process's context count so it tracks this thread
-    pub fn new_thread(
-        process: &Arc<Process>,
-        entry_point: VirtAddr,
-        argument_ptr: VirtAddr,
-        priority: Option<ContextPriority>,
-        custom_stack_size: Option<NonZero<usize>>,
-    ) -> Result<(ArcThread, Tid), MapToError> {
-        let context_id = process.next_tid.fetch_add(1, Ordering::SeqCst);
-
-        let (th_mem_tracker, stack_end, tp_addr, ke_stack_tracker, ke_stack_end) =
-            process.allocate_thread_memory(custom_stack_size)?;
-
-        let mut vasa = process.vasa();
-        let page_table = &mut vasa.page_table;
-
-        let cpu_status = unsafe {
-            CPUStatus::create_child(
-                tp_addr.unwrap_or(VirtAddr::null()),
-                stack_end,
-                ke_stack_end,
-                page_table,
+        unsafe {
+            let (manager, thread) = ThreadsManager::new_with_root_thread(
+                &mut process,
                 entry_point,
-                context_id,
-                argument_ptr.into_ptr::<()>(),
-                process.userspace_process,
-            )?
-        };
+                custom_stack_size,
+                args,
+                env,
+                abi_structures,
+                userspace_process,
+                master_tls,
+            )?;
 
-        let thread = Self::create_thread(process, context_id, cpu_status, priority);
-        let thread = ArcThread::new(thread);
-
-        let mut resources = process.resources_mut();
-        let th_mem_ri = resources.add_local_resource(ResourceData::TrackedMapping(th_mem_tracker));
-        let ke_stack_ri =
-            resources.add_local_resource(ResourceData::TrackedMapping(ke_stack_tracker));
-
-        thread.take_resources(&[th_mem_ri, ke_stack_ri]);
-        process.add_thread(thread.clone());
-
-        Ok((thread, context_id))
+            *process.threads_manager.get() = manager;
+            Ok((process, thread))
+        }
     }
 
     /// Creates a new process from an elf
@@ -658,6 +536,30 @@ impl Process {
         self.vasa.lock()
     }
 
+    pub fn threads_manager<'s>(&'s self) -> MutexGuard<'s, ThreadsManager> {
+        self.threads_manager.lock()
+    }
+
+    fn can_cleanup_proc(&self) -> bool {
+        self.threads_manager
+            .try_lock()
+            .is_some_and(|guard| guard.is_empty())
+    }
+
+    /// Attempts to cleanup process if all it's thread were already removed, the memory space can be deallocated as a whole.
+    /// returns true if the process was cleaned up, false otherwise
+    pub fn try_cleanup(&self) -> bool {
+        if self.can_cleanup_proc() {
+            unsafe {
+                self.cleanup();
+            }
+
+            true
+        } else {
+            false
+        }
+    }
+
     // TODO: Implement ArcProcess
     /// kills the process
     /// if `killed_by` is `None` the process will be killed by itself
@@ -670,19 +572,14 @@ impl Process {
         // !!!!! Cleanup must be done before this thread is removed !!!!!
         eve::schedule_proc_cleanup(this.clone());
 
-        let threads = this.threads.lock();
+        let mut threads = this.threads_manager.lock();
         // Set state to dead
         *this.exit_info.write() = Some(ExitInfo {
             exit_code,
             killed_by,
         });
 
-        for thread in &*threads {
-            if !thread.is_dead() {
-                unsafe { thread.soft_kill(true) };
-            }
-        }
-
+        threads.kill_all();
         this.is_alive.store(false, Ordering::Release);
         this.wait_queue.lock().wake_all();
 

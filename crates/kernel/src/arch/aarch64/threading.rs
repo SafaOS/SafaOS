@@ -242,7 +242,7 @@ unsafe fn create_cpu_local(
     process: &Arc<Process>,
     idle_function: fn() -> !,
 ) -> Result<(&'static Scheduler, NonNull<CPUStatus>), MapToError> {
-    let (thread, _) = Process::new_thread(
+    let (thread, _) = process.threads_manager().create_thread(
         process,
         VirtAddr::from(idle_function as usize),
         VirtAddr::null(),

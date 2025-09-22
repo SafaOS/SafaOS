@@ -107,24 +107,29 @@ pub fn wait_for_process(pid: Pid) -> Option<usize> {
 pub fn wait_for_thread(tid: Tid) -> Option<()> {
     let this_thread = thread::current();
     let this_process = this_thread.process();
-    let thread = this_process
-        .threads
-        .lock()
-        .iter()
-        .find(|thread| thread.tid() == tid && !thread.is_dead())
-        .cloned()?;
+    let try_remove = this_process
+        .threads_manager()
+        .remove_tid(tid)
+        .map_err(|e| e.clone());
 
-    without_interrupts(|| {
-        this_process.sleep_thread(
-            this_thread.clone(),
-            WaitOnProcReason::WaitingOnChild(thread.clone()),
-            None,
-        );
-        self::yield_now();
-    });
-    assert!(thread.is_dead(), "Thread didn't wait for thread to exit");
+    // FIXME: This is shit, it doesn't always remove thread IDs, we can store thread IDs better anyways using a wrapping counter.
+    match try_remove {
+        Ok(false) => None,
+        Err(thread) if !thread.is_dead() => {
+            without_interrupts(|| {
+                this_process.sleep_thread(
+                    this_thread.clone(),
+                    WaitOnProcReason::WaitingOnChild(thread.clone()),
+                    None,
+                );
+                self::yield_now();
+            });
+            assert!(thread.is_dead(), "Thread didn't wait for thread to exit");
 
-    Some(())
+            Some(())
+        }
+        Ok(true) | Err(_) => Some(()),
+    }
 }
 
 /// performs a WAIT for a futex to be unlocked

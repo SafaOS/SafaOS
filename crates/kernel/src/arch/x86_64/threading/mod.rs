@@ -288,7 +288,7 @@ unsafe fn create_cpu_local(
 ) -> Result<(&'static ArchCPULocalStorage, NonNull<CPUStatus>), MapToError> {
     assert!(!tss_ptr.is_null());
 
-    let (thread, _) = Process::new_thread(
+    let (thread, _) = process.threads_manager().create_thread(
         process,
         VirtAddr::from(idle_function as usize),
         VirtAddr::null(),

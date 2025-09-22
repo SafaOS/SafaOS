@@ -157,19 +157,11 @@ fn cleanup_thread(tid: Tid, _arg: &()) -> ! {
                             return true;
                         }
 
-                        let mut threads = proc.threads.lock();
-                        let can_clean = threads.iter().all(|t| t.is_removed());
-
-                        if can_clean {
-                            threads.clear();
-                            drop(threads);
-                            unsafe {
-                                proc.cleanup();
-                            }
-
+                        let success = proc.try_cleanup();
+                        if success {
                             SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
                         }
-                        !can_clean
+                        !success
                     }
                 }
             });

@@ -187,6 +187,12 @@ macro_rules! impl_common {
             pub fn get_mut(&mut self) -> &mut T {
                 self.0.get_mut()
             }
+
+            /// Get a raw pointer to the inner data.
+            #[allow(unused)]
+            pub fn get(&self) -> *mut T {
+                self.0.data_ptr()
+            }
         }
     };
 

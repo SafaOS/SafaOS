@@ -273,7 +273,6 @@ pub struct Thread {
 
     is_dying: AtomicBool,
     is_dead: AtomicBool,
-    is_removed: AtomicBool,
     parent_process: Arc<Process>,
     owned_resources: Mutex<Vec<Ri>>,
 
@@ -308,7 +307,6 @@ impl Thread {
             context: UnsafeCell::new(Some(Context::new(cpu_status))),
             is_dying: AtomicBool::new(false),
             is_dead: AtomicBool::new(false),
-            is_removed: AtomicBool::new(false),
             parent_process: parent_process.clone(),
             scheduler: UnsafeCell::new(None),
             next: UnsafeCell::new(None),
@@ -361,10 +359,6 @@ impl Thread {
         self.is_dead.load(core::sync::atomic::Ordering::SeqCst)
     }
 
-    pub fn is_removed(&self) -> bool {
-        self.is_removed.load(core::sync::atomic::Ordering::Acquire)
-    }
-
     /// Cleans up the thread's Context
     /// will finish cleanup when the context is dropped
     ///
@@ -379,15 +373,14 @@ impl Thread {
 
         {
             let mut resource_manager = self.parent_process.resources_mut();
-            let owned_resources = self.owned_resources.lock();
+            let owned_resources = self.owned_resources.try_lock().expect("Thread is active");
 
             for resource in &*owned_resources {
                 resource_manager.remove_resource(*resource);
             }
         }
 
-        self.is_removed
-            .store(true, core::sync::atomic::Ordering::Release);
+        self.parent_process.threads_manager().remove(self.tid());
     }
 
     pub fn status_mut<'a>(&'a self) -> SpinLockGuard<'a, ContextStatus> {

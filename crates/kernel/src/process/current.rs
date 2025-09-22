@@ -32,7 +32,7 @@ pub fn thread_spawn(
     custom_stack_size: Option<NonZero<usize>>,
 ) -> Result<Tid, MapToError> {
     let this = process::current();
-    let (thread, cid) = Process::new_thread(
+    let (thread, cid) = this.threads_manager().create_thread(
         &this,
         entry_point,
         argument_ptr,
