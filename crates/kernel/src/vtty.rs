@@ -7,6 +7,7 @@ use safa_abi::errors::ErrorStatus;
 use crate::{
     arch::without_interrupts,
     drivers::vfs::SeekOffset,
+    process::resources::{self, Resource},
     scheduler::wait_queue::WaitQueue,
     syscalls::ffi::SyscallFFI,
     thread::{self},
@@ -313,6 +314,61 @@ impl Deref for ChildVTTY {
 pub fn alloc_vtty() -> (MotherVTTY, ChildVTTY) {
     let tty = VirtualTTY::new();
     (MotherVTTY { tty: tty.clone() }, ChildVTTY { tty })
+}
+
+impl Resource for MotherVTTY {
+    fn read(&self, off: SeekOffset, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
+        self.read(off, buf).map_err(|()| ErrorStatus::InvalidOffset)
+    }
+    fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
+        _ = off;
+        let buf_str = str::from_utf8(buf)?;
+        Ok(self.write(buf_str))
+    }
+    fn try_clone_into_node(
+        &self,
+        is_global: bool,
+    ) -> Result<crate::process::resources::ResourceNodeRef, ErrorStatus> {
+        resources::generic_clone_impl(self, is_global)
+    }
+    fn sync(&self) -> Result<(), ErrorStatus> {
+        // TODO: Implement Sync and buffering
+        Ok(())
+    }
+    fn address_space_generic(&self) -> bool {
+        true
+    }
+    fn send_command(&self, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
+        self.process_command(cmd, arg)
+    }
+}
+
+impl Resource for ChildVTTY {
+    fn read(&self, off: SeekOffset, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
+        _ = off;
+        Ok(self.read(buf))
+    }
+    fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
+        _ = off;
+        let buf_str = str::from_utf8(buf)?;
+        Ok(self.write(buf_str))
+    }
+    fn try_clone_into_node(
+        &self,
+        is_global: bool,
+    ) -> Result<crate::process::resources::ResourceNodeRef, ErrorStatus> {
+        resources::generic_clone_impl(self, is_global)
+    }
+    fn sync(&self) -> Result<(), ErrorStatus> {
+        // TODO: Implement Sync and buffering
+        Ok(())
+    }
+    fn address_space_generic(&self) -> bool {
+        true
+    }
+    fn send_command(&self, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
+        self.process_command(cmd, arg)
+    }
 }
 
 #[allow(unused_assignments)]

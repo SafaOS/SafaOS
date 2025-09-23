@@ -4,8 +4,10 @@ use alloc::sync::Arc;
 
 use crate::{
     arch::without_interrupts,
+    process::resources::{Resource, generic_clone_impl},
     sockets::{
-        ListenRequest, SOCKET_ABSTRACT_BINDINGS, SockID, Socket, SocketError,
+        ListenRequest, SOCKET_ABSTRACT_BINDINGS, SockID, Socket, SocketDomain, SocketError,
+        SocketKind,
         conn::{SocketClientConn, SocketServerConn},
         remove_socket,
     },
@@ -87,6 +89,12 @@ impl ServerSocketDesc {
     }
 }
 
+impl Resource for ServerSocketDesc {
+    fn address_space_generic(&self) -> bool {
+        false
+    }
+}
+
 /// A client's socket reference descriptor
 /// Multiple clients may exists but only one server can exist
 pub struct CliSocketDesc {
@@ -124,5 +132,25 @@ impl CliSocketDesc {
         })?;
 
         request.take().ok_or(SocketError::ConnectionRefused)
+    }
+}
+
+/// A socket descriptor
+#[derive(Debug, Clone, Copy)]
+pub struct SocketDesc {
+    pub domain: SocketDomain,
+    pub kind: SocketKind,
+    pub can_block: bool,
+}
+
+impl Resource for SocketDesc {
+    fn try_clone_into_node(
+        &self,
+        is_global: bool,
+    ) -> Result<crate::process::resources::ResourceNodeRef, safa_abi::errors::ErrorStatus> {
+        generic_clone_impl(self, is_global)
+    }
+    fn address_space_generic(&self) -> bool {
+        true
     }
 }

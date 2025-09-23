@@ -8,9 +8,10 @@ use crate::{
         frame_allocator::{self},
         paging::PAGE_SIZE,
     },
-    process::{self, vas::MemMappedInterface},
+    process::{self, resources::Resource, vas::MemMappedInterface},
     time,
     utils::{
+        locks::Mutex,
         path::PathParts,
         ustar::{self, TarArchiveIter},
     },
@@ -74,7 +75,6 @@ pub enum FSError {
     MissingPermission,
     OperationNotSupported,
     InvalidResource,
-    UnsupportedResource,
     AlreadyExists,
     InvalidCmd,
     InvalidArg,
@@ -108,7 +108,6 @@ impl IntoErr for FSError {
             Self::InvalidArg => ErrorStatus::InvalidArgument,
             Self::InvalidName | Self::PathTooLong => ErrorStatus::StrTooLong,
             Self::InvalidResource => ErrorStatus::UnknownResource,
-            Self::UnsupportedResource => ErrorStatus::UnsupportedResource,
             Self::MMapError => ErrorStatus::MMapError,
             Self::OutOfMemory => ErrorStatus::OutOfMemory,
             Self::InvalidSize => ErrorStatus::InvalidSize,
@@ -196,6 +195,46 @@ impl FSObjectDescriptor {
     }
 }
 
+impl Resource for FSObjectDescriptor {
+    fn read(&self, off: SeekOffset, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
+        let am = self.read(off, buf)?;
+        Ok(am)
+    }
+    fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
+        let am = self.write(off, buf)?;
+        Ok(am)
+    }
+    fn sync(&self) -> Result<(), ErrorStatus> {
+        self.sync()?;
+        Ok(())
+    }
+    fn truncate(&self, len: usize) -> Result<(), ErrorStatus> {
+        self.truncate(len)?;
+        Ok(())
+    }
+    fn send_command(&self, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
+        self.send_command(cmd, arg)?;
+        Ok(())
+    }
+    fn open_mmap_interface(
+        &self,
+        offset: SeekOffset,
+        page_count: usize,
+    ) -> Result<Box<dyn MemMappedInterface>, ErrorStatus> {
+        let result = self.open_mmap_interface(offset, page_count)?;
+        Ok(result)
+    }
+    fn try_clone_into_node(
+        &self,
+        is_global: bool,
+    ) -> Result<process::resources::ResourceNodeRef, ErrorStatus> {
+        process::resources::generic_clone_impl(self, is_global)
+    }
+    fn address_space_generic(&self) -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone)]
 /// Represents a unique identifier for a VFS object, that is a combination of [`FSObjectID`] and the file system itself.
 struct VFSObjectID {
@@ -272,6 +311,24 @@ impl CollectionIterDescriptor {
         let index = self.index;
         self.index += 1;
         self.entries.get(index).cloned()
+    }
+}
+
+impl Resource for Mutex<CollectionIterDescriptor> {
+    fn try_clone_into_node(
+        &self,
+        is_global: bool,
+    ) -> Result<process::resources::ResourceNodeRef, ErrorStatus> {
+        let guard = self.lock();
+        let descriptor = guard.clone();
+        Ok(process::resources::ResourceNode::create(
+            Mutex::new(descriptor),
+            is_global,
+        ))
+    }
+
+    fn address_space_generic(&self) -> bool {
+        true
     }
 }
 

@@ -10,7 +10,7 @@ use crate::{
     VirtAddr,
     arch::threading::CPUStatus,
     memory::paging::MapToError,
-    process::{Process, resources::ResourceData},
+    process::Process,
     thread::{ArcThread, ContextPriority, Thread, Tid},
 };
 
@@ -113,8 +113,8 @@ impl ThreadsManager {
             )?
         };
 
-        resources.add_global_resource(ResourceData::TrackedMapping(thread_mem_tracker));
-        resources.add_global_resource(ResourceData::TrackedMapping(ke_stack_tracker));
+        resources.add_global_resource(thread_mem_tracker);
+        resources.add_global_resource(ke_stack_tracker);
 
         let next_tid = this.new_tid();
         assert_eq!(next_tid, 0);
@@ -181,9 +181,8 @@ impl ThreadsManager {
         let thread = ArcThread::new(thread);
 
         let mut resources = parent.resources_mut();
-        let th_mem_ri = resources.add_local_resource(ResourceData::TrackedMapping(th_mem_tracker));
-        let ke_stack_ri =
-            resources.add_local_resource(ResourceData::TrackedMapping(ke_stack_tracker));
+        let th_mem_ri = resources.add_local_resource(th_mem_tracker);
+        let ke_stack_ri = resources.add_local_resource(ke_stack_tracker);
 
         thread.take_resources(&[th_mem_ri, ke_stack_ri]);
 

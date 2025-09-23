@@ -1,135 +1,132 @@
-use core::{fmt::Debug, sync::atomic::AtomicBool};
+use core::{
+    any::Any,
+    fmt::Debug,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
-    drivers::vfs::{CollectionIterDescriptor, FSResult},
-    process::{self, vas::TrackedMemoryMapping},
-    shared_mem::TrackedShmKey,
-    sockets::{
-        SocketDomain, SocketKind,
-        conn::{SocketClientConn, SocketServerConn},
-        desc::ServerSocketDesc,
-    },
+    drivers::vfs::SeekOffset,
+    process::{self, vas::MemMappedInterface},
     thread,
-    utils::locks::Mutex,
-    vtty::{ChildVTTY, MotherVTTY},
 };
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
 use hashbrown::HashMap;
 use safa_abi::errors::ErrorStatus;
-
-use crate::drivers::vfs::FSObjectDescriptor;
 
 /// A resource ID
 pub type Ri = usize;
 
-pub enum ResourceData {
-    File(FSObjectDescriptor),
-    DirIter(Mutex<CollectionIterDescriptor>),
-    TrackedMapping(TrackedMemoryMapping),
-    SocketDesc {
-        domain: SocketDomain,
-        kind: SocketKind,
-        can_block: bool,
-    },
-    ServerSocket(ServerSocketDesc),
-    ServerSocketConn(SocketServerConn),
-    ClientSocketConn(SocketClientConn),
-    ShmDesc(TrackedShmKey),
-    MotherVTTY(MotherVTTY),
-    ChildVTTY(ChildVTTY),
-}
-
-impl ResourceData {
-    pub fn try_clone(&self) -> Result<Self, ()> {
-        match self {
-            Self::ChildVTTY(v) => Ok(Self::ChildVTTY(v.clone())),
-            Self::MotherVTTY(v) => Ok(Self::MotherVTTY(v.clone())),
-            Self::File(file) => Ok(Self::File(file.clone())),
-            Self::DirIter(coll) => Ok(Self::DirIter(Mutex::new(coll.lock().clone()))),
-            Self::SocketDesc {
-                domain,
-                kind,
-                can_block,
-            } => Ok(Self::SocketDesc {
-                domain: *domain,
-                kind: *kind,
-                can_block: *can_block,
-            }),
-            Self::ShmDesc(key) => Ok(Self::ShmDesc(key.clone())),
-            Self::ServerSocket(_)
-            | Self::ClientSocketConn(_)
-            | Self::ServerSocketConn(_)
-            | Self::TrackedMapping(_) => Err(()),
-        }
+pub trait Resource: Any {
+    /// Performs a write operation on the resource.
+    fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
+        _ = off;
+        _ = buf;
+        Err(ErrorStatus::UnsupportedResource)
+    }
+    /// Performs a read operation on the resource.
+    fn read(&self, off: SeekOffset, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
+        _ = off;
+        _ = buf;
+        Err(ErrorStatus::UnsupportedResource)
+    }
+    /// Performs a synchronization operation on the resource.
+    fn sync(&self) -> Result<(), ErrorStatus> {
+        Err(ErrorStatus::UnsupportedResource)
+    }
+    /// Performs a truncation operation on the resource.
+    fn truncate(&self, len: usize) -> Result<(), ErrorStatus> {
+        _ = len;
+        Err(ErrorStatus::UnsupportedResource)
+    }
+    /// Performs a command operation on the resource.
+    fn send_command(&self, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
+        _ = cmd;
+        _ = arg;
+        Err(ErrorStatus::UnsupportedResource)
     }
 
-    pub fn cloneable_to_different_address_space(&self) -> bool {
-        match self {
-            Self::TrackedMapping(_) => false,
-            _ => true,
-        }
+    /// Opens a memory mapping interface for the resource.
+    fn open_mmap_interface(
+        &self,
+        offset: SeekOffset,
+        page_count: usize,
+    ) -> Result<Box<dyn MemMappedInterface>, ErrorStatus> {
+        _ = offset;
+        _ = page_count;
+        Err(ErrorStatus::UnsupportedResource)
+    }
+    /// Attempts to create a new resource from the current one.
+    fn try_clone_into_node(&self, is_global: bool) -> Result<ResourceNodeRef, ErrorStatus> {
+        _ = is_global;
+        Err(ErrorStatus::UnsupportedResource)
+    }
+
+    /// Whether the resource is sendable across address spaces.
+    fn address_space_generic(&self) -> bool;
+}
+
+impl dyn Resource {
+    #[inline]
+    /// Attempts to downcast the resource to a specific type.
+    pub fn as_ref<T: Resource>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+
+    #[inline]
+    /// Attempts to downcast the resource to a specific type, returning an error if it fails.
+    pub fn as_ref_expected<T: Resource>(&self) -> Result<&T, ErrorStatus> {
+        self.as_ref().ok_or(ErrorStatus::UnsupportedResource)
     }
 }
 
-pub struct Resource {
-    data: ResourceData,
+/// Generic implementation of the `clone` method for resources
+/// [`Resource::try_clone_into_node`]
+pub fn generic_clone_impl<T: Resource + Clone>(
+    resource: &T,
+    is_global: bool,
+) -> Result<ResourceNodeRef, ErrorStatus> {
+    Ok(ResourceNode::create(resource.clone(), is_global))
+}
+
+pub struct ResourceNodeInner<T: Resource + 'static + ?Sized> {
     /// Whether or not the Resource is tracked by a single thread or the entire process
     /// likely true
     global: AtomicBool,
+    data: T,
 }
 
-impl Resource {
-    pub const fn new(data: ResourceData, is_global: bool) -> Self {
-        Self {
-            data,
+/// A Node that represents a resource in the process's resource tree.
+pub type ResourceNode = ResourceNodeInner<dyn Resource>;
+/// A shared reference to a [`ResourceNode`].
+pub type ResourceNodeRef = Arc<ResourceNode>;
+
+impl ResourceNode {
+    pub fn create<T: Resource + 'static>(data: T, is_global: bool) -> ResourceNodeRef {
+        Arc::new(ResourceNodeInner {
+            data: data,
             global: AtomicBool::new(is_global),
-        }
-    }
-
-    pub const fn new_global(data: ResourceData) -> Self {
-        Self::new(data, true)
-    }
-
-    pub const fn new_local(data: ResourceData) -> Self {
-        Self::new(data, false)
-    }
-
-    pub fn try_clone(&self) -> Result<Self, ()> {
-        Ok(Self {
-            data: self.data.try_clone()?,
-            global: AtomicBool::new(self.global.load(core::sync::atomic::Ordering::Acquire)),
         })
     }
 
-    pub fn data(&self) -> &ResourceData {
+    pub fn create_global<T: Resource + 'static>(data: T) -> ResourceNodeRef {
+        Self::create(data, true)
+    }
+
+    pub fn create_local<T: Resource + 'static>(data: T) -> ResourceNodeRef {
+        Self::create(data, false)
+    }
+
+    pub fn data(&self) -> &dyn Resource {
         &self.data
     }
 
     pub fn cloneable_to_different_address_space(&self) -> bool {
-        self.data.cloneable_to_different_address_space()
-            && self.global.load(core::sync::atomic::Ordering::Acquire)
-    }
-
-    /// Performs a Sync operation on this resource
-    /// # Safety
-    /// Must be called from the address space owning this resource
-    pub unsafe fn sync(&self) -> FSResult<()> {
-        match self.data() {
-            ResourceData::File(f) => f.sync(),
-            ResourceData::TrackedMapping(m) => unsafe { m.sync().map(|_| ()) },
-            ResourceData::ChildVTTY(_) | ResourceData::MotherVTTY(_) => Ok(()),
-            ResourceData::DirIter(_)
-            | ResourceData::ServerSocket(_)
-            | ResourceData::ClientSocketConn(_)
-            | ResourceData::ServerSocketConn(_)
-            | ResourceData::SocketDesc { .. }
-            | ResourceData::ShmDesc(_) => Err(crate::drivers::vfs::FSError::OperationNotSupported),
-        }
+        self.data.address_space_generic() && self.global.load(core::sync::atomic::Ordering::Acquire)
     }
 }
 
 pub struct ResourceManager {
-    resources: HashMap<Ri, Arc<Resource>>,
+    resources: HashMap<Ri, ResourceNodeRef>,
     next_resource_id: Ri,
 }
 
@@ -149,19 +146,19 @@ impl ResourceManager {
         }
     }
 
-    fn add_resource(&mut self, resource: Resource) -> Ri {
+    fn add_resource_node(&mut self, resource: ResourceNodeRef) -> Ri {
         let ri = self.next_resource_id;
-        self.resources.insert(ri, Arc::new(resource));
+        self.resources.insert(ri, resource);
         self.next_resource_id += 1;
         ri
     }
 
-    pub fn add_global_resource(&mut self, data: ResourceData) -> Ri {
-        self.add_resource(Resource::new_global(data))
+    pub fn add_global_resource<R: Resource + 'static>(&mut self, data: R) -> Ri {
+        self.add_resource_node(ResourceNode::create_global(data))
     }
 
-    pub fn add_local_resource(&mut self, data: ResourceData) -> Ri {
-        self.add_resource(Resource::new_local(data))
+    pub fn add_local_resource<R: Resource + 'static>(&mut self, data: R) -> Ri {
+        self.add_resource_node(ResourceNode::create_local(data))
     }
 
     #[inline]
@@ -173,23 +170,24 @@ impl ResourceManager {
         }
     }
 
-    pub fn clone_resource(&mut self, ri: Ri) -> Option<Result<Resource, ()>> {
+    pub fn clone_resource(&mut self, ri: Ri) -> Option<Result<ResourceNodeRef, ErrorStatus>> {
         let resource = self.get_mut(ri)?;
         // Only clones global resources
         if !resource.global.load(core::sync::atomic::Ordering::Acquire) {
             return None;
         }
 
-        Some(resource.try_clone())
+        Some(resource.data().try_clone_into_node(true))
     }
 
     pub fn clone(&self) -> Self {
         let mut resources = HashMap::with_capacity(self.resources.capacity());
         for (res_id, res) in self.resources.iter() {
             if res.cloneable_to_different_address_space()
-                && let Ok(res) = res.try_clone()
+                && res.global.load(Ordering::Acquire)
+                && let Ok(res) = res.data().try_clone_into_node(true)
             {
-                resources.insert(*res_id, Arc::new(res));
+                resources.insert(*res_id, res);
             }
         }
 
@@ -214,7 +212,7 @@ impl ResourceManager {
             let resource_id = *resource_id;
             let result = self.clone_resource(resource_id).ok_or(())?;
             if let Ok(result) = result {
-                new_resources.insert(resource_id, Arc::new(result));
+                new_resources.insert(resource_id, result);
 
                 if max_resource_id < resource_id {
                     max_resource_id = resource_id;
@@ -230,60 +228,54 @@ impl ResourceManager {
 
     /// gets a reference to the resource with index `ri`
     /// returns `None` if `ri` is invalid
-    fn get<'s>(&'s self, ri: Ri) -> Option<&'s Arc<Resource>> {
+    fn get<'s>(&'s self, ri: Ri) -> Option<&'s ResourceNodeRef> {
         self.resources.get(&ri)
     }
 
-    fn get_mut(&mut self, ri: Ri) -> Option<&mut Arc<Resource>> {
+    fn get_mut(&mut self, ri: Ri) -> Option<&mut ResourceNodeRef> {
         self.resources.get_mut(&ri)
     }
 }
-// TODO: fgure out a better way to do this, where it's easier to tell that we are holding a lock on
-// the current process state.
 
-pub fn get_resource<DO, R, E: Into<ErrorStatus>>(ri: Ri, then: DO) -> Result<R, ErrorStatus>
-where
-    DO: FnOnce(Arc<Resource>) -> Result<R, E>,
-{
-    let res = {
-        let this = process::current();
-        this.resources()
-            .get(ri)
-            .cloned()
-            .ok_or(ErrorStatus::UnknownResource)?
-    };
-
-    then(res).map_err(|e| e.into())
+/// Gets a shared reference to the resource with the ID `ri`.
+pub fn get(ri: Ri) -> Option<ResourceNodeRef> {
+    let this = process::current();
+    this.resources().get(ri).cloned()
 }
 
-/// Gets a reference to resource with ri `ri` then executes then on it
+/// Same as [`get`] but returns an error if the resource is not found.
+pub fn get_expected(ri: Ri) -> Result<ResourceNodeRef, ErrorStatus> {
+    get(ri).ok_or(ErrorStatus::UnknownResource)
+}
+
+/// Like [`get`] but instead of returning a shared reference, it uses a closure to execute on the resource, keeps a lock held as long as the closure is executing.
 ///
-/// If you are going to do something poteinally blocking use [get_resource] instead
-pub fn get_resource_reference<DO, R>(ri: Ri, then: DO) -> Option<R>
+/// If you are going to do something potentially blocking or slow use [`get`] instead
+pub fn get_ref<DO, R>(ri: Ri, then: DO) -> Option<R>
 where
-    DO: FnOnce(&Resource) -> R,
+    DO: FnOnce(&ResourceNode) -> R,
 {
     let this = process::current();
     this.resources_mut().get(ri).map(|r| then(r))
 }
 
-/// gets a resource with ri `ri` then executes then on it
-pub fn get_resource_mut<DO, R>(ri: Ri, then: DO) -> Option<R>
+/// Like [`get_ref`] but muttable
+pub fn get_mut<DO, R>(ri: Ri, then: DO) -> Option<R>
 where
-    DO: FnOnce(&mut Arc<Resource>) -> R,
+    DO: FnOnce(&mut ResourceNodeRef) -> R,
 {
     let this = process::current();
-    this.resources_mut().get_mut(ri).map(then)
+    this.resources_mut().get_mut(ri).map(|r| then(r))
 }
 
 /// Adds a resource that lives as long as the current process, to the current process
-pub fn add_global_resource(resource_data: ResourceData) -> Ri {
+pub fn add_global_resource<R: Resource + 'static>(resource_data: R) -> Ri {
     let this = process::current();
     this.resources_mut().add_global_resource(resource_data)
 }
 
 /// Adds a resource that lives as long as the current thread not the process, to the current process
-pub fn add_local_resource(resource_data: ResourceData) -> Ri {
+pub fn add_local_resource<R: Resource + 'static>(resource_data: R) -> Ri {
     let curr_thread = thread::current();
     let curr_process = curr_thread.process();
     let ri = curr_process
@@ -294,16 +286,15 @@ pub fn add_local_resource(resource_data: ResourceData) -> Ri {
 }
 
 /// Duplicates a resource return the new duplicate resource's ID or None if that resource doesn't exist
-pub fn duplicate_resource(ri: Ri) -> Option<Result<Ri, ()>> {
+pub fn duplicate_resource(ri: Ri) -> Option<Result<Ri, ErrorStatus>> {
     let current_process = process::current();
     let mut manager = current_process.resources_mut();
 
     let resource = manager.clone_resource(ri)?;
-    if let Err(()) = resource {
-        return Some(Err(()));
+    match resource {
+        Ok(resource) => Some(Ok(manager.add_resource_node(resource))),
+        Err(err) => Some(Err(err)),
     }
-
-    Some(Ok(manager.add_resource(resource.unwrap())))
 }
 
 /// removes a resource from the current process with `ri`

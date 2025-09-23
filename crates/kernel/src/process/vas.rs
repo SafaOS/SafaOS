@@ -13,6 +13,7 @@ use crate::{
         frame_allocator::{self, Frame},
         paging::{self, MapToError, PAGE_SIZE, Page, PhysPageTable},
     },
+    process::resources::Resource,
 };
 
 pub trait MemMappedInterface {
@@ -65,6 +66,24 @@ impl TrackedMemoryMapping {
         } else {
             Err(FSError::OperationNotSupported)
         }
+    }
+}
+
+impl Resource for TrackedMemoryMapping {
+    fn sync(&self) -> Result<(), safa_abi::errors::ErrorStatus> {
+        // Safety: A resource operates in the same address space as the mapping
+        // also verified by Self::address_space_generic()
+        unsafe {
+            self.sync()?;
+        }
+        Ok(())
+    }
+    fn send_command(&self, cmd: u16, arg: u64) -> Result<(), safa_abi::errors::ErrorStatus> {
+        self.send_command(cmd, arg)?;
+        Ok(())
+    }
+    fn address_space_generic(&self) -> bool {
+        false
     }
 }
 

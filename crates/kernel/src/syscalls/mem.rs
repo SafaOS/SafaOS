@@ -2,7 +2,6 @@ use crate::drivers::vfs::SeekOffset;
 use crate::memory::paging::EntryFlags;
 use crate::process;
 use crate::process::resources;
-use crate::process::resources::ResourceData;
 use crate::shared_mem;
 use crate::shared_mem::ShmKey;
 use crate::syscalls::ErrorStatus;
@@ -53,10 +52,8 @@ pub fn sysmem_map(
     let resource_off = resource_off.unwrap_or(SeekOffset::Start(0));
 
     let interface = associated_resource.map(|ri| {
-        resources::get_resource_reference(ri, |res| match res.data() {
-            ResourceData::File(fd) => Ok(fd.open_mmap_interface(resource_off, page_count)?),
-            ResourceData::ShmDesc(shm) => Ok(shm.mmap_interface()),
-            _ => Err(ErrorStatus::UnsupportedResource),
+        resources::get_ref(ri, |res| {
+            res.data().open_mmap_interface(resource_off, page_count)
         })
         .ok_or(ErrorStatus::UnknownResource)
         .flatten()
@@ -88,7 +85,7 @@ pub fn sysmem_map(
 
     let start_addr = tracker.start();
     // TODO: Implement local option
-    let ri = resources::add_global_resource(ResourceData::TrackedMapping(tracker));
+    let ri = resources::add_global_resource(tracker);
 
     if let Some(p) = out_res_id {
         *p = ri;
@@ -120,7 +117,7 @@ fn sysshm_create(
     let tracked_key = shared_mem::create_shm(pages_count).map_err(|()| ErrorStatus::OutOfMemory)?;
     let key = *tracked_key.key();
 
-    let resource = ResourceData::ShmDesc(tracked_key);
+    let resource = tracked_key;
     let ri = match local {
         false => resources::add_global_resource(resource),
         true => resources::add_local_resource(resource),
@@ -146,7 +143,7 @@ fn sysshm_open(key: ShmKey, flags: ShmFlags, out_resource: &mut Ri) -> Result<()
 
     let local = flags.contains(ShmFlags::LOCAL);
 
-    let resource = ResourceData::ShmDesc(tracked_key);
+    let resource = tracked_key;
     let ri = match local {
         false => resources::add_global_resource(resource),
         true => resources::add_local_resource(resource),

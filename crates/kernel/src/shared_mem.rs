@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use crate::{
     error,
     memory::frame_allocator::{self, Frame},
-    process::vas::MemMappedInterface,
+    process::{resources::Resource, vas::MemMappedInterface},
     utils::locks::Mutex,
 };
 
@@ -151,6 +151,29 @@ impl Drop for TrackedShmKey {
 impl Clone for TrackedShmKey {
     fn clone(&self) -> Self {
         Self::track(self.desc.clone(), self.key)
+    }
+}
+
+impl Resource for TrackedShmKey {
+    fn open_mmap_interface(
+        &self,
+        offset: crate::drivers::vfs::SeekOffset,
+        page_count: usize,
+    ) -> Result<Box<dyn MemMappedInterface>, safa_abi::errors::ErrorStatus> {
+        _ = offset;
+        _ = page_count;
+        Ok(self.mmap_interface())
+    }
+
+    fn try_clone_into_node(
+        &self,
+        is_global: bool,
+    ) -> Result<crate::process::resources::ResourceNodeRef, safa_abi::errors::ErrorStatus> {
+        crate::process::resources::generic_clone_impl(self, is_global)
+    }
+
+    fn address_space_generic(&self) -> bool {
+        false
     }
 }
 

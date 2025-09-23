@@ -1,11 +1,13 @@
 use crate::{
-    process::resources::{self, Resource, ResourceData, Ri},
-    sockets::{self, SocketDomain, SocketKind},
+    process::resources::{self, ResourceNode, Ri},
+    sockets::{
+        self, SocketDomain, SocketKind,
+        desc::{ServerSocketDesc, SocketDesc},
+    },
     utils::types::Name,
 };
 
 use super::{ErrorStatus, SyscallFFI};
-use alloc::sync::Arc;
 use macros::syscall_handler;
 use safa_abi::sockets::{SockBindAbstractAddr, SockBindAddr, SockCreateFlags};
 
@@ -61,13 +63,14 @@ fn syssock_create(
     };
 
     let can_block = !flags.contains(SockCreateFlags::SOCK_NON_BLOCKING);
-    let resource_state = ResourceData::SocketDesc {
+
+    let res = SocketDesc {
         domain,
         kind,
         can_block,
     };
+    let resource_id = resources::add_global_resource(res);
 
-    let resource_id = resources::add_global_resource(resource_state);
     if let Some(out_res) = out_resource {
         *out_res = resource_id;
     }
@@ -76,9 +79,9 @@ fn syssock_create(
 
 #[syscall_handler]
 fn syssock_listen(sock_resource: Ri, backlog: usize) -> Result<(), ErrorStatus> {
-    resources::get_resource_reference(sock_resource, |r| match r.data() {
-        ResourceData::ServerSocket(s) => Ok(s.configure_listen_queue(backlog)),
-        _ => Err(ErrorStatus::UnsupportedResource),
+    resources::get_ref(sock_resource, |r| {
+        let s = r.data().as_ref_expected::<ServerSocketDesc>()?;
+        Ok(s.configure_listen_queue(backlog))
     })
     .ok_or(ErrorStatus::UnknownResource)
     .flatten()
@@ -97,17 +100,16 @@ fn syssock_accept(
         "Accepting from a specific Address is unimplemented"
     );
 
-    resources::get_resource(sock_resource, |r| match r.data() {
-        ResourceData::ServerSocket(serv) => {
-            let conn = serv.accept()?;
-            let conn_ri = resources::add_global_resource(ResourceData::ServerSocketConn(conn));
-            if let Some(out) = out_connection_id {
-                *out = conn_ri;
-            }
-            Ok(())
-        }
-        _ => Err(ErrorStatus::UnsupportedResource),
-    })
+    let resource = resources::get_expected(sock_resource)?;
+
+    let serv = resource.data().as_ref_expected::<ServerSocketDesc>()?;
+    let conn = serv.accept()?;
+
+    let conn_ri = resources::add_global_resource(conn);
+    if let Some(out) = out_connection_id {
+        *out = conn_ri;
+    }
+    Ok(())
 }
 
 #[syscall_handler]
@@ -117,17 +119,14 @@ fn syssock_connect(
     addr_struct_size: usize,
     out_connection_id: Option<&mut Ri>,
 ) -> Result<(), ErrorStatus> {
-    let (domain, kind, _) =
-        resources::get_resource_reference(sock_resource, |res| match res.data() {
-            ResourceData::SocketDesc {
-                domain,
-                kind,
-                can_block,
-            } => Ok((*domain, *kind, *can_block)),
-            _ => Err(ErrorStatus::UnsupportedResource),
-        })
-        .ok_or(ErrorStatus::UnknownResource)
-        .flatten()?;
+    let socket_desc = resources::get_ref(sock_resource, |res| {
+        res.data().as_ref_expected::<SocketDesc>().copied()
+    })
+    .ok_or(ErrorStatus::UnknownResource)
+    .flatten()?;
+
+    let domain = socket_desc.domain;
+    let kind = socket_desc.kind;
 
     let addr = compute_addr(addr, addr_struct_size)?;
     let sock_id = match addr {
@@ -144,7 +143,7 @@ fn syssock_connect(
 
     let client_conn = client_sock.connect(client_sock.can_block())?;
 
-    let ri = resources::add_global_resource(ResourceData::ClientSocketConn(client_conn));
+    let ri = resources::add_global_resource(client_conn);
     if let Some(out) = out_connection_id {
         *out = ri;
     }
@@ -162,23 +161,30 @@ fn syssock_bind(
     }
 
     // Operation is non blocking so it is ok to do this
-    let (id, addr) = resources::get_resource_mut(sock_resource, |res| match res.data() {
-        ResourceData::SocketDesc {
-            domain,
-            kind,
-            can_block,
-        } => {
-            let addr = compute_addr(addr, addr_struct_size)?;
-            let created_socket = sockets::create_socket(*domain, *kind, *can_block);
-            let id = created_socket.id;
-            *res = Arc::new(Resource::new_global(ResourceData::ServerSocket(
-                created_socket,
-            )));
+    let (id, addr) = resources::get_mut(sock_resource, |res| {
+        match (
+            res.data().as_ref::<ServerSocketDesc>(),
+            res.data().as_ref::<SocketDesc>(),
+        ) {
+            (
+                None,
+                Some(SocketDesc {
+                    domain,
+                    kind,
+                    can_block,
+                }),
+            ) => {
+                let addr = compute_addr(addr, addr_struct_size)?;
+                let created_socket = sockets::create_socket(*domain, *kind, *can_block);
+                let id = created_socket.id;
+                *res = ResourceNode::create_global(created_socket);
 
-            Ok((id, addr))
+                Ok((id, addr))
+            }
+            (Some(s), None) => Ok((s.id, compute_addr(addr, addr_struct_size)?)),
+            (Some(_), Some(_)) => unreachable!("Schrödinger Resource"),
+            _ => Err(ErrorStatus::UnsupportedResource),
         }
-        ResourceData::ServerSocket(s) => Ok((s.id, compute_addr(addr, addr_struct_size)?)),
-        _ => Err(ErrorStatus::UnsupportedResource),
     })
     .ok_or(ErrorStatus::UnknownResource)
     .flatten()?;

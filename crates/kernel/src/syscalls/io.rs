@@ -1,7 +1,7 @@
 use super::ffi::SyscallFFI;
 use crate::{
-    drivers::vfs::{FSError, SeekOffset},
-    process::resources::{self, ResourceData, Ri},
+    drivers::vfs::{CollectionIterDescriptor, FSObjectDescriptor, SeekOffset},
+    process::resources::{self, Ri},
     utils::locks::Mutex,
     vtty,
 };
@@ -21,14 +21,8 @@ fn syswrite(
 ) -> Result<(), ErrorStatus> {
     let off = SeekOffset::from(offset);
 
-    let wrote = resources::get_resource::<_, _, ErrorStatus>(fd, |r| match r.data() {
-        ResourceData::File(fd) => Ok(fd.write(off, buf)?),
-        ResourceData::ServerSocketConn(conn) => Ok(conn.write(buf)?),
-        ResourceData::ClientSocketConn(conn) => Ok(conn.write(buf)?),
-        ResourceData::MotherVTTY(vtty) => Ok(vtty.write(str::from_utf8(buf)?)),
-        ResourceData::ChildVTTY(vtty) => Ok(vtty.write(str::from_utf8(buf)?)),
-        _ => Err(ErrorStatus::UnsupportedResource),
-    })?;
+    let resource = resources::get_expected(fd)?;
+    let wrote = resource.data().write(off, buf)?;
 
     if let Some(dest_wrote) = dest_wrote {
         *dest_wrote = wrote;
@@ -45,17 +39,8 @@ fn sysread(
     dest_read: Option<&mut usize>,
 ) -> Result<(), ErrorStatus> {
     let off = SeekOffset::from(offset);
-
-    let bytes_read = resources::get_resource::<_, _, ErrorStatus>(fd, |r| match r.data() {
-        ResourceData::File(fd) => Ok(fd.read(off, buf)?),
-        ResourceData::ServerSocketConn(conn) => Ok(conn.read(buf)?),
-        ResourceData::ClientSocketConn(conn) => Ok(conn.read(buf)?),
-        ResourceData::ChildVTTY(vtty) => Ok(vtty.read(buf)),
-        ResourceData::MotherVTTY(vtty) => {
-            vtty.read(off, buf).map_err(|_| ErrorStatus::InvalidOffset)
-        }
-        _ => Err(ErrorStatus::UnsupportedResource),
-    })?;
+    let resource = resources::get_expected(fd)?;
+    let bytes_read = resource.data().read(off, buf)?;
 
     if let Some(dest_read) = dest_read {
         *dest_read = bytes_read;
@@ -66,80 +51,70 @@ fn sysread(
 
 #[syscall_handler]
 fn sysdiriter_open(dir_rd: Ri, dest_diriter: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    resources::get_resource(dir_rd, |resource| match resource.data() {
-        ResourceData::File(fd) => {
-            let diriter = fd.open_collection_iter()?;
-            let ri = resources::add_global_resource(ResourceData::DirIter(Mutex::new(diriter)));
-            if let Some(dest_diriter) = dest_diriter {
-                *dest_diriter = ri;
-            }
-            Ok(())
-        }
-        _ => Err(ErrorStatus::UnsupportedResource),
-    })
+    let resource = resources::get(dir_rd).ok_or(ErrorStatus::UnknownResource)?;
+    let fd = resource.data().as_ref_expected::<FSObjectDescriptor>()?;
+    let diriter = fd.open_collection_iter()?;
+
+    let ri = resources::add_global_resource(Mutex::new(diriter));
+    if let Some(dest_diriter) = dest_diriter {
+        *dest_diriter = ri;
+    }
+    Ok(())
 }
 
 #[syscall_handler]
 fn sysdiriter_next(diriter_rd: Ri, direntry: &mut DirEntry) -> Result<(), ErrorStatus> {
-    resources::get_resource(diriter_rd, |resource| match resource.data() {
-        ResourceData::DirIter(dir) => {
-            let next = dir.lock().next();
-            if let Some(next) = next {
-                *direntry = next;
-                Ok(())
-            } else {
-                *direntry = unsafe { core::mem::zeroed() };
-                Err(ErrorStatus::Generic)
-            }
-        }
-        _ => Err(ErrorStatus::UnsupportedResource),
-    })
+    let resource = resources::get_expected(diriter_rd)?;
+    let diriter = resource
+        .data()
+        .as_ref_expected::<Mutex<CollectionIterDescriptor>>()?;
+
+    let next = diriter.lock().next();
+    if let Some(next) = next {
+        *direntry = next;
+        Ok(())
+    } else {
+        *direntry = unsafe { core::mem::zeroed() };
+        Err(ErrorStatus::Generic)
+    }
 }
 
 #[syscall_handler]
 fn syssync(ri: Ri) -> Result<(), ErrorStatus> {
-    resources::get_resource(ri, |resource| unsafe { resource.sync() })
+    let resource = resources::get_expected(ri)?;
+    resource.data().sync()
 }
 
 #[syscall_handler]
 fn systruncate(fd: Ri, len: usize) -> Result<(), ErrorStatus> {
-    resources::get_resource(fd, |resource| match resource.data() {
-        ResourceData::File(fd) => Ok(fd.truncate(len)?),
-        _ => Err(FSError::UnsupportedResource),
-    })
+    let resource = resources::get_expected(fd)?;
+    resource.data().truncate(len)
 }
 
 // TODO: add always successful syscall handlers support
 #[syscall_handler]
 fn sysfsize(ri: Ri, dest_fd: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    resources::get_resource(ri, |resource| match resource.data() {
-        ResourceData::File(fd) => {
-            if let Some(dest_fd) = dest_fd {
-                *dest_fd = fd.size();
-            }
-            Ok(())
-        }
-        _ => Err(FSError::UnsupportedResource),
-    })
+    let resource = resources::get_expected(ri)?;
+    let fd = resource.data().as_ref_expected::<FSObjectDescriptor>()?;
+    if let Some(dest_fd) = dest_fd {
+        *dest_fd = fd.size();
+    }
+    Ok(())
 }
 
 #[syscall_handler]
 fn sysattrs(ri: Ri, dest_attrs: Option<&mut FileAttr>) -> Result<(), ErrorStatus> {
-    resources::get_resource(ri, |resource| match resource.data() {
-        ResourceData::File(fd) => {
-            if let Some(dest_attrs) = dest_attrs {
-                *dest_attrs = fd.attrs();
-            }
-            Ok(())
-        }
-        _ => Err(FSError::UnsupportedResource),
-    })
+    let resource = resources::get_expected(ri)?;
+    let fd = resource.data().as_ref_expected::<FSObjectDescriptor>()?;
+    if let Some(dest_attrs) = dest_attrs {
+        *dest_attrs = fd.attrs();
+    }
+    Ok(())
 }
 
 #[syscall_handler]
 fn sysdup(resource: Ri, dest_resource: &mut Ri) -> Result<(), ErrorStatus> {
     *dest_resource = resources::duplicate_resource(resource)
-        .map(|s| s.map_err(|()| ErrorStatus::ResourceCloneFailed))
         .ok_or(ErrorStatus::UnknownResource)
         .flatten()?;
     Ok(())
@@ -147,22 +122,15 @@ fn sysdup(resource: Ri, dest_resource: &mut Ri) -> Result<(), ErrorStatus> {
 
 #[syscall_handler]
 fn sysio_command(ri: Ri, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
-    resources::get_resource(ri, |res| match res.data() {
-        ResourceData::File(f) => Ok(f.send_command(cmd, arg)?),
-        ResourceData::TrackedMapping(m) => Ok(m.send_command(cmd, arg)?),
-        ResourceData::ServerSocketConn(conn) => Ok(conn.handle_command(cmd, arg)?),
-        ResourceData::ClientSocketConn(conn) => Ok(conn.handle_command(cmd, arg)?),
-        ResourceData::ChildVTTY(v) => v.process_command(cmd, arg),
-        ResourceData::MotherVTTY(v) => v.process_command(cmd, arg),
-        _ => Err(ErrorStatus::OperationNotSupported),
-    })
+    let resource = resources::get_expected(ri)?;
+    resource.data().send_command(cmd, arg)
 }
 
 #[syscall_handler]
 fn sysvtty_alloc(mother_ri: &mut Ri, child_ri: &mut Ri) {
     let (mother, child) = vtty::alloc_vtty();
-    let m = resources::add_global_resource(ResourceData::MotherVTTY(mother));
-    let c = resources::add_global_resource(ResourceData::ChildVTTY(child));
+    let m = resources::add_global_resource(mother);
+    let c = resources::add_global_resource(child);
 
     *mother_ri = m;
     *child_ri = c;

@@ -6,6 +6,7 @@ use crate::{
     arch::without_interrupts,
     drivers::vfs::FSResult,
     memory::paging::PAGE_SIZE,
+    process::resources::Resource,
     scheduler::wait_queue::WaitQueue,
     sockets::{SockConnID, Socket, SocketError},
     thread,
@@ -482,5 +483,61 @@ impl Drop for SocketClientConn {
 impl Drop for SocketServerConn {
     fn drop(&mut self) {
         self.socket.disconnect(self.id);
+    }
+}
+
+impl Resource for SocketClientConn {
+    fn read(
+        &self,
+        off: crate::drivers::vfs::SeekOffset,
+        buf: &mut [u8],
+    ) -> Result<usize, safa_abi::errors::ErrorStatus> {
+        _ = off;
+        let am = self.read(buf)?;
+        Ok(am)
+    }
+    fn write(
+        &self,
+        off: crate::drivers::vfs::SeekOffset,
+        buf: &[u8],
+    ) -> Result<usize, safa_abi::errors::ErrorStatus> {
+        _ = off;
+        let am = self.write(buf)?;
+        Ok(am)
+    }
+    fn send_command(&self, cmd: u16, arg: u64) -> Result<(), safa_abi::errors::ErrorStatus> {
+        self.handle_command(cmd, arg)?;
+        Ok(())
+    }
+    fn address_space_generic(&self) -> bool {
+        false
+    }
+}
+
+impl Resource for SocketServerConn {
+    fn read(
+        &self,
+        off: crate::drivers::vfs::SeekOffset,
+        buf: &mut [u8],
+    ) -> Result<usize, safa_abi::errors::ErrorStatus> {
+        _ = off;
+        let am = self.read(buf)?;
+        Ok(am)
+    }
+    fn write(
+        &self,
+        off: crate::drivers::vfs::SeekOffset,
+        buf: &[u8],
+    ) -> Result<usize, safa_abi::errors::ErrorStatus> {
+        _ = off;
+        let am = self.write(buf)?;
+        Ok(am)
+    }
+    fn send_command(&self, cmd: u16, arg: u64) -> Result<(), safa_abi::errors::ErrorStatus> {
+        self.handle_command(cmd, arg)?;
+        Ok(())
+    }
+    fn address_space_generic(&self) -> bool {
+        false
     }
 }

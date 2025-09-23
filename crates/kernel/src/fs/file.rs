@@ -1,13 +1,10 @@
 use core::{mem::ManuallyDrop, ops::Deref};
 
-use safa_abi::{
-    errors::ErrorStatus,
-    fs::{FSObjectType, OpenOptions},
-};
+use safa_abi::fs::{FSObjectType, OpenOptions};
 
 use crate::{
     drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
-    process::resources::{self, ResourceData},
+    process::resources,
     utils::{
         io::{IoError, Readable},
         path::Path,
@@ -30,14 +27,12 @@ impl File {
         T: FnOnce(&FSObjectDescriptor) -> R,
     {
         unsafe {
-            resources::get_resource(self.0, |resource| {
-                let ResourceData::File(fd) = resource.data() else {
-                    unreachable!()
-                };
-
-                Ok::<_, ErrorStatus>(then(fd))
-            })
-            .unwrap_unchecked()
+            let resource = resources::get(self.0).unwrap_unchecked();
+            let fd = resource
+                .data()
+                .as_ref_expected::<FSObjectDescriptor>()
+                .unwrap_unchecked();
+            then(fd)
         }
     }
 
@@ -45,7 +40,7 @@ impl File {
     pub fn open_all(path: Path) -> FSResult<Self> {
         let fd = VFS_STRUCT.read().open_all(path)?;
 
-        let fd_ri = resources::add_global_resource(ResourceData::File(fd));
+        let fd_ri = resources::add_global_resource(fd);
         Ok(Self(fd_ri))
     }
 
@@ -53,7 +48,7 @@ impl File {
     pub fn open_with_options(path: Path, options: OpenOptions) -> FSResult<Self> {
         let fd = VFS_STRUCT.read().open(path, options)?;
 
-        let fd_ri = resources::add_global_resource(ResourceData::File(fd));
+        let fd_ri = resources::add_global_resource(fd);
         Ok(Self(fd_ri))
     }
 
@@ -64,8 +59,8 @@ impl File {
     }
 
     pub fn from_fd(fd: usize) -> Option<Result<Self, ()>> {
-        resources::get_resource_reference(fd, |resource| {
-            if let ResourceData::File(_) = resource.data() {
+        resources::get_ref(fd, |resource| {
+            if let Some(_) = resource.data().as_ref::<FSObjectDescriptor>() {
                 Ok(Self(fd))
             } else {
                 Err(())
