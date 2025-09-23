@@ -1,6 +1,7 @@
 use crate::{
     VirtAddr,
     fs::{DirIter, File},
+    process::resources::Ri,
 };
 
 use crate::utils::path::Path;
@@ -167,7 +168,7 @@ impl_ffi_int!(u64);
 impl_ffi_int!(i64);
 
 impl SyscallFFI for File {
-    type Args = usize;
+    type Args = Ri;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         File::from_fd(args)
             .map(|s| s.map_err(|()| ErrorStatus::UnsupportedResource))
@@ -177,7 +178,7 @@ impl SyscallFFI for File {
 }
 
 impl SyscallFFI for DirIter {
-    type Args = usize;
+    type Args = Ri;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         DirIter::from_ri(args)
             .map(|s| s.map_err(|()| ErrorStatus::UnsupportedResource))

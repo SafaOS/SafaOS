@@ -84,15 +84,16 @@ fn spawn_inner(
         } else {
             // clone only necessary resources
             let mut resources = heapless::Vec::<Ri, 3>::new();
-            if let Some(stdin) = stdio.stdin.into() {
+            let (stdout, stdin, stderr) = stdio.into_rust();
+            if let Some(stdin) = stdin {
                 _ = resources.push(stdin);
             }
 
-            if let Some(stdout) = stdio.stdout.into() {
+            if let Some(stdout) = stdout {
                 _ = resources.push(stdout);
             }
 
-            if let Some(stderr) = stdio.stderr.into() {
+            if let Some(stderr) = stderr {
                 _ = resources.push(stderr);
             }
 

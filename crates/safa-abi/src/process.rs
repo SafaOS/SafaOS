@@ -31,6 +31,7 @@ impl AbiStructures {
     }
 }
 
+// Resources are actually 32-bit now but if i change this everything will break
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct ProcessStdio {
@@ -40,12 +41,30 @@ pub struct ProcessStdio {
 }
 
 impl ProcessStdio {
-    pub fn new(stdout: Option<usize>, stdin: Option<usize>, stderr: Option<usize>) -> Self {
+    pub fn new(stdout: Option<u32>, stdin: Option<u32>, stderr: Option<u32>) -> Self {
         Self {
-            stdout: stdout.into(),
-            stdin: stdin.into(),
-            stderr: stderr.into(),
+            stdout: stdout.map(|u32| u32 as usize).into(),
+            stdin: stdin.map(|u32| u32 as usize).into(),
+            stderr: stderr.map(|u32| u32 as usize).into(),
         }
+    }
+
+    /// Convert the ProcessStdio into a tuple of Option<u32>, (stdout, stdin, stderr)
+    pub fn into_rust(self) -> (Option<u32>, Option<u32>, Option<u32>) {
+        (
+            match self.stdout {
+                COption::Some(stdout) => Some(stdout as u32),
+                COption::None => None,
+            },
+            match self.stdin {
+                COption::Some(stdin) => Some(stdin as u32),
+                COption::None => None,
+            },
+            match self.stderr {
+                COption::Some(stderr) => Some(stderr as u32),
+                COption::None => None,
+            },
+        )
     }
 }
 

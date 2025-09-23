@@ -50,7 +50,7 @@ fn sysread(
 }
 
 #[syscall_handler]
-fn sysdiriter_open(dir_rd: Ri, dest_diriter: Option<&mut usize>) -> Result<(), ErrorStatus> {
+fn sysdiriter_open(dir_rd: Ri, dest_diriter: Option<&mut Ri>) -> Result<(), ErrorStatus> {
     let resource = resources::get(dir_rd).ok_or(ErrorStatus::UnknownResource)?;
     let fd = resource.data().as_ref_expected::<FSObjectDescriptor>()?;
     let diriter = fd.open_collection_iter()?;

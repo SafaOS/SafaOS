@@ -43,8 +43,8 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
         let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvalidSyscall)?;
         match syscall {
             // IO related syscalls
-            SyscallTable::SysFDirIterOpen => io::sysdiriter_open_raw(a, b as *mut usize),
-            SyscallTable::SysDirIterClose => Ok(drop(DirIter::make(a)?)),
+            SyscallTable::SysFDirIterOpen => io::sysdiriter_open_raw(a, b as *mut Ri),
+            SyscallTable::SysDirIterClose => Ok(drop(DirIter::make(a as Ri)?)),
             SyscallTable::SysDirIterNext => io::sysdiriter_next_raw(a, b as *mut DirEntry),
             SyscallTable::SysIOWrite => {
                 io::syswrite_raw(a, b, (c as *const u8, d), e as *mut usize)
@@ -55,10 +55,10 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysFSize => io::sysfsize_raw(a, b as *mut usize),
             SyscallTable::SysFAttrs => io::sysattrs_raw(a, b as *mut FileAttr),
             SyscallTable::SysIOCommand => io::sysio_command_raw(a, b, c),
-            SyscallTable::SysVTTYAlloc => io::sysvtty_alloc_raw(a as *mut usize, b as *mut usize),
+            SyscallTable::SysVTTYAlloc => io::sysvtty_alloc_raw(a as *mut Ri, b as *mut Ri),
             // Resources related syscalls
             SyscallTable::SysRDestroy => {
-                if !resources::remove_resource(a) {
+                if !resources::remove_resource(a as Ri) {
                     return Err(ErrorStatus::UnknownResource);
                 }
 
@@ -69,8 +69,8 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysFGetDirEntry => {
                 fs::sysget_direntry_raw((a as *const u8, b), c as *mut DirEntry)
             }
-            SyscallTable::SysFSOpenAll => fs::sysopen_all_raw((a as *const u8, b), c as *mut usize),
-            SyscallTable::SysFSOpen => fs::sysopen_raw((a as *const u8, b), c, d as *mut usize),
+            SyscallTable::SysFSOpenAll => fs::sysopen_all_raw((a as *const u8, b), c as *mut Ri),
+            SyscallTable::SysFSOpen => fs::sysopen_raw((a as *const u8, b), c, d as *mut Ri),
             SyscallTable::SysFSRemovePath => fs::sysremove_path_raw((a as *const u8, b)),
             SyscallTable::SysFSCreate => fs::syscreate_raw((a as *const u8, b)),
             SyscallTable::SysFSCreateDir => fs::syscreatedir_raw((a as *const u8, b)),

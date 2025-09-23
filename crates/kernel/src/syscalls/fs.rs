@@ -1,6 +1,7 @@
 use macros::syscall_handler;
 use safa_abi::fs::{DirEntry, OpenOptions};
 
+use crate::process::resources::Ri;
 use crate::syscalls::{ErrorStatus, SyscallFFI};
 use crate::{
     drivers::vfs::FSResult,
@@ -10,7 +11,7 @@ use crate::{
 
 /// Opens a file or directory with all permissions
 #[syscall_handler]
-fn sysopen_all(path: Path, dest_fd: Option<&mut usize>) -> FSResult<()> {
+fn sysopen_all(path: Path, dest_fd: Option<&mut Ri>) -> FSResult<()> {
     let file_ref = FileRef::open_all(path)?;
     if let Some(dest_fd) = dest_fd {
         *dest_fd = file_ref.ri();
@@ -21,7 +22,7 @@ fn sysopen_all(path: Path, dest_fd: Option<&mut usize>) -> FSResult<()> {
 
 /// Opens a file or directory with the specified options
 #[syscall_handler]
-fn sysopen(path: Path, options: u8, dest_fd: Option<&mut usize>) -> FSResult<()> {
+fn sysopen(path: Path, options: u8, dest_fd: Option<&mut Ri>) -> FSResult<()> {
     let options = OpenOptions::from_bits(options);
     let file_ref = FileRef::open_with_options(path, options)?;
 

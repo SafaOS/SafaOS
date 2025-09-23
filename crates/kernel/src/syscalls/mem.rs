@@ -42,7 +42,7 @@ pub fn sysmem_map(
 
     let (associated_resource, resource_off) = if flags.contains(MemMapFlags::MAP_RESOURCE) {
         (
-            Some(mmap_config.resource_to_map),
+            Some(mmap_config.resource_to_map as Ri),
             Some(SeekOffset::from(mmap_config.resource_off)),
         )
     } else {

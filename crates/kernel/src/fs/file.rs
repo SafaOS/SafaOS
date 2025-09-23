@@ -4,7 +4,7 @@ use safa_abi::fs::{FSObjectType, OpenOptions};
 
 use crate::{
     drivers::vfs::{FSError, FSObjectDescriptor, FSResult, SeekOffset, VFS_STRUCT},
-    process::resources,
+    process::resources::{self, Ri},
     utils::{
         io::{IoError, Readable},
         path::Path,
@@ -14,11 +14,11 @@ use crate::{
 #[derive(Debug)]
 /// A high-level wrapper around a file descriptor resource
 /// that automatically closes the file descriptor when dropped
-pub struct File(usize);
+pub struct File(Ri);
 
 impl File {
     /// Returns the resource ID of the given file
-    pub const fn fd(&self) -> usize {
+    pub const fn fd(&self) -> Ri {
         self.0
     }
 
@@ -58,7 +58,7 @@ impl File {
         self.with_fd(|fd| fd.read(offset, buffer))
     }
 
-    pub fn from_fd(fd: usize) -> Option<Result<Self, ()>> {
+    pub fn from_fd(fd: Ri) -> Option<Result<Self, ()>> {
         resources::get_ref(fd, |resource| {
             if let Some(_) = resource.data().as_ref::<FSObjectDescriptor>() {
                 Ok(Self(fd))
@@ -125,7 +125,7 @@ impl FileRef {
     }
 
     /// Return the resource ID (equivalent to file descriptor in linux) of the file
-    pub fn ri(&self) -> usize {
+    pub fn ri(&self) -> Ri {
         self.0.0
     }
 }

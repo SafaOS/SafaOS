@@ -14,7 +14,7 @@ use hashbrown::HashMap;
 use safa_abi::errors::ErrorStatus;
 
 /// A resource ID
-pub type Ri = usize;
+pub type Ri = u32;
 
 pub trait Resource: Any {
     /// Performs a write operation on the resource.
