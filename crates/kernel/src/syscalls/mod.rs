@@ -52,6 +52,7 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysIORead => io::sysread_raw(a, b, (c as *mut u8, d), e as *mut usize),
             SyscallTable::SysIOTruncate => io::systruncate_raw(a, b),
             SyscallTable::SysIOSync => io::syssync_raw(a),
+            SyscallTable::SysIOPoll => io::sysio_poll_raw((a as *mut _, b), c),
             SyscallTable::SysFSize => io::sysfsize_raw(a, b as *mut usize),
             SyscallTable::SysFAttrs => io::sysattrs_raw(a, b as *mut FileAttr),
             SyscallTable::SysIOCommand => io::sysio_command_raw(a, b, c),

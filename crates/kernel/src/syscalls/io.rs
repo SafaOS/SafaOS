@@ -1,7 +1,10 @@
 use super::ffi::SyscallFFI;
 use crate::{
     drivers::vfs::{CollectionIterDescriptor, FSObjectDescriptor, SeekOffset},
-    process::resources::{self, Ri},
+    process::{
+        poll::{self, PollError},
+        resources::{self, Ri},
+    },
     utils::locks::Mutex,
     vtty,
 };
@@ -134,4 +137,12 @@ fn sysvtty_alloc(mother_ri: &mut Ri, child_ri: &mut Ri) {
 
     *mother_ri = m;
     *child_ri = c;
+}
+
+#[syscall_handler]
+fn sysio_poll(
+    resources: &mut [safa_abi::poll::PollEntry],
+    timeout_after: u64,
+) -> Result<(), PollError> {
+    poll::poll_resources(resources, timeout_after)
 }

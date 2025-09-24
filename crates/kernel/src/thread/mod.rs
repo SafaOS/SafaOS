@@ -13,7 +13,10 @@ use crate::{
     arch::{threading::CPUStatus, without_interrupts},
     debug, eve,
     process::{Pid, Process, resources::Ri},
-    scheduler::{Scheduler, wait_queue::WaitQueue},
+    scheduler::{
+        Scheduler,
+        wait_queue::{WaitQueue, WaitQueueWithTimeout},
+    },
     time,
     utils::locks::{Mutex, SpinLock, SpinLockGuard},
 };
@@ -239,6 +242,15 @@ impl ArcThread {
         reason: Reason,
     ) {
         queue.push(self, reason);
+    }
+
+    pub fn sleep_in_queue_with_timeout<const AVERAGE: usize, Reason>(
+        self,
+        queue: &mut WaitQueueWithTimeout<AVERAGE, Reason>,
+        reason: Reason,
+        duration: Option<NonZero<u64>>,
+    ) -> Option<NonZero<u64>> {
+        queue.push(self, reason, duration)
     }
 }
 

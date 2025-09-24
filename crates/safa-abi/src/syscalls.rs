@@ -35,6 +35,9 @@ pub enum SyscallTable {
     ///
     /// Otherwise, errors with [`NotAFile`]
     SysIORead = 4,
+    /// Given a set of resources, waits for any of them to become ready for I/O (with specified events), returns the events that occurred causing the thread to wake up.
+    /// A single poll entry's layout is defined in [`crate::poll::PollEntry`].
+    SysIOPoll = 45,
     /// Creates a new file
     SysFSCreate = 6,
     /// Creates a new directory
@@ -158,7 +161,7 @@ pub enum SyscallTable {
 
 // sadly we cannot use any proc macros here because this crate is used by the libstd port and more, they don't happen to like proc macros...
 /// When a new syscall is added, add to this number, and use the old value as the syscall number
-const NEXT_SYSCALL_NUM: u16 = 45;
+const NEXT_SYSCALL_NUM: u16 = 46;
 
 impl TryFrom<u16> for SyscallTable {
     type Error = ();

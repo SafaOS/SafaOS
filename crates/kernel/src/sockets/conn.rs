@@ -1,12 +1,16 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::{collections::linked_list::LinkedList, sync::Arc};
+use safa_abi::poll::PollEvents;
 
 use crate::{
     arch::without_interrupts,
     drivers::vfs::FSResult,
     memory::paging::PAGE_SIZE,
-    process::resources::Resource,
+    process::{
+        poll::{self, PollID},
+        resources::Resource,
+    },
     scheduler::wait_queue::WaitQueue,
     sockets::{SockConnID, Socket, SocketError},
     thread,
@@ -210,8 +214,11 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
         let results = self.inner_conn.read::<IS_SERVER>(buf);
         match results {
             Ok(r) => {
+                let last = *update;
                 *update -= r;
-                let ava = MAX_STREAM_SIZE - *update;
+                let current = *update;
+
+                let ava = MAX_STREAM_SIZE - current;
                 waiter
                     .wait_queue
                     .wake_on_condition(|reason| match (reason, IS_SERVER) {
@@ -223,6 +230,28 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
                         }
                         _ => false,
                     });
+
+                let id = if IS_SERVER {
+                    self.server_poll_id()
+                } else {
+                    self.client_poll_id()
+                };
+
+                let events_add = if last >= MAX_STREAM_SIZE {
+                    PollEvents::CAN_WRITE
+                } else {
+                    PollEvents::NONE
+                };
+
+                let events_remove = if current == 0 {
+                    PollEvents::DATA_AVAILABLE
+                } else {
+                    PollEvents::NONE
+                };
+
+                if !events_add.is_empty() || !events_remove.is_empty() {
+                    poll::broadcast_events(id, events_add, events_remove);
+                }
                 Ok(r)
             }
             Err(SocketError::WouldBlockEmpty) if can_block => {
@@ -272,12 +301,31 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
         let results = self.inner_conn.write::<TARGETS_SERVER>(buf);
         match results {
             Ok(len) => {
+                let last = *update;
                 *update += len;
-                let reason = if TARGETS_SERVER {
-                    SocketWaitReason::ServSockEmpty
+                let current = *update;
+
+                let (reason, poll_id) = if TARGETS_SERVER {
+                    (SocketWaitReason::ServSockEmpty, self.server_poll_id())
                 } else {
-                    SocketWaitReason::ClientSockEmpty
+                    (SocketWaitReason::ClientSockEmpty, self.client_poll_id())
                 };
+
+                let events_add = if last == 0 {
+                    PollEvents::DATA_AVAILABLE
+                } else {
+                    PollEvents::NONE
+                };
+
+                let events_remove = if current >= MAX_STREAM_SIZE {
+                    PollEvents::CAN_WRITE
+                } else {
+                    PollEvents::NONE
+                };
+
+                if !events_add.is_empty() || !events_remove.is_empty() {
+                    poll::broadcast_events(poll_id, events_add, events_remove);
+                }
 
                 waiter.wait_queue.wake_equals(&reason);
                 Ok(len)
@@ -306,10 +354,37 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
         }
     }
 
-    pub fn mark_dropped(&self) {
+    pub(super) fn server_poll_id(&self) -> PollID {
+        PollID::from_ptr(self as *const Self)
+    }
+
+    pub(super) fn client_poll_id(&self) -> PollID {
+        let ptr = self as *const Self as usize;
+        // size_of::<Self> is bigger than 1 so this is ok.
+        PollID::from_usize(ptr + 1)
+    }
+
+    pub(super) fn mark_dropped(&self) {
         let mut waiter = self.wait_queue.lock();
         waiter.conn_dropped = true;
         waiter.wait_queue.wake_all();
+        poll::broadcast_events(
+            self.client_poll_id(),
+            PollEvents::DISCONNECTED,
+            PollEvents::NONE,
+        );
+        poll::broadcast_events(
+            self.server_poll_id(),
+            PollEvents::DISCONNECTED,
+            PollEvents::NONE,
+        );
+    }
+}
+
+impl<T: GenericSockConnTrait> Drop for GenericSockConn<T> {
+    fn drop(&mut self) {
+        poll::stop_tracking_id(self.client_poll_id());
+        poll::stop_tracking_id(self.server_poll_id());
     }
 }
 
@@ -340,6 +415,20 @@ impl SocketConn {
         match self {
             Self::SeqPacket(seq) => seq.write::<TARGETS_SERVER>(buf, can_block),
             Self::Stream(s) => s.write::<TARGETS_SERVER>(buf, can_block),
+        }
+    }
+
+    fn server_poll_id(&self) -> PollID {
+        match self {
+            Self::SeqPacket(sqp) => sqp.server_poll_id(),
+            Self::Stream(st) => st.server_poll_id(),
+        }
+    }
+
+    fn client_poll_id(&self) -> PollID {
+        match self {
+            Self::SeqPacket(sqp) => sqp.client_poll_id(),
+            Self::Stream(st) => st.client_poll_id(),
         }
     }
 }
@@ -512,6 +601,9 @@ impl Resource for SocketClientConn {
     fn address_space_generic(&self) -> bool {
         false
     }
+    fn poll_id(&self) -> Option<PollID> {
+        Some(self.inner.client_poll_id())
+    }
 }
 
 impl Resource for SocketServerConn {
@@ -539,5 +631,8 @@ impl Resource for SocketServerConn {
     }
     fn address_space_generic(&self) -> bool {
         false
+    }
+    fn poll_id(&self) -> Option<PollID> {
+        Some(self.inner.server_poll_id())
     }
 }

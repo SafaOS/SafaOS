@@ -6,7 +6,7 @@ use core::{
 
 use crate::{
     drivers::vfs::SeekOffset,
-    process::{self, vas::MemMappedInterface},
+    process::{self, poll::PollID, vas::MemMappedInterface},
     thread,
 };
 use alloc::{boxed::Box, sync::Arc};
@@ -63,6 +63,10 @@ pub trait Resource: Any {
 
     /// Whether the resource is sendable across address spaces.
     fn address_space_generic(&self) -> bool;
+    /// Returns [`PollID`] for the resource's instance if it is pollable.
+    fn poll_id(&self) -> Option<PollID> {
+        None
+    }
 }
 
 impl dyn Resource {

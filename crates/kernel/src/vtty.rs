@@ -2,12 +2,15 @@ use core::ops::Deref;
 
 use alloc::sync::Arc;
 use bitflags::bitflags;
-use safa_abi::errors::ErrorStatus;
+use safa_abi::{errors::ErrorStatus, poll::PollEvents};
 
 use crate::{
     arch::without_interrupts,
     drivers::vfs::SeekOffset,
-    process::resources::{self, Resource},
+    process::{
+        poll::{self, PollID},
+        resources::{self, Resource},
+    },
     scheduler::wait_queue::WaitQueue,
     syscalls::ffi::SyscallFFI,
     thread::{self},
@@ -259,6 +262,23 @@ impl VirtualTTY {
             _ => Err(ErrorStatus::InvalidCommand),
         }
     }
+
+    pub fn child_poll_id(&self) -> PollID {
+        let ptr = self as *const _ as usize;
+        // Self is size 0x70, so ptr + 1 is still within the bounds of the struct
+        PollID::from_usize(ptr + 1)
+    }
+
+    pub fn mother_poll_id(&self) -> PollID {
+        PollID::from_ptr(self)
+    }
+}
+
+impl Drop for VirtualTTY {
+    fn drop(&mut self) {
+        poll::stop_tracking_id(self.mother_poll_id());
+        poll::stop_tracking_id(self.child_poll_id());
+    }
 }
 
 /// A Mother interface over a [`VirtualTTY`].
@@ -270,6 +290,12 @@ impl MotherVTTY {
     /// Performs a write operation to stdin
     pub fn write(&self, s: &str) -> usize {
         self.tty.write_stdin(s);
+        // We wrote data to the child
+        poll::broadcast_events(
+            self.tty.child_poll_id(),
+            PollEvents::DATA_AVAILABLE,
+            PollEvents::NONE,
+        );
         s.len()
     }
     /// Performs a read operation from stdout
@@ -288,6 +314,12 @@ impl ChildVTTY {
     /// Performs a write operation to stdout
     pub fn write(&self, s: &str) -> usize {
         self.tty.write_stdout(s);
+        // We wrote data to the mother
+        poll::broadcast_events(
+            self.tty.mother_poll_id(),
+            PollEvents::DATA_AVAILABLE,
+            PollEvents::NONE,
+        );
         s.len()
     }
     /// Performs a read operation from stdin
@@ -320,26 +352,35 @@ impl Resource for MotherVTTY {
     fn read(&self, off: SeekOffset, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
         self.read(off, buf).map_err(|()| ErrorStatus::InvalidOffset)
     }
+
     fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
         _ = off;
         let buf_str = str::from_utf8(buf)?;
         Ok(self.write(buf_str))
     }
+
     fn try_clone_into_node(
         &self,
         is_global: bool,
     ) -> Result<crate::process::resources::ResourceNodeRef, ErrorStatus> {
         resources::generic_clone_impl(self, is_global)
     }
+
     fn sync(&self) -> Result<(), ErrorStatus> {
         // TODO: Implement Sync and buffering
         Ok(())
     }
+
     fn address_space_generic(&self) -> bool {
         true
     }
+
     fn send_command(&self, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
         self.process_command(cmd, arg)
+    }
+
+    fn poll_id(&self) -> Option<PollID> {
+        Some(self.tty.mother_poll_id())
     }
 }
 
@@ -348,26 +389,35 @@ impl Resource for ChildVTTY {
         _ = off;
         Ok(self.read(buf))
     }
+
     fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
         _ = off;
         let buf_str = str::from_utf8(buf)?;
         Ok(self.write(buf_str))
     }
+
     fn try_clone_into_node(
         &self,
         is_global: bool,
     ) -> Result<crate::process::resources::ResourceNodeRef, ErrorStatus> {
         resources::generic_clone_impl(self, is_global)
     }
+
     fn sync(&self) -> Result<(), ErrorStatus> {
         // TODO: Implement Sync and buffering
         Ok(())
     }
+
     fn address_space_generic(&self) -> bool {
         true
     }
+
     fn send_command(&self, cmd: u16, arg: u64) -> Result<(), ErrorStatus> {
         self.process_command(cmd, arg)
+    }
+
+    fn poll_id(&self) -> Option<PollID> {
+        Some(self.tty.child_poll_id())
     }
 }
 
