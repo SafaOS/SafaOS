@@ -53,15 +53,15 @@ impl ResourcePoll {
         self.status.get(&id).copied()
     }
 
-    fn broadcast_events(&mut self, id: PollID, events: PollEvents, events_remove: PollEvents) {
+    fn broadcast_events(&mut self, id: PollID, events_add: PollEvents, events_remove: PollEvents) {
         let old_events = self.status.get(&id).copied().unwrap_or(PollEvents::NONE);
-        let events_all = old_events.difference(events_remove).intersection(events);
+        let events_all = old_events.difference(events_remove).union(events_add);
 
         self.status.insert(id, events_all);
-        if events.contains(PollEvents::DISCONNECTED) {
-            self.wake_id_with_reasons(id, events);
-        } else {
-            self.wake_for_id_reasons(id, events);
+        if events_all.contains(PollEvents::DISCONNECTED) {
+            self.wake_id_with_reasons(id, events_all);
+        } else if !events_all.is_empty() {
+            self.wake_for_id_reasons(id, events_all);
         }
     }
 
@@ -154,11 +154,12 @@ pub fn poll_resources(
     };
     let timeout_after = (timeout_after.get() != u64::MAX).then_some(timeout_after);
 
-    let queue = POLL_QUEUE.lock();
+    let mut poll_queue = POLL_QUEUE.lock();
     let mut queue_entry = Box::new(PollEntry {
         resources: SmallVec::with_capacity(entries.len()),
     });
 
+    let mut any_skipped = false;
     for ent in &mut *entries {
         let ri = ent.resource();
         let poll_for = ent.events();
@@ -174,11 +175,10 @@ pub fn poll_resources(
             .poll_id()
             .ok_or(PollError::UnsupportedResource)?;
 
-        if let Some(status) = queue.current_events(poll_id) {
-            if status.contains(poll_for) {
+        if let Some(status) = poll_queue.current_events(poll_id) {
+            if status.contains(poll_for) || status.contains(PollEvents::DISCONNECTED) {
                 *poll_result = status;
-            } else if status.contains(PollEvents::DISCONNECTED) {
-                *poll_result = PollEvents::DISCONNECTED;
+                any_skipped = true;
             } else {
                 *poll_result = PollEvents::NONE;
                 queue_entry.resources.push((poll_id, poll_for));
@@ -190,13 +190,12 @@ pub fn poll_resources(
         }
     }
 
-    if queue_entry.resources.is_empty() {
+    if queue_entry.resources.is_empty() || any_skipped {
         return Ok(());
     }
 
     let entry_ptr = NonNull::from_ref(&*queue_entry);
 
-    let mut poll_queue = POLL_QUEUE.lock();
     with_interrupts(move || {
         thread::current().sleep_in_queue_with_timeout(
             &mut poll_queue.queue,

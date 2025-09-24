@@ -96,13 +96,31 @@ impl VirtualTTY {
 
     /// Writes a string to stdout
     pub fn write_stdout(&self, s: &str) {
+        if s.len() == 0 {
+            return;
+        }
         let bytes = s.as_bytes();
+
         let mut stdout = self.stdout.lock();
+        let data_was_ava = !stdout.is_empty();
+
         stdout.reserve(bytes.len());
         stdout.extend_from_slice(bytes);
+        if !data_was_ava {
+            /* targets mother poll */
+            poll::broadcast_events(
+                self.mother_poll_id(),
+                PollEvents::DATA_AVAILABLE,
+                PollEvents::NONE,
+            );
+        }
     }
     /// Writes a string to stdin
     pub fn write_stdin(&self, s: &str) {
+        if s.len() == 0 {
+            return;
+        }
+
         const ERASE: u8 = 0x7f;
 
         let bytes = s.as_bytes();
@@ -133,6 +151,9 @@ impl VirtualTTY {
                 echo(b'\x08');
             }};
         }
+
+        let newlines_count_was = waiter.newlines_count;
+        let stdin_had = stdin.len();
 
         for b in bytes {
             match *b {
@@ -170,20 +191,41 @@ impl VirtualTTY {
         if flags.contains(TTYFlags::CANONICAL) && waiter.newlines_count > 0 {
             waiter.wait_queue.wake_equals(&WaitReason::CanonicalRead);
         }
+
+        if (flags.contains(TTYFlags::CANONICAL)
+            && newlines_count_was == 0
+            && waiter.newlines_count > 0)
+            || (!flags.contains(TTYFlags::CANONICAL) && stdin_had == 0)
+        {
+            poll::broadcast_events(
+                self.child_poll_id(),
+                PollEvents::DATA_AVAILABLE,
+                PollEvents::NONE,
+            );
+        }
     }
 
-    /// Reads `buf`.len() or less bytes from stdout starting from `offset`,
+    /// Reads `buf`.len() or less bytes from stdout,
     ///
     /// Returns the amount of data read if successful otherwise Err(()) if the offset is larger or less than the amount of data available.
-    pub fn read_stdout(&self, offset: SeekOffset, buf: &mut [u8]) -> Result<usize, ()> {
-        let stdout = self.stdout.lock();
-        let offset = match offset {
-            SeekOffset::End(am) => stdout.len().checked_sub(am).ok_or(())?,
-            SeekOffset::Start(s) => s,
-        };
+    pub fn read_stdout(&self, buf: &mut [u8]) -> Result<usize, ()> {
+        let mut stdout = self.stdout.lock();
 
-        let read_len = buf.len().min(stdout.len().checked_sub(offset).ok_or(())?);
-        buf[..read_len].copy_from_slice(&stdout[offset..offset + read_len]);
+        let stdout_len = stdout.len();
+        let read_len = buf.len().min(stdout_len);
+
+        buf[..read_len].copy_from_slice(&stdout[..read_len]);
+
+        stdout.copy_within(read_len.., 0);
+        stdout.truncate(stdout_len - read_len);
+
+        if stdout.is_empty() {
+            poll::broadcast_events(
+                self.mother_poll_id(),
+                PollEvents::NONE,
+                PollEvents::DATA_AVAILABLE,
+            );
+        }
         Ok(read_len)
     }
 
@@ -220,10 +262,13 @@ impl VirtualTTY {
         };
 
         let read_len = buf.len().min(max_read);
+
+        let mut newlines_ava = false;
         if let Some(ref mut waiter) = canonical
             && read_len == max_read
         {
             waiter.newlines_count -= 1;
+            newlines_ava = waiter.newlines_count > 0;
         }
 
         buf[..read_len].copy_from_slice(&stdin_bytes[..read_len]);
@@ -231,6 +276,14 @@ impl VirtualTTY {
         unsafe {
             let stdin_bytes_len = stdin_bytes.len();
             stdin.set_len(stdin_bytes_len - read_len);
+        }
+
+        if stdin.len() == 0 || (canonical.is_some() && !newlines_ava) {
+            poll::broadcast_events(
+                self.child_poll_id(),
+                PollEvents::NONE,
+                PollEvents::DATA_AVAILABLE,
+            );
         }
         read_len
     }
@@ -290,17 +343,11 @@ impl MotherVTTY {
     /// Performs a write operation to stdin
     pub fn write(&self, s: &str) -> usize {
         self.tty.write_stdin(s);
-        // We wrote data to the child
-        poll::broadcast_events(
-            self.tty.child_poll_id(),
-            PollEvents::DATA_AVAILABLE,
-            PollEvents::NONE,
-        );
         s.len()
     }
     /// Performs a read operation from stdout
-    pub fn read(&self, off: SeekOffset, buf: &mut [u8]) -> Result<usize, ()> {
-        self.tty.read_stdout(off, buf)
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize, ()> {
+        self.tty.read_stdout(buf)
     }
 }
 
@@ -350,7 +397,8 @@ pub fn alloc_vtty() -> (MotherVTTY, ChildVTTY) {
 
 impl Resource for MotherVTTY {
     fn read(&self, off: SeekOffset, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
-        self.read(off, buf).map_err(|()| ErrorStatus::InvalidOffset)
+        _ = off;
+        self.read(buf).map_err(|()| ErrorStatus::InvalidOffset)
     }
 
     fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
@@ -436,17 +484,19 @@ fn vtty_canonical_mode_test() {
     let (mother, child) = alloc_vtty();
 
     mother.set_flags(TTYFlags::CANONICAL | TTYFlags::ECHO);
+
     child.write(MSG0);
     mother.write(MSG0);
     mother.write(SPEC_MSG);
+
     mother.set_flags(TTYFlags::CANONICAL | TTYFlags::ECHO | TTYFlags::ECHO_ERASE);
+
     mother.write(SPEC_MSG);
     mother.write(MSG1);
     // No echo
     mother.set_flags(TTYFlags::CANONICAL);
     mother.write(MSG1);
 
-    let mut mo_off = 0;
     macro_rules! assert_child {
         ($buf: ident, $c: ident, $o: expr) => {{
             let read_buf = &mut $buf;
@@ -472,7 +522,7 @@ fn vtty_canonical_mode_test() {
         ($o: expr) => {{
             let o = $o as &[u8];
             let len = mother
-                .read(SeekOffset::Start(mo_off), &mut read_buf[..o.len()])
+                .read(&mut read_buf[..o.len()])
                 .expect("Failed to read from stdout: InvalidOffset");
             let read = &read_buf[..len];
             unsafe {
@@ -484,7 +534,6 @@ fn vtty_canonical_mode_test() {
                     str::from_utf8_unchecked(o)
                 );
             }
-            mo_off += len;
         }};
     }
 
@@ -555,7 +604,6 @@ fn vtty_non_canonical_mode_test() {
     mother.set_flags(TTYFlags::empty());
     mother.write(MSG1);
 
-    let mut mo_off = 0;
     macro_rules! assert_child {
         ($buf: ident, $c: ident, $o: expr) => {{
             let read_buf = &mut $buf;
@@ -585,7 +633,7 @@ fn vtty_non_canonical_mode_test() {
         ($o: expr) => {{
             let o = $o as &[u8];
             let len = mother
-                .read(SeekOffset::Start(mo_off), &mut read_buf[..o.len()])
+                .read(&mut read_buf[..o.len()])
                 .expect("Failed to read from stdout: InvalidOffset");
             let read = &read_buf[..len];
             unsafe {
@@ -597,7 +645,6 @@ fn vtty_non_canonical_mode_test() {
                     str::from_utf8_unchecked(o)
                 );
             }
-            mo_off += len;
         }};
     }
 
