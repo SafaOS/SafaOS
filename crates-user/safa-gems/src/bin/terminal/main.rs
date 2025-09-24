@@ -4,7 +4,7 @@ use std::{
     io::{Read, Write},
     os::safaos::io::IoUtils,
     process::Command,
-    str, thread,
+    str,
     time::Instant,
 };
 
@@ -18,8 +18,10 @@ use libgem::{
     },
 };
 use libopal::event::KeyModifiers;
+use safa_api::abi::poll::{PollEntry, PollEvents};
 
 use crate::term_display::TerminalElement;
+use std::os::safaos::AsRawResource;
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 560;
@@ -138,22 +140,33 @@ fn main() {
     let mut read_from = mother;
 
     let mut statemechaine = vte::Parser::new();
-
+    let mut poll_entries = [
+        PollEntry::new(0, PollEvents::NONE),
+        PollEntry::new(
+            read_from.as_raw_resource() as u32,
+            PollEvents::DATA_AVAILABLE,
+        ),
+    ];
     loop {
         term.redraw();
 
-        let events = term.try_handle_events();
+        let events = term.try_handle_events_with_poll(&mut poll_entries);
         let console: &mut TerminalElement = term.body().get_element_as_mut(id).expect("SDASsada??");
 
-        let len = read_from
-            .read_to_end(&mut buf)
-            .expect("Failed to read stdout");
-        if len != 0 {
-            let instant = Instant::now();
-            statemechaine.advance(console, &buf);
-            let elapsed = instant.elapsed();
-            println!("elapsed: {}ms, parsing {}", elapsed.as_millis(), buf.len());
-            buf.clear();
+        if poll_entries[1]
+            .returned_events()
+            .contains(PollEvents::DATA_AVAILABLE)
+        {
+            let len = read_from
+                .read_to_end(&mut buf)
+                .expect("Failed to read stdout");
+            if len != 0 {
+                let instant = Instant::now();
+                statemechaine.advance(console, &buf);
+                let elapsed = instant.elapsed();
+                println!("elapsed: {}ms, parsing {}", elapsed.as_millis(), buf.len());
+                buf.clear();
+            }
         }
 
         if let Some(events) = events {
@@ -203,7 +216,5 @@ fn main() {
                 }
             }
         }
-
-        thread::yield_now();
     }
 }
