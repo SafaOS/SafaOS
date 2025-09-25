@@ -264,16 +264,18 @@ impl TerminalElement {
 
     /// Insert a character at cursor `cursor`, returns the new cursor position, also handles both newline '\n' and backspace '\x08'.
     fn insert_char_at(&mut self, cursor: Cursor, data: char) -> Cursor {
-        let max_char_len = self.max_chars_len();
+        let max_char_off = self.max_chars_len() - 1;
 
         let mut curr_line = cursor.line;
         let mut curr_col = cursor.index;
 
         let buf = &mut self.buffer;
-        while curr_col >= max_char_len {
-            curr_col -= max_char_len;
+        while curr_col >= max_char_off {
+            curr_col -= max_char_off;
             curr_line += 1;
         }
+
+        println!("inserting at {curr_line}:{curr_col}, max is {max_char_off}");
 
         while curr_line >= buf.lines.len() {
             let ending = buf.lines.last().map(|l| l.ending()).unwrap_or_default();
@@ -408,10 +410,8 @@ impl TerminalElement {
 
         if data == '\x08' {
             Cursor::new(curr_line, curr_col /* we went back a col remember */)
-        } else if curr_col + 1 < max_char_len {
-            Cursor::new(curr_line, curr_col + 1)
         } else {
-            Cursor::new(curr_line + 1, 0)
+            Cursor::new(curr_line, curr_col + 1)
         }
     }
 
