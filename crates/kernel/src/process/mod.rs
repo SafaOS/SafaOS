@@ -126,7 +126,8 @@ impl Process {
             assert!(!self.vasa.is_locked());
             assert!(!self.resources.is_locked());
 
-            *self.resources.write() = ResourceManager::new();
+            // Safety: We know the process is dead if this function was called.
+            self.resources.write().drop_all();
             ManuallyDrop::drop(&mut self.vasa.lock().page_table);
         }
     }

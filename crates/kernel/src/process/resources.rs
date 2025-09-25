@@ -239,6 +239,20 @@ impl ResourceManager {
     fn get_mut(&mut self, ri: Ri) -> Option<&mut ResourceNodeRef> {
         self.resources.get_mut(&ri)
     }
+
+    /// Forces all resources to be dropped, even if there is an alive shared reference to them
+    /// # Safety
+    /// caller must ensure the process calling this is completely dead,
+    /// I use this to clean up resources if for example a process dead during a blocking syscall,
+    /// only a syscall may hold another shared reference to a resource.
+    pub unsafe fn drop_all(&mut self) {
+        let mut toke = core::mem::replace(self, ResourceManager::new());
+        for (_, res) in toke.resources.drain() {
+            while Arc::strong_count(&res) != 1 {
+                unsafe { Arc::decrement_strong_count(&*res) };
+            }
+        }
+    }
 }
 
 /// Gets a shared reference to the resource with the ID `ri`.
