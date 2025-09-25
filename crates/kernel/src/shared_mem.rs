@@ -173,7 +173,7 @@ impl Resource for TrackedShmKey {
     }
 
     fn address_space_generic(&self) -> bool {
-        false
+        true
     }
 }
 
