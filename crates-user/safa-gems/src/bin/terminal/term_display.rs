@@ -275,8 +275,6 @@ impl TerminalElement {
             curr_line += 1;
         }
 
-        println!("inserting at {curr_line}:{curr_col}, max is {max_char_off}");
-
         while curr_line >= buf.lines.len() {
             let ending = buf.lines.last().map(|l| l.ending()).unwrap_or_default();
 
