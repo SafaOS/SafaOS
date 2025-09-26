@@ -3,7 +3,6 @@ pub mod framebuffer;
 pub mod interrupts;
 pub mod keyboard;
 pub mod keymapper;
-pub mod net;
 pub mod pci;
 pub mod usb_mouse;
 mod utils;
