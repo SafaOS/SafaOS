@@ -147,6 +147,8 @@ fn main() {
             PollEvents::DATA_AVAILABLE,
         ),
     ];
+
+    let win_id = term.win().id();
     loop {
         term.redraw();
 
@@ -167,7 +169,7 @@ fn main() {
         if let Some(events) = events {
             for event in events
                 .iter()
-                .filter(|w_eve| w_eve.win() == term.win().id())
+                .filter(|w_eve| w_eve.win() == win_id)
                 .map(|w_eve| w_eve.event())
             {
                 match event {

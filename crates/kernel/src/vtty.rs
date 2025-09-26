@@ -100,8 +100,13 @@ impl VirtualTTY {
             return;
         }
         let bytes = s.as_bytes();
+        self.write_stdout_inner(&mut self.stdout.lock(), bytes)
+    }
 
-        let mut stdout = self.stdout.lock();
+    fn write_stdout_inner(&self, stdout: &mut PageVec<u8>, bytes: &[u8]) {
+        if bytes.len() == 0 {
+            return;
+        }
         let data_was_ava = !stdout.is_empty();
 
         stdout.reserve(bytes.len());
@@ -131,24 +136,22 @@ impl VirtualTTY {
         let flags = self.flags.read();
         let mut stdout = flags.contains(TTYFlags::ECHO).then(|| self.stdout.lock());
 
-        let mut echo = move |c: u8| {
-            if let Some(ref mut s) = stdout {
-                s.push(c)
+        let mut echo = move |s: &[u8]| {
+            if let Some(ref mut stdout) = stdout {
+                self.write_stdout_inner(stdout, s);
             }
         };
 
         macro_rules! echo_ctrl {
             ($c: expr) => {{
-                echo(b'^');
-                echo($c);
+                echo(b"^");
+                echo($c.as_bytes());
             }};
         }
 
         macro_rules! echo_erase {
             () => {{
-                echo(b'\x08');
-                echo(b' ');
-                echo(b'\x08');
+                echo(b"\x08 \x08");
             }};
         }
 
@@ -173,13 +176,13 @@ impl VirtualTTY {
                                 echo_erase!()
                             }
                         } else {
-                            echo_ctrl!(b'H');
+                            echo_ctrl!("H");
                         }
                     }
                 }
                 o => {
                     stdin.push(o);
-                    echo(o);
+                    echo(&[o]);
 
                     if o == b'\n' {
                         waiter.newlines_count += 1;
