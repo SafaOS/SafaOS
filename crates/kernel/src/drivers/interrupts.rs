@@ -23,6 +23,10 @@ pub enum IntTrigger {
 #[derive(Debug, Clone)]
 pub enum IRQInfo {
     MSIX(MSIXInfo),
+    PCIInt {
+        interrupt_line: u8,
+        interrupt_pin: u8,
+    },
 }
 
 unsafe impl Send for IRQInfo {}
@@ -32,6 +36,7 @@ impl IRQInfo {
     fn setup(&mut self, irq_num: u32, trigger: IntTrigger) {
         match self {
             IRQInfo::MSIX(msix) => msix.setup(irq_num, trigger),
+            IRQInfo::PCIInt { .. } => {}
         }
     }
 }

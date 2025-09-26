@@ -4,7 +4,10 @@ use core::{fmt::Debug, u32, u64};
 use lazy_static::lazy_static;
 use msi::{MSIXCap, MSIXInfo};
 
-use crate::{PhysAddr, drivers::pci::extended_caps::CaptabilitiesIter};
+use crate::{
+    PhysAddr,
+    drivers::{interrupts::IRQInfo, pci::extended_caps::CaptabilitiesIter},
+};
 pub mod extended_caps;
 pub mod msi;
 
@@ -296,6 +299,26 @@ impl<'a> PCIDeviceInfo<'a> {
     pub fn get_msix_cap(&mut self) -> Option<MSIXInfo> {
         self.header
             .get_msix_cap(self.bus, self.device, self.function)
+    }
+
+    pub fn get_pci_irq_info(&mut self) -> Option<IRQInfo> {
+        let general = self.header.unwrap_general();
+        let interrupt_pin = (general.interrupt_pin != 0).then_some(general.interrupt_pin)?;
+        let interrupt_line = general.interrupt_line;
+
+        Some(IRQInfo::PCIInt {
+            interrupt_line,
+            interrupt_pin,
+        })
+    }
+
+    /// Gets the best IRQ Info available
+    pub fn get_best_irq_info(&mut self) -> Option<IRQInfo> {
+        if let Some(msix) = self.get_msix_cap() {
+            Some(msix.into_irq_info())
+        } else {
+            self.get_pci_irq_info()
+        }
     }
 
     /// Gets at most 6 base address registers addresses from the header and their sizes

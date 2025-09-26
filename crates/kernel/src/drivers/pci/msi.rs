@@ -58,7 +58,7 @@ struct MSIXTableEntry {
     vector_control: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct MSIXInfo {
     cap_ptr: *mut MSIXCap,
     table_base_addr: PhysAddr,

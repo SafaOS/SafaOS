@@ -8,6 +8,7 @@ use core::{arch::asm, fmt::Display};
 use handlers::IDT;
 use idt::IDTDesc;
 
+use crate::arch::x86_64::interrupts::apic::{APIC, IOREDTBL};
 use crate::arch::x86_64::registers::RFLAGS;
 use crate::{KERNEL_ELF, VirtAddr};
 
@@ -128,11 +129,27 @@ irq_list!(
 /// Registers the handler function `handler` to irq `irq_num`
 /// Make sure the num is retrieved from [`AVAILABLE_RQS`]
 pub unsafe fn register_irq_handler(irq_num: u32, info: &IRQInfo) {
-    _ = info;
     let table = unsafe { &mut *IDT.get() };
     assert_eq!(table[irq_num as usize], idt::GateDescriptor::default());
     for (i, ava_irq) in IRQS.iter().enumerate() {
         if *ava_irq == irq_num {
+            match info {
+                // No additional setup needed.
+                IRQInfo::MSIX(_) => {}
+                IRQInfo::PCIInt {
+                    interrupt_line,
+                    interrupt_pin,
+                } => unsafe {
+                    _ = interrupt_pin;
+
+                    let redirection = IOREDTBL::new()
+                        .with_vector(irq_num as u8)
+                        .with_masked(false);
+
+                    APIC.write_ioapic_irq(*interrupt_line, redirection)
+                },
+            }
+
             table[irq_num as usize] =
                 idt::GateDescriptor::new(HANDLERS[i] as usize, handlers::ATTR_INT);
             return;

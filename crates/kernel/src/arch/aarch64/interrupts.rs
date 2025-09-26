@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
-use crate::arch::aarch64::gic::its::commands::{ITSCommand, GITS_COMMAND_QUEUE};
-use crate::arch::aarch64::gic::{its, LPI_MANAGER};
+use crate::arch::aarch64::gic::its::commands::{GITS_COMMAND_QUEUE, ITSCommand};
+use crate::arch::aarch64::gic::{LPI_MANAGER, its};
 use crate::drivers::interrupts::IRQInfo;
 use crate::utils::locks::Mutex;
 use lazy_static::lazy_static;
@@ -14,6 +14,7 @@ lazy_static! {
 pub unsafe fn register_irq_handler(int_id: u32, info: &IRQInfo) {
     let device_id = match info {
         IRQInfo::MSIX(msix) => msix.requester_id(),
+        IRQInfo::PCIInt { .. } => todo!("Implement PCI IRQs"),
     };
     let event_id = int_id;
 
