@@ -86,8 +86,8 @@ pub fn init_idt() {
     }
 }
 
-const fn irq_handler<const IRQ_NUM: u32>() -> extern "x86-interrupt" fn() {
-    extern "x86-interrupt" fn handler<const IRQ_NUM: u32>() {
+const fn irq_handler<const IRQ_NUM: u32>() -> extern "x86-interrupt" fn(InterruptFrame) {
+    extern "x86-interrupt" fn handler<const IRQ_NUM: u32>(_: InterruptFrame) {
         let manager = crate::drivers::interrupts::IRQ_MANAGER.read();
         for irq in &manager.irqs {
             if irq.irq_num == IRQ_NUM {
@@ -118,7 +118,7 @@ macro_rules! irq_list {
     ( $( $x:literal ),* $(,)? ) => {
         /// A list of available System IRQ numbers (interrupt IDs) to use
         pub const IRQS: [u32; count_idents!($($x),*)] = [ $( $x ),* ];
-        const HANDLERS: [extern "x86-interrupt" fn(); count_idents!($($x),*)] = [ $( irq_handler::<$x>() ),* ];
+        const HANDLERS: [extern "x86-interrupt" fn(InterruptFrame); count_idents!($($x),*)] = [ $( irq_handler::<$x>() ),* ];
     }
 }
 

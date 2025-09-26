@@ -1,6 +1,9 @@
 use core::sync::atomic::{AtomicI16, AtomicU8, Ordering};
 
-use crate::arch::x86_64::{interrupts::apic::APIC, io::outb};
+use crate::arch::x86_64::{
+    interrupts::{InterruptFrame, apic::APIC},
+    io::outb,
+};
 
 use super::apic::{IOREDTBL, send_eoi};
 
@@ -19,7 +22,7 @@ fn set_freq(freq: u32) {
 pub static PIT_IRQ: AtomicU8 = AtomicU8::new(2);
 pub static PIT_COUNTER: AtomicI16 = AtomicI16::new(0);
 
-pub extern "x86-interrupt" fn pit_handler() {
+pub extern "x86-interrupt" fn pit_handler(_: InterruptFrame) {
     PIT_COUNTER.fetch_sub(1, Ordering::Relaxed);
     send_eoi();
 }

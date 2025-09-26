@@ -66,16 +66,16 @@ lazy_static! {
         (0x81, do_nothing, ATTR_INT)
     );
 }
-extern "x86-interrupt" fn apic_err() {
+extern "x86-interrupt" fn apic_err(_: InterruptFrame) {
     panic!("APIC error encountured")
 }
-extern "x86-interrupt" fn halt_handler() {
+extern "x86-interrupt" fn halt_handler(_: InterruptFrame) {
     crate::serial!("halting...\n");
     send_eoi();
     khalt()
 }
 
-extern "x86-interrupt" fn flush_cache_handler() {
+extern "x86-interrupt" fn flush_cache_handler(_: InterruptFrame) {
     unsafe {
         flush_cache_inner();
         send_eoi();
@@ -118,16 +118,16 @@ extern "x86-interrupt" fn page_fault_handler(frame: TrapFrame) {
     panic!("---- Page Fault ----\naddress: {:#x}\n{}", cr2, frame)
 }
 
-pub extern "x86-interrupt" fn keyboard_interrupt_handler() {
+pub extern "x86-interrupt" fn keyboard_interrupt_handler(_: InterruptFrame) {
     ps2::handle_ps2_keyboard();
     send_eoi();
 }
 
-pub extern "x86-interrupt" fn mice_handler() {
+pub extern "x86-interrupt" fn mice_handler(_: InterruptFrame) {
     ps2::mice_handler();
     send_eoi();
 }
 
-pub extern "x86-interrupt" fn do_nothing() {
+pub extern "x86-interrupt" fn do_nothing(_: InterruptFrame) {
     send_eoi();
 }

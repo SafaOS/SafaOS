@@ -7,6 +7,7 @@ use crate::{
         without_interrupts,
         x86_64::{
             gdt::{TSS0_PTR, TaskStateSegment, get_kernel_tss_stack, set_kernel_tss_stack},
+            interrupts::InterruptFrame,
             registers::{RFLAGS, rdmsr, wrmsr},
         },
     },
@@ -196,7 +197,7 @@ unsafe extern "C" {
 }
 
 unsafe extern "x86-interrupt" {
-    pub fn context_switch_stub();
+    pub fn context_switch_stub(_: InterruptFrame) -> !;
 }
 
 #[repr(C)]
