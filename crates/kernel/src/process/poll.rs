@@ -1,6 +1,5 @@
 use core::{num::NonZero, ptr::NonNull};
 
-use alloc::boxed::Box;
 use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
 use safa_abi::errors::IntoErr;
@@ -155,11 +154,9 @@ pub fn poll_resources(
     let timeout_after = (timeout_after.get() != u64::MAX).then_some(timeout_after);
 
     let mut poll_queue = POLL_QUEUE.lock();
-    let mut queue_entry = Box::new(PollEntry {
-        resources: SmallVec::with_capacity(entries.len()),
-    });
-
     let mut any_skipped = false;
+    let mut actual_count = 0;
+
     for ent in &mut *entries {
         let ri = ent.resource();
         let poll_for = ent.events();
@@ -169,29 +166,47 @@ pub fn poll_resources(
             continue;
         }
 
-        let resource = resources::get(ri).ok_or(PollError::UnknownResource)?;
-        let poll_id = resource
-            .data()
-            .poll_id()
-            .ok_or(PollError::UnsupportedResource)?;
+        let poll_id = resources::get_ref(ri, |res| {
+            res.data().poll_id().ok_or(PollError::UnsupportedResource)
+        })
+        .ok_or(PollError::UnknownResource)
+        .flatten()?;
 
         if let Some(status) = poll_queue.current_events(poll_id) {
             if status.contains(poll_for) || status.contains(PollEvents::DISCONNECTED) {
                 *poll_result = status;
                 any_skipped = true;
-            } else {
-                *poll_result = PollEvents::NONE;
-                queue_entry.resources.push((poll_id, poll_for));
             }
-        } else {
+        } else if !any_skipped {
             *poll_result = PollEvents::NONE;
-            // The ID is not in the queue, yet, but it is safe to assume that it is going to be added later, because the resource is still alive.
-            queue_entry.resources.push((poll_id, poll_for));
         }
+
+        actual_count += 1;
     }
 
-    if queue_entry.resources.is_empty() || any_skipped {
+    if any_skipped || actual_count == 0 {
         return Ok(());
+    }
+
+    let mut queue_entry = ::alloc::boxed::Box::new(PollEntry {
+        resources: SmallVec::with_capacity(actual_count),
+    });
+
+    for ent in &mut *entries {
+        let ri = ent.resource();
+        let poll_for = ent.events();
+
+        if poll_for.is_empty() {
+            continue;
+        }
+
+        let poll_id = resources::get_ref(ri, |res| {
+            res.data().poll_id().ok_or(PollError::UnsupportedResource)
+        })
+        .ok_or(PollError::UnknownResource)
+        .flatten()?;
+
+        queue_entry.resources.push((poll_id, poll_for));
     }
 
     let entry_ptr = NonNull::from_ref(&*queue_entry);

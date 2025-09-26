@@ -153,20 +153,15 @@ fn main() {
         let events = term.try_handle_events_with_poll(&mut poll_entries);
         let console: &mut TerminalElement = term.body().get_element_as_mut(id).expect("SDASsada??");
 
-        if poll_entries[1]
-            .returned_events()
-            .contains(PollEvents::DATA_AVAILABLE)
-        {
-            let len = read_from
-                .read_to_end(&mut buf)
-                .expect("Failed to read stdout");
-            if len != 0 {
-                let instant = Instant::now();
-                statemechaine.advance(console, &buf);
-                let elapsed = instant.elapsed();
-                println!("elapsed: {}ms, parsing {}", elapsed.as_millis(), buf.len());
-                buf.clear();
-            }
+        let len = read_from
+            .read_to_end(&mut buf)
+            .expect("Failed to read stdout");
+        if len != 0 {
+            let instant = Instant::now();
+            statemechaine.advance(console, &buf);
+            let elapsed = instant.elapsed();
+            println!("elapsed: {}ms, parsing {}", elapsed.as_millis(), buf.len());
+            buf.clear();
         }
 
         if let Some(events) = events {
