@@ -1,6 +1,7 @@
 use core::{
     fmt::Debug,
     ops::{Deref, DerefMut},
+    ptr::NonNull,
 };
 
 use crate::{
@@ -22,9 +23,9 @@ pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
 /// A pointer to some data in a physical frame that is mapped to a virtual address in the hddm
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct FramePtr<T: ?Sized>(*mut T);
+pub struct FramePtr<T: ?Sized>(NonNull<T>);
 impl<T: ?Sized> FramePtr<T> {
-    pub unsafe fn from_ptr(ptr: *mut T) -> Self {
+    pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
         Self(ptr)
     }
 
@@ -38,22 +39,24 @@ impl<T: ?Sized> FramePtr<T> {
     }
 
     pub const fn as_ptr(&self) -> *mut T {
-        self.0
+        self.0.as_ptr()
     }
 }
 
 impl<T: ?Sized> Deref for FramePtr<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.0 }
+        unsafe { self.0.as_ref() }
     }
 }
 
 impl<T: ?Sized> DerefMut for FramePtr<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.0 }
+        unsafe { self.0.as_mut() }
     }
 }
+
+unsafe impl<T: ?Sized + Send> Send for FramePtr<T> {}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -92,7 +95,7 @@ impl Frame {
     /// unsafe because the caller must ensure that the frame is valid and points to data containing [`T`]
     pub unsafe fn into_ptr<T>(self) -> FramePtr<T> {
         let addr = self.virt_addr();
-        FramePtr(addr.into_ptr::<T>())
+        FramePtr(NonNull::new(addr.into_ptr::<T>()).expect("Frame points to null"))
     }
 }
 

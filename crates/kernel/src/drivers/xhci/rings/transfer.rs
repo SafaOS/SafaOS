@@ -1,3 +1,5 @@
+use core::ptr::NonNull;
+
 use crate::{
     PhysAddr, VirtAddr,
     drivers::xhci::{self, rings::trbs::TRB, utils::XHCIError},
@@ -36,7 +38,7 @@ impl XHCITransferRing {
         trbs[max_trb_count - 1] = TRB::new_link(trbs_phys_addr, curr_ring_cycle_bit);
 
         let trbs_len = trbs.len();
-        let trbs_ptr = unsafe { FramePtr::from_ptr(trbs) };
+        let trbs_ptr = unsafe { FramePtr::from_ptr(NonNull::new_unchecked(trbs)) };
 
         Ok(Self {
             trbs_ptr,
