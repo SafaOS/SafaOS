@@ -20,6 +20,7 @@
 #![feature(const_ops)]
 #![feature(unsafe_cell_access)]
 #![feature(macro_metavar_expr_concat)]
+#![feature(set_ptr_value)]
 
 #[cfg(test)]
 mod test;
@@ -35,6 +36,7 @@ mod limine;
 /// such as info!, debug! and StackTrace
 mod logging;
 mod memory;
+mod net;
 mod process;
 mod scheduler;
 mod shared_mem;
