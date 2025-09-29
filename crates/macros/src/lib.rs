@@ -115,7 +115,7 @@ pub fn display_consts(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
                     #(#arms)*
-                    Self(x) => write!(f, "{}::{}", stringify!(#ty), x),
+                    Self(x) => write!(f, "{}({})", stringify!(#ty), x),
                 }
             }
         }
@@ -124,7 +124,7 @@ pub fn display_consts(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
                     #(#arms)*
-                    Self(x) => write!(f, "{}::{}", stringify!(#ty), x),
+                    Self(x) => write!(f, "{}({:#x})", stringify!(#ty), x),
                 }
             }
         }

@@ -6,7 +6,9 @@ use msi::{MSIXCap, MSIXInfo};
 
 use crate::{
     PhysAddr,
-    drivers::{interrupts::IRQInfo, pci::extended_caps::CaptabilitiesIter},
+    drivers::{
+        interrupts::IRQInfo, net::e1000::E1000NetCard, pci::extended_caps::CaptabilitiesIter,
+    },
 };
 pub mod extended_caps;
 pub mod msi;
@@ -471,6 +473,10 @@ lazy_static! {
         let host_pci = HOST_PCI.as_ref()?;
         host_pci.create_device::<XHCI>()
     };
+    pub static ref E1000_DEVICE: Option<E1000NetCard> = {
+        let host_pci = HOST_PCI.as_ref()?;
+        host_pci.create_device()
+    };
 }
 
 /// Initializes drivers and devices that uses the PCI
@@ -479,4 +485,5 @@ pub fn init() {
         host_pci.print();
     }
     XHCI_DEVICE.as_ref().map(|device| device.start());
+    E1000_DEVICE.as_ref().map(|device| device.start());
 }

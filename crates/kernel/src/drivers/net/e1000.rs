@@ -1,4 +1,4 @@
-use core::{cell::OnceCell, net::Ipv4Addr};
+use core::cell::OnceCell;
 
 use bitfield_struct::bitfield;
 
@@ -7,7 +7,6 @@ use crate::{
     arch::{
         io::{inl, outl},
         paging::current_higher_root_table,
-        with_interrupts,
     },
     debug,
     drivers::{
@@ -21,7 +20,6 @@ use crate::{
     },
     net::{
         MacAddress,
-        arp::ARP,
         ethernet::{EthernetHeader, EthernetType},
     },
     sleep, sleep_until,
@@ -37,6 +35,12 @@ pub struct RxDescriptor {
     status: u8,
     error: u8,
     special: u16,
+}
+
+impl RxDescriptor {
+    pub fn data(&self) -> &[u8] {
+        unsafe { &(&*self.addr.into_virt().into_ptr::<[u8; PAGE_SIZE]>())[..self.len as usize] }
+    }
 }
 
 /// Device Control Register
@@ -341,25 +345,32 @@ pub struct TxDescriptor {
 
 #[bitfield(u8)]
 pub struct TxCmd {
-    /// Interrupt Delay Enable
-    ide: bool,
-    /// VLAN Packet Enable
+    /// End Of Packet
     ///
-    /// When set, indicates that the packet is a VLAN packet and the Ethernet controller
-    /// should add the VLAN Ethertype and an 802.1q VLAN tag to the packet. The
-    /// Ethertype field comes from the VET register and the VLAN tag comes from the
-    /// special field of the TX descriptor. The hardware inserts the FCS/CRC field in that
-    /// case.
+    /// When set, indicates the last descriptor making up the packet. One or many
+    /// descriptors can be used to form a packet.
+    eop: bool,
+    /// Insert FCS
     ///
-    /// When cleared, the Ethernet controller sends a generic Ethernet packet. The IFCS
-    /// controls the insertion of the FCS field in that case.
-    /// In order to have this capability CTRL.VME bit should also be set, otherwise VLE
-    /// capability is ignored. VLE is valid only when EOP is set.
-    vle: bool,
-    /// Extension (0b for legacy mode).
+    /// Controls the insertion of the FCS/CRC field in normal Ethernet packets. IFCS is
+    /// valid only when EOP is set.
+    ifcs: bool,
+    /// Insert checksum
     ///
-    /// Should be written with 0b for future compatibility.
-    ext: bool,
+    /// When set, the Ethernet controller needs to insert a checksum at the offset indicated
+    /// by the CSO field. The checksum calculations are performed for the entire packet
+    /// starting at the byte indicated by the CCS field. IC is ignored if CSO and CCS are out
+    /// of the packet range. This occurs when (CSS  length) OR (CSO  length - 1). IC is
+    /// valid only when EOP is set.
+    ic: bool,
+    /// Report Status
+    ///
+    /// When set, the Ethernet controller needs to report the status information. This ability
+    /// may be used by software that does in-memory checks of the transmit descriptors to
+    /// determine which ones are done and packets have been buffered in the transmit
+    /// FIFO. Software does it by looking at the descriptor status byte and checking the
+    /// Descriptor Done (DD) bit.
+    rs: bool,
     /// Report Packet Sent
     ///
     /// When set, the 82544GC/EI defers writing the DD bit in the status byte
@@ -373,32 +384,25 @@ pub struct TxCmd {
     /// This bit is reserved and should be programmed to 0b for all Ethernet controllers
     /// except the 82544GC/EI.
     rps: bool,
-    /// Report Status
+    /// Extension (0b for legacy mode).
     ///
-    /// When set, the Ethernet controller needs to report the status information. This ability
-    /// may be used by software that does in-memory checks of the transmit descriptors to
-    /// determine which ones are done and packets have been buffered in the transmit
-    /// FIFO. Software does it by looking at the descriptor status byte and checking the
-    /// Descriptor Done (DD) bit.
-    rs: bool,
-    /// Insert checksum
+    /// Should be written with 0b for future compatibility.
+    ext: bool,
+    /// VLAN Packet Enable
     ///
-    /// When set, the Ethernet controller needs to insert a checksum at the offset indicated
-    /// by the CSO field. The checksum calculations are performed for the entire packet
-    /// starting at the byte indicated by the CCS field. IC is ignored if CSO and CCS are out
-    /// of the packet range. This occurs when (CSS  length) OR (CSO  length - 1). IC is
-    /// valid only when EOP is set.
-    ic: bool,
-    /// Insert FCS
+    /// When set, indicates that the packet is a VLAN packet and the Ethernet controller
+    /// should add the VLAN Ethertype and an 802.1q VLAN tag to the packet. The
+    /// Ethertype field comes from the VET register and the VLAN tag comes from the
+    /// special field of the TX descriptor. The hardware inserts the FCS/CRC field in that
+    /// case.
     ///
-    /// Controls the insertion of the FCS/CRC field in normal Ethernet packets. IFCS is
-    /// valid only when EOP is set.
-    ifcs: bool,
-    /// End Of Packet
-    ///
-    /// When set, indicates the last descriptor making up the packet. One or many
-    /// descriptors can be used to form a packet.
-    eop: bool,
+    /// When cleared, the Ethernet controller sends a generic Ethernet packet. The IFCS
+    /// controls the insertion of the FCS field in that case.
+    /// In order to have this capability CTRL.VME bit should also be set, otherwise VLE
+    /// capability is ignored. VLE is valid only when EOP is set.
+    vle: bool,
+    /// Interrupt Delay Enable
+    ide: bool,
 }
 
 /// This register contains the lower bits of the 64-bit transmit Descriptor base address. The base
@@ -738,6 +742,24 @@ const TX_DESC_COUNT: usize = 256 /* 1 pages */;
 const REG_IMC: u16 = 0xD8;
 /// Interrupt Mask Set/Read Register
 const REG_IMS: u16 = 0xD0;
+/// Receiver Timer Interrupt mask
+///
+/// Set when the receiver timer expires.
+/// The receiver timer is used for receiver descriptor packing. Timer
+/// expiration flushes any accumulated descriptors and sets an
+/// interrupt event when enabled.
+const IMS_RXT0_MASK: u32 = 1 << 7;
+/// No idea where this is documented but everyone does it...
+const IMS_RXQ0_MASK: u32 = 1 << 20;
+/// Receiver Timer Interrupt Cause
+///
+/// Set when the receiver timer expires.
+/// The receiver timer is used for receiver descriptor packing. Timer
+/// expiration flushes any accumulated descriptors and sets an
+/// interrupt event when enabled.
+const ICR_RXT0: u32 = IMS_RXT0_MASK;
+/// No idea where this is documented but everyone does it...
+const ICR_RXQ0: u32 = IMS_RXQ0_MASK;
 /// Interrupt Cause Read Register
 ///
 /// This register contains all interrupt conditions for the Ethernet controller. Each time an interrupt
@@ -761,6 +783,99 @@ const REG_RDTR: u16 = 0x2820;
 
 const INTERRUPT_THROTTLING_RATE: u32 = 500;
 
+#[derive(Debug, Clone)]
+pub struct E1000Comm {
+    receive_descriptors: FramePtr<[RxDescriptor; RX_DESC_COUNT]>,
+    transmit_descriptors: FramePtr<[TxDescriptor; TX_DESC_COUNT]>,
+    tx_curr: u32,
+}
+
+impl E1000Comm {
+    pub const fn new(
+        receive_descriptors: FramePtr<[RxDescriptor; RX_DESC_COUNT]>,
+        transmit_descriptors: FramePtr<[TxDescriptor; TX_DESC_COUNT]>,
+    ) -> Self {
+        Self {
+            receive_descriptors,
+            transmit_descriptors,
+            tx_curr: 0,
+        }
+    }
+
+    pub fn send_ethernet(
+        &mut self,
+        card: &E1000NetCard,
+        dest_mac: MacAddress,
+        ethertype: EthernetType,
+        payload: &[u8],
+    ) -> Result<(), ()> {
+        if payload.is_empty() {
+            return Ok(());
+        }
+
+        if payload.len() > PAGE_SIZE - size_of::<EthernetHeader>() {
+            return Err(());
+        }
+
+        let src_mac = card.mac_address();
+        let header = EthernetHeader::new(dest_mac, src_mac, ethertype);
+
+        let tx_descs = &mut *self.transmit_descriptors;
+
+        let desc_count = tx_descs.len();
+        let curr_tx = &mut tx_descs[self.tx_curr as usize];
+        let tx_virt = curr_tx.addr.into_virt();
+
+        unsafe {
+            let ptr = tx_virt.into_ptr::<[u8; PAGE_SIZE]>();
+            let header_size = size_of::<EthernetHeader>();
+
+            let header_ptr = ptr as *mut EthernetHeader;
+            let payload_ptr = ptr.byte_add(header_size) as *mut u8;
+
+            header_ptr.write_volatile(header);
+            payload_ptr.copy_from(payload.as_ptr(), payload.len());
+
+            core::ptr::write_volatile(
+                curr_tx,
+                TxDescriptor {
+                    addr: curr_tx.addr,
+                    length: (header_size + payload.len()) as u16,
+                    cso: 0,
+                    cmd: TxCmd::new()
+                        .with_eop(true)
+                        .with_ifcs(true)
+                        .with_rs(true)
+                        .with_rps(true),
+                    status: 0,
+                    css: 0,
+                    special: 0,
+                },
+            );
+        }
+
+        self.tx_curr += 1;
+        if self.tx_curr as usize >= desc_count {
+            self.tx_curr = 0;
+        }
+
+        card.write_command(REG_TDT, self.tx_curr);
+        while crate::read_ref!(curr_tx.status) == 0 {
+            core::hint::spin_loop();
+        }
+        card.clear_status();
+
+        debug!(
+            E1000NetCard,
+            "Transmitted packet worth {} bytes, header: {:#?}, descriptor is: {:#x?}",
+            payload.len(),
+            header,
+            curr_tx
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum DeviceBase {
     IO(u16),
@@ -772,8 +887,7 @@ pub struct E1000NetCard {
     base: DeviceBase,
     eeprom_exists: OnceCell<bool>,
     mac: OnceCell<MacAddress>,
-    receive_descriptors: OnceCell<FramePtr<[RxDescriptor; RX_DESC_COUNT]>>,
-    transmit: OnceCell<Mutex<(FramePtr<[TxDescriptor; TX_DESC_COUNT]>, u32)>>,
+    com: OnceCell<Mutex<E1000Comm>>,
     irq_info: IRQInfo,
 }
 
@@ -883,11 +997,7 @@ impl E1000NetCard {
         }
     }
 
-    pub fn rx_init(&self) -> Result<(), MapToError> {
-        assert!(
-            self.receive_descriptors.get().is_none(),
-            "Receive Descriptors are already initialized"
-        );
+    pub fn try_rx_init(&self) -> Result<FramePtr<[RxDescriptor; RX_DESC_COUNT]>, MapToError> {
         // TODO: proper VMM or DMA allocation at least
         const RX_DESCS_BYTES: usize = RX_DESC_COUNT * size_of::<RxDescriptor>();
         const {
@@ -936,15 +1046,10 @@ impl E1000NetCard {
         );
         self.clear_status();
 
-        self.receive_descriptors.set(descriptors_ref);
-        Ok(())
+        Ok(descriptors_ref)
     }
 
-    pub fn tx_init(&self) -> Result<(), MapToError> {
-        assert!(
-            self.transmit.get().is_none(),
-            "Tx Descriptors already initialized"
-        );
+    pub fn try_tx_init(&self) -> Result<FramePtr<[TxDescriptor; TX_DESC_COUNT]>, MapToError> {
         const TX_DESCS_BYTES: usize = TX_DESC_COUNT * size_of::<TxDescriptor>();
         const {
             assert!(TX_DESCS_BYTES <= PAGE_SIZE);
@@ -992,7 +1097,17 @@ impl E1000NetCard {
         // No idea why everyone does it this way and I am too lazy to read and wriite docs...`
         self.write_command(REG_TIPG, 0x60200a);
 
-        _ = self.transmit.set(Mutex::new((descriptors_ref, 0)));
+        Ok(descriptors_ref)
+    }
+
+    /// Init the packet receive and transfer process (TX and RX).
+    pub fn comm_init(&self) -> Result<(), MapToError> {
+        let tx_descs = self.try_tx_init()?;
+        let rx_descs = self.try_rx_init()?;
+
+        self.com
+            .set(Mutex::new(E1000Comm::new(rx_descs, tx_descs)))
+            .expect("Already initialized");
         Ok(())
     }
 
@@ -1014,7 +1129,7 @@ impl E1000NetCard {
     pub fn enable_interrupts(&self) {
         self.write_command(REG_RDTR, 0);
         self.write_command(REG_ITR, INTERRUPT_THROTTLING_RATE);
-        self.write_command(REG_IMS, u32::MAX);
+        self.write_command(REG_IMS, IMS_RXQ0_MASK | IMS_RXT0_MASK);
         self.write_command(REG_ICR, u32::MAX);
         self.clear_status();
     }
@@ -1050,14 +1165,8 @@ impl E1000NetCard {
         let mac = self.mac_address();
         info!(E1000NetCard, "Initializing with mac {}", mac);
 
-        self.rx_init()?;
-        self.tx_init()?;
+        self.comm_init()?;
         self.enable_interrupts();
-        crate::serial!(
-            "tctl is {:#x?}, rctl is {:#x?}\n",
-            RegTCTL::from_bits(self.read_command(REG_TCTL)),
-            RegRctl::from_bits(self.read_command(REG_RCTL))
-        );
 
         let link_speed = self.get_link_speed();
         info!(
@@ -1075,76 +1184,11 @@ impl E1000NetCard {
         ethertype: EthernetType,
         payload: &[u8],
     ) -> Result<(), ()> {
-        if payload.is_empty() {
-            return Ok(());
-        }
-
-        if payload.len() > PAGE_SIZE - size_of::<EthernetHeader>() {
-            return Err(());
-        }
-
-        let src_mac = self.mac_address();
-        let header = EthernetHeader::new(dest_mac, src_mac, ethertype);
-
-        let tx_descs = self.transmit.get().expect("Not initialized");
-        let mut tx_descs = tx_descs.lock();
-        let (tx_descs, tx_curr) = &mut *tx_descs;
-
-        let desc_count = tx_descs.len();
-        let curr_tx = &mut tx_descs[*tx_curr as usize];
-        let tx_virt = curr_tx.addr.into_virt();
-
-        unsafe {
-            let ptr = tx_virt.into_ptr::<[u8; PAGE_SIZE]>();
-            let header_size = size_of::<EthernetHeader>();
-
-            let header_ptr = ptr as *mut EthernetHeader;
-            let payload_ptr = ptr.byte_add(header_size) as *mut u8;
-
-            header_ptr.write_volatile(header);
-            payload_ptr.copy_from(payload.as_ptr(), payload.len());
-
-            core::ptr::write_volatile(
-                curr_tx,
-                TxDescriptor {
-                    addr: curr_tx.addr,
-                    length: (header_size + payload.len()) as u16,
-                    cso: 0,
-                    cmd: TxCmd::new()
-                        .with_eop(true)
-                        .with_ifcs(true)
-                        .with_rs(true)
-                        .with_rps(true),
-                    status: 0,
-                    css: 0,
-                    special: 0,
-                },
-            );
-
-            unsafe {
-                crate::arch::flush_cache();
-            }
-        }
-
-        *tx_curr += 1;
-        if *tx_curr as usize >= desc_count {
-            *tx_curr = 0;
-        }
-
-        self.write_command(REG_TDT, *tx_curr);
-        while crate::read_ref!(curr_tx.status) == 0 {
-            core::hint::spin_loop();
-        }
-        self.clear_status();
-
-        debug!(
-            E1000NetCard,
-            "Transmitted packet worth {} bytes, header: {:#?}, descriptor is: {:#x?}",
-            payload.len(),
-            header,
-            curr_tx
-        );
-        Ok(())
+        self.com
+            .get()
+            .expect("E1000 Driver not initialized")
+            .lock()
+            .send_ethernet(self, dest_mac, ethertype, payload)
     }
 }
 
@@ -1154,11 +1198,37 @@ impl InterruptReceiver for E1000NetCard {
     fn handle_interrupt(&self) {
         let icr = self.read_command(REG_ICR);
         if icr != 0 {
-            crate::serial!("interrupt received: {icr:#x}\n");
+            debug!(E1000NetCard, "Interrupt received: {icr:#x}");
             self.write_command(REG_ICR, icr);
+
+            if (icr & (ICR_RXQ0 | ICR_RXT0)) != 0 {
+                let mut comm = self.com.get().expect("E1000 Driver not initialized").lock();
+
+                loop {
+                    let curr = (self.read_command(REG_RDT) + 1) as usize % RX_DESC_COUNT;
+                    let desc = &mut comm.receive_descriptors[curr];
+
+                    if (desc.status & 1) == 0 {
+                        break;
+                    }
+                    if desc.error != 0 {
+                        error!(E1000NetCard, "Received packet error: {:#x}", desc.error);
+                    }
+
+                    let bytes = desc.data();
+                    crate::net::handle_packet(bytes);
+
+                    crate::write_ref!(desc.status, 0);
+                    self.write_command(REG_RDT, curr as u32);
+                }
+            }
         }
 
-        crate::serial!("status is {:?}\n", self.status());
+        debug!(
+            E1000NetCard,
+            "Handled interrupt with status: {:?}",
+            self.status()
+        );
     }
 }
 
@@ -1221,8 +1291,7 @@ impl PCIDevice for E1000NetCard {
             base,
             mac: OnceCell::new(),
             eeprom_exists: OnceCell::new(),
-            receive_descriptors: OnceCell::new(),
-            transmit: OnceCell::new(),
+            com: OnceCell::new(),
         }
     }
 
@@ -1233,26 +1302,6 @@ impl PCIDevice for E1000NetCard {
             error!(E1000NetCard, "Init failed with err: {:?}", err);
             return false;
         }
-
-        let mac = self.mac_address();
-
-        with_interrupts(|| {
-            sleep!(100 ms);
-            crate::serial!("here\n");
-            self.send_ethernet(
-                MacAddress::BROADCAST,
-                EthernetType::ARP,
-                ARP::new_request(
-                    mac,
-                    Ipv4Addr::new(192, 168, 1, 0),
-                    Ipv4Addr::new(192, 168, 1, 11),
-                )
-                .as_bytes(),
-            )
-            .expect("Failed to send");
-            loop {
-                core::hint::spin_loop();
-            }
-        })
+        true
     }
 }

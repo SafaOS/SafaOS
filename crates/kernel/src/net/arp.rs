@@ -1,38 +1,72 @@
-use core::net::Ipv4Addr;
-
-use macros::display_consts;
+use core::{
+    fmt::{self, Debug, Display},
+    net::Ipv4Addr,
+};
 
 use crate::net::MacAddress;
 
 /// The type of the hardware layer the packet is destined for.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct ARPHtype(u16);
+pub struct ARPHtype([u8; 2]);
 
-#[display_consts]
 impl ARPHtype {
-    pub const ETHERNET: Self = Self(0x1);
+    pub const ETHERNET: Self = Self([0x00, 0x01]);
+}
+
+impl Display for ARPHtype {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04x}", u16::from_be_bytes(self.0))
+    }
+}
+
+impl fmt::Debug for ARPHtype {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ARPHtype({:04x})", u16::from_be_bytes(self.0))
+    }
 }
 
 /// The type of the protocol address that the ARP request uses.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct ARPPtype(u16);
+pub struct ARPPtype([u8; 2]);
 
-#[display_consts]
 impl ARPPtype {
-    pub const IP: Self = Self(0x0800);
+    pub const IP: Self = Self([0x08, 0x00]);
+}
+
+impl Display for ARPPtype {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04x}", u16::from_be_bytes(self.0))
+    }
+}
+
+impl fmt::Debug for ARPPtype {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ARPPtype({:04x})", u16::from_be_bytes(self.0))
+    }
 }
 
 /// The operation of the ARP packet.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct ARPOp(u16);
+pub struct ARPOp([u8; 2]);
 
-#[display_consts]
 impl ARPOp {
-    pub const REQUEST: Self = Self(0x1);
-    pub const REPLY: Self = Self(0x2);
+    pub const REQUEST: Self = Self([0x00, 0x01]);
+    pub const REPLY: Self = Self([0x00, 0x02]);
+}
+
+impl Display for ARPOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04x}", u16::from_be_bytes(self.0))
+    }
+}
+
+impl Debug for ARPOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ARPOp({:04x})", u16::from_be_bytes(self.0))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,13 +1,11 @@
 use crate::net::MacAddress;
-use macros::display_consts;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct EthernetType(u16);
+pub struct EthernetType([u8; 2]);
 
-#[display_consts]
 impl EthernetType {
-    pub const ARP: Self = Self(0x0806);
+    pub const ARP: Self = Self([0x08, 0x06]);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,10 +24,6 @@ impl EthernetHeader {
             ethertype,
         }
     }
-
-    pub const fn into_bytes(self) -> [u8; size_of::<Self>()] {
-        unsafe { core::mem::transmute(self) }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,13 +38,5 @@ impl EthernetFrame {
         assert!(bytes.len() >= 14);
         let payload = &bytes[14..];
         unsafe { &*((bytes as *const [u8]).with_metadata_of(payload) as *const Self) }
-    }
-
-    pub const fn size(&self) -> usize {
-        size_of_val(self)
-    }
-
-    pub const fn payload_len(&self) -> usize {
-        self.payload.len()
     }
 }

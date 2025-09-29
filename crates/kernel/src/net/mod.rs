@@ -2,6 +2,8 @@ use core::fmt::{Debug, Display};
 
 pub mod arp;
 pub mod ethernet;
+pub mod manager;
+pub use manager::handle_packet;
 
 /// Represents a MAC address.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -16,13 +18,6 @@ impl MacAddress {
 
     pub const fn new(bytes: [u8; 6]) -> Self {
         Self { bytes }
-    }
-
-    pub const fn from_slice(bytes: &[u8]) -> Self {
-        assert!(bytes.len() == 6);
-        Self {
-            bytes: [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]],
-        }
     }
 }
 
