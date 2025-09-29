@@ -80,15 +80,15 @@ pub fn handle_packet(packet: &[u8]) {
 #[allow(dead_code)]
 /// Sends an ARP request to identify the MAC address of a given IP address.
 pub fn send_arp(target_ip: Ipv4Addr) -> Result<(), NetworkError> {
+    let mac = MANAGER
+        .as_ref()
+        .map(|m| m.mac())
+        .ok_or(NetworkError::NoInterface)?;
+
     send_ethernet(
         EthernetType::ARP,
         MacAddress::BROADCAST,
-        ARP::new_request(
-            MANAGER.as_ref().unwrap().mac(),
-            Ipv4Addr::new(192, 168, 69, 69),
-            target_ip,
-        )
-        .as_bytes(),
+        ARP::new_request(mac, Ipv4Addr::new(192, 168, 69, 69), target_ip).as_bytes(),
     )
 }
 
