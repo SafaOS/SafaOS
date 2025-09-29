@@ -54,7 +54,7 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
         limine::get_phy_offset()
     );
 
-    let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+    let flags = EntryFlags::WRITE;
     for entry in limine::mmap_request().entries() {
         let phys_addr = PhysAddr::from(entry.base as usize);
         let size_bytes = entry.length as usize;
@@ -64,7 +64,7 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
             let flags = if entry.entry_type == EntryType::FRAMEBUFFER {
                 flags | EntryFlags::FRAMEBUFFER_CACHED
             } else {
-                flags
+                flags | EntryFlags::DEVICE_UNCACHEABLE
             };
 
             let virt_addr = phys_addr.into_virt();

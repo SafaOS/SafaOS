@@ -41,9 +41,7 @@ impl From<EntryFlags> for ArchEntryFlags {
 
         if value.contains(EntryFlags::DEVICE_UNCACHEABLE) {
             flags |= ArchEntryFlags::MAIR1;
-        }
-
-        if value.contains(EntryFlags::FRAMEBUFFER_CACHED) {
+        } else if value.contains(EntryFlags::FRAMEBUFFER_CACHED) {
             flags |= ArchEntryFlags::MAIR2;
         }
 
