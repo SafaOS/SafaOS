@@ -389,28 +389,28 @@ impl PCI {
         device: u8,
         function: u8,
         f: &F,
-    ) -> Option<PCIDeviceInfo<'s>>
+    ) -> Result<Option<PCIDeviceInfo<'s>>, ()>
     where
         F: Fn(&PCIDeviceInfo) -> bool,
     {
         let header = self.get_header(bus, device, function);
         if !header.is_valid() {
-            return None;
+            return Err(());
         }
 
         if function == 0 && header.is_multifunction() {
             for function in 1..8 {
-                if let r @ Some(_) = self.enum_device(bus, device, function, f) {
-                    return r;
+                if let Ok(Some(info)) = self.enum_device(bus, device, function, f) {
+                    return Ok(Some(info));
                 }
             }
         }
 
         let info = PCIDeviceInfo::new(header, bus, device, function);
         if f(&info) {
-            return Some(info);
+            return Ok(Some(info));
         }
-        None
+        Ok(None)
     }
 
     fn enum_all<'s, F>(&'s self, f: &F) -> Option<PCIDeviceInfo<'s>>
@@ -419,8 +419,10 @@ impl PCI {
     {
         for bus in self.start_bus..self.end_bus {
             for device in 0..32 {
-                if let r @ Some(_) = self.enum_device(bus, device, 0, f) {
-                    return r;
+                match self.enum_device(bus, device, 0, f) {
+                    Ok(Some(info)) => return Some(info),
+                    Ok(None) => (),
+                    Err(()) => return None,
                 }
             }
         }
@@ -484,6 +486,7 @@ pub fn init() {
     if let Some(host_pci) = HOST_PCI.as_ref() {
         host_pci.print();
     }
+
     XHCI_DEVICE.as_ref().map(|device| device.start());
     E1000_DEVICE.as_ref().map(|device| device.start());
 }
