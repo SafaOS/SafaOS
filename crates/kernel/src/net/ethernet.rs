@@ -6,6 +6,7 @@ pub struct EthernetType([u8; 2]);
 
 impl EthernetType {
     pub const ARP: Self = Self([0x08, 0x06]);
+    pub const IPV4: Self = Self([0x08, 0x00]);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,15 +1,16 @@
 use core::net::Ipv4Addr;
 
-use lazy_static::lazy_static;
-
 use crate::{
     debug,
-    drivers::{net::e1000::E1000NetCard, pci::E1000_DEVICE},
+    drivers::vfs::VFS_STRUCT,
     net::{
         MacAddress,
         arp::ARP,
         ethernet::{EthernetFrame, EthernetType},
+        interface::{NetIntError, NetworkInterface, NetworkInterfaceSuper},
+        ipv4,
     },
+    utils::locks::{RwLock, RwLockReadGuard},
     warn,
 };
 
@@ -19,20 +20,41 @@ pub enum NetworkError {
     NoInterface,
 }
 
-#[derive(Debug)]
-pub struct NetworkManager {
-    chip: &'static E1000NetCard,
+impl From<NetIntError> for NetworkError {
+    fn from(error: NetIntError) -> Self {
+        match error {
+            NetIntError::PacketTooLarge => NetworkError::PayloadTooLarge,
+        }
+    }
 }
 
-lazy_static! {
-    static ref MANAGER: Option<NetworkManager> =
-        // TODO: Handle more Nics at the same time
-        E1000_DEVICE.as_ref().map(|device| NetworkManager { chip: device });
+pub struct NetworkManager {
+    interfaces: RwLock<heapless::Vec<&'static dyn NetworkInterface, 256>>,
 }
+
+static MANAGER: NetworkManager = NetworkManager {
+    interfaces: RwLock::new(heapless::Vec::new()),
+};
 
 impl NetworkManager {
+    pub fn interfaces(
+        &self,
+    ) -> RwLockReadGuard<'_, heapless::Vec<&'static dyn NetworkInterface, 256>> {
+        self.interfaces.read()
+    }
+
+    /// Adds a network interface to the manager.
+    pub fn add_interface(&self, interface: &'static dyn NetworkInterfaceSuper) {
+        self.interfaces
+            .write()
+            .push(interface)
+            .map_err(|_| ())
+            .expect("Too much network interfaces");
+        crate::devices::add_device_at(&*VFS_STRUCT.read(), interface, "net");
+    }
+
     /// Handles incoming packets.
-    pub fn handle_packet(&self, packet: &[u8]) {
+    pub fn handle_packet(&self, interface: &'static dyn NetworkInterface, packet: &[u8]) {
         if packet.len() < 14 {
             warn!(NetworkManager, "Received packet too short, dropping...");
             return;
@@ -41,55 +63,67 @@ impl NetworkManager {
         let frame = EthernetFrame::from_bytes(packet);
         // TODO: Handle the packet
         debug!(NetworkManager, "Received packet: {:#x?}", frame);
-    }
-
-    pub fn mac(&self) -> MacAddress {
-        self.chip.mac_address()
+        match frame.header.ethertype {
+            EthernetType::IPV4 => ipv4::handle_ipv4_packet(interface, &frame.payload),
+            other => debug!(NetworkManager, "Unknown ethertype: {:#x?}", other),
+        }
     }
 
     /// Sends an Ethernet frame through the network interface.
     pub fn send_ethernet(
         &self,
+        interface: &dyn NetworkInterface,
         ethertype: EthernetType,
         target_mac: MacAddress,
         payload: &[u8],
     ) -> Result<(), NetworkError> {
-        self.chip
-            .send_ethernet(target_mac, ethertype, payload)
-            .map_err(|()| NetworkError::PayloadTooLarge)
+        interface.send_ethernet(target_mac, ethertype, payload)?;
+        Ok(())
     }
 }
 
 /// Sends an Ethernet frame through the network interface.
 pub fn send_ethernet(
+    interface: &dyn NetworkInterface,
     ethertype: EthernetType,
     target_mac: MacAddress,
     payload: &[u8],
 ) -> Result<(), NetworkError> {
-    MANAGER
-        .as_ref()
-        .ok_or(NetworkError::NoInterface)?
-        .send_ethernet(ethertype, target_mac, payload)
+    MANAGER.send_ethernet(interface, ethertype, target_mac, payload)
 }
 
 /// Handles incoming packets.
-pub fn handle_packet(packet: &[u8]) {
-    MANAGER.as_ref().unwrap().handle_packet(packet);
+pub fn handle_packet(interface: &'static dyn NetworkInterface, packet: &[u8]) {
+    MANAGER.handle_packet(interface, packet);
+}
+
+/// Adds a network interface to the manager.
+pub fn add_interface(interface: &'static dyn NetworkInterfaceSuper) {
+    MANAGER.add_interface(interface);
 }
 
 #[allow(dead_code)]
 /// Sends an ARP request to identify the MAC address of a given IP address.
 pub fn send_arp(target_ip: Ipv4Addr) -> Result<(), NetworkError> {
-    let mac = MANAGER
-        .as_ref()
-        .map(|m| m.mac())
-        .ok_or(NetworkError::NoInterface)?;
+    let interfaces = &*MANAGER.interfaces();
+    if interfaces.is_empty() {
+        return Err(NetworkError::NoInterface);
+    }
 
-    send_ethernet(
-        EthernetType::ARP,
-        MacAddress::BROADCAST,
-        ARP::new_request(mac, Ipv4Addr::new(192, 168, 69, 69), target_ip).as_bytes(),
-    )
+    for int in interfaces {
+        send_ethernet(
+            *int,
+            EthernetType::ARP,
+            MacAddress::BROADCAST,
+            ARP::new_request(
+                int.mac_address(),
+                Ipv4Addr::new(192, 168, 69, 69),
+                target_ip,
+            )
+            .as_bytes(),
+        )?;
+    }
+    Ok(())
 }
 
 #[test_case]

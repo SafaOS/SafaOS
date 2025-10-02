@@ -8,6 +8,7 @@ pub mod ffi;
 pub mod fs;
 pub mod input;
 pub mod mem;
+pub mod net;
 pub mod poll;
 pub mod process;
 pub mod sockets;

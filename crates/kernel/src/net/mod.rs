@@ -3,7 +3,9 @@ use core::fmt::{Debug, Display};
 pub mod arp;
 pub mod ethernet;
 pub mod manager;
-pub use manager::handle_packet;
+pub use manager::{add_interface, handle_packet};
+pub mod interface;
+pub mod ipv4;
 
 /// Represents a MAC address.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

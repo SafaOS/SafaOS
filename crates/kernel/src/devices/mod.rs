@@ -17,6 +17,7 @@ use crate::{
     process::vas::MemMappedInterface,
     terminal::FRAMEBUFFER_TERMINAL,
     time,
+    utils::path::{Path, PathParts},
 };
 
 use crate::utils::locks::RwLock;
@@ -25,6 +26,20 @@ use crate::utils::{path::make_path, types::DriveName};
 pub fn add_device(vfs: &VFS, device: &'static dyn Device) {
     let path = make_path!("dev", device.name());
     vfs.mount_device(path, device).unwrap();
+}
+
+pub fn add_device_at(vfs: &VFS, device: &'static dyn Device, subpath: &str) {
+    let dir_path = make_path!("dev", subpath);
+    vfs.createdir(dir_path).expect("Failed to create root dir");
+
+    let dev_path = PathParts::new(device.name());
+
+    let mut full_path = dir_path.into_owned().expect("Failed to convert into owned");
+    full_path
+        .append_simplified(unsafe { Path::from_raw_parts(None, Some(dev_path)) })
+        .expect("Failed to append");
+
+    vfs.mount_device(full_path.as_path(), device).unwrap();
 }
 
 /// Mounts devices to the `dev:/` file system in the VFS

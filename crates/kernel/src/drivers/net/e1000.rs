@@ -1,6 +1,7 @@
 use core::cell::OnceCell;
 
 use bitfield_struct::bitfield;
+use safa_abi::net::NicAddrInfoV4;
 
 use crate::{
     PhysAddr, VirtAddr,
@@ -21,6 +22,7 @@ use crate::{
     net::{
         MacAddress,
         ethernet::{EthernetHeader, EthernetType},
+        interface::NetworkInterface,
     },
     sleep, sleep_until,
     utils::locks::Mutex,
@@ -889,6 +891,7 @@ pub struct E1000NetCard {
     mac: OnceCell<MacAddress>,
     com: OnceCell<Mutex<E1000Comm>>,
     irq_info: IRQInfo,
+    addr_info: Mutex<NicAddrInfoV4>,
 }
 
 impl E1000NetCard {
@@ -1193,9 +1196,36 @@ impl E1000NetCard {
 }
 
 unsafe impl Sync for E1000NetCard {}
+impl NetworkInterface for E1000NetCard {
+    fn name(&self) -> &'static str {
+        "E1000"
+    }
+
+    fn mac_address(&self) -> MacAddress {
+        self.mac_address()
+    }
+
+    fn send_ethernet(
+        &self,
+        dst_mac: MacAddress,
+        ethertype: EthernetType,
+        payload: &[u8],
+    ) -> Result<(), crate::net::interface::NetIntError> {
+        self.send_ethernet(dst_mac, ethertype, payload)
+            .map_err(|()| crate::net::interface::NetIntError::PacketTooLarge)
+    }
+
+    fn nic_info(&self) -> NicAddrInfoV4 {
+        *self.addr_info.lock()
+    }
+
+    fn set_nic_info(&self, info: NicAddrInfoV4) {
+        *self.addr_info.lock() = info;
+    }
+}
 
 impl InterruptReceiver for E1000NetCard {
-    fn handle_interrupt(&self) {
+    fn handle_interrupt(&'static self) {
         let icr = self.read_command(REG_ICR);
         if icr != 0 {
             debug!(E1000NetCard, "Interrupt received: {icr:#x}");
@@ -1216,7 +1246,7 @@ impl InterruptReceiver for E1000NetCard {
                     }
 
                     let bytes = desc.data();
-                    crate::net::handle_packet(bytes);
+                    crate::net::handle_packet(self, bytes);
 
                     crate::write_ref!(desc.status, 0);
                     self.write_command(REG_RDT, curr as u32);
@@ -1292,6 +1322,7 @@ impl PCIDevice for E1000NetCard {
             mac: OnceCell::new(),
             eeprom_exists: OnceCell::new(),
             com: OnceCell::new(),
+            addr_info: Mutex::new(NicAddrInfoV4::default()),
         }
     }
 
@@ -1302,6 +1333,8 @@ impl PCIDevice for E1000NetCard {
             error!(E1000NetCard, "Init failed with err: {:?}", err);
             return false;
         }
+
+        crate::net::add_interface(self);
         true
     }
 }
