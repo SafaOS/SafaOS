@@ -1,11 +1,12 @@
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use safa_abi::errors::IntoErr;
 
 use crate::{
     sockets::{
-        conn_queue::SocketConnQueue,
+        conn::BlockingDatagramStream,
+        conn_queue::ConnOrientedSocket,
         desc::{CliSocketDesc, ServerSocketDesc},
         listener::{ListenQueue, ListenRequest},
     },
@@ -29,6 +30,7 @@ pub type SockConnID = u32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketDomain {
     Unix,
+    Net,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +45,7 @@ pub enum SocketError {
     ConnectionClosed,
     /// Connection refused for some reason
     ConnectionRefused,
+    OperationNotSupported,
 }
 
 impl IntoErr for SocketError {
@@ -53,42 +56,62 @@ impl IntoErr for SocketError {
             }
             Self::ConnectionRefused => safa_abi::errors::ErrorStatus::ConnectionRefused,
             Self::ConnectionClosed => safa_abi::errors::ErrorStatus::ConnectionClosed,
+            Self::OperationNotSupported => safa_abi::errors::ErrorStatus::OperationNotSupported,
         }
     }
 }
 
+enum SocketState {
+    ConnectionOriented(ConnOrientedSocket),
+    Connectionless { stream: Box<BlockingDatagramStream> },
+}
+
+impl SocketState {
+    pub fn on_drop(&self) {
+        match self {
+            SocketState::ConnectionOriented(state) => state.on_drop(),
+            SocketState::Connectionless { stream } => stream.on_drop(),
+        }
+    }
+}
+
+/// Represents a Unix socket.
 pub struct Socket {
     can_block: bool,
-    sock_queue: SocketConnQueue,
-    listen_queue: Mutex<ListenQueue>,
+    sock_state: SocketState,
+    domain: SocketDomain,
 }
 
 impl Socket {
     fn before_drop(&self) {
-        let mut listen_queue = self.listen_queue.lock();
-
-        // Stop all the existing connections
-        self.sock_queue.drop_all_connections();
-        listen_queue.on_drop();
+        self.sock_state.on_drop()
     }
 
     pub const fn can_block(&self) -> bool {
         self.can_block
     }
 
+    fn connection_state(&self) -> Option<&ConnOrientedSocket> {
+        match &self.sock_state {
+            SocketState::ConnectionOriented(socket) => Some(socket),
+            _ => None,
+        }
+    }
+
     pub const fn sock_type(&self) -> SocketKind {
-        match self.sock_queue {
-            SocketConnQueue::SeqPacket(_) => SocketKind::SeqPacket,
-            SocketConnQueue::Stream(_) => SocketKind::Stream,
+        match self.sock_state {
+            SocketState::ConnectionOriented(ref connection_state) => connection_state.ty(),
+            SocketState::Connectionless { .. } => SocketKind::Datagram,
         }
     }
 
     pub const fn domain(&self) -> SocketDomain {
-        SocketDomain::Unix
+        self.domain
     }
 
     pub fn disconnect(&self, id: SockConnID) {
-        self.sock_queue.remove_connection(id);
+        self.connection_state()
+            .map(|state| state.conn_queue.remove_connection(id));
     }
 }
 
@@ -96,6 +119,7 @@ impl Socket {
 pub enum SocketKind {
     SeqPacket,
     Stream,
+    Datagram,
 }
 
 struct SockQueue {
@@ -120,15 +144,18 @@ impl SockQueue {
         kind: SocketKind,
         can_block: bool,
     ) -> ServerSocketDesc {
-        _ = domain;
-
         let id = self.next_id;
+
         let sock = Socket {
-            listen_queue: Mutex::new(ListenQueue::new(0)),
             can_block,
-            sock_queue: match kind {
-                SocketKind::SeqPacket => SocketConnQueue::new_seq_packet(),
-                SocketKind::Stream => SocketConnQueue::new_stream(),
+            domain,
+            sock_state: match kind {
+                SocketKind::SeqPacket | SocketKind::Stream => {
+                    SocketState::ConnectionOriented(ConnOrientedSocket::new(kind))
+                }
+                SocketKind::Datagram => SocketState::Connectionless {
+                    stream: Box::new(BlockingDatagramStream::new()),
+                },
             },
         };
 
@@ -140,7 +167,7 @@ impl SockQueue {
 
     fn remove_socket(&mut self, socket_id: SockID) -> bool {
         if let Some(s) = self.sockets.remove(&socket_id) {
-            s.sock_queue.drop_all_connections();
+            s.sock_state.on_drop();
             true
         } else {
             false

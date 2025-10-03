@@ -81,7 +81,7 @@ fn syssock_create(
 fn syssock_listen(sock_resource: Ri, backlog: usize) -> Result<(), ErrorStatus> {
     resources::get_ref(sock_resource, |r| {
         let s = r.data().as_ref_expected::<ServerSocketDesc>()?;
-        Ok(s.configure_listen_queue(backlog))
+        Ok(s.configure_listen_queue(backlog)?)
     })
     .ok_or(ErrorStatus::UnknownResource)
     .flatten()

@@ -18,26 +18,21 @@ use crate::{
 };
 
 const MAX_STREAM_SIZE: usize = PAGE_SIZE;
-/// A stream socket connection.
-pub struct SocketStreamConn {
-    server_buf: Mutex<heapless::Vec<u8, MAX_STREAM_SIZE>>,
-    client_buf: Mutex<heapless::Vec<u8, MAX_STREAM_SIZE>>,
+
+/// A one-way stream connection.
+pub struct OneWayStream {
+    buf: Mutex<heapless::Vec<u8, MAX_STREAM_SIZE>>,
 }
 
-impl SocketStreamConn {
+impl OneWayStream {
     pub const fn new() -> Self {
         Self {
-            server_buf: Mutex::new(heapless::Vec::new()),
-            client_buf: Mutex::new(heapless::Vec::new()),
+            buf: Mutex::new(heapless::Vec::new()),
         }
     }
 
-    fn read_inner<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
-        let mut to_read_from = if IS_SERVER {
-            self.server_buf.lock()
-        } else {
-            self.client_buf.lock()
-        };
+    fn read_inner(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+        let mut to_read_from = self.buf.lock();
         let max_len = to_read_from.len();
 
         let read_len = max_len.min(buf.len());
@@ -52,14 +47,10 @@ impl SocketStreamConn {
         Ok(read_len)
     }
 
-    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
+    fn write_inner(&self, buf: &[u8]) -> Result<usize, SocketError> {
         let len = buf.len().min(MAX_STREAM_SIZE);
 
-        let mut to_write_to = if IS_SERVER {
-            self.server_buf.lock()
-        } else {
-            self.client_buf.lock()
-        };
+        let mut to_write_to = self.buf.lock();
 
         to_write_to
             .extend_from_slice(&buf[..len])
@@ -68,51 +59,156 @@ impl SocketStreamConn {
     }
 }
 
-/// A sequenced packet socket connection.
-pub struct SocketSeqPacketConn {
-    inner: SocketStreamConn,
-    server_packets: Mutex<LinkedList<usize>>,
-    client_packets: Mutex<LinkedList<usize>>,
+/// A one way packet stream.
+pub struct DatagramStream {
+    buf: OneWayStream,
+    packets: Mutex<LinkedList<usize>>,
 }
 
-impl SocketSeqPacketConn {
+impl DatagramStream {
     pub const fn new() -> Self {
         Self {
-            inner: SocketStreamConn::new(),
-            server_packets: Mutex::new(LinkedList::new()),
-            client_packets: Mutex::new(LinkedList::new()),
+            buf: OneWayStream::new(),
+            packets: Mutex::new(LinkedList::new()),
         }
     }
 
-    fn read_inner<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
-        let mut to_read_from = if IS_SERVER {
-            self.server_packets.lock()
-        } else {
-            self.client_packets.lock()
-        };
+    fn read_inner(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+        let mut to_read_from = self.packets.lock();
 
         let Some(msg_len) = to_read_from.pop_front() else {
             return Err(SocketError::WouldBlockEmpty);
         };
 
         let amount = buf.len().min(msg_len);
-        self.inner.read_inner::<IS_SERVER>(&mut buf[..amount])
+        self.buf.read_inner(&mut buf[..amount])
     }
 
-    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
+    fn write_inner(&self, buf: &[u8]) -> Result<usize, SocketError> {
         if buf.len() == 0 {
             return Ok(0);
         }
 
-        let mut to_write_to = if IS_SERVER {
-            self.server_packets.lock()
-        } else {
-            self.client_packets.lock()
-        };
+        let mut to_write_to = self.packets.lock();
 
-        let len = self.inner.write_inner::<IS_SERVER>(buf)?;
+        let len = self.buf.write_inner(buf)?;
         to_write_to.push_back(len);
         Ok(len)
+    }
+}
+
+pub struct BlockingDatagramStream {
+    inner: DatagramStream,
+    wait_queue: Mutex<WaitQueue<1>>,
+    dropped: AtomicBool,
+}
+
+impl BlockingDatagramStream {
+    pub const fn new() -> Self {
+        Self {
+            inner: DatagramStream::new(),
+            wait_queue: Mutex::new(WaitQueue::new()),
+            dropped: AtomicBool::new(false),
+        }
+    }
+
+    pub fn on_drop(&self) {
+        self.dropped.store(true, Ordering::SeqCst);
+        self.wait_queue.lock().wake_all();
+    }
+
+    pub fn write(&self, buf: &[u8]) -> Result<usize, SocketError> {
+        if self.dropped.load(Ordering::Acquire) {
+            return Err(SocketError::ConnectionClosed);
+        }
+
+        let len = self.inner.write_inner(buf)?;
+        let mut wait_queue = self.wait_queue.lock();
+        wait_queue.wake_all();
+        Ok(len)
+    }
+
+    pub fn read(&self, can_block: bool, buf: &mut [u8]) -> Result<usize, SocketError> {
+        if self.dropped.load(Ordering::Acquire) {
+            return Err(SocketError::ConnectionClosed);
+        }
+
+        match self.inner.read_inner(buf) {
+            Ok(len) => Ok(len),
+            Err(SocketError::WouldBlockEmpty) if can_block => {
+                let mut wait_queue = self.wait_queue.lock();
+                without_interrupts(|| {
+                    thread::current().sleep_in_queue(&mut wait_queue, ());
+                    drop(wait_queue);
+                    thread::current::yield_now();
+                });
+                // retry
+                self.read(can_block, buf)
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+/// A stream socket connection.
+pub struct SocketStreamConn {
+    server_buf: OneWayStream,
+    client_buf: OneWayStream,
+}
+
+impl SocketStreamConn {
+    pub const fn new() -> Self {
+        Self {
+            server_buf: OneWayStream::new(),
+            client_buf: OneWayStream::new(),
+        }
+    }
+
+    fn read_inner<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+        if IS_SERVER {
+            self.server_buf.read_inner(buf)
+        } else {
+            self.client_buf.read_inner(buf)
+        }
+    }
+
+    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
+        if IS_SERVER {
+            self.server_buf.write_inner(buf)
+        } else {
+            self.client_buf.write_inner(buf)
+        }
+    }
+}
+
+/// A sequenced packet socket connection.
+pub struct SocketSeqPacketConn {
+    server_packets: DatagramStream,
+    client_packets: DatagramStream,
+}
+
+impl SocketSeqPacketConn {
+    pub const fn new() -> Self {
+        Self {
+            server_packets: DatagramStream::new(),
+            client_packets: DatagramStream::new(),
+        }
+    }
+
+    fn read_inner<const IS_SERVER: bool>(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+        if IS_SERVER {
+            self.server_packets.read_inner(buf)
+        } else {
+            self.client_packets.read_inner(buf)
+        }
+    }
+
+    fn write_inner<const IS_SERVER: bool>(&self, buf: &[u8]) -> Result<usize, SocketError> {
+        if IS_SERVER {
+            self.server_packets.write_inner(buf)
+        } else {
+            self.client_packets.write_inner(buf)
+        }
     }
 }
 
