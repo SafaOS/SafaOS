@@ -1,6 +1,7 @@
 use core::net::Ipv4Addr;
 
 use crate::{
+    net::ipv4::PageIPv4Packet,
     process::resources::{self, ResourceNode, Ri},
     sockets::{
         self, SocketDomain, SocketKind,
@@ -61,6 +62,43 @@ impl SyscallFFI for safa_abi::sockets::SockDomain {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         unsafe { Ok(core::mem::transmute(args as u8)) }
+    }
+}
+
+#[syscall_handler]
+fn syssock_sendto(
+    sock_ri: Ri,
+    payload: &[u8],
+    addr: &SockBindAddr,
+    addr_len: usize,
+) -> Result<(), ErrorStatus> {
+    let addr = compute_addr(&addr, addr_len)?;
+    match addr {
+        Addr::Inet { ipv4, port } => {
+            resources::get_ref(sock_ri, |resource| {
+                resource
+                    .data()
+                    .as_ref::<ServerSocketDesc>()
+                    .map(|desc| (desc.domain(), desc.sock_type()))
+                    .or_else(|| {
+                        resource
+                            .data()
+                            .as_ref::<SocketDesc>()
+                            .map(|desc| (desc.domain, desc.kind))
+                    })
+                    .filter(|(domain, kind)| {
+                        *domain == SocketDomain::Net && *kind == SocketKind::Datagram
+                    })
+                    .ok_or(ErrorStatus::UnsupportedResource)
+            })
+            .ok_or(ErrorStatus::UnknownResource)
+            .flatten()?;
+
+            let mut packet = PageIPv4Packet::new_udp(payload, 0, port, ipv4);
+            crate::net::manager::send_ipv4_packet(&mut *packet)?;
+            Ok(())
+        }
+        Addr::Abstract(_) => Err(ErrorStatus::InvalidArgument),
     }
 }
 

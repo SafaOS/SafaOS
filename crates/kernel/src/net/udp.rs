@@ -18,12 +18,13 @@ pub struct UDPHeader {
 }
 
 impl UDPHeader {
-    pub fn new(src_port: u16, dst_port: u16, length: u16, checksum: u16) -> Self {
+    pub fn new(src_port: u16, dst_port: u16, payload_length: u16) -> Self {
+        let length = payload_length + size_of::<UDPHeader>() as u16;
         Self {
             src_port: src_port.to_be_bytes(),
             dst_port: dst_port.to_be_bytes(),
             length: length.to_be_bytes(),
-            checksum: checksum.to_be_bytes(),
+            checksum: [0; 2],
         }
     }
 
@@ -36,8 +37,8 @@ impl UDPHeader {
         u16::from_be_bytes(self.length)
     }
 
-    pub fn checksum(&self) -> u16 {
-        u16::from_be_bytes(self.checksum)
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { &*(self as *const Self as *const [u8; size_of::<Self>()]) }
     }
 }
 

@@ -119,6 +119,9 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysSockConnect => {
                 sockets::syssock_connect_raw(a, b as *const _, c, d as *mut _)
             }
+            SyscallTable::SysSockSendTo => {
+                sockets::syssock_sendto_raw(a, (b as *const _, c), d as *const _, e)
+            }
         }
     }
 

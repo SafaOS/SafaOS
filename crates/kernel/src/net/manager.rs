@@ -1,5 +1,7 @@
 use core::net::Ipv4Addr;
 
+use safa_abi::errors::{ErrorStatus, IntoErr};
+
 use crate::{
     debug,
     drivers::vfs::VFS_STRUCT,
@@ -8,7 +10,7 @@ use crate::{
         arp::ARP,
         ethernet::{EthernetFrame, EthernetType},
         interface::{NetIntError, NetworkInterface, NetworkInterfaceSuper},
-        ipv4,
+        ipv4::{self, IPv4Packet},
     },
     utils::locks::{RwLock, RwLockReadGuard},
     warn,
@@ -18,6 +20,17 @@ use crate::{
 pub enum NetworkError {
     PayloadTooLarge,
     NoInterface,
+    AddressNotFound,
+}
+
+impl IntoErr for NetworkError {
+    fn into_err(self) -> safa_abi::errors::ErrorStatus {
+        match self {
+            Self::PayloadTooLarge => ErrorStatus::StrTooLong,
+            Self::NoInterface => ErrorStatus::Unknown,
+            Self::AddressNotFound => ErrorStatus::AddressNotFound,
+        }
+    }
 }
 
 impl From<NetIntError> for NetworkError {
@@ -80,6 +93,26 @@ impl NetworkManager {
         interface.send_ethernet(target_mac, ethertype, payload)?;
         Ok(())
     }
+
+    pub fn send_ipv4_request(&self, packet: &mut IPv4Packet) -> Result<(), NetworkError> {
+        let header = packet.header();
+        if header.dst_addr == Ipv4Addr::BROADCAST {
+            for interface in &*self.interfaces.read() {
+                packet.header_mut().src_addr = interface.nic_info().ipv4_address;
+
+                interface.send_ethernet(
+                    MacAddress::BROADCAST,
+                    EthernetType::IPV4,
+                    packet.as_bytes(),
+                )?;
+            }
+
+            Ok(())
+        } else {
+            // TODO: Arp
+            Err(NetworkError::AddressNotFound)
+        }
+    }
 }
 
 /// Sends an Ethernet frame through the network interface.
@@ -100,6 +133,11 @@ pub fn handle_packet(interface: &'static dyn NetworkInterface, packet: &[u8]) {
 /// Adds a network interface to the manager.
 pub fn add_interface(interface: &'static dyn NetworkInterfaceSuper) {
     MANAGER.add_interface(interface);
+}
+
+/// Sends an IPv4 packet through a network interface which can receive it, returns [`NetworkError::AddressNotFound`] if the Ip Address isn't supported by any interface.
+pub fn send_ipv4_packet(packet: &mut IPv4Packet) -> Result<(), NetworkError> {
+    MANAGER.send_ipv4_request(packet)
 }
 
 #[allow(dead_code)]

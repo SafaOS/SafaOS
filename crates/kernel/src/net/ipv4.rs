@@ -1,12 +1,18 @@
 use core::{
     fmt::{self, Debug},
     net::Ipv4Addr,
+    ops::{Deref, DerefMut},
 };
 
 use bitfield_struct::bitfield;
 use macros::display_consts;
 
-use crate::{debug, net::interface::NetworkInterface, warn};
+use crate::{
+    debug,
+    net::{interface::NetworkInterface, udp::UDPHeader},
+    utils::alloc::PageVec,
+    warn,
+};
 
 /// Version and header length.
 #[bitfield(u8)]
@@ -21,8 +27,15 @@ pub struct VersionIHL {
 
 #[bitfield(u8)]
 pub struct DSCPECN {
+    /// Originally defined as the type of service (ToS), this field specifies differentiated services (DiffServ).
+    ///
+    /// Real-time data streaming makes use of the DSCP field.
+    ///
+    /// An example is Voice over IP (VoIP), which is used for interactive voice services.
     #[bits(6)]
     dscp: u8,
+    /// This field allows end-to-end notification of network congestion without dropping packets.
+    /// ECN is an optional feature available when both endpoints support it and effective when also supported by the underlying network.
     #[bits(2)]
     ecn: u8,
 }
@@ -84,8 +97,62 @@ pub struct IPv4Header {
 }
 
 impl IPv4Header {
-    pub fn total_length(&self) -> usize {
+    pub const fn new(
+        payload_len: u16,
+        dst_addr: Ipv4Addr,
+        time_to_live: u8,
+        protocol: IPv4Protocol,
+    ) -> Self {
+        let total_len = payload_len + size_of::<Self>() as u16;
+        let mut this = Self {
+            version_ihl: VersionIHL::new()
+                .with_version(4)
+                .with_ihl(size_of::<Self>() as u8),
+            dscp_ecn: DSCPECN::new(),
+            total_length: total_len.to_be_bytes(),
+            identification: [0; 2],
+            fragment_flags: FragmentFlags::new(),
+            time_to_live,
+            protocol,
+            header_checksum: [0; 2],
+            src_addr: Ipv4Addr::UNSPECIFIED,
+            dst_addr,
+        };
+
+        this.header_checksum = this.calculate_checksum().to_be_bytes();
+        this
+    }
+
+    pub const fn calculate_checksum(&self) -> u16 {
+        let mut sum = 0u32;
+        let bytes = self.as_bytes();
+
+        let (as_u16, _) = bytes.as_chunks::<2>();
+
+        let mut i = 0;
+        while i < as_u16.len() {
+            let chunk = as_u16[i];
+
+            sum += u16::from_be_bytes(chunk) as u32;
+            if sum > u16::MAX as u32 {
+                sum = (sum >> 16) + (sum & u16::MAX as u32);
+            }
+            i += 1;
+        }
+
+        (!(sum & u16::MAX as u32)) as u16
+    }
+
+    pub const fn total_length(&self) -> usize {
         u16::from_be_bytes(self.total_length) as usize
+    }
+
+    pub const fn checksum(&self) -> u16 {
+        u16::from_be_bytes(self.header_checksum)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8] {
+        unsafe { core::mem::transmute::<&Self, &[u8; size_of::<Self>()]>(self) }
     }
 }
 
@@ -93,7 +160,7 @@ const _: () = assert!(size_of::<IPv4Header>() == 20);
 const _: () = assert!(align_of::<IPv4Header>() == 1);
 
 #[repr(C)]
-struct IPv4Packet([u8]);
+pub struct IPv4Packet([u8]);
 
 impl IPv4Packet {
     /// Creates a new pending IPv4 packet from a byte slice, returns an error if the slice is too small to hold a [`IPv4Header`].
@@ -120,6 +187,14 @@ impl IPv4Packet {
     pub fn header(&self) -> &IPv4Header {
         unsafe { &*(self.0.as_ptr() as *const IPv4Header) }
     }
+
+    pub fn header_mut(&mut self) -> &mut IPv4Header {
+        unsafe { &mut *(self.0.as_mut_ptr() as *mut IPv4Header) }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 impl Debug for IPv4Packet {
@@ -128,6 +203,48 @@ impl Debug for IPv4Packet {
             .field("header", &self.header())
             .field("data", &self.payload())
             .finish()
+    }
+}
+
+/// Owned IPv4 packet, the allocation size is in pages
+#[repr(C)]
+pub struct PageIPv4Packet(PageVec<u8>);
+impl PageIPv4Packet {
+    pub fn new(header: IPv4Header) -> Self {
+        let mut packet = PageVec::with_capacity(size_of::<IPv4Header>());
+        packet.extend_from_slice(header.as_bytes());
+        Self(packet)
+    }
+
+    pub fn push(&mut self, data: &[u8]) {
+        self.0.reserve(data.len());
+        self.0.extend_from_slice(data);
+    }
+
+    /// Constructs a new Owned IPv4 packet with the given UDP header and payload.
+    pub fn new_udp(payload: &[u8], src_port: u16, dst_port: u16, dst_addr: Ipv4Addr) -> Self {
+        let udp_header = UDPHeader::new(src_port, dst_port, payload.len() as u16);
+        let udp_len = udp_header.length();
+
+        let ipv4_header = IPv4Header::new(udp_len, dst_addr, 1, IPv4Protocol::UDP);
+        let mut this = Self::new(ipv4_header);
+        this.push(udp_header.as_bytes());
+        this.push(payload);
+        this
+    }
+}
+
+impl Deref for PageIPv4Packet {
+    type Target = IPv4Packet;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self.0.as_slice() as *const [u8] as *const IPv4Packet) }
+    }
+}
+
+impl DerefMut for PageIPv4Packet {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *(self.0.as_mut_slice() as *mut [u8] as *mut IPv4Packet) }
     }
 }
 
@@ -141,7 +258,17 @@ impl IPv4Manager {
     fn handle_packet(&self, int: &'static dyn NetworkInterface, raw_packet: &[u8]) {
         let packet = match IPv4Packet::try_from_bytes(raw_packet) {
             Ok(packet) if packet.header().total_length() > packet.total_size() => {
-                warn!(IPv4Manager, "Invalid IPv4 packet");
+                warn!(
+                    IPv4Manager,
+                    "Invalid IPv4 packet: invalid length, ignoring..."
+                );
+                return;
+            }
+            Ok(packet) if packet.header().checksum() != packet.header().calculate_checksum() => {
+                warn!(
+                    IPv4Manager,
+                    "Invalid IPv4 packet: invalid checksum, ignoring..."
+                );
                 return;
             }
             Ok(packet) => packet,
