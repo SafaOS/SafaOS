@@ -59,9 +59,21 @@ impl ServerSocketDesc {
             .ok_or(SocketError::OperationNotSupported)?;
         conn_state.accept(&self.reference)
     }
+
+    pub fn socket(&self) -> &Arc<Socket> {
+        &self.reference
+    }
 }
 
 impl Resource for ServerSocketDesc {
+    fn read(
+        &self,
+        off: crate::drivers::vfs::SeekOffset,
+        buf: &mut [u8],
+    ) -> Result<usize, safa_abi::errors::ErrorStatus> {
+        _ = off;
+        Ok(self.read_socket(buf)?)
+    }
     fn address_space_generic(&self) -> bool {
         false
     }

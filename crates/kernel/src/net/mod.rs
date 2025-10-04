@@ -6,6 +6,7 @@ pub mod manager;
 pub use manager::{add_interface, handle_packet};
 pub mod interface;
 pub mod ipv4;
+pub mod udp;
 
 /// Represents a MAC address.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

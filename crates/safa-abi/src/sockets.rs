@@ -31,7 +31,39 @@ impl SockBindAbstractAddr {
     }
 }
 
-use core::ops::BitOr;
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SockBindInetV4Addr {
+    kind: u32,
+    pub port: u16,
+    pub ip: Ipv4Addr,
+}
+
+impl SockBindInetV4Addr {
+    pub const KIND: u32 = 1;
+
+    pub const fn new(port: u16, addr: Ipv4Addr) -> Self {
+        Self {
+            kind: Self::KIND,
+            port,
+            ip: addr,
+        }
+    }
+}
+
+use core::{net::Ipv4Addr, ops::BitOr};
+
+/// Domain given to [`crate::syscalls::SyscallTable::SysSockCreate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct SockDomain(u8);
+
+impl SockDomain {
+    /// Unix Domain sockets
+    pub const LOCAL: Self = Self(0);
+    /// The Internet Domain, IPv4
+    pub const INETV4: Self = Self(1);
+}
 
 /// Flags given to [`crate::syscalls::SyscallTable::SysSockCreate`],
 /// Also contains information about the Socket Type, by default the Socket Type is SOCK_STREAM and blocking unless a flag was given
@@ -40,8 +72,10 @@ use core::ops::BitOr;
 pub struct SockCreateFlags(u16);
 
 impl SockCreateFlags {
-    /// A SeqPacket Socket, unlike Stream Sockets which are the default, this preserves messages boundaries
+    /// A SeqPacket Socket, unlike Stream Sockets which are the default for local sockets, this preserves messages boundaries
     pub const SOCK_SEQPACKET: Self = Self(1);
+    /// A Datagram Socket, only allowed for network domain sockets, UDP by default and preserves messages boundaries.
+    pub const SOCK_DGRAM: Self = Self(2);
     /// A Non Blocking Socket, anything that would normally block would return [`crate::errors::ErrorStatus::WouldBlock`] instead of blocking
     /// except for [`crate::syscalls::SyscallTable::SysSockConnect`],
     /// this one is defined by POSIX as not blockable but it is way too hard to implement ._.

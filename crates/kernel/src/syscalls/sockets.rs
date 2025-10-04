@@ -1,3 +1,5 @@
+use core::net::Ipv4Addr;
+
 use crate::{
     process::resources::{self, ResourceNode, Ri},
     sockets::{
@@ -9,7 +11,7 @@ use crate::{
 
 use super::{ErrorStatus, SyscallFFI};
 use macros::syscall_handler;
-use safa_abi::sockets::{SockBindAbstractAddr, SockBindAddr, SockCreateFlags};
+use safa_abi::sockets::{SockBindAbstractAddr, SockBindAddr, SockBindInetV4Addr, SockCreateFlags};
 
 impl SyscallFFI for SockCreateFlags {
     type Args = usize;
@@ -20,6 +22,11 @@ impl SyscallFFI for SockCreateFlags {
 
 enum Addr {
     Abstract(Name),
+    Inet {
+        #[allow(unused)]
+        ipv4: Ipv4Addr,
+        port: u16,
+    },
 }
 
 fn compute_addr(addr: &SockBindAddr, addr_struct_size: usize) -> Result<Addr, ErrorStatus> {
@@ -39,27 +46,50 @@ fn compute_addr(addr: &SockBindAddr, addr_struct_size: usize) -> Result<Addr, Er
                 .map_err(|_| ErrorStatus::InvalidStr)?,
             ))
         }
+        SockBindInetV4Addr::KIND if addr_struct_size == size_of::<SockBindInetV4Addr>() => {
+            let addr = unsafe { &*(addr as *const SockBindAddr as *const SockBindInetV4Addr) };
+            let ipv4 = addr.ip;
+            let port = addr.port;
+
+            Ok(Addr::Inet { ipv4, port })
+        }
         _ => Err(ErrorStatus::InvalidArgument),
+    }
+}
+
+impl SyscallFFI for safa_abi::sockets::SockDomain {
+    type Args = usize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        unsafe { Ok(core::mem::transmute(args as u8)) }
     }
 }
 
 #[syscall_handler]
 fn syssock_create(
-    domain: u8,
+    domain: safa_abi::sockets::SockDomain,
     flags: SockCreateFlags,
     protocol: u32,
     out_resource: Option<&mut Ri>,
 ) -> Result<(), ErrorStatus> {
     _ = protocol;
-    if domain != 0 {
-        return Err(ErrorStatus::InvalidArgument);
-    }
-    let domain = SocketDomain::Unix;
 
-    let kind = if flags.contains(SockCreateFlags::SOCK_SEQPACKET) {
-        SocketKind::SeqPacket
-    } else {
-        SocketKind::Stream
+    let domain = match domain {
+        safa_abi::sockets::SockDomain::LOCAL => SocketDomain::Unix,
+        safa_abi::sockets::SockDomain::INETV4 => SocketDomain::Net,
+        _ => return Err(ErrorStatus::InvalidArgument),
+    };
+
+    let is_seqpacket = flags.contains(SockCreateFlags::SOCK_SEQPACKET);
+    let kind = match domain {
+        SocketDomain::Unix => {
+            if is_seqpacket {
+                SocketKind::SeqPacket
+            } else {
+                SocketKind::Stream
+            }
+        }
+        SocketDomain::Net if is_seqpacket => return Err(ErrorStatus::TypeMismatch),
+        SocketDomain::Net => SocketKind::Datagram,
     };
 
     let can_block = !flags.contains(SockCreateFlags::SOCK_NON_BLOCKING);
@@ -131,6 +161,7 @@ fn syssock_connect(
     let addr = compute_addr(addr, addr_struct_size)?;
     let sock_id = match addr {
         Addr::Abstract(ref name) => sockets::get_abstract_binding(name),
+        Addr::Inet { .. } => None, // TODO: TCP sockets...,
     }
     .ok_or(ErrorStatus::AddressNotFound)?;
 
@@ -160,8 +191,9 @@ fn syssock_bind(
         return Err(ErrorStatus::TooShort);
     }
 
+    let addr = compute_addr(addr, addr_struct_size)?;
     // Operation is non blocking so it is ok to do this
-    let (id, addr) = resources::get_mut(sock_resource, |res| {
+    let (socket, id) = resources::get_mut(sock_resource, |res| {
         match (
             res.data().as_ref::<ServerSocketDesc>(),
             res.data().as_ref::<SocketDesc>(),
@@ -174,23 +206,33 @@ fn syssock_bind(
                     can_block,
                 }),
             ) => {
-                let addr = compute_addr(addr, addr_struct_size)?;
-                let created_socket = sockets::create_socket(*domain, *kind, *can_block);
-                let id = created_socket.id;
-                *res = ResourceNode::create_global(created_socket);
+                let created_socket_desc = sockets::create_socket(*domain, *kind, *can_block);
+                let id = created_socket_desc.id;
+                let socket = created_socket_desc.socket().clone();
+                *res = ResourceNode::create_global(created_socket_desc);
 
-                Ok((id, addr))
+                Ok((socket, id))
             }
-            (Some(s), None) => Ok((s.id, compute_addr(addr, addr_struct_size)?)),
+            (Some(s), None) => Ok((s.socket().clone(), s.id)),
             (Some(_), Some(_)) => unreachable!("Schrödinger Resource"),
-            _ => Err(ErrorStatus::UnsupportedResource),
+            (None, None) => Err(ErrorStatus::UnsupportedResource),
         }
     })
     .ok_or(ErrorStatus::UnknownResource)
     .flatten()?;
 
+    let domain = socket.domain();
+    let kind = socket.sock_type();
+
     match addr {
-        Addr::Abstract(abs) => sockets::bind_abstract_socket(abs.clone(), id),
+        Addr::Abstract(abs) if domain == SocketDomain::Unix => {
+            sockets::bind_abstract_socket(abs.clone(), id)
+        }
+        // TODO: use the IpV4 field
+        Addr::Inet { port, .. } if domain == SocketDomain::Net && kind == SocketKind::Datagram => {
+            crate::net::udp::bind_socket(port, &socket).map_err(|()| ErrorStatus::AlreadyExists)?
+        }
+        _ => Err(ErrorStatus::TypeMismatch)?,
     }
 
     Ok(())

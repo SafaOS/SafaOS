@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use safa_abi::errors::IntoErr;
 
 use crate::{
+    memory::page_allocator::PageAlloc,
     sockets::{
         conn::BlockingDatagramStream,
         conn_queue::ConnOrientedSocket,
@@ -61,16 +62,49 @@ impl IntoErr for SocketError {
     }
 }
 
+pub struct ConnectionlessSocket {
+    stream: Box<BlockingDatagramStream, PageAlloc>,
+    udp_port: RwLock<Option<u16>>,
+}
+
+impl ConnectionlessSocket {
+    pub fn new() -> Self {
+        Self {
+            stream: Box::new_in(BlockingDatagramStream::new(), PageAlloc),
+            udp_port: RwLock::new(None),
+        }
+    }
+
+    pub fn on_drop(&self) {
+        self.stream.on_drop();
+        if let Some(port) = *self.udp_port.read() {
+            assert!(
+                crate::net::udp::remove_socket(port),
+                "Failed to remove UDP socket not found on port {}",
+                port
+            );
+        }
+    }
+
+    pub fn write_bytes(&self, bytes: &[u8]) -> Result<usize, SocketError> {
+        self.stream.write(bytes)
+    }
+
+    pub fn set_port(&self, port: u16) {
+        *self.udp_port.write() = Some(port);
+    }
+}
+
 enum SocketState {
     ConnectionOriented(ConnOrientedSocket),
-    Connectionless { stream: Box<BlockingDatagramStream> },
+    Connectionless(ConnectionlessSocket),
 }
 
 impl SocketState {
     pub fn on_drop(&self) {
         match self {
             SocketState::ConnectionOriented(state) => state.on_drop(),
-            SocketState::Connectionless { stream } => stream.on_drop(),
+            SocketState::Connectionless(state) => state.on_drop(),
         }
     }
 }
@@ -81,6 +115,9 @@ pub struct Socket {
     sock_state: SocketState,
     domain: SocketDomain,
 }
+
+unsafe impl Send for Socket {}
+unsafe impl Sync for Socket {}
 
 impl Socket {
     fn before_drop(&self) {
@@ -96,6 +133,34 @@ impl Socket {
             SocketState::ConnectionOriented(socket) => Some(socket),
             _ => None,
         }
+    }
+
+    fn connectionless_state(&self) -> Option<&ConnectionlessSocket> {
+        match &self.sock_state {
+            SocketState::Connectionless(socket) => Some(socket),
+            _ => None,
+        }
+    }
+
+    /// Write to a connection-less socket, panicks if it is connection based
+    pub fn write_socket(&self, data: &[u8]) -> Result<usize, SocketError> {
+        self.connectionless_state()
+            .map(|state| state.write_bytes(data))
+            .expect("Expected connectionless socket")
+    }
+
+    /// Attempts to read from a connection-less socket.
+    pub fn read_socket(&self, data: &mut [u8]) -> Result<usize, SocketError> {
+        self.connectionless_state()
+            .map(|state| state.stream.read(self.can_block(), data))
+            .ok_or(SocketError::OperationNotSupported)?
+    }
+
+    /// Attempts to set the port of a UDP socket, panicks if it isn't UDP.
+    pub fn set_udp_port(&self, port: u16) {
+        self.connectionless_state()
+            .map(|state| state.set_port(port))
+            .expect("Expected UDP socket")
     }
 
     pub const fn sock_type(&self) -> SocketKind {
@@ -153,9 +218,7 @@ impl SockQueue {
                 SocketKind::SeqPacket | SocketKind::Stream => {
                     SocketState::ConnectionOriented(ConnOrientedSocket::new(kind))
                 }
-                SocketKind::Datagram => SocketState::Connectionless {
-                    stream: Box::new(BlockingDatagramStream::new()),
-                },
+                SocketKind::Datagram => SocketState::Connectionless(ConnectionlessSocket::new()),
             },
         };
 

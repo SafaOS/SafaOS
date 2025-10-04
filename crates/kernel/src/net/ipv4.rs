@@ -6,7 +6,7 @@ use core::{
 use bitfield_struct::bitfield;
 use macros::display_consts;
 
-use crate::{debug, net::interface::NetworkInterface, utils::locks::Mutex, warn};
+use crate::{debug, net::interface::NetworkInterface, warn};
 
 /// Version and header length.
 #[bitfield(u8)]
@@ -138,7 +138,7 @@ impl IPv4Manager {
         Self
     }
 
-    fn handle_packet(&mut self, int: &'static dyn NetworkInterface, raw_packet: &[u8]) {
+    fn handle_packet(&self, int: &'static dyn NetworkInterface, raw_packet: &[u8]) {
         let packet = match IPv4Packet::try_from_bytes(raw_packet) {
             Ok(packet) if packet.header().total_length() > packet.total_size() => {
                 warn!(IPv4Manager, "Invalid IPv4 packet");
@@ -151,17 +151,23 @@ impl IPv4Manager {
             }
         };
 
-        debug!(
-            IPv4Manager,
-            "Got packet: {packet:#?}, interface: {}",
-            int.name()
-        );
+        match packet.header().protocol {
+            IPv4Protocol::UDP => super::udp::handle_udp_packet(packet.payload()),
+            _ => {
+                debug!(
+                    IPv4Manager,
+                    "Got unknown packet: {packet:#?}, interface: {}",
+                    int.name()
+                );
+            }
+        }
     }
 }
 
-static IPV4_MANAGER: Mutex<IPv4Manager> = Mutex::new(IPv4Manager::new());
+static IPV4_MANAGER: IPv4Manager = IPv4Manager::new();
 
 /// Handles an incoming IPv4 packet.
+/// TODO: Its probably smarter to handle packets in a separate thread.
 pub fn handle_ipv4_packet(int: &'static dyn NetworkInterface, packet: &[u8]) {
-    IPV4_MANAGER.lock().handle_packet(int, packet);
+    IPV4_MANAGER.handle_packet(int, packet);
 }
