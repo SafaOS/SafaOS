@@ -97,12 +97,7 @@ pub struct IPv4Header {
 }
 
 impl IPv4Header {
-    pub const fn new(
-        payload_len: u16,
-        dst_addr: Ipv4Addr,
-        time_to_live: u8,
-        protocol: IPv4Protocol,
-    ) -> Self {
+    pub const fn new(payload_len: u16, dst_addr: Ipv4Addr, protocol: IPv4Protocol) -> Self {
         let total_len = payload_len + size_of::<Self>() as u16;
         let mut this = Self {
             version_ihl: VersionIHL::new()
@@ -112,7 +107,7 @@ impl IPv4Header {
             total_length: total_len.to_be_bytes(),
             identification: [0; 2],
             fragment_flags: FragmentFlags::new(),
-            time_to_live,
+            time_to_live: 64,
             protocol,
             header_checksum: [0; 2],
             src_addr: Ipv4Addr::UNSPECIFIED,
@@ -134,21 +129,18 @@ impl IPv4Header {
             let chunk = as_u16[i];
 
             sum += u16::from_be_bytes(chunk) as u32;
-            if sum > u16::MAX as u32 {
-                sum = (sum >> 16) + (sum & u16::MAX as u32);
-            }
             i += 1;
         }
 
-        (!(sum & u16::MAX as u32)) as u16
+        while sum >> 16 != 0 {
+            sum = (sum >> 16) + (sum & u16::MAX as u32);
+        }
+
+        !(sum as u16)
     }
 
     pub const fn total_length(&self) -> usize {
         u16::from_be_bytes(self.total_length) as usize
-    }
-
-    pub const fn checksum(&self) -> u16 {
-        u16::from_be_bytes(self.header_checksum)
     }
 
     pub const fn as_bytes(&self) -> &[u8] {
@@ -226,7 +218,7 @@ impl PageIPv4Packet {
         let udp_header = UDPHeader::new(src_port, dst_port, payload.len() as u16);
         let udp_len = udp_header.length();
 
-        let ipv4_header = IPv4Header::new(udp_len, dst_addr, 1, IPv4Protocol::UDP);
+        let ipv4_header = IPv4Header::new(udp_len, dst_addr, IPv4Protocol::UDP);
         let mut this = Self::new(ipv4_header);
         this.push(udp_header.as_bytes());
         this.push(payload);
@@ -264,7 +256,7 @@ impl IPv4Manager {
                 );
                 return;
             }
-            Ok(packet) if packet.header().checksum() != packet.header().calculate_checksum() => {
+            Ok(packet) if packet.header().calculate_checksum() != 0 => {
                 warn!(
                     IPv4Manager,
                     "Invalid IPv4 packet: invalid checksum, ignoring..."
