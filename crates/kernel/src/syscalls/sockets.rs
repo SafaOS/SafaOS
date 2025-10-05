@@ -213,7 +213,8 @@ fn syssock_connect(
     let client_conn = client_sock.connect(client_sock.can_block())?;
     resources::get_mut(sock_resource, |res| {
         *res = ResourceNode::create(client_conn, res.is_global())
-    });
+    })
+    .ok_or(ErrorStatus::UnknownResource)?;
     Ok(())
 }
 
