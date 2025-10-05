@@ -32,6 +32,7 @@ pub trait NetworkInterface: Send + Sync {
 
 const CMD_GET_NIC_ADDR_INFO: u16 = 0x1001;
 const CMD_SET_NIC_ADDR_INFO: u16 = 0x1002;
+const CMD_GET_NIC_MAC_ADDR: u16 = 0x1003;
 
 impl<T: NetworkInterface> CharDevice for T {
     fn name(&self) -> &'static str {
@@ -49,15 +50,23 @@ impl<T: NetworkInterface> CharDevice for T {
     }
 
     fn send_command(&self, cmd: u16, arg: u64) -> crate::drivers::vfs::FSResult<()> {
-        let ptr: &mut NicAddrInfoV4 =
-            SyscallFFI::make(arg as *mut NicAddrInfoV4).map_err(|_| FSError::InvalidArg)?;
         match cmd {
             CMD_GET_NIC_ADDR_INFO => {
+                let ptr: &mut NicAddrInfoV4 =
+                    SyscallFFI::make(arg as *mut NicAddrInfoV4).map_err(|_| FSError::InvalidArg)?;
                 *ptr = self.nic_info();
                 Ok(())
             }
             CMD_SET_NIC_ADDR_INFO => {
+                let ptr: &mut NicAddrInfoV4 =
+                    SyscallFFI::make(arg as *mut NicAddrInfoV4).map_err(|_| FSError::InvalidArg)?;
                 self.set_nic_info(*ptr);
+                Ok(())
+            }
+            CMD_GET_NIC_MAC_ADDR => {
+                let ptr: &mut MacAddress =
+                    SyscallFFI::make(arg as *mut _).map_err(|_| FSError::InvalidArg)?;
+                *ptr = self.mac_address();
                 Ok(())
             }
             _ => Err(FSError::InvalidCmd),
