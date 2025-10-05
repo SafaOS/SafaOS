@@ -17,16 +17,20 @@ use crate::{
 /// Version and header length.
 #[bitfield(u8)]
 pub struct VersionIHL {
-    /// Version of the IP protocol, 4 for IPv4.
-    #[bits(4)]
-    version: u8,
     /// Header length, the header by default is 20 bytes but it can extend up to 60 bytes with options.
     #[bits(4)]
     ihl: u8,
+    /// Version of the IP protocol, 4 for IPv4.
+    #[bits(4)]
+    version: u8,
 }
 
 #[bitfield(u8)]
 pub struct DSCPECN {
+    /// This field allows end-to-end notification of network congestion without dropping packets.
+    /// ECN is an optional feature available when both endpoints support it and effective when also supported by the underlying network.
+    #[bits(2)]
+    ecn: u8,
     /// Originally defined as the type of service (ToS), this field specifies differentiated services (DiffServ).
     ///
     /// Real-time data streaming makes use of the DSCP field.
@@ -34,14 +38,12 @@ pub struct DSCPECN {
     /// An example is Voice over IP (VoIP), which is used for interactive voice services.
     #[bits(6)]
     dscp: u8,
-    /// This field allows end-to-end notification of network congestion without dropping packets.
-    /// ECN is an optional feature available when both endpoints support it and effective when also supported by the underlying network.
-    #[bits(2)]
-    ecn: u8,
 }
 
 #[bitfield(u16)]
 pub struct FragmentFlags {
+    #[bits(13)]
+    fragment_offset: u16,
     #[bits(1)]
     __rsz0: (),
     /// This field specifies whether the datagram can be fragmented or not.
@@ -56,8 +58,6 @@ pub struct FragmentFlags {
     ///
     /// The last fragment has a non-zero Fragment Offset field, so it can still be differentiated from an unfragmented packet.
     mf: bool,
-    #[bits(13)]
-    fragment_offset: u16,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -107,7 +107,7 @@ impl IPv4Header {
         let mut this = Self {
             version_ihl: VersionIHL::new()
                 .with_version(4)
-                .with_ihl(size_of::<Self>() as u8),
+                .with_ihl((size_of::<Self>() / 4) as u8),
             dscp_ecn: DSCPECN::new(),
             total_length: total_len.to_be_bytes(),
             identification: [0; 2],
