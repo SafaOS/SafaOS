@@ -97,7 +97,7 @@ pub fn handle_udp_packet(bytes: &[u8]) {
                 }
             }
         } else {
-            UDP_PORTS.write().remove(&dst_port);
+            warn!("Failed to upgrade socket at port {dst_port}");
         }
     }
 }

@@ -78,11 +78,7 @@ impl ConnectionlessSocket {
     pub fn on_drop(&self) {
         self.stream.on_drop();
         if let Some(port) = *self.udp_port.read() {
-            assert!(
-                crate::net::udp::remove_socket(port),
-                "Failed to remove UDP socket not found on port {}",
-                port
-            );
+            crate::net::udp::remove_socket(port);
         }
     }
 
