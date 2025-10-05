@@ -127,6 +127,10 @@ impl ResourceNode {
     pub fn cloneable_to_different_address_space(&self) -> bool {
         self.data.address_space_generic() && self.global.load(core::sync::atomic::Ordering::Acquire)
     }
+
+    pub fn is_global(&self) -> bool {
+        self.global.load(core::sync::atomic::Ordering::Acquire)
+    }
 }
 
 pub struct ResourceManager {

@@ -186,7 +186,6 @@ fn syssock_connect(
     sock_resource: Ri,
     addr: &SockBindAddr,
     addr_struct_size: usize,
-    out_connection_id: Option<&mut Ri>,
 ) -> Result<(), ErrorStatus> {
     let socket_desc = resources::get_ref(sock_resource, |res| {
         res.data().as_ref_expected::<SocketDesc>().copied()
@@ -212,11 +211,9 @@ fn syssock_connect(
     }
 
     let client_conn = client_sock.connect(client_sock.can_block())?;
-
-    let ri = resources::add_global_resource(client_conn);
-    if let Some(out) = out_connection_id {
-        *out = ri;
-    }
+    resources::get_mut(sock_resource, |res| {
+        *res = ResourceNode::create(client_conn, res.is_global())
+    });
     Ok(())
 }
 
