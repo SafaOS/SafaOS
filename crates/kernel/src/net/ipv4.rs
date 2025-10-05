@@ -9,7 +9,10 @@ use macros::display_consts;
 
 use crate::{
     debug,
-    net::{interface::NetworkInterface, udp::UDPHeader},
+    net::{
+        interface::NetworkInterface,
+        udp::{UDPHeader, UDPPacket},
+    },
     utils::alloc::PageVec,
     warn,
 };
@@ -99,7 +102,7 @@ pub struct IPv4Header {
 impl IPv4Header {
     pub const fn new(payload_len: u16, dst_addr: Ipv4Addr, protocol: IPv4Protocol) -> Self {
         let total_len = payload_len + size_of::<Self>() as u16;
-        let mut this = Self {
+        let this = Self {
             version_ihl: VersionIHL::new()
                 .with_version(4)
                 .with_ihl((size_of::<Self>() / 4) as u8),
@@ -114,7 +117,6 @@ impl IPv4Header {
             dst_addr,
         };
 
-        this.header_checksum = this.calculate_checksum().to_be_bytes();
         this
     }
 
@@ -137,6 +139,11 @@ impl IPv4Header {
         }
 
         !(sum as u16)
+    }
+
+    /// Calculates the checksum and puts it into the header.
+    fn put_checksum(&mut self) {
+        self.header_checksum = self.calculate_checksum().to_be_bytes();
     }
 
     pub const fn total_length(&self) -> usize {
@@ -176,12 +183,33 @@ impl IPv4Packet {
         &self.0[size_of::<IPv4Header>()..]
     }
 
+    pub fn payload_mut(&mut self) -> &mut [u8] {
+        &mut self.0[size_of::<IPv4Header>()..]
+    }
+
     pub fn header(&self) -> &IPv4Header {
         unsafe { &*(self.0.as_ptr() as *const IPv4Header) }
     }
 
     pub fn header_mut(&mut self) -> &mut IPv4Header {
         unsafe { &mut *(self.0.as_mut_ptr() as *mut IPv4Header) }
+    }
+
+    /// Calculates the checksum and puts it into the IPv4 header and the underlying protocol's header.
+    pub fn put_checksum(&mut self) {
+        let header = self.header_mut();
+        header.put_checksum();
+        match header.protocol {
+            IPv4Protocol::UDP => {
+                let src_addr = header.src_addr;
+                let dst_addr = header.dst_addr;
+
+                let udp_packet = UDPPacket::try_from_bytes_mut(self.payload_mut())
+                    .expect("Invalid UDP packet: too small");
+                udp_packet.put_checksum(src_addr, dst_addr);
+            }
+            _ => {}
+        }
     }
 
     pub fn as_bytes(&self) -> &[u8] {

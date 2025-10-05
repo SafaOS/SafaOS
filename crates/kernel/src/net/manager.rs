@@ -99,6 +99,7 @@ impl NetworkManager {
         if header.dst_addr == Ipv4Addr::BROADCAST {
             for interface in &*self.interfaces.read() {
                 packet.header_mut().src_addr = interface.nic_info().ipv4_address;
+                packet.put_checksum();
 
                 interface.send_ethernet(
                     MacAddress::BROADCAST,
