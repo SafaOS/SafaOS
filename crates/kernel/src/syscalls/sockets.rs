@@ -75,26 +75,27 @@ fn syssock_sendto(
     let addr = compute_addr(&addr, addr_len)?;
     match addr {
         Addr::Inet { ipv4, port } => {
-            resources::get_ref(sock_ri, |resource| {
+            let src_port = resources::get_ref(sock_ri, |resource| {
                 resource
                     .data()
                     .as_ref::<ServerSocketDesc>()
-                    .map(|desc| (desc.domain(), desc.sock_type()))
+                    .and_then(|desc| Some((desc.udp_port()?, desc.domain(), desc.sock_type())))
                     .or_else(|| {
                         resource
                             .data()
                             .as_ref::<SocketDesc>()
-                            .map(|desc| (desc.domain, desc.kind))
+                            .map(|desc| (0, desc.domain, desc.kind))
                     })
-                    .filter(|(domain, kind)| {
-                        *domain == SocketDomain::Net && *kind == SocketKind::Datagram
+                    .and_then(|(port, domain, kind)| {
+                        (domain == SocketDomain::Net && kind == SocketKind::Datagram)
+                            .then_some(port)
                     })
                     .ok_or(ErrorStatus::UnsupportedResource)
             })
             .ok_or(ErrorStatus::UnknownResource)
             .flatten()?;
 
-            let mut packet = PageIPv4Packet::new_udp(payload, 0, port, ipv4);
+            let mut packet = PageIPv4Packet::new_udp(payload, src_port, port, ipv4);
             crate::net::manager::send_ipv4_packet(&mut *packet)?;
             Ok(())
         }

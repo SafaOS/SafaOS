@@ -93,6 +93,10 @@ impl ConnectionlessSocket {
     pub fn set_port(&self, port: u16) {
         *self.udp_port.write() = Some(port);
     }
+
+    pub fn udp_port(&self) -> Option<u16> {
+        *self.udp_port.read()
+    }
 }
 
 enum SocketState {
@@ -161,6 +165,11 @@ impl Socket {
         self.connectionless_state()
             .map(|state| state.set_port(port))
             .expect("Expected UDP socket")
+    }
+
+    pub fn udp_port(&self) -> Option<u16> {
+        self.connectionless_state()
+            .and_then(|state| state.udp_port())
     }
 
     pub const fn sock_type(&self) -> SocketKind {
