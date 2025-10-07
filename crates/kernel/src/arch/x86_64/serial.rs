@@ -1,5 +1,3 @@
-use lazy_static::lazy_static;
-
 use crate::{arch::without_interrupts, utils::locks::SpinLock};
 use core::fmt::{self, Write};
 
@@ -56,10 +54,7 @@ pub fn write_serial_string(s: &str) {
 }
 
 pub struct Serial;
-lazy_static! {
-    /// Global Serial writer
-    pub static ref SERIAL: SpinLock<Serial> = SpinLock::new(Serial);
-}
+
 impl Write for Serial {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         write_serial_string(s);
@@ -67,6 +62,12 @@ impl Write for Serial {
     }
 }
 
+pub static SERIAL: SpinLock<Serial> = SpinLock::new(Serial);
 pub fn _serial(args: fmt::Arguments) {
-    without_interrupts(|| SERIAL.lock().write_fmt(args).unwrap())
+    without_interrupts(|| {
+        SERIAL
+            .lock()
+            .write_fmt(args)
+            .expect("Failed to write to serial");
+    });
 }

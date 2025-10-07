@@ -52,7 +52,7 @@ pub fn init(vfs: &mut VFS) {
     )
     .expect("failed to mount `dev:/`");
     add_device(vfs, &*FRAMEBUFFER_TERMINAL);
-    add_device(vfs, &*SERIAL);
+    add_device(vfs, &SERIAL);
     add_device(vfs, &*FRAMEBUFFER_DRIVER);
     add_device(vfs, &KEYBOARD_EVENT_QUEUE);
     add_device(vfs, &MICE_EVENT_QUEUE);

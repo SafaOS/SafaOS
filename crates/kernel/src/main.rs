@@ -48,7 +48,7 @@ mod utils;
 mod vtty;
 
 extern crate alloc;
-use arch::serial;
+use arch::serial::{self, SERIAL};
 
 use globals::*;
 
@@ -101,7 +101,9 @@ macro_rules! sleep {
             core::hint::spin_loop()
         }
     }};
-    ($ms: literal ms) => {{ $crate::sleep!($ms) }};
+    ($ms: literal ms) => {{
+        $crate::sleep!($ms)
+    }};
 }
 
 #[macro_export]
@@ -172,7 +174,6 @@ use core::panic::PanicInfo;
 use core::sync::atomic::AtomicUsize;
 
 use crate::arch::registers::CPUID;
-use crate::arch::serial::SERIAL;
 use crate::arch::without_interrupts;
 use crate::utils::locks::SpinLock;
 
@@ -186,6 +187,8 @@ fn panic(info: &PanicInfo) -> ! {
             arch::halt_all();
         }
 
+        // Wait for halt to complete
+        crate::sleep!(10 ms);
         static _PANICK_LOCK: SpinLock<()> = SpinLock::new(());
         let _guard = _PANICK_LOCK.lock();
 

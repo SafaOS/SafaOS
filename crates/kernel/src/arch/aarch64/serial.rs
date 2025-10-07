@@ -37,10 +37,8 @@ pub(super) fn write_str(s: &str) {
 }
 
 pub struct Serial;
-lazy_static! {
-    /// Global Serial writer
-    pub static ref SERIAL: SpinLock<Serial> = SpinLock::new(Serial);
-}
+/// Global Serial writer
+pub static SERIAL: SpinLock<Serial> = SpinLock::new(Serial);
 
 impl Write for Serial {
     fn write_char(&mut self, c: char) -> fmt::Result {
