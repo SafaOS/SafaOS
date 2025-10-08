@@ -22,5 +22,5 @@ fn spawn_test() {
 
     let ret = thread::current::wait_for_process(pid);
 
-    assert_eq!(ret, Some(1));
+    assert_eq!(ret, Ok(Some(1)));
 }

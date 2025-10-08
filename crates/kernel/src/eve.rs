@@ -128,43 +128,34 @@ fn cleanup_thread(tid: Tid, _arg: &()) -> ! {
     debug!("Clean-up thread running with id: {}\n", tid);
     loop {
         if SHOULD_WAKEUP.load(Ordering::Acquire) > 0 {
-            // A thread yield during this would deadlock if [`schedule_thread_cleanup`] is called
-            let mut to_cleanup = TO_CLEANUP.lock();
-            if SHOULD_WAKEUP.load(Ordering::SeqCst) == 0 {
-                continue;
-            }
+            let cleanup_item = {
+                let mut to_cleanup = TO_CLEANUP.lock();
+                if SHOULD_WAKEUP.load(Ordering::Acquire) == 0 {
+                    continue;
+                }
 
-            // TODO: Maybe there is a faster method to handle this
-            to_cleanup.retain(|item| {
-                match item {
-                    // only remove items that's been around beyond or at `at_context_switch_count`
+                let pos = to_cleanup.iter().position(|item| match item {
                     CleanupItem::Thread {
                         context_switch_count,
                         at_context_switch_count,
-                        thread,
-                    } => {
-                        if context_switch_count.load(Ordering::Acquire) >= *at_context_switch_count
-                        {
-                            unsafe { thread.cleanup() };
-                            SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
-                            false
-                        } else {
-                            true
-                        }
-                    }
-                    CleanupItem::Process { proc } => {
-                        if proc.is_alive() {
-                            return true;
-                        }
+                        ..
+                    } => context_switch_count.load(Ordering::Acquire) >= *at_context_switch_count,
+                    CleanupItem::Process { proc } => (!proc.is_alive()) && proc.can_cleanup_proc(),
+                });
 
-                        let success = proc.try_cleanup();
-                        if success {
-                            SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
-                        }
-                        !success
-                    }
+                pos.map(|i| to_cleanup.swap_remove(i))
+            };
+
+            if let Some(clean_up) = cleanup_item {
+                match clean_up {
+                    CleanupItem::Thread { thread, .. } => unsafe {
+                        thread.cleanup();
+                    },
+                    CleanupItem::Process { proc } => assert!(proc.try_cleanup()),
                 }
-            });
+
+                SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
+            }
         }
         core::hint::spin_loop();
     }

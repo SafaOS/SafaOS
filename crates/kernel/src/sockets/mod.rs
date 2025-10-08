@@ -5,6 +5,7 @@ use safa_abi::errors::IntoErr;
 
 use crate::{
     memory::page_allocator::PageAlloc,
+    scheduler::wait_queue::WaitError,
     sockets::{
         conn::BlockingDatagramStream,
         conn_queue::ConnOrientedSocket,
@@ -47,6 +48,16 @@ pub enum SocketError {
     /// Connection refused for some reason
     ConnectionRefused,
     OperationNotSupported,
+    Interrupted,
+}
+
+impl From<WaitError> for SocketError {
+    fn from(value: WaitError) -> Self {
+        match value {
+            WaitError::ForceTerminated => Self::Interrupted,
+            WaitError::Timeout => unreachable!(),
+        }
+    }
 }
 
 impl IntoErr for SocketError {
@@ -58,6 +69,7 @@ impl IntoErr for SocketError {
             Self::ConnectionRefused => safa_abi::errors::ErrorStatus::ConnectionRefused,
             Self::ConnectionClosed => safa_abi::errors::ErrorStatus::ConnectionClosed,
             Self::OperationNotSupported => safa_abi::errors::ErrorStatus::OperationNotSupported,
+            Self::Interrupted => safa_abi::errors::ErrorStatus::ForceTerminated,
         }
     }
 }

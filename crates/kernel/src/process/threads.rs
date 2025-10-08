@@ -44,10 +44,27 @@ impl ThreadsManager {
         }
     }
 
-    pub fn kill_all(&mut self) {
+    /// # Safety:
+    /// Once all threads are killed, if this is the current process, no more thread yields can be made.
+    pub unsafe fn kill_all(&mut self) {
+        let mut current = None;
         for (_, thread) in &self.threads {
+            let is_current = crate::thread::is_current(thread);
+
+            // kill current the last, so we are allowed to yield in the meantime
+            if is_current {
+                current = Some(thread);
+                continue;
+            }
+
             if !thread.is_dead() {
-                unsafe { thread.soft_kill(true) };
+                _ = unsafe { thread.soft_kill(true) };
+            }
+        }
+
+        if let Some(curr) = current {
+            unsafe {
+                _ = curr.soft_kill(true);
             }
         }
     }

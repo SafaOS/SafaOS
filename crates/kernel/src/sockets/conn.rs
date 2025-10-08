@@ -4,7 +4,6 @@ use alloc::{collections::linked_list::LinkedList, sync::Arc};
 use safa_abi::poll::PollEvents;
 
 use crate::{
-    arch::without_interrupts,
     drivers::vfs::FSResult,
     memory::paging::PAGE_SIZE,
     process::{
@@ -13,7 +12,6 @@ use crate::{
     },
     scheduler::wait_queue::WaitQueue,
     sockets::{SockConnID, Socket, SocketError},
-    thread,
     utils::locks::Mutex,
 };
 
@@ -123,8 +121,7 @@ impl BlockingDatagramStream {
         }
 
         let len = self.inner.write_inner(buf)?;
-        let mut wait_queue = self.wait_queue.lock();
-        wait_queue.wake_all();
+        self.wait_queue.lock().wake_all();
         Ok(len)
     }
 
@@ -133,15 +130,12 @@ impl BlockingDatagramStream {
             return Err(SocketError::ConnectionClosed);
         }
 
+        let pending_wait = self.wait_queue.prepare_wait();
         match self.inner.read_inner(buf) {
             Ok(len) => Ok(len),
             Err(SocketError::WouldBlockEmpty) if can_block => {
-                let mut wait_queue = self.wait_queue.lock();
-                without_interrupts(|| {
-                    thread::current().sleep_in_queue(&mut wait_queue, ());
-                    drop(wait_queue);
-                    thread::current::yield_now();
-                });
+                pending_wait.enter_wait(())?;
+
                 // retry
                 self.read(can_block, buf)
             }
@@ -262,20 +256,18 @@ enum SocketWaitReason {
     ClientSockEmpty,
 }
 
-struct Waiter {
+struct WaitStatus {
     server_sock_len: usize,
     client_sock_len: usize,
     conn_dropped: bool,
-    wait_queue: WaitQueue<2, SocketWaitReason>,
 }
 
-impl Waiter {
+impl WaitStatus {
     const fn new() -> Self {
         Self {
             server_sock_len: 0,
             client_sock_len: 0,
             conn_dropped: false,
-            wait_queue: WaitQueue::new(),
         }
     }
 }
@@ -283,14 +275,16 @@ impl Waiter {
 /// Represents a generic socket connection.
 pub(super) struct GenericSockConn<T: GenericSockConnTrait> {
     inner_conn: T,
-    wait_queue: Mutex<Waiter>,
+    wait_stats: Mutex<WaitStatus>,
+    wait_queue: Mutex<WaitQueue<2, SocketWaitReason>>,
 }
 
 impl<T: GenericSockConnTrait> GenericSockConn<T> {
     pub(super) fn new() -> Self {
         Self {
             inner_conn: T::new(),
-            wait_queue: Mutex::new(Waiter::new()),
+            wait_stats: Mutex::new(WaitStatus::new()),
+            wait_queue: Mutex::new(WaitQueue::new()),
         }
     }
 
@@ -299,12 +293,12 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
         buf: &mut [u8],
         can_block: bool,
     ) -> Result<usize, SocketError> {
-        let mut waiter = self.wait_queue.lock();
-        let conn_dropped = waiter.conn_dropped;
+        let mut wait_stats = self.wait_stats.lock();
+        let conn_dropped = wait_stats.conn_dropped;
         let update = if IS_SERVER {
-            &mut waiter.server_sock_len
+            &mut wait_stats.server_sock_len
         } else {
-            &mut waiter.client_sock_len
+            &mut wait_stats.client_sock_len
         };
 
         let results = self.inner_conn.read::<IS_SERVER>(buf);
@@ -315,8 +309,8 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
                 let current = *update;
 
                 let ava = MAX_STREAM_SIZE - current;
-                waiter
-                    .wait_queue
+                self.wait_queue
+                    .lock()
                     .wake_on_condition(|reason| match (reason, IS_SERVER) {
                         (SocketWaitReason::ServSockFull(need), true)
                         | (SocketWaitReason::ClientSockFull(need), false)
@@ -354,19 +348,16 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
                 if conn_dropped {
                     return Err(SocketError::ConnectionClosed);
                 }
+                // Its ok to prepare the wait from here instead of before the function call because,
+                // anybody who will wake, will modify the stats first and we hold a lock on the stats so they cannot possibly wake before this.
+                let pending_wait = self.wait_queue.prepare_wait();
+                drop(wait_stats);
 
-                without_interrupts(move || {
-                    thread::current().sleep_in_queue(
-                        &mut waiter.wait_queue,
-                        if IS_SERVER {
-                            SocketWaitReason::ServSockEmpty
-                        } else {
-                            SocketWaitReason::ClientSockEmpty
-                        },
-                    );
-                    drop(waiter);
-                    thread::current::yield_now();
-                });
+                pending_wait.enter_wait(if IS_SERVER {
+                    SocketWaitReason::ServSockEmpty
+                } else {
+                    SocketWaitReason::ClientSockEmpty
+                })?;
 
                 self.read::<IS_SERVER>(buf, can_block)
             }
@@ -381,17 +372,17 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
     ) -> Result<usize, SocketError> {
         let amount = buf.len().min(MAX_STREAM_SIZE);
         let buf = &buf[..amount];
-        let mut waiter = self.wait_queue.lock();
+        let mut wait_stats = self.wait_stats.lock();
 
-        let conn_dropped = waiter.conn_dropped;
+        let conn_dropped = wait_stats.conn_dropped;
         if conn_dropped {
             return Err(SocketError::ConnectionClosed);
         }
 
         let update = if TARGETS_SERVER {
-            &mut waiter.server_sock_len
+            &mut wait_stats.server_sock_len
         } else {
-            &mut waiter.client_sock_len
+            &mut wait_stats.client_sock_len
         };
 
         let results = self.inner_conn.write::<TARGETS_SERVER>(buf);
@@ -423,7 +414,7 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
                     poll::broadcast_events(poll_id, events_add, events_remove);
                 }
 
-                waiter.wait_queue.wake_equals(&reason);
+                self.wait_queue.lock().wake_equals(&reason);
                 Ok(len)
             }
             Err(SocketError::WouldBlockFull) if can_block => {
@@ -431,19 +422,15 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
                     return Err(SocketError::ConnectionClosed);
                 }
 
-                without_interrupts(|| {
-                    thread::current().sleep_in_queue(
-                        &mut waiter.wait_queue,
-                        if TARGETS_SERVER {
-                            SocketWaitReason::ServSockFull(amount)
-                        } else {
-                            SocketWaitReason::ClientSockFull(amount)
-                        },
-                    );
+                let pending_wait = self.wait_queue.prepare_wait();
+                drop(wait_stats);
 
-                    drop(waiter);
-                    thread::current::yield_now();
-                });
+                pending_wait.enter_wait(if TARGETS_SERVER {
+                    SocketWaitReason::ServSockFull(amount)
+                } else {
+                    SocketWaitReason::ClientSockFull(amount)
+                })?;
+
                 self.write::<TARGETS_SERVER>(buf, can_block)
             }
             Err(e) => Err(e),
@@ -461,9 +448,9 @@ impl<T: GenericSockConnTrait> GenericSockConn<T> {
     }
 
     pub(super) fn mark_dropped(&self) {
-        let mut waiter = self.wait_queue.lock();
-        waiter.conn_dropped = true;
-        waiter.wait_queue.wake_all();
+        let mut wait_stats = self.wait_stats.lock();
+        wait_stats.conn_dropped = true;
+        self.wait_queue.lock().wake_all();
         poll::broadcast_events(
             self.client_poll_id(),
             PollEvents::DISCONNECTED,

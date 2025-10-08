@@ -4,9 +4,11 @@ use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
 use safa_abi::errors::IntoErr;
 use smallvec::SmallVec;
+use thiserror::Error;
 
 use crate::{
-    arch::with_interrupts, process::resources, scheduler::wait_queue::WaitQueueWithTimeout, thread,
+    process::resources,
+    scheduler::wait_queue::{WaitError, WaitQueueWithTimeout},
     utils::locks::Mutex,
 };
 
@@ -32,10 +34,16 @@ pub struct PollEntry {
     resources: SmallVec<[(PollID, PollEvents); 3]>,
 }
 
+// For now the size doesn't matter
+
+struct WaitRequest(NonNull<PollEntry>);
+unsafe impl Send for WaitRequest {}
+
+static POLL_WAIT_QUEUE: Mutex<WaitQueueWithTimeout<8, WaitRequest>> =
+    Mutex::new(WaitQueueWithTimeout::new());
+
 pub struct ResourcePoll {
     status: HashMap<PollID, PollEvents, FxBuildHasher>,
-    // For now the size doesn't matter
-    queue: WaitQueueWithTimeout<8, NonNull<PollEntry>>,
 }
 
 unsafe impl Send for ResourcePoll {}
@@ -44,7 +52,6 @@ impl ResourcePoll {
     pub const fn new() -> Self {
         Self {
             status: HashMap::with_hasher(FxBuildHasher),
-            queue: WaitQueueWithTimeout::new(),
         }
     }
 
@@ -70,8 +77,8 @@ impl ResourcePoll {
     }
 
     fn wake_on_condition(&mut self, mut condition: impl FnMut(&mut PollEntry) -> bool) {
-        self.queue.wake_on_condition(|entry| {
-            let entry = unsafe { entry.as_mut() };
+        POLL_WAIT_QUEUE.lock().wake_on_condition(|entry| {
+            let entry = unsafe { entry.0.as_mut() };
             condition(entry)
         });
     }
@@ -120,12 +127,16 @@ pub fn stop_tracking_id(id: PollID) {
 }
 
 /// An error that can occur when attempting to poll resources.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PollError {
     /// Resource doesn't exist.
+    #[error("Resource doesn't exist")]
     UnknownResource,
     /// Resource doesn't support polling.
+    #[error("Resource doesn't support polling")]
     UnsupportedResource,
+    #[error("Wait for poll failed: {0}")]
+    WaitError(#[from] WaitError),
 }
 
 impl IntoErr for PollError {
@@ -133,6 +144,7 @@ impl IntoErr for PollError {
         match self {
             Self::UnknownResource => safa_abi::errors::ErrorStatus::UnknownResource,
             Self::UnsupportedResource => safa_abi::errors::ErrorStatus::UnsupportedResource,
+            Self::WaitError(w) => w.into(),
         }
     }
 }
@@ -153,7 +165,7 @@ pub fn poll_resources(
     };
     let timeout_after = (timeout_after.get() != u64::MAX).then_some(timeout_after);
 
-    let mut poll_queue = POLL_QUEUE.lock();
+    let poll_queue = POLL_QUEUE.lock();
     let mut any_skipped = false;
     let mut actual_count = 0;
 
@@ -211,15 +223,10 @@ pub fn poll_resources(
 
     let entry_ptr = NonNull::from_ref(&*queue_entry);
 
-    with_interrupts(move || {
-        thread::current().sleep_in_queue_with_timeout(
-            &mut poll_queue.queue,
-            entry_ptr,
-            timeout_after,
-        );
-        drop(poll_queue);
-        thread::current::yield_now();
-    });
+    let pending_wait = POLL_WAIT_QUEUE.prepare_wait();
+    drop(poll_queue);
+
+    pending_wait.enter_wait(WaitRequest(entry_ptr), timeout_after)?;
 
     // Once we are awaken entry should be filled with the results
     let mut results = queue_entry.resources.iter().map(|(_, result)| *result);

@@ -18,7 +18,7 @@ use macros::syscall_handler;
 
 #[syscall_handler]
 fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
-    let code = thread::current::wait_for_process(pid).ok_or(ErrorStatus::InvalidPid)?;
+    let code = thread::current::wait_for_process(pid)?.ok_or(ErrorStatus::InvalidPid)?;
     if let Some(dest_code) = dest_code {
         *dest_code = code;
     }
@@ -27,7 +27,9 @@ fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus>
 
 #[syscall_handler]
 fn syst_wait(tid: Tid) -> Result<(), ErrorStatus> {
-    thread::current::wait_for_thread(tid).ok_or(ErrorStatus::InvalidTid)?;
+    if !thread::current::wait_for_thread(tid)? {
+        return Err(ErrorStatus::InvalidTid);
+    }
     Ok(())
 }
 

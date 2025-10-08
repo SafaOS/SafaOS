@@ -142,5 +142,5 @@ fn userspace_test_script() {
     .unwrap();
     // thread yields, so works even when interrupts are disabled
     let ret = crate::thread::current::wait_for_process(pid);
-    assert_eq!(ret, Some(0));
+    assert_eq!(ret, Ok(Some(0)));
 }

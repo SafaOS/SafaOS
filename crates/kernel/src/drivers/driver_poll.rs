@@ -17,7 +17,7 @@ pub trait PolledDriver: Send + Sync {
         let sleep_ms = self.run_every_ms();
         loop {
             self.poll();
-            thread::current::sleep_for_ms(sleep_ms);
+            thread::current::sleep_for_ms(sleep_ms).expect("Poll thread shouldn't terminate");
         }
     }
 }

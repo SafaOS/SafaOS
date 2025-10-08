@@ -72,11 +72,13 @@ pub enum ErrorStatus {
     AddressNotFound = 0x26,
     /// A given input buffer size is not acceptable by the attempted operation
     InvalidSize = 0x27,
+    /// The syscall was interrupted by something, such as a kill command.
+    ForceTerminated = 0x28,
 }
 
 impl ErrorStatus {
     // update when a new error is added
-    const MAX: u16 = Self::InvalidSize as u16;
+    const MAX: u16 = Self::ForceTerminated as u16;
 
     #[inline(always)]
     /// Gives a string description of the error
@@ -122,6 +124,7 @@ impl ErrorStatus {
             ConnectionClosed => "Connection Closed",
             ConnectionRefused => "Connection Refused",
             WouldBlock => "Operation Would Block",
+            ForceTerminated => "Operation Terminated",
         }
     }
 

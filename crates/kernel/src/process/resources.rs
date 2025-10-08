@@ -298,13 +298,14 @@ pub fn add_global_resource<R: Resource + 'static>(resource_data: R) -> Ri {
 
 /// Adds a resource that lives as long as the current thread not the process, to the current process
 pub fn add_local_resource<R: Resource + 'static>(resource_data: R) -> Ri {
-    let curr_thread = thread::current();
-    let curr_process = curr_thread.process();
-    let ri = curr_process
-        .resources_mut()
-        .add_local_resource(resource_data);
-    curr_thread.take_resources(&[ri]);
-    ri
+    thread::with_current(|curr_thread| {
+        let curr_process = curr_thread.process();
+        let ri = curr_process
+            .resources_mut()
+            .add_local_resource(resource_data);
+        curr_thread.take_resources(&[ri]);
+        ri
+    })
 }
 
 /// Duplicates a resource return the new duplicate resource's ID or None if that resource doesn't exist

@@ -8,6 +8,7 @@ use safa_abi::{
 
 use crate::{
     VirtAddr, process,
+    scheduler::wait_queue::WaitError,
     thread::{self, ContextPriority},
 };
 use crate::{syscalls::SyscallFFI, thread::Tid};
@@ -21,11 +22,8 @@ fn syst_fut_wake(addr: &AtomicU32, n: usize, wake_results: Option<&mut usize>) {
 }
 
 #[syscall_handler]
-fn syst_fut_wait(addr: &AtomicU32, val: u32, timeout_ms: u64, wait_results: Option<&mut bool>) {
-    let results = unsafe { thread::current::wait_for_futex(addr, val, timeout_ms) };
-    if let Some(wait_results) = wait_results {
-        *wait_results = results;
-    }
+fn syst_fut_wait(addr: &AtomicU32, val: u32, timeout_ms: u64) -> Result<(), WaitError> {
+    unsafe { thread::current::wait_for_futex(addr, val, timeout_ms) }
 }
 
 #[syscall_handler]

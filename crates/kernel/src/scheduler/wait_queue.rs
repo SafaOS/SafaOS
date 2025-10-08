@@ -3,25 +3,167 @@
 
 use core::num::NonZero;
 
+use alloc::sync::Arc;
+use safa_abi::errors::IntoErr;
 use smallvec::SmallVec;
+use thiserror::Error;
 
+use crate::arch::with_interrupts;
+use crate::thread;
+use crate::utils::locks::{Mutex, MutexGuard};
 use crate::{thread::ArcThread, time};
 
 const MIN_WAIT_THREADS: usize = 4;
 
-trait TimeoutType {
+/// Represents a lock on a [`WaitQueue`] thats held before beginning a wait operation,
+/// call enter_wait on this to sleep the current thread in the queue,
+///
+/// This lock helps guarantee nobody will wake threads before this thread is sleeping for a given condition,
+/// Ensure to make sure the condition applies after holding this lock, before actually beginning sleeping otherwise dropping this is perfectly safe.
+#[derive(Debug)]
+pub struct PendingWait<'a, const AVERAGE: usize, Reason, Timeout: TimeoutType>(
+    MutexGuard<'a, WaitQueue<AVERAGE, Reason, Timeout>>,
+    &'a Mutex<WaitQueue<AVERAGE, Reason, Timeout>>,
+);
+
+impl<const AVERAGE: usize, Reason, Timeout: TimeoutType>
+    Mutex<WaitQueue<AVERAGE, Reason, Timeout>>
+{
+    /// Returns a [`PendingWait`] instance that holds a lock on self, afterwards call [`PendingWait::enter_wait`].
+    pub fn prepare_wait<'s>(&'s self) -> PendingWait<'s, AVERAGE, Reason, Timeout> {
+        PendingWait(self.lock(), self)
+    }
+}
+
+impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> PendingWait<'_, AVERAGE, Reason, Timeout> {
+    fn enter_wait_inner(self, reason: Reason, timeout: Timeout) -> Result<(), WaitError> {
+        thread::with_current(|thread| {
+            if thread.should_terminate() {
+                return Err(WaitError::ForceTerminated);
+            }
+
+            let (mut wait_queue_guard, wait_queue) = (self.0, self.1);
+
+            // ensures that the allocator won't context switch
+            wait_queue_guard.threads.reserve(1);
+
+            let timeout_opt = timeout.into_option();
+            let timeouted = with_interrupts(|| {
+                let wake_at = if let Some(timeout) = timeout_opt {
+                    Some(thread.sleep_for_ms(timeout))
+                } else {
+                    thread.block_waiting();
+                    None
+                };
+
+                let timeout = Timeout::from_option(wake_at);
+                wait_queue_guard
+                    .threads
+                    .push((thread.clone(), reason, timeout.clone()));
+                drop(wait_queue_guard);
+                thread::current::yield_now();
+
+                timeout.is_timeout()
+            });
+
+            let remove_self = || {
+                let mut wait_queue = wait_queue.lock();
+                let index = wait_queue
+                    .threads
+                    .iter()
+                    .position(|(t, _, _)| Arc::ptr_eq(t, &thread));
+
+                if let Some(i) = index {
+                    // TODO: should we swap_remove?
+                    wait_queue.threads.swap_remove(i);
+                }
+            };
+
+            if thread.should_terminate() {
+                remove_self();
+                return Err(WaitError::ForceTerminated);
+            }
+
+            if timeouted {
+                remove_self();
+                return Err(WaitError::Timeout);
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Returns a reference to the wait queue
+    pub fn wait_queue_mut(&mut self) -> &mut WaitQueue<AVERAGE, Reason, Timeout> {
+        &mut *self.0
+    }
+}
+
+impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason, Option<NonZero<u64>>> {
+    /// Applies the [`PendingWait`], causing the current thread to sleep for at most `timeout_after` ms if Some, until a wake operation on the [`WaitQueue`] happens.
+    pub fn enter_wait(
+        self,
+        reason: Reason,
+        timeout_after: Option<NonZero<u64>>,
+    ) -> Result<(), WaitError> {
+        self.enter_wait_inner(reason, timeout_after)
+    }
+}
+impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason, ()> {
+    /// Applies the [`PendingWait`], causing the current thread to sleep until a wake operation on the [`WaitQueue`] happens.
+    pub fn enter_wait(self, reason: Reason) -> Result<(), WaitError> {
+        self.enter_wait_inner(reason, ())
+    }
+}
+
+/// An error during a Wait operation done on a [`PendingWait`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum WaitError {
+    /// Timeout reached
+    #[error("Wait timeouted")]
+    Timeout,
+    /// Thread Terminated
+    #[error("Thread terminated")]
+    ForceTerminated,
+}
+
+impl IntoErr for WaitError {
+    fn into_err(self) -> safa_abi::errors::ErrorStatus {
+        match self {
+            Self::ForceTerminated => safa_abi::errors::ErrorStatus::ForceTerminated,
+            Self::Timeout => safa_abi::errors::ErrorStatus::Timeout,
+        }
+    }
+}
+
+trait TimeoutType: Clone {
     fn is_timeout(&self) -> bool;
+    fn into_option(self) -> Option<NonZero<u64>>;
+    fn from_option(opt: Option<NonZero<u64>>) -> Self;
 }
 
 impl TimeoutType for () {
     fn is_timeout(&self) -> bool {
         false
     }
+    fn into_option(self) -> Option<NonZero<u64>> {
+        None
+    }
+    fn from_option(opt: Option<NonZero<u64>>) -> Self {
+        _ = opt;
+        ()
+    }
 }
 
 impl TimeoutType for Option<NonZero<u64>> {
     fn is_timeout(&self) -> bool {
         self.is_some_and(|wake_at| wake_at.get() <= time!(ms))
+    }
+    fn into_option(self) -> Option<NonZero<u64>> {
+        self
+    }
+    fn from_option(opt: Option<NonZero<u64>>) -> Self {
+        opt
     }
 }
 
@@ -31,7 +173,7 @@ impl TimeoutType for Option<NonZero<u64>> {
 ///
 /// [`AVERAGE`] is the average number of threads that will be stored in the wait queue, used to avoid heap allocations.
 /// [`Reason`] is the reason type for waiting.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WaitQueue<
     const AVERAGE: usize = MIN_WAIT_THREADS,
     Reason = (),
@@ -44,43 +186,6 @@ pub struct WaitQueue<
 pub type WaitQueueWithTimeout<const AVERAGE: usize, Reason> =
     WaitQueue<AVERAGE, Reason, Option<NonZero<u64>>>;
 
-impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason, ()> {
-    /// Pushes a thread and its sleep reason into the wait queue.
-    /// also handles setting the thread's status to blocked and such.
-    ///
-    /// # Safety
-    /// safe to call but may cause a deadlock if used incorrectly, please disable interrupts before calling this function,
-    /// and drop all the locks
-    pub fn push(&mut self, thread: ArcThread, reason: Reason) {
-        thread.temp_block_forever();
-        self.threads.push((thread, reason, ()));
-    }
-}
-
-impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason, Option<NonZero<u64>>> {
-    /// Pushes a thread and its sleep reason into the wait queue, with an optional timeout duration, returns the wake time of the thread if it was timed out.
-    /// also handles setting the thread's status to blocked and such.
-    /// # Safety
-    /// safe to call but may cause a deadlock if used incorrectly, please disable interrupts before calling this function,
-    /// and drop all the locks
-    ///
-    pub fn push(
-        &mut self,
-        thread: ArcThread,
-        reason: Reason,
-        duration: Option<NonZero<u64>>,
-    ) -> Option<NonZero<u64>> {
-        let wake_at = if let Some(ms) = duration {
-            Some(thread.sleep_for_ms(ms))
-        } else {
-            thread.temp_block_forever();
-            None
-        };
-        self.threads.push((thread, reason, wake_at));
-        wake_at
-    }
-}
-
 impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> WaitQueue<AVERAGE, Reason, Timeout> {
     /// Creates a new wait queue.
     pub const fn new() -> Self {
@@ -89,18 +194,9 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> WaitQueue<AVERAGE, Reas
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.threads.len()
-    }
-
     /// Wakes all threads in the wait queue.
     pub fn wake_all(&mut self) {
-        for (thread, _, wake_at) in self.threads.drain(..) {
-            // Will wake up by timeout
-            if wake_at.is_timeout() {
-                continue;
-            }
-
+        for (thread, _, _) in self.threads.drain(..) {
             thread.wake_up();
         }
     }
@@ -149,15 +245,22 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> WaitQueue<AVERAGE, Reas
         count
     }
 
-    /// Attempts to pop a thread from the wait queue and apply the given function to its reason, returning None if the queue is empty.
-    pub fn try_pop_one<R>(&mut self, d: impl FnOnce(Reason) -> R) -> Option<R> {
-        let (thread, reason, timeouted) = self.threads.pop()?;
-        if timeouted.is_timeout() {
-            return self.try_pop_one(d);
-        }
-
-        let results = Some(d(reason));
-        thread.wake_up();
+    /// Attempts to pop a thread from the wait queue where the given function `d` returns Some(R),
+    /// if any thread was successfully awaken returns the results of `d`.
+    pub fn try_pop_one<R>(&mut self, d: impl Fn(&mut Reason) -> Option<R>) -> Option<R> {
+        let mut results = None;
+        self.wake_n_on_condition(
+            |reason| {
+                let attempt = d(reason);
+                if attempt.is_some() {
+                    results = attempt;
+                    true
+                } else {
+                    false
+                }
+            },
+            1,
+        );
         results
     }
 }

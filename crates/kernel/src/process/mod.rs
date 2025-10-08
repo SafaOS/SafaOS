@@ -68,7 +68,7 @@ const GUARD_PAGES_COUNT: usize = 2;
 pub enum WaitOnProcReason {
     WaitingOnSelf,
     WaitingOnChild(ArcThread),
-    WaitingOnFutex(*const AtomicU32),
+    WaitingOnFutex(*const AtomicU32, u32),
 }
 
 pub struct Process {
@@ -152,14 +152,6 @@ impl Process {
         ),
         MapToError,
     > {
-        for v in env {
-            crate::serial!("env: ");
-            for ch in v.utf8_chunks() {
-                crate::serial!("{}", ch.valid());
-                crate::serial!("{:?}", ch.invalid());
-            }
-            crate::serial!("\n");
-        }
         let env_bytes: usize = env.iter().map(|x| x.len() + 1).sum();
         let args_bytes: usize = env.iter().map(|x| x.len() + 1).sum();
 
@@ -384,17 +376,20 @@ impl Process {
             <= 1;
 
         unsafe {
-            thread.soft_kill(process_dead);
-            this.wait_queue.lock().wake_on_condition(|r| match r {
-                WaitOnProcReason::WaitingOnChild(child) => child.tid() == tid,
-                _ => false,
-            });
-        }
-        if process_dead {
-            unsafe { Process::kill(this, exit_code, None) };
-        }
+            let success = thread.soft_kill(process_dead);
+            if success {
+                this.wait_queue.lock().wake_on_condition(|r| match r {
+                    WaitOnProcReason::WaitingOnChild(child) => child.tid() == tid,
+                    _ => false,
+                });
 
-        process_dead
+                if process_dead {
+                    Process::kill(this, exit_code, None)
+                };
+            }
+
+            process_dead
+        }
     }
 
     const fn new(
@@ -540,7 +535,8 @@ impl Process {
         self.threads_manager.lock()
     }
 
-    fn can_cleanup_proc(&self) -> bool {
+    /// Returns true if the process can be cleaned-up now.
+    pub fn can_cleanup_proc(&self) -> bool {
         self.threads_manager
             .try_lock()
             .is_some_and(|guard| guard.is_empty())
@@ -573,15 +569,18 @@ impl Process {
         eve::schedule_proc_cleanup(this.clone());
 
         let mut threads = this.threads_manager.lock();
+        let mut wait_queue = this.wait_queue.lock();
+
         // Set state to dead
         *this.exit_info.write() = Some(ExitInfo {
             exit_code,
             killed_by,
         });
 
-        threads.kill_all();
+        // Once self is killed we cannot yield, so we cannot hold any locks...
+        unsafe { threads.kill_all() };
         this.is_alive.store(false, Ordering::Release);
-        this.wait_queue.lock().wake_all();
+        wait_queue.wake_all();
 
         debug!(
             Process,
@@ -606,7 +605,7 @@ impl Process {
 
         let count = self.wait_queue.lock().wake_n_on_condition(
             |reason| match reason {
-                WaitOnProcReason::WaitingOnFutex(addr) => *addr == target_addr,
+                WaitOnProcReason::WaitingOnFutex(addr, _) => *addr == target_addr,
                 _ => false,
             },
             n,
@@ -618,18 +617,22 @@ impl Process {
     /// Sleeps the current thread in the process's wait queue.
     pub fn sleep_thread(
         &self,
-        thread: ArcThread,
         reason: WaitOnProcReason,
         duration: Option<NonZero<u64>>,
-    ) -> Option<NonZero<u64>> {
-        let mut queue = self.wait_queue.lock();
-        if let WaitOnProcReason::WaitingOnChild(ref child) = reason {
-            if child.is_dead() {
-                return None;
-            }
+    ) -> Result<(), scheduler::wait_queue::WaitError> {
+        let pending = self.wait_queue.prepare_wait();
+        let cont = match &reason {
+            WaitOnProcReason::WaitingOnChild(child) => !child.is_dead(),
+            WaitOnProcReason::WaitingOnSelf => self.is_alive(),
+            WaitOnProcReason::WaitingOnFutex(addr, value) => unsafe {
+                (**addr).load(Ordering::SeqCst) == *value
+            },
+        };
+        if !cont {
+            return Ok(());
         }
 
-        queue.push(thread, reason, duration)
+        pending.enter_wait(reason, duration)
     }
 
     fn at(&self) -> VirtAddr {
@@ -647,7 +650,7 @@ impl Process {
 
 /// Returns the current process. (The process that is a parent of the current thread)
 pub fn current() -> Arc<Process> {
-    thread::current().process().clone()
+    thread::with_current(|curr| curr.process().clone())
 }
 
 /// Fast, cheaper access to the current process's pid

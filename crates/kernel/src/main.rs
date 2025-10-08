@@ -101,9 +101,7 @@ macro_rules! sleep {
             core::hint::spin_loop()
         }
     }};
-    ($ms: literal ms) => {{
-        $crate::sleep!($ms)
-    }};
+    ($ms: literal ms) => {{ $crate::sleep!($ms) }};
 }
 
 #[macro_export]

@@ -42,7 +42,8 @@ impl<T: TTYInterface> CharDevice for RwLock<TTY<T>> {
             tty.enable_input();
             // TODO: add thread sleep
             drop(tty);
-            thread::current::sleep_for_ms(10)
+            thread::current::yield_now();
+            core::hint::spin_loop();
         }
     }
 

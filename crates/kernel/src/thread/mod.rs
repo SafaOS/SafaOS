@@ -13,11 +13,8 @@ use crate::{
     arch::{threading::CPUStatus, without_interrupts},
     debug, eve,
     process::{Pid, Process, resources::Ri},
-    scheduler::{
-        Scheduler,
-        wait_queue::{WaitQueue, WaitQueueWithTimeout},
-    },
-    time,
+    scheduler::Scheduler,
+    thread, time,
     utils::locks::{Mutex, SpinLock, SpinLockGuard},
 };
 
@@ -59,14 +56,16 @@ impl From<RawContextPriority> for ContextPriority {
 pub enum BlockedReason {
     /// The thread is sleeping until [`.0`] ms of boot time is reached
     SleepingUntil(u64),
-    BlockedForever,
+    Waiting,
+    Dead,
 }
 
 impl BlockedReason {
     pub fn block_lifted(&self) -> bool {
         match self {
             Self::SleepingUntil(n) => time!(ms) >= *n,
-            Self::BlockedForever => false,
+            Self::Waiting => false,
+            Self::Dead => false,
         }
     }
 }
@@ -108,33 +107,17 @@ impl ArcThread {
         };
 
         let scheduler = unsafe { scheduler.as_ref() };
-        let is_current = {
-            let curr_thread = scheduler.current_thread_ref();
-            // TODO: maybe we shouldn't identify threads by PID:TID combination, but by a unique identifier
-            let curr_pid = curr_thread.process().pid();
-            let curr_tid = curr_thread.tid();
-            let this_pid = self.process().pid();
-            let this_tid = self.tid();
 
-            curr_pid == this_pid && curr_tid == this_tid
-        };
-
+        let is_current = thread::is_current(self);
         if !is_current {
-            // NOTE:
-            // we have 2 guranatees here
-            // 1. The thread that we are trying to remove is not going to be accessed once we unblock the scheduler
-            // 2. The Scheduler is blocked until the thread is completely removed
-            // meaning that we don't have to worry about keeping a dangling next pointer
-            // However in case we are the current thread, we will be accessed the next time we yield so we need to keep the next pointer
-            // but it is safe to do so because no other thread should be removed or switched to during the removal of self
-            self.block_not_running_forever();
+            self.block_dead();
         }
 
         unsafe {
             eve::schedule_thread_cleanup(self.clone(), scheduler.context_switches_count_ref())
         };
         if is_current {
-            self.set_status(ContextStatus::Blocked(BlockedReason::BlockedForever));
+            self.set_status(ContextStatus::Blocked(BlockedReason::Dead));
         }
 
         /* ensures no other thread is going to be removed or switched to during this operation */
@@ -190,22 +173,31 @@ impl ArcThread {
         *self = new_head;
     }
 
+    #[must_use]
     /// Kills the thread without removing it from the process list,
     /// remove the thread from the Scheduler's task list
     /// # Safety
     /// The caller must remove the thread from the parent process's thread list.
     /// If this was called from the current thread, the caller must run it without interrupts.
     /// If this was the last thread in the process, the process must be killed by the caller.
-    pub unsafe fn soft_kill(&self, process_dead: bool) {
+    pub unsafe fn soft_kill(&self, process_dead: bool) -> bool {
         if self
             .is_dying
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            while !self.is_dead() {
-                core::hint::spin_loop();
+            let is_current = thread::is_current(self);
+
+            if is_current {
+                // another thread is killing this thread
+                self.set_status(ContextStatus::Blocked(BlockedReason::Dead));
+                return false;
+            } else {
+                while !self.is_dead() {
+                    core::hint::spin_loop();
+                }
+                return false;
             }
-            return;
         }
 
         unsafe {
@@ -220,6 +212,7 @@ impl ArcThread {
             self.tid(),
             self.process().name(),
         );
+        true
     }
 
     /// Kills the thread removing it from the parent process's thread list unlike [`soft_kill`],
@@ -232,27 +225,27 @@ impl ArcThread {
         unsafe { Process::on_thread_exit(process, self, exit_code) };
     }
 
-    /// Puts this thread to sleep in the given wait queue, for the given reason [`reason`],
-    /// doesn't immediately begin sleeping until the next thread yield.
-    ///
-    /// # Safety
-    /// This function is safe but if used incorrectly can lead to deadlocks, please run without interrupts and then drop any local locks after calling this function, before yielding to begin the sleep.
-    pub fn sleep_in_queue<const AVERAGE: usize, Reason>(
-        self,
-        queue: &mut WaitQueue<AVERAGE, Reason>,
-        reason: Reason,
-    ) {
-        queue.push(self, reason);
-    }
+    // Puts this thread to sleep in the given wait queue, for the given reason [`reason`],
+    // doesn't immediately begin sleeping until the next thread yield.
+    //
+    // # Safety
+    // This function is safe but if used incorrectly can lead to deadlocks, please run without interrupts and then drop any local locks after calling this function, before yielding to begin the sleep.
+    // pub fn sleep_in_queue<const AVERAGE: usize, Reason>(
+    //     self,
+    //     queue: &mut WaitQueue<AVERAGE, Reason>,
+    //     reason: Reason,
+    // ) {
+    //     queue.push(self, reason);
+    // }
 
-    pub fn sleep_in_queue_with_timeout<const AVERAGE: usize, Reason>(
-        self,
-        queue: &mut WaitQueueWithTimeout<AVERAGE, Reason>,
-        reason: Reason,
-        duration: Option<NonZero<u64>>,
-    ) -> Option<NonZero<u64>> {
-        queue.push(self, reason, duration)
-    }
+    // pub fn sleep_in_queue_with_timeout<const AVERAGE: usize, Reason>(
+    //     self,
+    //     queue: &mut WaitQueueWithTimeout<AVERAGE, Reason>,
+    //     reason: Reason,
+    //     duration: Option<NonZero<u64>>,
+    // ) -> Option<NonZero<u64>> {
+    //     queue.push(self, reason, duration)
+    // }
 }
 
 impl Drop for ArcThread {
@@ -282,9 +275,10 @@ pub struct Thread {
     id: Tid,
     priority: ContextPriority,
     status: SpinLock<ContextStatus>,
-    context: UnsafeCell<Option<Context>>,
+    context: UnsafeCell<Context>,
 
     is_dying: AtomicBool,
+    should_terminate: UnsafeCell<bool>,
     is_dead: AtomicBool,
     parent_process: Arc<Process>,
     owned_resources: Mutex<Vec<Ri>>,
@@ -317,14 +311,20 @@ impl Thread {
             id: cid,
             priority,
             status: SpinLock::new(ContextStatus::Runnable),
-            context: UnsafeCell::new(Some(Context::new(cpu_status))),
+            context: UnsafeCell::new(Context::new(cpu_status)),
             is_dying: AtomicBool::new(false),
             is_dead: AtomicBool::new(false),
             parent_process: parent_process.clone(),
             scheduler: UnsafeCell::new(None),
             next: UnsafeCell::new(None),
             prev: UnsafeCell::new(None),
+            should_terminate: UnsafeCell::new(false),
         }
+    }
+
+    /// Returns true if the thread should terminate
+    pub fn should_terminate(&self) -> bool {
+        unsafe { *self.should_terminate.get() }
     }
 
     /// Returns a mutable reference to the next thread in the scheduler's queue.
@@ -356,12 +356,8 @@ impl Thread {
         &self.parent_process
     }
 
-    pub const unsafe fn context(&self) -> Option<&mut Context> {
-        unsafe { &mut *self.context.get() }.as_mut()
-    }
-
     pub const unsafe fn context_unchecked(&self) -> &mut Context {
-        unsafe { self.context().unwrap_unchecked() }
+        unsafe { &mut *self.context.get() }
     }
 
     pub const fn tid(&self) -> Tid {
@@ -380,10 +376,6 @@ impl Thread {
     /// modify the thread's Context. It is the caller's responsibility to ensure that
     /// the thread is not currently running.
     pub unsafe fn cleanup(&self) {
-        let context =
-            unsafe { (&mut *self.context.get()).take() }.expect("Thread was already removed");
-        drop(context);
-
         {
             let mut resource_manager = self.parent_process.resources_mut();
             let owned_resources = self.owned_resources.try_lock().expect("Thread is active");
@@ -401,16 +393,35 @@ impl Thread {
     }
 
     /// Blocks the current thread forever, making sure it is not running first
-    pub fn block_not_running_forever(&self) {
+    pub fn block_dead(&self) {
+        // Safety:
+        // - Only block_dead muttates this
+        // - Its only goes from false to true and not backwards, the time threads read this after it is true doesn't matter.
+        unsafe { *self.should_terminate.get() = true };
         loop {
             let mut status = self.status.lock();
-            if status.is_running() {
-                drop(status);
-                current::yield_now();
-            } else {
-                *status = ContextStatus::Blocked(BlockedReason::BlockedForever);
-                break;
+
+            match *status {
+                ContextStatus::Runnable
+                    // Safety: we hold a lock on status, and context shall not be accessed before holding a lock on status, perhaps this can be expressed better?
+                    if unsafe { self.context_unchecked().cpu_status.at().is_in_lower_half() } =>
+                {
+                    *status = ContextStatus::Blocked(BlockedReason::Dead);
+                    break;
+                }
+                ContextStatus::Running | ContextStatus::Runnable => {}
+                ContextStatus::Blocked(BlockedReason::Dead) => {
+                    break;
+                }
+                ContextStatus::Blocked(
+                    BlockedReason::SleepingUntil(_) | BlockedReason::Waiting,
+                ) => {
+                    *status = ContextStatus::Runnable;
+                }
             }
+
+            drop(status);
+            current::yield_now()
         }
     }
 
@@ -418,10 +429,10 @@ impl Thread {
     /// # Safety
     /// Safe to call, but may cause a deadlock if not used correctly,
     /// make sure to disable interrupts before calling this and drop all the local locks after calling this, then thread yield.
-    pub fn temp_block_forever(&self) {
+    pub fn block_waiting(&self) {
         without_interrupts(|| {
             let mut status = self.status.lock();
-            *status = ContextStatus::Blocked(BlockedReason::BlockedForever)
+            *status = ContextStatus::Blocked(BlockedReason::Waiting)
         });
     }
 
@@ -429,7 +440,9 @@ impl Thread {
     pub fn wake_up(&self) {
         without_interrupts(|| {
             let mut status = self.status.lock();
-            *status = ContextStatus::Runnable;
+            if matches!(*status, ContextStatus::Blocked(_)) {
+                *status = ContextStatus::Runnable;
+            }
         });
     }
 
@@ -467,9 +480,18 @@ impl Context {
     }
 }
 
-/// Returns the current thread, that is the thread executing this code right now.
-pub fn current() -> ArcThread {
-    Scheduler::get().current_thread()
+/// Executes [`f`] on the current thread returning the results.
+pub fn with_current<F, R>(f: F) -> R
+where
+    F: FnOnce(&ArcThread) -> R,
+{
+    // Safety: The reference would always point to the current thread as long as it's really is the current thread.
+    f(Scheduler::get().current_thread_ref())
+}
+
+/// Returns true if [`other`] is the current thread.
+pub fn is_current(other: &ArcThread) -> bool {
+    Arc::ptr_eq(&Scheduler::get().current_thread_ref(), other)
 }
 
 /// Returns the current process ID, that is the ID of the process executing this code right now.

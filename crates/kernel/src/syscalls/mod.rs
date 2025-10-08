@@ -86,10 +86,8 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
             SyscallTable::SysPExit => crate::process::current::exit(a),
             SyscallTable::SysTExit => crate::thread::current::exit(a),
             SyscallTable::SysTYield => Ok(crate::thread::current::yield_now()),
-            SyscallTable::SysTSleep => Ok(crate::thread::current::sleep_for_ms(a as u64)),
-            SyscallTable::SysTFutWait => {
-                thread::syst_fut_wait_raw(a as *const AtomicU32, b, c, d as *mut bool)
-            }
+            SyscallTable::SysTSleep => Ok(crate::thread::current::sleep_for_ms(a as u64)?),
+            SyscallTable::SysTFutWait => thread::syst_fut_wait_raw(a as *const AtomicU32, b, c),
             SyscallTable::SysTFutWake => {
                 thread::syst_fut_wake_raw(a as *const AtomicU32, b, c as *mut usize)
             }
@@ -124,6 +122,13 @@ pub fn syscall(number: u16, a: usize, b: usize, c: usize, d: usize, e: usize) ->
     }
 
     // maps the results to an ErrorStatus
-    let value = inner(number, a, b, c, d, e).into();
+    let results = inner(number, a, b, c, d, e);
+    let value = match results {
+        Err(ErrorStatus::ForceTerminated) => {
+            crate::thread::current::exit(ErrorStatus::ForceTerminated as usize)
+        }
+        Err(e) => SysResult::Error(e),
+        Ok(()) => SysResult::Success,
+    };
     value
 }

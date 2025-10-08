@@ -4,6 +4,7 @@ use core::num::NonZero;
 use core::sync::atomic::AtomicU32;
 
 use crate::process::{self, Pid, WaitOnProcReason};
+use crate::scheduler::wait_queue::WaitError;
 use crate::thread::Tid;
 use crate::time;
 use crate::{
@@ -19,32 +20,31 @@ use crate::{
 pub fn exit(code: usize) -> ! {
     without_interrupts(|| {
         // current thread should be dropped at the end of this
-        unsafe {
-            let current = thread::current();
-            current.kill(code);
-        }
+        unsafe { thread::with_current(|curr| curr.kill(code)) }
         self::yield_now();
         unreachable!("thread didn't exit")
     })
 }
 
 /// Sleeps the current thread for `ms` milliseconds.
-pub fn sleep_for_ms(ms: u64) {
+pub fn sleep_for_ms(ms: u64) -> Result<(), WaitError> {
     let Some(ms) = NonZero::new(ms) else {
-        return;
+        return Ok(());
     };
 
     without_interrupts(|| {
-        let curr_time = time!(ms);
+        thread::with_current(|current| {
+            let wake_at = current.sleep_for_ms(ms);
+            yield_now();
 
-        let current = thread::current();
-        current.sleep_for_ms(ms);
-        yield_now();
-        assert!(
-            ms.saturating_add(curr_time).get() <= time!(ms),
-            "thread didn't sleep"
-        );
-    });
+            if current.should_terminate() {
+                Err(WaitError::ForceTerminated)
+            } else {
+                assert!(wake_at.get() <= time!(ms), "thread didn't sleep");
+                Ok(())
+            }
+        })
+    })
 }
 
 /// Yields execution to the next thread that is ready to run, in the thread queue for the current CPU.
@@ -63,27 +63,25 @@ pub fn yield_now() {
 
 /// Sleeps the current thread until the process with `pid` exits.
 /// Returns the exit code of the process after cleaning it up.
-pub fn wait_for_process(pid: Pid) -> Option<usize> {
+pub fn wait_for_process(pid: Pid) -> Result<Option<usize>, WaitError> {
     // cycles through the processes one by one until it finds the process with `pid`
     // returns the exit code of the process if it's a zombie and cleans it up
-    let found_proc =
-        scheduler::process_list::find(|process| process.pid() == pid, |process| process.clone())?;
+    let Some(found_proc) =
+        scheduler::process_list::find(|process| process.pid() == pid, |process| process.clone())
+    else {
+        return Ok(None);
+    };
 
     if !found_proc.is_alive() {
         let Some(process_info) = scheduler::process_list::remove(|p| p.pid() == pid) else {
             warn!("process with `{pid}` was already cleaned up by another wait operation");
-            return None;
+            return Ok(None);
         };
 
-        return process_info.exit_code;
+        return Ok(process_info.exit_code);
     }
 
-    let this_thread = thread::current();
-    without_interrupts(|| {
-        found_proc.sleep_thread(this_thread, WaitOnProcReason::WaitingOnSelf, None);
-        self::yield_now();
-    });
-
+    found_proc.sleep_thread(WaitOnProcReason::WaitingOnSelf, None)?;
     assert!(
         !found_proc.is_alive(),
         "Thread didn't wait for process to exit"
@@ -92,44 +90,41 @@ pub fn wait_for_process(pid: Pid) -> Option<usize> {
     // TODO: block multiple waits on same pid
     let Some(process_info) = scheduler::process_list::remove(|p| p.pid() == pid) else {
         warn!("process with `{pid}` was already cleaned up by another wait operation");
-        return None;
+        return Ok(None);
     };
 
-    Some(
+    Ok(Some(
         process_info
             .exit_code
             .expect("process dead but exit code hasn't been set"),
-    )
+    ))
 }
 
 /// Sleeps the current thread until the thread with tid `tid` exits.
 // NOTE: threads don't have an exit code
-pub fn wait_for_thread(tid: Tid) -> Option<()> {
-    let this_thread = thread::current();
-    let this_process = this_thread.process();
-    let try_remove = this_process
-        .threads_manager()
-        .remove_tid(tid)
-        .map_err(|e| e.clone());
+//
+// returns true if the thread was awaited false if it wasn't
+pub fn wait_for_thread(tid: Tid) -> Result<bool, WaitError> {
+    thread::with_current(|this_thread| {
+        let this_process = this_thread.process();
+        let try_remove = this_process
+            .threads_manager()
+            .remove_tid(tid)
+            .map_err(|e| e.clone());
 
-    // FIXME: This is shit, it doesn't always remove thread IDs, we can store thread IDs better anyways using a wrapping counter.
-    match try_remove {
-        Ok(false) => None,
-        Err(thread) if !thread.is_dead() => {
-            without_interrupts(|| {
-                this_process.sleep_thread(
-                    this_thread.clone(),
-                    WaitOnProcReason::WaitingOnChild(thread.clone()),
-                    None,
-                );
-                self::yield_now();
-            });
-            assert!(thread.is_dead(), "Thread didn't wait for thread to exit");
+        // FIXME: This is shit, it doesn't always remove thread IDs, we can store thread IDs better anyways using a wrapping counter.
+        match try_remove {
+            Ok(false) => Ok(false),
+            Err(thread) if !thread.is_dead() => {
+                this_process
+                    .sleep_thread(WaitOnProcReason::WaitingOnChild(thread.clone()), None)?;
+                assert!(thread.is_dead(), "Thread didn't wait for thread to exit");
 
-            Some(())
+                Ok(true)
+            }
+            Ok(true) | Err(_) => Ok(true),
         }
-        Ok(true) | Err(_) => Some(()),
-    }
+    })
 }
 
 /// performs a WAIT for a futex to be unlocked
@@ -140,9 +135,13 @@ pub fn wait_for_thread(tid: Tid) -> Option<()> {
 ///
 /// # Safety
 /// The caller must ensure that the address `addr` is valid and points to a valid futex.
-pub unsafe fn wait_for_futex(addr: &AtomicU32, with_value: u32, timeout_ms: u64) -> bool {
+pub unsafe fn wait_for_futex(
+    addr: &AtomicU32,
+    with_value: u32,
+    timeout_ms: u64,
+) -> Result<(), WaitError> {
     let Some(timeout_ms) = NonZero::new(timeout_ms) else {
-        return false;
+        return Err(WaitError::Timeout);
     };
     let duration = if timeout_ms.get() == u64::MAX {
         None
@@ -150,26 +149,11 @@ pub unsafe fn wait_for_futex(addr: &AtomicU32, with_value: u32, timeout_ms: u64)
         Some(timeout_ms)
     };
 
-    let this_thread = thread::current();
     let this_proc = process::current();
 
     if addr.load(core::sync::atomic::Ordering::SeqCst) != with_value {
-        return true;
+        return Ok(());
     }
 
-    let timeouted = without_interrupts(move || {
-        let timeout_at = this_proc.sleep_thread(
-            this_thread,
-            WaitOnProcReason::WaitingOnFutex(addr),
-            duration,
-        );
-        self::yield_now();
-
-        if let Some(timeout_at) = timeout_at {
-            time!(ms) >= timeout_at.get()
-        } else {
-            false
-        }
-    });
-    !timeouted
+    this_proc.sleep_thread(WaitOnProcReason::WaitingOnFutex(addr, with_value), duration)
 }

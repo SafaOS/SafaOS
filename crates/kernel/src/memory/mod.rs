@@ -188,6 +188,11 @@ impl VirtAddr {
         self.0 as *mut T
     }
 
+    /// Returns true if the address is in the lower half of the address space.
+    pub const fn is_in_lower_half(self) -> bool {
+        self.0 < (usize::MAX / 2)
+    }
+
     /// Returns the equalivent PhysAddr for the Page containing this VirtualAddr assuming it exists in the HHDM
     /// NOTE: it is unlikely that a VirtAddr would have an equalivent PhysAddr, it is safe to assume so if the VirtAddr was gathered [`PhysAddr::into_virt`]
     #[inline(always)]

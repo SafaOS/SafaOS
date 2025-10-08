@@ -5,15 +5,13 @@ use bitflags::bitflags;
 use safa_abi::{errors::ErrorStatus, poll::PollEvents};
 
 use crate::{
-    arch::without_interrupts,
     drivers::vfs::SeekOffset,
     process::{
         poll::{self, PollID},
         resources::{self, Resource},
     },
-    scheduler::wait_queue::WaitQueue,
+    scheduler::wait_queue::{WaitError, WaitQueue},
     syscalls::ffi::SyscallFFI,
-    thread::{self},
     utils::{
         alloc::PageVec,
         locks::{Mutex, RwLock},
@@ -43,18 +41,9 @@ enum WaitReason {
 }
 
 #[derive(Debug)]
-struct Waiter {
+struct Stdin {
+    inner: PageVec<u8>,
     newlines_count: usize,
-    wait_queue: WaitQueue<2, WaitReason>,
-}
-
-impl Waiter {
-    const fn new() -> Self {
-        Self {
-            newlines_count: 0,
-            wait_queue: WaitQueue::new(),
-        }
-    }
 }
 
 /// A Virtual TTY is similar to PTYs in unix-like systems.
@@ -74,18 +63,21 @@ impl Waiter {
 #[derive(Debug)]
 pub struct VirtualTTY {
     stdout: Mutex<PageVec<u8>>,
-    stdin: Mutex<PageVec<u8>>,
+    stdin: Mutex<Stdin>,
     flags: RwLock<TTYFlags>,
-    waiter: Mutex<Waiter>,
+    wait_queue: Mutex<WaitQueue<2, WaitReason>>,
 }
 
 impl VirtualTTY {
     const fn new_inner() -> Self {
         Self {
             stdout: Mutex::new(PageVec::new()),
-            stdin: Mutex::new(PageVec::new()),
+            stdin: Mutex::new(Stdin {
+                inner: PageVec::new(),
+                newlines_count: 0,
+            }),
             flags: RwLock::new(TTYFlags::CANONICAL.union(TTYFlags::ECHO)),
-            waiter: Mutex::new(Waiter::new()),
+            wait_queue: Mutex::new(WaitQueue::new()),
         }
     }
 
@@ -129,7 +121,6 @@ impl VirtualTTY {
         const ERASE: u8 = 0x7f;
 
         let bytes = s.as_bytes();
-        let mut waiter = self.waiter.lock();
         let mut stdin = self.stdin.lock();
         let stdin = &mut *stdin;
 
@@ -155,17 +146,17 @@ impl VirtualTTY {
             }};
         }
 
-        let newlines_count_was = waiter.newlines_count;
-        let stdin_had = stdin.len();
+        let newlines_count_was = stdin.newlines_count;
+        let stdin_had = stdin.inner.len();
 
         for b in bytes {
             match *b {
                 ERASE if flags.contains(TTYFlags::CANONICAL) => {
-                    if stdin.last().is_none_or(|c| c == &b'\n') {
+                    if stdin.inner.last().is_none_or(|c| c == &b'\n') {
                         continue;
                     }
 
-                    let c = stdin.pop().unwrap();
+                    let c = stdin.inner.pop().unwrap();
                     let c_was_ctrl = ascii_is_ctrl(c);
 
                     if flags.contains(TTYFlags::ECHO) {
@@ -181,23 +172,25 @@ impl VirtualTTY {
                     }
                 }
                 o => {
-                    stdin.push(o);
+                    stdin.inner.push(o);
                     echo(&[o]);
 
                     if o == b'\n' {
-                        waiter.newlines_count += 1;
+                        stdin.newlines_count += 1;
                     }
                 }
             }
         }
 
-        if flags.contains(TTYFlags::CANONICAL) && waiter.newlines_count > 0 {
-            waiter.wait_queue.wake_equals(&WaitReason::CanonicalRead);
+        if flags.contains(TTYFlags::CANONICAL) && stdin.newlines_count > 0 {
+            self.wait_queue
+                .lock()
+                .wake_equals(&WaitReason::CanonicalRead);
         }
 
         if (flags.contains(TTYFlags::CANONICAL)
             && newlines_count_was == 0
-            && waiter.newlines_count > 0)
+            && stdin.newlines_count > 0)
             || (!flags.contains(TTYFlags::CANONICAL) && stdin_had == 0)
         {
             poll::broadcast_events(
@@ -233,62 +226,50 @@ impl VirtualTTY {
     }
 
     /// Reads buf.len() bytes from stdin, may block if there is no data to read, data is defined as a single line, an incomplete line doesn't count as data
-    pub fn read_stdin(&self, buf: &mut [u8]) -> usize {
+    pub fn read_stdin(&self, buf: &mut [u8]) -> Result<usize, WaitError> {
         let mut stdin = self.stdin.lock();
-        let mut canonical = self
-            .flags
-            .read()
-            .contains(TTYFlags::CANONICAL)
-            .then(|| self.waiter.lock());
+        let is_canonical = self.flags.read().contains(TTYFlags::CANONICAL);
 
-        if let Some(ref mut waiter) = canonical {
-            if waiter.newlines_count == 0 {
+        if is_canonical {
+            if stdin.newlines_count == 0 {
+                let pending = self.wait_queue.prepare_wait();
                 drop(stdin);
-                without_interrupts(move || {
-                    let mut waiter = canonical.unwrap();
-                    thread::current()
-                        .sleep_in_queue(&mut waiter.wait_queue, WaitReason::CanonicalRead);
+                pending.enter_wait(WaitReason::CanonicalRead)?;
 
-                    drop(waiter);
-                    thread::current::yield_now();
-                });
                 return self.read_stdin(buf);
             }
         }
 
-        let stdin_bytes = stdin.as_mut_slice();
-        let max_read = if canonical.is_some() {
-            let first_newline = stdin_bytes.iter().position(|c| *c == b'\n').unwrap();
+        let max_read = if is_canonical {
+            let first_newline = stdin.inner.iter().position(|c| *c == b'\n').unwrap();
             first_newline + 1
         } else {
-            stdin_bytes.len()
+            stdin.inner.len()
         };
 
         let read_len = buf.len().min(max_read);
 
         let mut newlines_ava = false;
-        if let Some(ref mut waiter) = canonical
-            && read_len == max_read
-        {
-            waiter.newlines_count -= 1;
-            newlines_ava = waiter.newlines_count > 0;
+        if is_canonical && read_len == max_read {
+            stdin.newlines_count -= 1;
+            newlines_ava = stdin.newlines_count > 0;
         }
 
-        buf[..read_len].copy_from_slice(&stdin_bytes[..read_len]);
-        stdin_bytes.copy_within(read_len.., 0);
+        buf[..read_len].copy_from_slice(&stdin.inner[..read_len]);
+        stdin.inner.copy_within(read_len.., 0);
         unsafe {
-            let stdin_bytes_len = stdin_bytes.len();
-            stdin.set_len(stdin_bytes_len - read_len);
+            let stdin_bytes_len = stdin.inner.len();
+            stdin.inner.set_len(stdin_bytes_len - read_len);
         }
 
-        if stdin.len() == 0 || (canonical.is_some() && !newlines_ava) {
+        if stdin.inner.len() == 0 || (is_canonical && !newlines_ava) {
             poll::broadcast_events(
                 self.child_poll_id(),
                 PollEvents::NONE,
                 PollEvents::DATA_AVAILABLE,
             );
         }
-        read_len
+        Ok(read_len)
     }
 
     pub fn set_flags(&self, tty_flags: TTYFlags) {
@@ -373,7 +354,7 @@ impl ChildVTTY {
         s.len()
     }
     /// Performs a read operation from stdin
-    pub fn read(&self, buf: &mut [u8]) -> usize {
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize, WaitError> {
         self.tty.read_stdin(buf)
     }
 }
@@ -438,7 +419,7 @@ impl Resource for MotherVTTY {
 impl Resource for ChildVTTY {
     fn read(&self, off: SeekOffset, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
         _ = off;
-        Ok(self.read(buf))
+        Ok(self.read(buf)?)
     }
 
     fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
@@ -475,6 +456,7 @@ impl Resource for ChildVTTY {
 #[allow(unused_assignments)]
 #[test_case]
 fn vtty_canonical_mode_test() {
+    use crate::thread;
     use core::sync::atomic::{AtomicBool, Ordering};
     const MSG0: &str = "Hello, world!\n";
     const SPEC_MSG: &str = "hi\x7flol\n";
@@ -504,7 +486,7 @@ fn vtty_canonical_mode_test() {
         ($buf: ident, $c: ident, $o: expr) => {{
             let read_buf = &mut $buf;
             let child = &$c;
-            let len = child.read(read_buf);
+            let len = child.read(read_buf).expect("Failed to read");
             let read = &read_buf[..len];
             unsafe {
                 assert_eq!(
@@ -613,8 +595,12 @@ fn vtty_non_canonical_mode_test() {
             let child = &$c;
             let o: &[u8] = $o;
 
-            let len_half0 = child.read(&mut read_buf[..o.len() / 2]);
-            let len_half1 = child.read(&mut read_buf[o.len() / 2..o.len()]);
+            let len_half0 = child
+                .read(&mut read_buf[..o.len() / 2])
+                .expect("Failed to read from child");
+            let len_half1 = child
+                .read(&mut read_buf[o.len() / 2..o.len()])
+                .expect("Failed to read from child");
             let len = len_half0 + len_half1;
             let read = &read_buf[..len];
             unsafe {

@@ -113,7 +113,7 @@ pub(super) unsafe fn before_thread_yield() {
 unsafe fn switch_inner(
     head_thread: &ArcThread,
     current_thread_ptr: *mut ArcThread,
-    current_status: CPUStatus,
+    current_cpu_status: CPUStatus,
 ) -> (NonNull<CPUStatus>, ContextPriority, bool) {
     unsafe {
         let current_thread = &*current_thread_ptr;
@@ -121,12 +121,11 @@ unsafe fn switch_inner(
         let current_pid = current_process.pid();
 
         if likely(!current_thread.is_dead()) {
-            let current_context = current_thread
-                .context()
-                .expect("context is None before the thread is removed");
-            current_context.set_cpu_status(current_status);
-
             let mut status = current_thread.status_mut();
+
+            let current_context = current_thread.context_unchecked();
+            current_context.set_cpu_status(current_cpu_status);
+
             if status.is_running() {
                 *status = ContextStatus::Runnable;
             }
