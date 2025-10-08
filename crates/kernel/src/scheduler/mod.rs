@@ -46,13 +46,10 @@ impl Scheduler {
             context_switch_count: AtomicUsize::new(0),
         }
     }
-    /// Get the current thread
-    pub fn current_thread(&self) -> ArcThread {
-        // safe because the current thread is only ever read by the current thread and modifieded by context switch
-        unsafe { (*self.current_thread.get()).clone() }
-    }
     /// Get a reference to the current thread
-    pub fn current_thread_ref(&self) -> &ArcThread {
+    /// # Safety:
+    /// this reference shall not be given to other threads.
+    pub unsafe fn current_thread_ref(&self) -> &ArcThread {
         unsafe { &*self.current_thread.get() }
     }
 

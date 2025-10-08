@@ -485,18 +485,18 @@ pub fn with_current<F, R>(f: F) -> R
 where
     F: FnOnce(&ArcThread) -> R,
 {
-    // Safety: The reference would always point to the current thread as long as it's really is the current thread.
-    f(Scheduler::get().current_thread_ref())
+    // Safety:
+    // The reference would always point to the current thread as long as it's really is the current thread,
+    // and The lifetime of this reference is local to this function which is running within this thread.
+    f(unsafe { Scheduler::get().current_thread_ref() })
 }
 
 /// Returns true if [`other`] is the current thread.
 pub fn is_current(other: &ArcThread) -> bool {
-    Arc::ptr_eq(&Scheduler::get().current_thread_ref(), other)
+    with_current(|curr| Arc::ptr_eq(curr, other))
 }
 
 /// Returns the current process ID, that is the ID of the process executing this code right now.
-///
-/// faster than [`current()`]`.process().pid()`
 pub fn current_pid() -> Pid {
-    Scheduler::get().current_thread_ref().process().pid()
+    with_current(|curr| curr.process().pid())
 }
