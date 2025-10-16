@@ -1,7 +1,4 @@
-use core::{
-    net::Ipv4Addr,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::{net::Ipv4Addr, num::NonZero};
 
 use alloc::{
     collections::linked_list::LinkedList,
@@ -24,7 +21,7 @@ pub enum UdpState {
     Connected { ip: Ipv4Addr, port: u16 },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Message {
     src_ip: Ipv4Addr,
     src_port: u16,
@@ -56,20 +53,30 @@ impl Drop for BindInfo {
         assert!(crate::net::udp::remove_socket(self.port));
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimeoutInfo {
+    read_timeout: Option<NonZero<u64>>,
+    write_timeout: Option<NonZero<u64>>,
+    can_block: bool,
+}
 
 pub struct UdpSocket {
-    can_block: AtomicBool,
+    timeout_info: RwLock<TimeoutInfo>,
     state: RwLock<UdpState>,
     messages: Mutex<Messages>,
     binded_to: RwLock<Option<BindInfo>>,
-    wait_queue: Mutex<WaitQueue<1>>,
+    wait_queue: Mutex<WaitQueue<1, (), Option<NonZero<u64>>>>,
     weak: Weak<Self>,
 }
 
 impl UdpSocket {
     pub fn create(can_block: bool) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
-            can_block: AtomicBool::new(can_block),
+            timeout_info: RwLock::new(TimeoutInfo {
+                read_timeout: None,
+                write_timeout: None,
+                can_block,
+            }),
             state: RwLock::new(UdpState::Disconnected),
             messages: Mutex::new(Messages::new()),
             binded_to: RwLock::new(None),
@@ -106,6 +113,21 @@ impl UdpSocket {
 }
 
 impl Socket for UdpSocket {
+    fn set_blocking(&self, value: bool) {
+        self.timeout_info.write().can_block = value
+    }
+    fn get_blocking(&self) -> bool {
+        self.timeout_info.read().can_block
+    }
+
+    fn set_read_timeout(&self, timeout: Option<core::num::NonZero<u64>>) {
+        self.timeout_info.write().read_timeout = timeout;
+    }
+
+    fn set_write_timeout(&self, timeout: Option<core::num::NonZero<u64>>) {
+        self.timeout_info.write().write_timeout = timeout;
+    }
+
     fn accept(&self) -> Result<alloc::sync::Arc<Self>, super::SocketError> {
         Err(SocketError::OperationNotSupported)
     }
@@ -162,6 +184,7 @@ impl Socket for UdpSocket {
         let binded_to = self.binded_to.read();
         let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
         // TODO: verify destination address and port before doing allocations
+        // TODO: don't do allocations at all and do write timeout
         crate::net::manager::send_ipv4_packet(&mut PageIPv4Packet::new_udp(
             buf,
             binded_to.port,
@@ -188,6 +211,7 @@ impl Socket for UdpSocket {
                 let binded_to = self.binded_to.read();
                 let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
                 // TODO: verify destination address and port before doing allocations
+                // TODO: don't do allocations at all and do write timeout
                 crate::net::manager::send_ipv4_packet(&mut PageIPv4Packet::new_udp(
                     buf,
                     binded_to.port,
@@ -211,15 +235,21 @@ impl Socket for UdpSocket {
         buf: &mut [u8],
         flags: safa_abi::sockets::SockMsgFlags,
     ) -> Result<(usize, Option<super::OwnedSocketAddr>), SocketError> {
-        let can_block =
-            !flags.contains(SockMsgFlags::DONT_WAIT) && self.can_block.load(Ordering::Acquire);
+        let timeout_info = *self.timeout_info.read();
+        let can_block = !flags.contains(SockMsgFlags::DONT_WAIT) && timeout_info.can_block;
 
         let mut messages = self.messages.lock();
-        let Some(message) = messages.messages.pop_front() else {
+        let message = if flags.contains(SockMsgFlags::PEEK) {
+            messages.messages.front().copied()
+        } else {
+            messages.messages.pop_front()
+        };
+        let Some(message) = message else {
             if can_block {
                 let pending_wait = self.wait_queue.prepare_wait();
                 drop(messages);
-                pending_wait.enter_wait(())?;
+                // FIXME: retrying doesn't respect timeout...
+                pending_wait.enter_wait((), timeout_info.read_timeout)?;
                 return self.recv_from(buf, flags);
             } else {
                 return Err(SocketError::WouldBlockEmpty);
@@ -229,7 +259,7 @@ impl Socket for UdpSocket {
         let size = message.size.min(buf.len());
         let (amount, len_is, _) = messages
             .stream
-            .read(&mut buf[..size], false)
+            .read(&mut buf[..size], flags.contains(SockMsgFlags::PEEK))
             .expect("Shouldn't return an error if there is messages...");
 
         if len_is == 0 {
@@ -248,10 +278,6 @@ impl Socket for UdpSocket {
 
     fn receive(&self, buf: &mut [u8], flags: SockMsgFlags) -> Result<usize, SocketError> {
         self.recv_from(buf, flags).map(|(size, _)| size)
-    }
-
-    fn set_blocking(&self, value: bool) {
-        self.can_block.store(value, Ordering::Release);
     }
 
     fn on_close(&self) {

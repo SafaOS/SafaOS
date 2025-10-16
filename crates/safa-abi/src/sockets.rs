@@ -4,20 +4,20 @@ use crate::consts::MAX_NAME_LENGTH;
 /// Configures the Socket Binding Address
 ///
 /// The actual structure varries for each binding kind, and each family excepts a specific set of kinds
-pub struct SockBindAddr {
-    pub kind: u32,
+pub struct SocketAddr {
+    pub family: u32,
 }
 
 #[repr(C)]
-/// An Abstract binding, converted from [SockBindAddr]
-pub struct SockBindAbstractAddr {
-    kind: u32,
+/// A local family binding, converted from [SockBindAddr]
+pub struct LocalSocketAddr {
+    family: u32,
     /// Must be valid UTF-8, the actual length is provided to SysSockBind
     pub name: [u8; MAX_NAME_LENGTH],
 }
 
-impl SockBindAbstractAddr {
-    pub const KIND: u32 = 0;
+impl LocalSocketAddr {
+    pub const FAMILY: u32 = SockDomain::LOCAL.0 as u32;
     /// Creates a new abstract binding Addr from a given name bytes,
     /// name[..name_length] must be valid UTF8 where name_length is
     ///
@@ -25,7 +25,7 @@ impl SockBindAbstractAddr {
     /// The structures total length is passed to SysSockBind
     pub const fn new(name: [u8; MAX_NAME_LENGTH]) -> Self {
         Self {
-            kind: Self::KIND,
+            family: Self::FAMILY,
             name,
         }
     }
@@ -33,18 +33,18 @@ impl SockBindAbstractAddr {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SockBindInetV4Addr {
-    kind: u32,
+pub struct InetV4SocketAddr {
+    family: u32,
     pub port: u16,
     pub ip: Ipv4Addr,
 }
 
-impl SockBindInetV4Addr {
-    pub const KIND: u32 = 1;
+impl InetV4SocketAddr {
+    pub const FAMILY: u32 = SockDomain::INETV4.0 as u32;
 
     pub const fn new(port: u16, addr: Ipv4Addr) -> Self {
         Self {
-            kind: Self::KIND,
+            family: Self::FAMILY,
             port,
             ip: addr,
         }

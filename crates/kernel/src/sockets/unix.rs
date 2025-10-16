@@ -1,7 +1,4 @@
-use core::{
-    cell::UnsafeCell,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::{cell::UnsafeCell, num::NonZero};
 
 use alloc::{
     boxed::Box,
@@ -184,11 +181,18 @@ enum WaitReason {
     WaitingForAccepts,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimeoutInfo {
+    read_timeout: Option<NonZero<u64>>,
+    write_timeout: Option<NonZero<u64>>,
+    can_block: bool,
+}
+
 pub struct LocalSocket {
     conn_accepted: UnsafeCell<bool>,
-    can_block: AtomicBool,
+    timeout_info: RwLock<TimeoutInfo>,
     status: RwLock<Status>,
-    wait_queue: Mutex<WaitQueue<1, WaitReason>>,
+    wait_queue: Mutex<WaitQueue<1, WaitReason, Option<NonZero<u64>>>>,
     kind: LocalSocketKind,
     binded_to: Mutex<Option<Arc<Name>>>,
     this: Weak<Self>,
@@ -206,7 +210,11 @@ impl LocalSocket {
     fn create_inner(status: Status, kind: LocalSocketKind, can_block: bool) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             conn_accepted: UnsafeCell::new(false),
-            can_block: AtomicBool::new(can_block),
+            timeout_info: RwLock::new(TimeoutInfo {
+                read_timeout: None,
+                write_timeout: None,
+                can_block: can_block,
+            }),
             status: RwLock::new(status),
             wait_queue: Mutex::new(WaitQueue::new()),
             kind,
@@ -259,24 +267,26 @@ impl LocalSocket {
     fn try_accept_connection(&self) -> Result<Arc<LocalSocket>, SocketError> {
         match &*self.status.read() {
             Status::Listening { accept_queue, .. } => {
-                let can_block = self.can_block.load(Ordering::Relaxed);
+                let can_block = self.timeout_info.read().can_block;
                 loop {
                     let mut queue_guard = accept_queue.lock();
 
                     if let Some(connection) = queue_guard.try_pop_one(|reason| Some(reason.clone()))
                     {
                         unsafe { *connection.conn_accepted.get() = true };
-                        let new = Self::create_connected(
-                            connection,
-                            self.can_block.load(Ordering::Relaxed),
-                        );
+                        let new = Self::create_connected(connection, can_block);
                         break Ok(new);
                     } else if !can_block {
                         break Err(SocketError::WouldBlockNoConnectionRequests);
                     } else {
                         let pending_wait = self.wait_queue.prepare_wait();
+                        poll::broadcast_events(
+                            self.poll_id(),
+                            PollEvents::CAN_WRITE,
+                            PollEvents::DATA_AVAILABLE,
+                        );
                         drop(queue_guard);
-                        pending_wait.enter_wait(WaitReason::WaitingForAccepts)?;
+                        pending_wait.enter_wait(WaitReason::WaitingForAccepts, None)?;
                     }
                 }
             }
@@ -322,14 +332,19 @@ impl LocalSocket {
         match &*status {
             Status::Connected {
                 other: Some(other), ..
-            } => other.write_self(buf, can_block_mask),
+            } => other.write_self(buf, can_block_mask, *self.timeout_info.read()),
             Status::Disconnected
             | Status::Listening { .. }
             | Status::Connected { other: None, .. } => Err(SocketError::ConnectionClosed),
         }
     }
 
-    pub fn write_self(&self, buf: &[u8], can_block_mask: bool) -> Result<usize, SocketError> {
+    fn write_self(
+        &self,
+        buf: &[u8],
+        can_block_mask: bool,
+        timeout_info: TimeoutInfo,
+    ) -> Result<usize, SocketError> {
         let status_guard = self.status.read();
         let status = &*status_guard;
         let Status::Connected {
@@ -346,7 +361,8 @@ impl LocalSocket {
         }
 
         let mut buffer = buffer.lock();
-        let can_block = self.can_block.load(Ordering::Relaxed) & can_block_mask;
+
+        let can_block = timeout_info.can_block && can_block_mask;
 
         match buffer.write(buf) {
             Ok((size, len_now, len_before)) => {
@@ -357,7 +373,7 @@ impl LocalSocket {
 
                     self.wait_queue
                         .lock()
-                        .wake_equals(&WaitReason::WaitUntilNotEmpty);
+                        .wake_on_condition(|r| r == &WaitReason::WaitUntilNotEmpty);
                 }
 
                 let events_remove = if len_now >= STREAM_SIZE {
@@ -375,9 +391,11 @@ impl LocalSocket {
                 // We can drop the guard now, because when someone tries to notify the wait queue of new data they'll have to wait until we enter sleep
                 drop(buffer);
                 drop(status_guard);
-                pending_wait.enter_wait(WaitReason::WaitUntilCanWrite)?;
+                // FIXME: if more than one thread is waiting we should decrement the timeout before retrying...
+                pending_wait
+                    .enter_wait(WaitReason::WaitUntilCanWrite, timeout_info.write_timeout)?;
 
-                self.write_self(buf, can_block_mask)
+                self.write_self(buf, can_block_mask, timeout_info)
             }
             Err(SocketError::WouldBlockEmpty) => unreachable!(),
             Err(e) => Err(e),
@@ -409,7 +427,8 @@ impl LocalSocket {
         };
 
         let mut buffer = buffer.lock();
-        let can_block = can_block_mask && self.can_block.load(Ordering::Relaxed);
+        let timeout_info = *self.timeout_info.read();
+        let can_block = can_block_mask && timeout_info.can_block;
 
         match buffer.read(buf, just_peek) {
             Ok((amount, len_now, len_before)) => {
@@ -420,7 +439,7 @@ impl LocalSocket {
 
                     self.wait_queue
                         .lock()
-                        .wake_equals(&WaitReason::WaitUntilCanWrite);
+                        .wake_on_condition(|r| r == &WaitReason::WaitUntilCanWrite);
                 }
 
                 let events_remove = if len_now == 0 {
@@ -445,7 +464,9 @@ impl LocalSocket {
                 let pending_wait = self.wait_queue.prepare_wait();
                 drop(buffer);
                 drop(status_guard);
-                pending_wait.enter_wait(WaitReason::WaitUntilNotEmpty)?;
+                // FIXME: retrying doesn't respect the timeout...
+                pending_wait
+                    .enter_wait(WaitReason::WaitUntilNotEmpty, timeout_info.read_timeout)?;
 
                 self.read_self(buf, just_peek, can_block_mask)
             }
@@ -474,11 +495,26 @@ impl LocalSocket {
                     return Err(SocketError::ConnectionRefused);
                 }
 
+                let events_add = if *curr == 0 {
+                    PollEvents::DATA_AVAILABLE
+                } else {
+                    PollEvents::NONE
+                };
+
                 *curr += 1;
+
+                let events_remove = if *curr == max {
+                    PollEvents::CAN_WRITE
+                } else {
+                    PollEvents::NONE
+                };
+
                 other
                     .wait_queue
                     .lock()
-                    .wake_equals(&WaitReason::WaitingForAccepts);
+                    .wake_on_condition(|r| r == &WaitReason::WaitingForAccepts);
+                poll::broadcast_events(other.poll_id(), events_add, events_remove);
+
                 unsafe { *self.conn_accepted.get() = false };
                 let this = self
                     .this
@@ -508,7 +544,19 @@ impl Socket for LocalSocket {
     }
 
     fn set_blocking(&self, value: bool) {
-        self.can_block.store(value, Ordering::Release);
+        self.timeout_info.write().can_block = value;
+    }
+
+    fn get_blocking(&self) -> bool {
+        self.timeout_info.read().can_block
+    }
+
+    fn set_read_timeout(&self, timeout: Option<NonZero<u64>>) {
+        self.timeout_info.write().read_timeout = timeout
+    }
+
+    fn set_write_timeout(&self, timeout: Option<NonZero<u64>>) {
+        self.timeout_info.write().write_timeout = timeout
     }
 
     fn connect(&self, addr: SocketAddrRef) -> Result<(), SocketError> {

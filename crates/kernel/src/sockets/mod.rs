@@ -1,4 +1,4 @@
-use core::{net::Ipv4Addr, ops::Deref};
+use core::{net::Ipv4Addr, num::NonZero, ops::Deref};
 
 use alloc::sync::Arc;
 use safa_abi::{
@@ -104,17 +104,17 @@ pub enum OwnedSocketAddr {
     },
 }
 
-use safa_abi::sockets::SockBindAddr as AbiSockAddr;
+use safa_abi::sockets::SocketAddr as AbiSockAddr;
 impl<'a> SocketAddrRef<'a> {
     pub fn from_raw(
-        addr: &'a safa_abi::sockets::SockBindAddr,
+        addr: &'a safa_abi::sockets::SocketAddr,
         addr_struct_size: usize,
     ) -> Result<Self, ErrorStatus> {
-        use safa_abi::sockets::SockBindAbstractAddr as AbiAbstractAddr;
-        use safa_abi::sockets::SockBindInetV4Addr as AbiIpV4Addr;
+        use safa_abi::sockets::InetV4SocketAddr as AbiIpV4Addr;
+        use safa_abi::sockets::LocalSocketAddr as AbiAbstractAddr;
 
-        match addr.kind {
-            AbiAbstractAddr::KIND => {
+        match addr.family {
+            AbiAbstractAddr::FAMILY => {
                 let name_len = addr_struct_size
                     .checked_sub(size_of::<AbiSockAddr>())
                     .ok_or(ErrorStatus::InvalidArgument)?;
@@ -125,7 +125,7 @@ impl<'a> SocketAddrRef<'a> {
 
                 Ok(SocketAddrRef::Abstract(name_utf8))
             }
-            AbiIpV4Addr::KIND => {
+            AbiIpV4Addr::FAMILY => {
                 if size_of::<AbiIpV4Addr>() != addr_struct_size {
                     return Err(ErrorStatus::InvalidArgument);
                 }
@@ -188,6 +188,9 @@ pub trait Socket: 'static {
     }
 
     fn set_blocking(&self, value: bool);
+    fn get_blocking(&self) -> bool;
+    fn set_read_timeout(&self, timeout: Option<NonZero<u64>>);
+    fn set_write_timeout(&self, timeout: Option<NonZero<u64>>);
     fn poll_id(&self) -> PollID;
     /// Clean-up function when the socket's resource is dropped
     fn on_close(&self);
@@ -284,10 +287,30 @@ impl<T: Socket> Resource for SocketResource<T> {
 
     fn send_command(&self, cmd: u16, arg: u64) -> Result<(), safa_abi::errors::ErrorStatus> {
         const SET_BLOCKING: u16 = 0;
+        const GET_BLOCKING: u16 = 1;
+        const SET_READ_TIMEOUT: u16 = 2;
+        const SET_WRITE_TIMEOUT: u16 = 3;
         match cmd {
             SET_BLOCKING => {
                 let can_block = arg != 0;
                 self.set_blocking(can_block);
+                Ok(())
+            }
+            GET_BLOCKING => {
+                let ptr = <&mut bool>::make(arg as usize as *mut bool)?;
+                let can_block = self.get_blocking();
+
+                *ptr = can_block;
+                Ok(())
+            }
+            SET_READ_TIMEOUT => {
+                let non_zero = NonZero::new(arg);
+                self.set_read_timeout(non_zero);
+                Ok(())
+            }
+            SET_WRITE_TIMEOUT => {
+                let non_zero = NonZero::new(arg);
+                self.set_write_timeout(non_zero);
                 Ok(())
             }
             _ => Err(safa_abi::errors::ErrorStatus::InvalidCommand),

@@ -11,7 +11,7 @@ use crate::{
 use super::{ErrorStatus, SyscallFFI};
 use macros::syscall_handler;
 use safa_abi::sockets::{
-    SockBindAbstractAddr, SockBindAddr, SockBindInetV4Addr, SockCreateKind, SockMsgFlags,
+    InetV4SocketAddr, LocalSocketAddr, SockCreateKind, SockMsgFlags, SocketAddr,
 };
 
 impl SyscallFFI for SockCreateKind {
@@ -106,7 +106,7 @@ fn syssock_listen(sock: Socket, backlog: usize) -> Result<(), SocketError> {
 }
 
 fn out_addr(
-    out_sock_addr_ptr: NonNull<SockBindAddr>,
+    out_sock_addr_ptr: NonNull<SocketAddr>,
     out_sock_addr_size: &mut usize,
     value: OwnedSocketAddr,
 ) {
@@ -119,10 +119,10 @@ fn out_addr(
     match value {
         OwnedSocketAddr::Abstract(name) => {
             let name_len = name.len();
-            let mut abi_struct = SockBindAbstractAddr::new([0u8; _]);
+            let mut abi_struct = LocalSocketAddr::new([0u8; _]);
             abi_struct.name[..name_len].copy_from_slice(name.as_bytes());
-            let abi_struct_size = name_len + size_of::<SockBindAddr>();
-            let abi_bytes: [u8; size_of::<SockBindAbstractAddr>()] =
+            let abi_struct_size = name_len + size_of::<SocketAddr>();
+            let abi_bytes: [u8; size_of::<LocalSocketAddr>()] =
                 unsafe { core::mem::transmute(abi_struct) };
 
             let copy_len = out_bytes.len().min(abi_struct_size);
@@ -130,10 +130,10 @@ fn out_addr(
             unsafe { *out_sock_addr_size.as_mut() = abi_struct_size }
         }
         OwnedSocketAddr::Ip { addr, port } => {
-            let abi_struct = SockBindInetV4Addr::new(port, addr);
-            let abi_struct_size = size_of::<SockBindInetV4Addr>();
+            let abi_struct = InetV4SocketAddr::new(port, addr);
+            let abi_struct_size = size_of::<InetV4SocketAddr>();
 
-            let abi_bytes: [u8; size_of::<SockBindInetV4Addr>()] =
+            let abi_bytes: [u8; size_of::<InetV4SocketAddr>()] =
                 unsafe { core::mem::transmute(abi_struct) };
             let copy_len = out_bytes.len().min(abi_struct_size);
             out_bytes[..copy_len].copy_from_slice(&abi_bytes[..copy_len]);
@@ -147,7 +147,7 @@ fn syssock_recv_from(
     sock: Socket,
     buf: &mut [u8],
     flags: SockMsgFlags,
-    out_sock_addr: Option<&mut (Option<NonNull<SockBindAddr>>, usize)>,
+    out_sock_addr: Option<&mut (Option<NonNull<SocketAddr>>, usize)>,
 ) -> Result<usize, SocketError> {
     match out_sock_addr {
         Some((Some(sock_addr_ptr), sock_addr_size)) => {
@@ -167,7 +167,7 @@ fn syssock_recv_from(
 #[syscall_handler]
 fn syssock_accept(
     sock: Socket,
-    out_sock_addr: Option<&mut (Option<NonNull<SockBindAddr>>, usize)>,
+    out_sock_addr: Option<&mut (Option<NonNull<SocketAddr>>, usize)>,
 ) -> Result<Ri, SocketError> {
     let ri = match out_sock_addr {
         Some((Some(sock_addr_ptr), sock_addr_size)) => {
