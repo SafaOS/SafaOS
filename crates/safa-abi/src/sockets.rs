@@ -75,6 +75,8 @@ impl SockDomain {
 pub struct SockCreateKind(u16);
 
 impl SockCreateKind {
+    /// A stream socket, only allowed for local domain sockets.
+    pub const SOCK_STREAM: Self = Self(0);
     /// A SeqPacket Socket, unlike Stream Sockets which are the default for local sockets, this preserves messages boundaries
     pub const SOCK_SEQPACKET: Self = Self(1);
     /// A Datagram Socket, only allowed for network domain sockets, UDP by default and preserves messages boundaries.
