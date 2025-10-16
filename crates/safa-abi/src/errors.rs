@@ -1,3 +1,5 @@
+use core::fmt::Debug;
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
@@ -74,11 +76,15 @@ pub enum ErrorStatus {
     InvalidSize = 0x27,
     /// The syscall was interrupted by something, such as a kill command.
     ForceTerminated = 0x28,
+    /// Attempt to use an address thats already used.
+    AddressAlreadyInUse = 0x29,
+    /// Attempt to use an interface thats not bound to an address.
+    NotBound = 0x2A,
 }
 
 impl ErrorStatus {
     // update when a new error is added
-    const MAX: u16 = Self::ForceTerminated as u16;
+    const MAX: u16 = Self::NotBound as u16;
 
     #[inline(always)]
     /// Gives a string description of the error
@@ -125,6 +131,8 @@ impl ErrorStatus {
             ConnectionRefused => "Connection Refused",
             WouldBlock => "Operation Would Block",
             ForceTerminated => "Operation Terminated",
+            AddressAlreadyInUse => "Address Already In Use",
+            NotBound => "Interface Not Bound",
         }
     }
 
@@ -153,60 +161,98 @@ impl TryFrom<u16> for ErrorStatus {
         Self::try_from_u16(value)
     }
 }
+
+/// Represents the results of a SafaOS syscall, either an [`ErrorStatus`] or an Ok [`usize`] value smaller than or equal to [`isize::MAX`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SysResult {
-    Success,
-    Error(ErrorStatus),
+#[repr(transparent)]
+pub struct SysResult(isize);
+
+impl SysResult {
+    /// Converts an err into a [`SysResult`].
+    pub const fn err(err: ErrorStatus) -> Self {
+        Self(-(err as isize))
+    }
+
+    /// Turns a [`SysResult`] into result.
+    pub const fn into_result(self) -> Result<usize, ErrorStatus> {
+        if self.0.is_negative() {
+            Err(ErrorStatus::from_u16((-self.0) as u16))
+        } else {
+            Ok(self.0 as usize)
+        }
+    }
+
+    /// Attempts to convert a result into [`SysResult`], returns an error if the value is Ok(x) and x is larger than [`isize::MAX`]
+    pub const fn try_from_result(result: Result<usize, ErrorStatus>) -> Result<Self, ()> {
+        match result {
+            Err(err) => Ok(Self::err(err)),
+            Ok(value) => Self::try_ok(value),
+        }
+    }
+
+    /// Converts an Ok value [`value`] into [`Self`], it is expected to not be larger than [`isize::MAX`] or it panicks.
+    pub const fn ok(value: usize) -> Self {
+        let Ok(ok) = Self::try_ok(value) else {
+            panic!("Attempt to construct an Ok SysResult value larger than isize::MAX")
+        };
+        ok
+    }
+
+    /// Tries to convert an Ok value [`value`] into [`SysResult`], return an error if the value is larger than [`isize::MAX`].
+    pub const fn try_ok(value: usize) -> Result<Self, ()> {
+        let value = value as isize;
+        if value.is_negative() {
+            return Err(());
+        }
+
+        Ok(Self(value))
+    }
+
+    /// Converts a [`SysResult`] into an isize, negative value is for an error, use [`Self::into_result`] instead.
+    pub const fn as_isize(&self) -> isize {
+        self.0
+    }
+
+    /// Converts an isize into [`SysResult`]
+    /// # Safety
+    /// Perefectly safe as this type doesn't guarantee the contained error value (negative value) is valid.
+    pub const fn from_isize(isize: isize) -> Self {
+        Self(isize)
+    }
 }
 
 impl From<ErrorStatus> for SysResult {
     #[inline(always)]
     fn from(value: ErrorStatus) -> Self {
-        SysResult::Error(value)
+        Self::err(value)
     }
 }
 
-impl From<Result<(), ErrorStatus>> for SysResult {
+impl From<Result<usize, ErrorStatus>> for SysResult {
+    /// Panicks if the results is an Ok value larger than isize::MAX
     #[inline(always)]
-    fn from(value: Result<(), ErrorStatus>) -> Self {
-        match value {
-            Ok(()) => SysResult::Success,
-            Err(err) => SysResult::Error(err),
-        }
+    fn from(value: Result<usize, ErrorStatus>) -> Self {
+        Self::try_from_result(value).expect("Ok value is bigger than isize::MAX")
     }
 }
 
-impl TryFrom<u16> for SysResult {
-    type Error = ();
-    #[inline(always)]
-    fn try_from(value: u16) -> Result<Self, ()> {
-        match value {
-            0 => Ok(SysResult::Success),
-            other => {
-                let err = ErrorStatus::try_from(other).map_err(|_| ())?;
-                Ok(SysResult::Error(err))
-            }
-        }
-    }
-}
-
-impl From<SysResult> for Result<(), ErrorStatus> {
+impl From<SysResult> for Result<usize, ErrorStatus> {
     #[inline(always)]
     fn from(value: SysResult) -> Self {
-        match value {
-            SysResult::Success => Ok(()),
-            SysResult::Error(err) => Err(err),
-        }
+        value.into_result()
     }
 }
 
-impl Into<u16> for SysResult {
+impl Into<isize> for SysResult {
     #[inline(always)]
-    fn into(self) -> u16 {
-        match self {
-            SysResult::Success => 0,
-            SysResult::Error(err) => err as u16,
-        }
+    fn into(self) -> isize {
+        self.0
+    }
+}
+
+impl From<isize> for SysResult {
+    fn from(value: isize) -> Self {
+        Self::from_isize(value)
     }
 }
 
@@ -235,7 +281,10 @@ mod std_only {
     use std::process::Termination;
     impl Termination for SysResult {
         fn report(self) -> ExitCode {
-            let u16: u16 = self.into();
+            let u16: u16 = match self.into_result() {
+                Ok(_) => 0,
+                Err(smth) => smth as u16,
+            };
             ExitCode::from(u16 as u8)
         }
     }
