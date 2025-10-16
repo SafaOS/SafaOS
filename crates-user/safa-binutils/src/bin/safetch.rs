@@ -6,7 +6,7 @@ use owo_colors::OwoColorize;
 use safa_api::errors::SysResult;
 use std::{
     fs::File,
-    io::{self, BufReader, Write, stdout},
+    io::{self, stdout, BufReader, Write},
 };
 
 macro_rules! print_item {
@@ -104,5 +104,5 @@ fn print() -> io::Result<()> {
 
 fn main() -> SysResult {
     tri_io!(print());
-    SysResult::Success
+    SysResult::ok(0)
 }

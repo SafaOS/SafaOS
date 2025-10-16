@@ -153,15 +153,16 @@ fn exception(kind: ExcClass, frame: &mut InterruptFrame) {
         ExcClass::SysCall => {
             let number = (*frame.esr & 0xFFFF) as u16;
             let registers = &mut frame.general_registers[0..7];
-            let result: u16 = syscall(
+            let result: isize = syscall(
                 number,
                 (*registers[0]) as usize,
                 (*registers[1]) as usize,
                 (*registers[2]) as usize,
                 (*registers[3]) as usize,
                 (*registers[4]) as usize,
+                (*registers[5]) as usize,
             )
-            .into();
+            .as_isize();
             registers[0] = Reg(result as u64);
         }
         _ => panic!("Unhandled Synchronous Exception:\n{frame}"),

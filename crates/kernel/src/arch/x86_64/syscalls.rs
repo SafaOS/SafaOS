@@ -66,11 +66,18 @@ pub extern "x86-interrupt" fn syscall_base(_: InterruptFrame) {
 // FIXME: this is extremely unstable and fragile
 // FIXME: returns usize to make sure rax is used instead of ax
 #[unsafe(no_mangle)]
-pub extern "C" fn syscall_base_mapper(a: usize, b: usize, c: usize, d: usize, e: usize) -> usize {
+pub extern "C" fn syscall_base_mapper(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+    e: usize,
+    f: usize,
+) -> isize {
     let number: usize;
     unsafe {
         asm!("mov {}, rax", out(reg) number);
     }
-    let u16: u16 = syscalls::syscall(number as u16, a, b, c, d, e).into();
-    u16 as usize
+    let isize: isize = syscalls::syscall(number as u16, a, b, c, d, e, f).into();
+    isize
 }

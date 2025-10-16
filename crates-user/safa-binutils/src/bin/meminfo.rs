@@ -57,5 +57,5 @@ fn main() -> SysResult {
         }
     }
 
-    SysResult::Success
+    SysResult::ok(0)
 }

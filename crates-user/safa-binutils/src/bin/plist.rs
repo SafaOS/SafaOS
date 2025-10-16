@@ -44,5 +44,5 @@ fn main() -> SysResult {
             is_alive,
         );
     }
-    SysResult::Success
+    SysResult::ok(0)
 }

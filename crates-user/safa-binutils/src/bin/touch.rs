@@ -7,9 +7,9 @@ fn main() -> SysResult {
     let mut args = std::env::args().skip(1);
     let Some(path) = args.next() else {
         println!("touch: missing file path");
-        return SysResult::Error(ErrorStatus::NotEnoughArguments);
+        return SysResult::err(ErrorStatus::NotEnoughArguments);
     };
 
     tri_io!(OpenOptions::new().create_new(true).open(path));
-    SysResult::Success
+    SysResult::ok(0)
 }

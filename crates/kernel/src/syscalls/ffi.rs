@@ -1,7 +1,10 @@
+use core::{ops::Deref, ptr::NonNull};
+
 use crate::{
     VirtAddr,
+    drivers::vfs::SeekOffset,
     fs::{DirIter, File},
-    process::resources::Ri,
+    process::resources::{self, Resource, ResourceNodeRef, Ri},
 };
 
 use crate::utils::path::Path;
@@ -148,9 +151,9 @@ impl SyscallFFI for Path<'_> {
 macro_rules! impl_ffi_int {
     ($ty:ty) => {
         impl SyscallFFI for $ty {
-            type Args = usize;
+            type Args = $ty;
             fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-                Ok(args as $ty)
+                Ok(args)
             }
         }
     };
@@ -205,4 +208,57 @@ pub fn ptr_is_allowed<T: ?Sized>(ptr: *const T) -> bool {
 #[inline]
 pub fn ptr_is_valid<T>(ptr: *const T) -> bool {
     !ptr.is_null() && ptr.is_aligned() && ptr_is_allowed(ptr)
+}
+
+impl SyscallFFI for SeekOffset {
+    type Args = isize;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        Ok(SeekOffset::from(args))
+    }
+}
+
+/// Represents an argument passed to a syscall thats a Resource ID that points to a resource of an Unknown type,
+/// Use [ExpectedResource] if you know the type.
+pub struct ResourceDesc(ResourceNodeRef);
+
+impl SyscallFFI for ResourceDesc {
+    type Args = Ri;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        resources::get_expected(args as Ri).map(|ok| Self(ok))
+    }
+}
+
+impl Deref for ResourceDesc {
+    type Target = dyn Resource;
+    fn deref(&self) -> &Self::Target {
+        self.0.data()
+    }
+}
+
+/// Represents a syscall resource argument of an expected resource type: T
+pub struct ExpectedResource<T: Resource> {
+    _inner: ResourceDesc,
+    // Points to data in inner
+    reference: NonNull<T>,
+}
+
+impl<T: Resource> SyscallFFI for ExpectedResource<T> {
+    type Args = Ri;
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        let inner = ResourceDesc::make(args)?;
+        // Safety: data points to data allocated on the heap thats alive as long as inner is alive
+        let reference = inner.as_ref_expected::<T>()?;
+        let reference = NonNull::from_ref(reference);
+        Ok(Self {
+            _inner: inner,
+            reference,
+        })
+    }
+}
+
+impl<T: Resource> Deref for ExpectedResource<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.reference.as_ref() }
+    }
 }

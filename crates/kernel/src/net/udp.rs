@@ -1,12 +1,12 @@
 use core::net::Ipv4Addr;
 
-use alloc::sync::{Arc, Weak};
+use alloc::sync::Arc;
 use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
 
 use crate::{
     net::ipv4::IPv4Protocol,
-    sockets::{Socket, SocketError},
+    sockets::{SocketError, udp::UdpSocket},
     utils::locks::RwLock,
     warn,
 };
@@ -42,6 +42,10 @@ impl UDPHeader {
 
     pub fn dst_port(&self) -> u16 {
         u16::from_be_bytes(self.dst_port)
+    }
+
+    pub fn src_port(&self) -> u16 {
+        u16::from_be_bytes(self.src_port)
     }
 
     // TODO: verify packets...
@@ -141,10 +145,10 @@ impl UDPPacket {
     }
 }
 
-static UDP_PORTS: RwLock<HashMap<u16, Weak<Socket>, FxBuildHasher>> =
+static UDP_PORTS: RwLock<HashMap<u16, Arc<UdpSocket>, FxBuildHasher>> =
     RwLock::new(HashMap::with_hasher(FxBuildHasher));
 
-pub fn handle_udp_packet(bytes: &[u8]) {
+pub fn handle_udp_packet(src_ip: Ipv4Addr, bytes: &[u8]) {
     let Ok(packet) = UDPPacket::try_from_bytes(bytes) else {
         warn!("Invalid UDP Packet ignoring...");
         return;
@@ -152,29 +156,23 @@ pub fn handle_udp_packet(bytes: &[u8]) {
 
     let header = packet.header();
     let dst_port = header.dst_port();
+    let src_port = header.src_port();
 
     let ports = UDP_PORTS.read();
     if let Some(socket) = ports.get(&dst_port) {
-        let upgraded = socket.upgrade();
-        drop(ports);
-
-        if let Some(socket) = upgraded {
-            match socket.write_socket(packet.payload()) {
-                Err(SocketError::WouldBlockFull) => {} // vola packet lost!
-                Err(e) => {
-                    crate::error!("Failed to write to socket: {e:?}, at udp port {dst_port}");
-                }
-                Ok(am) => {
-                    if am != bytes.len() {
-                        warn!(
-                            "FIXME: wrote only {am} bytes of {} in UDP socket",
-                            bytes.len()
-                        )
-                    }
+        match socket.write(src_ip, src_port, packet.payload()) {
+            Err(SocketError::WouldBlockFull) => {} // vola packet lost!
+            Err(e) => {
+                crate::error!("Failed to write to socket: {e:?}, at udp port {dst_port}");
+            }
+            Ok(am) => {
+                if am != bytes.len() {
+                    warn!(
+                        "FIXME: wrote only {am} bytes of {} in UDP socket",
+                        bytes.len()
+                    )
                 }
             }
-        } else {
-            warn!("Failed to upgrade socket at port {dst_port}");
         }
     }
 }
@@ -185,11 +183,8 @@ pub fn remove_socket(port: u16) -> bool {
 }
 
 /// Attempts to bind a socket to a UDP port, returning an error if the port is already in use.
-pub fn bind_socket(port: u16, socket: &Arc<Socket>) -> Result<(), ()> {
+pub fn bind_socket(port: u16, socket: Arc<UdpSocket>) -> Result<(), ()> {
     let mut ports = UDP_PORTS.write();
-    ports
-        .try_insert(port, Arc::downgrade(socket))
-        .map_err(|_| ())?;
-    socket.set_udp_port(port);
+    ports.try_insert(port, socket).map_err(|_| ())?;
     Ok(())
 }

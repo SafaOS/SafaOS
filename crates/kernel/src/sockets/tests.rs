@@ -6,58 +6,45 @@ use crate::{
     arch::with_interrupts,
     process::current::kernel_thread_spawn,
     sockets::{
-        SockID, SocketDomain, SocketError, SocketKind, bind_abstract_socket, create_socket,
-        get_abstract_binding, get_client_socket,
+        Socket, SocketAddrRef, SocketError, SocketResource,
+        unix::{LocalSocket, LocalSocketKind},
     },
     thread::{self, Tid},
-    utils::{locks::Mutex, types::Name},
+    utils::types::Name,
 };
 
 #[allow(unused)]
 fn ipc_stream_test_inner() {
-    static BINDED_SOCKET: Mutex<SockID> = Mutex::new(0);
     static SOCKET_DROPPED: AtomicBool = AtomicBool::new(false);
 
     static CLIENT_MSG: &[u8] = b"Hello from the other side!";
     static SERVER_MSG: &[u8] = b"Your message was received!";
+    const ADDR: SocketAddrRef = SocketAddrRef::Abstract("safa_core::sockets::test_socket");
 
     fn test_thread(_: Tid, (): &()) -> ! {
-        let name: Name =
-            Name::try_from("safa_core::sockets::test_socket").expect("test socket name too long");
+        let sock_desc = SocketResource(LocalSocket::create(LocalSocketKind::Stream, true));
+        sock_desc.connect(ADDR).expect("failed to connect");
 
-        let sock_id = get_abstract_binding(&name).expect("socket was not binded");
-        assert_eq!(*BINDED_SOCKET.lock(), sock_id);
-        let sock = get_client_socket(sock_id).expect("socket binding not associated with any id");
-
-        let connection = sock
-            .connect(true)
-            .expect("socket dropped while waiting for connection");
-
-        let len = connection.write(CLIENT_MSG).expect("client write failed");
+        let len = sock_desc.write(CLIENT_MSG).expect("client write failed");
         assert_eq!(len, CLIENT_MSG.len());
 
         let mut data_buf = [0u8; SERVER_MSG.len()];
-        connection
+        sock_desc
             .read(&mut data_buf[..])
             .expect("client read failed");
 
         assert_eq!(&data_buf[..], SERVER_MSG, "the server's message is wrong");
-        drop(connection);
+        drop(sock_desc);
 
-        drop(sock);
         SOCKET_DROPPED.store(true, core::sync::atomic::Ordering::Release);
         thread::current::exit(0);
     }
 
-    let name: Name =
-        Name::try_from("safa_core::sockets::test_socket").expect("test socket name too long");
+    let sock_desc = SocketResource(LocalSocket::create(LocalSocketKind::Stream, true));
+    let weak_sock = Arc::downgrade(unsafe { sock_desc.inner() });
 
-    let sock_desc = create_socket(SocketDomain::Unix, SocketKind::Stream, true);
-    let weak_sock = Arc::downgrade(&sock_desc.reference);
-
-    *BINDED_SOCKET.lock() = sock_desc.id;
-    bind_abstract_socket(name, sock_desc.id);
-    sock_desc.configure_listen_queue(1);
+    sock_desc.bind(ADDR).expect("failed to bind socket");
+    sock_desc.listen(1);
 
     // Spawn a second thread
     kernel_thread_spawn(test_thread, &(), None, None)
@@ -73,7 +60,7 @@ fn ipc_stream_test_inner() {
 
     connection.write(SERVER_MSG).expect("server write failed");
     assert_eq!(
-        connection.read(&mut []),
+        connection.read(&mut [0]),
         Err(SocketError::ConnectionClosed),
         "Read didn't fail with connection closed, even after it was"
     );
@@ -103,33 +90,25 @@ fn ipc_seqpacket_test_inner() {
     static CLIENT_MSG1: &[u8] = b"Reply if you received this message!";
     static SERVER_MSG: &[u8] = b"Your message was received!";
     static THREAD_EXIT: AtomicBool = AtomicBool::new(false);
+    const ADDR: SocketAddrRef = SocketAddrRef::Abstract("safa_core::sockets::test_socket");
 
     fn test_thread(_: Tid, (): &()) -> ! {
         {
-            let name: Name = Name::try_from("safa_core::sockets::test_socket")
-                .expect("test socket name too long");
+            let sock = SocketResource(LocalSocket::create(LocalSocketKind::SeqPacket, true));
+            sock.connect(ADDR).expect("Socket connection failed");
 
-            let sock_id = get_abstract_binding(&name).expect("Socket was not binded");
-            let sock =
-                get_client_socket(sock_id).expect("Socket binding not associated with any id");
-
-            let connection = sock
-                .connect(true)
-                .expect("Socket dropped while waiting for connection");
-
-            let len = connection
+            let len = sock
                 .write(CLIENT_MSG0)
                 .expect("Client failed to write the first message");
             assert_eq!(len, CLIENT_MSG0.len());
 
-            let len = connection
+            let len = sock
                 .write(CLIENT_MSG1)
                 .expect("Client failed to write the second message");
             assert_eq!(len, CLIENT_MSG1.len());
 
             let mut read_buf = [0u8; SERVER_MSG.len()];
-            connection
-                .read(&mut read_buf[..])
+            sock.read(&mut read_buf[..])
                 .expect("Client failed to read the server's message");
 
             assert_eq!(&read_buf[..], SERVER_MSG, "Server's message was wrong");
@@ -138,9 +117,11 @@ fn ipc_seqpacket_test_inner() {
         thread::current::exit(0);
     }
 
-    let sock_desc = create_socket(SocketDomain::Unix, SocketKind::SeqPacket, true);
-    bind_abstract_socket(name, sock_desc.id);
-    sock_desc.configure_listen_queue(1);
+    let sock_desc = SocketResource(LocalSocket::create(LocalSocketKind::SeqPacket, true));
+    let weak_sock = Arc::downgrade(unsafe { sock_desc.inner() });
+
+    sock_desc.listen(1);
+    sock_desc.bind(ADDR).expect("failed to bind socket");
 
     // Spawn a second thread
     kernel_thread_spawn(test_thread, &(), None, None)

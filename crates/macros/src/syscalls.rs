@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::quote;
-use syn::ItemFn;
+use quote::{quote, ToTokens};
+use syn::{GenericArgument, ItemFn, Type};
 
 /// Given a syscall handler argument name and type, generate the raw argument, and the conversion code.
 pub fn convert_input_to_raw(
@@ -28,9 +28,9 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
 
     let func_name = func.sig.ident.to_string();
     let func_return = func.sig.output.clone();
-    let returns_nothing = matches!(func_return, syn::ReturnType::Default);
-    let never_returns =
-        matches!(func_return, syn::ReturnType::Type(_, ty) if matches!(&*ty, syn::Type::Never(_)));
+    // let returns_nothing = matches!(func_return, syn::ReturnType::Default);
+    // let never_returns =
+    //     matches!(func_return, syn::ReturnType::Type(_, ty) if matches!(&*ty, syn::Type::Never(_)));
 
     let generated_name = format!("{}_raw", func_name);
     let generated_name = syn::Ident::new(&generated_name, Span::mixed_site());
@@ -59,34 +59,89 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
             syn::FnArg::Receiver(_) => panic!("Cannot use receiver arguments in syscall handlers"),
         }
     }
-    if returns_nothing {
-        quote! {
+
+    match func_return {
+        syn::ReturnType::Default => quote! {
                 #func
 
-                pub fn #generated_name(#(#generated_inputs),*) -> Result<(), ErrorStatus> {
+                /// Returns nothing
+                pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
                     #(#generated_body)*
                     #func_name(#(#input_idents),*);
-                    Ok(())
+                    Ok(0)
                 }
-        }
-    } else if never_returns {
-        quote! {
-                #func
+        },
+        syn::ReturnType::Type(_, ty) => match &*ty {
+            syn::Type::Never(_) => {
+                quote! {
+                        #func
+                        /// Never returns
+                        pub fn #generated_name(#(#generated_inputs),*) -> ! {
+                            #(#generated_body)*
+                            #func_name(#(#input_idents),*)
+                        }
+                }
+            }
+            syn::Type::Path(path) => {
+                let segments = &path.path.segments;
+                match segments.last() {
+                    Some(seg) => {
+                        let ident = seg.ident.to_string();
+                        match &*ident.to_lowercase() {
+                        id if id.contains("result") => {
+                            let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+                                panic!("Result expect an <Ok, Error> value");
+                            };
+                            let mut args = args.args.iter();
+                            let ok = args.next().expect("Expected an Ok type in a Result");
 
-                pub fn #generated_name(#(#generated_inputs),*) -> ! {
-                    #(#generated_body)*
-                    #func_name(#(#input_idents),*)
-                }
-        }
-    } else {
-        quote! {
-                #func
+                            let should_map_to_zero = matches!(ok, GenericArgument::Type(Type::Tuple(t)) if t.elems.is_empty());
+                            if should_map_to_zero {
+                                quote! {
+                                    #func
+                                    /// Returns nothing on Ok
+                                    pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                                        #(#generated_body)*
+                                        #func_name(#(#input_idents),*).map_err(|err| err.into()).map(|()| 0)
+                                    }
+                                }
+                            } else {
+                                let ok_string = ok.into_token_stream().to_string();
+                                let doc_comment = format!("Returns a/an [`{ok_string}`] on Ok.");
 
-                pub fn #generated_name(#(#generated_inputs),*) -> Result<(), ErrorStatus> {
-                    #(#generated_body)*
-                    #func_name(#(#input_idents),*).map_err(|err| err.into())
+                                quote! {
+                                    #func
+
+                                    #[doc = #doc_comment]
+                                    pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                                        #(#generated_body)*
+                                        #func_name(#(#input_idents),*).map_err(|err| err.into()).map(|ok| ok as usize)
+                                    }
+                                }
+                            }
+                        }
+                        _ => quote! {
+                                #func
+
+                                pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                                    #(#generated_body)*
+                                    Ok(#func_name(#(#input_idents),*).into())
+                                }
+                            },
+                        }
+                    },
+                    None => unreachable!(),
                 }
-        }
+            }
+            _ => quote! {
+                    #func
+
+                    pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                        #(#generated_body)*
+                        Ok(#func_name(#(#input_idents),*).into())
+                    }
+            },
+        },
     }
     .into()
 }

@@ -1,5 +1,6 @@
 use crate::drivers::vfs::SeekOffset;
 use crate::memory::paging::EntryFlags;
+use crate::memory::paging::MapToError;
 use crate::process;
 use crate::process::resources;
 use crate::shared_mem;
@@ -26,8 +27,7 @@ pub fn sysmem_map(
     mmap_config: &RawMemMapConfig,
     flags: MemMapFlags,
     out_res_id: Option<&mut Ri>,
-    out_start_addr: Option<&mut VirtAddr>,
-) -> Result<(), ErrorStatus> {
+) -> Result<*mut u8, ErrorStatus> {
     if flags.contains(MemMapFlags::FIXED) {
         todo!("Fixed Mappings are not yet implemented")
     }
@@ -91,11 +91,7 @@ pub fn sysmem_map(
         *p = ri;
     }
 
-    if let Some(p) = out_start_addr {
-        *p = start_addr;
-    }
-
-    Ok(())
+    Ok(start_addr.into_ptr())
 }
 
 impl SyscallFFI for ShmFlags {
@@ -110,11 +106,11 @@ fn sysshm_create(
     pages_count: usize,
     flags: ShmFlags,
     out_shm_key: &mut ShmKey,
-    out_resource: Option<&mut Ri>,
-) -> Result<(), ErrorStatus> {
+) -> Result<Ri, MapToError> {
     let local = flags.contains(ShmFlags::LOCAL);
 
-    let tracked_key = shared_mem::create_shm(pages_count).map_err(|()| ErrorStatus::OutOfMemory)?;
+    let tracked_key =
+        shared_mem::create_shm(pages_count).map_err(|()| MapToError::FrameAllocationFailed)?;
     let key = *tracked_key.key();
 
     let resource = tracked_key;
@@ -124,11 +120,8 @@ fn sysshm_create(
     };
 
     *out_shm_key = key;
-    if let Some(out_resource) = out_resource {
-        *out_resource = ri;
-    }
 
-    Ok(())
+    Ok(ri)
 }
 
 impl SyscallFFI for ShmKey {
@@ -138,7 +131,7 @@ impl SyscallFFI for ShmKey {
     }
 }
 #[syscall_handler]
-fn sysshm_open(key: ShmKey, flags: ShmFlags, out_resource: &mut Ri) -> Result<(), ErrorStatus> {
+fn sysshm_open(key: ShmKey, flags: ShmFlags) -> Result<Ri, ErrorStatus> {
     let tracked_key = shared_mem::track_shm(key).ok_or(ErrorStatus::UnknownResource)?;
 
     let local = flags.contains(ShmFlags::LOCAL);
@@ -149,6 +142,5 @@ fn sysshm_open(key: ShmKey, flags: ShmFlags, out_resource: &mut Ri) -> Result<()
         true => resources::add_local_resource(resource),
     };
 
-    *out_resource = ri;
-    Ok(())
+    Ok(ri)
 }

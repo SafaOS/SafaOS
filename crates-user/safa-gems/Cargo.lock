@@ -101,9 +101,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.176"
+version = "0.2.177"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58f929b4d672ea937a23a1ab494143d968337a5f47e56d0815df1e0890ddf174"
+checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
 
 [[package]]
 name = "libgem"
@@ -243,14 +243,14 @@ dependencies = [
 
 [[package]]
 name = "safa-abi"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59232930b6ec867eac2dd7115e02a689f8448f43bfaaa2d4ebbdc4d06efcba97"
+checksum = "0dff02820bf9a9206ba3f1ce76dc0ead67e15fbdda32c316ff6452680c71b7a5"
 
 [[package]]
 name = "safa-api"
 version = "0.4.3"
-source = "git+https://github.com/SafaOS/safa-api#a1cd4a76a49672969a5d20bdebbf5aaafb100683"
+source = "git+https://github.com/SafaOS/safa-api#fc4410ba07ce23aabb08705298a70822a2f4ea5f"
 dependencies = [
  "safa-abi",
 ]

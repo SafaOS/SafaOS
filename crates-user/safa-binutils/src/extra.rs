@@ -25,7 +25,7 @@ macro_rules! tri {
     ($expr: expr) => {
         match $expr {
             Ok(data) => data,
-            Err(e) => return safa_api::errors::SysResult::Error(e),
+            Err(e) => return safa_api::errors::SysResult::err(e),
         }
     };
 }

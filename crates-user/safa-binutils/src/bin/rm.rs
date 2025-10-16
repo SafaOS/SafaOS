@@ -31,5 +31,5 @@ fn main() -> SysResult {
     let args = Args::parse();
     let results = remove(args.path, args.dir, args.recursive);
     tri_io!(results);
-    SysResult::Success
+    SysResult::ok(0)
 }

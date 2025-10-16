@@ -72,8 +72,9 @@ impl ResourcePoll {
     }
 
     fn stop_tracking_id(&mut self, id: PollID) {
-        self.status.remove(&id);
-        self.wake_id_with_reasons(id, PollEvents::DISCONNECTED);
+        if self.status.remove(&id).is_some() {
+            self.wake_id_with_reasons(id, PollEvents::DISCONNECTED)
+        }
     }
 
     fn wake_on_condition(&mut self, mut condition: impl FnMut(&mut PollEntry) -> bool) {
@@ -116,9 +117,11 @@ static POLL_QUEUE: Mutex<ResourcePoll> = Mutex::new(ResourcePoll::new());
 
 /// Broadcasts events to all tasks waiting on the [`PollID`] `id`.
 pub fn broadcast_events(poll_id: PollID, events_add: PollEvents, events_remove: PollEvents) {
-    POLL_QUEUE
-        .lock()
-        .broadcast_events(poll_id, events_add, events_remove);
+    if !events_add.is_empty() || !events_remove.is_empty() {
+        POLL_QUEUE
+            .lock()
+            .broadcast_events(poll_id, events_add, events_remove);
+    }
 }
 
 /// Removes the [`PollID`] `id` from the poll queue.

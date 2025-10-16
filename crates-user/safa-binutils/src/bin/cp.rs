@@ -30,5 +30,5 @@ fn copy(from: PathBuf, to: PathBuf) -> io::Result<u64> {
 fn main() -> SysResult {
     let args = Args::parse();
     tri_io!(copy(args.src, args.dest));
-    SysResult::Success
+    SysResult::ok(0)
 }

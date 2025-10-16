@@ -51,5 +51,5 @@ fn main() -> SysResult {
         println!("{}", f);
     }
 
-    SysResult::Success
+    SysResult::ok(0)
 }

@@ -1,39 +1,31 @@
-use alloc::{boxed::Box, sync::Arc};
-use hashbrown::HashMap;
-use lazy_static::lazy_static;
-use safa_abi::errors::IntoErr;
+use core::{net::Ipv4Addr, ops::Deref};
 
-use crate::{
-    memory::page_allocator::PageAlloc,
-    scheduler::wait_queue::WaitError,
-    sockets::{
-        conn::BlockingDatagramStream,
-        conn_queue::ConnOrientedSocket,
-        desc::{CliSocketDesc, ServerSocketDesc},
-        listener::{ListenQueue, ListenRequest},
-    },
-    utils::{
-        locks::{Mutex, RwLock},
-        types::Name,
-    },
+use alloc::sync::Arc;
+use safa_abi::{
+    errors::{ErrorStatus, IntoErr},
+    sockets::SockMsgFlags,
 };
 
-pub mod conn;
-mod conn_queue;
-pub mod desc;
-mod listener;
+use crate::{
+    net::manager::NetworkError,
+    process::{
+        poll::PollID,
+        resources::{self, Resource, Ri},
+    },
+    scheduler::wait_queue::WaitError,
+    sockets::{
+        udp::UdpSocket,
+        unix::{LocalSocket, LocalSocketKind},
+    },
+    syscalls::ffi::SyscallFFI,
+    utils::types::Name,
+};
+
+pub mod udp;
+pub mod unix;
 
 #[cfg(test)]
 mod tests;
-
-pub type SockID = u32;
-pub type SockConnID = u32;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SocketDomain {
-    Unix,
-    Net,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketError {
@@ -48,14 +40,29 @@ pub enum SocketError {
     /// Connection refused for some reason
     ConnectionRefused,
     OperationNotSupported,
-    Interrupted,
+    ForceTerminated,
+    AddressInUse,
+    AlreadyBinded,
+    UnknownAddress,
+    InvalidArgument,
+    TypeMismatch,
+    NotBound,
 }
 
 impl From<WaitError> for SocketError {
     fn from(value: WaitError) -> Self {
         match value {
-            WaitError::ForceTerminated => Self::Interrupted,
+            WaitError::ForceTerminated => Self::ForceTerminated,
             WaitError::Timeout => unreachable!(),
+        }
+    }
+}
+
+impl From<NetworkError> for SocketError {
+    fn from(value: NetworkError) -> Self {
+        match value {
+            NetworkError::AddressNotFound | NetworkError::NoInterface => Self::UnknownAddress,
+            NetworkError::PayloadTooLarge => Self::InvalidArgument,
         }
     }
 }
@@ -68,226 +75,318 @@ impl IntoErr for SocketError {
             }
             Self::ConnectionRefused => safa_abi::errors::ErrorStatus::ConnectionRefused,
             Self::ConnectionClosed => safa_abi::errors::ErrorStatus::ConnectionClosed,
-            Self::OperationNotSupported => safa_abi::errors::ErrorStatus::OperationNotSupported,
-            Self::Interrupted => safa_abi::errors::ErrorStatus::ForceTerminated,
+            Self::OperationNotSupported | Self::AlreadyBinded => {
+                safa_abi::errors::ErrorStatus::OperationNotSupported
+            }
+            Self::ForceTerminated => safa_abi::errors::ErrorStatus::ForceTerminated,
+            Self::AddressInUse => safa_abi::errors::ErrorStatus::AddressAlreadyInUse,
+            Self::UnknownAddress => safa_abi::errors::ErrorStatus::AddressNotFound,
+            Self::InvalidArgument => safa_abi::errors::ErrorStatus::InvalidArgument,
+            Self::TypeMismatch => safa_abi::errors::ErrorStatus::TypeMismatch,
+            Self::NotBound => safa_abi::errors::ErrorStatus::NotBound,
         }
     }
 }
 
-pub struct ConnectionlessSocket {
-    stream: Box<BlockingDatagramStream, PageAlloc>,
-    udp_port: RwLock<Option<u16>>,
+#[derive(Debug, Clone, Copy)]
+pub enum SocketAddrRef<'a> {
+    Abstract(&'a str),
+    Ip { addr: Ipv4Addr, port: u16 },
 }
 
-impl ConnectionlessSocket {
-    pub fn new() -> Self {
-        Self {
-            stream: Box::new_in(BlockingDatagramStream::new(), PageAlloc),
-            udp_port: RwLock::new(None),
-        }
-    }
-
-    pub fn on_drop(&self) {
-        self.stream.on_drop();
-        if let Some(port) = *self.udp_port.read() {
-            crate::net::udp::remove_socket(port);
-        }
-    }
-
-    pub fn write_bytes(&self, bytes: &[u8]) -> Result<usize, SocketError> {
-        self.stream.write(bytes)
-    }
-
-    pub fn set_port(&self, port: u16) {
-        *self.udp_port.write() = Some(port);
-    }
-
-    pub fn udp_port(&self) -> Option<u16> {
-        *self.udp_port.read()
-    }
+#[derive(Debug, Clone)]
+pub enum OwnedSocketAddr {
+    #[allow(unused)]
+    Abstract(Name),
+    Ip {
+        addr: Ipv4Addr,
+        port: u16,
+    },
 }
 
-enum SocketState {
-    ConnectionOriented(ConnOrientedSocket),
-    Connectionless(ConnectionlessSocket),
-}
+use safa_abi::sockets::SockBindAddr as AbiSockAddr;
+impl<'a> SocketAddrRef<'a> {
+    pub fn from_raw(
+        addr: &'a safa_abi::sockets::SockBindAddr,
+        addr_struct_size: usize,
+    ) -> Result<Self, ErrorStatus> {
+        use safa_abi::sockets::SockBindAbstractAddr as AbiAbstractAddr;
+        use safa_abi::sockets::SockBindInetV4Addr as AbiIpV4Addr;
 
-impl SocketState {
-    pub fn on_drop(&self) {
-        match self {
-            SocketState::ConnectionOriented(state) => state.on_drop(),
-            SocketState::Connectionless(state) => state.on_drop(),
+        match addr.kind {
+            AbiAbstractAddr::KIND => {
+                let name_len = addr_struct_size
+                    .checked_sub(size_of::<AbiSockAddr>())
+                    .ok_or(ErrorStatus::InvalidArgument)?;
+
+                let as_abs: &'a AbiAbstractAddr = unsafe { core::mem::transmute(addr) };
+                let name_bytes = &as_abs.name[..name_len];
+                let name_utf8 = str::from_utf8(name_bytes)?;
+
+                Ok(SocketAddrRef::Abstract(name_utf8))
+            }
+            AbiIpV4Addr::KIND => {
+                if size_of::<AbiIpV4Addr>() != addr_struct_size {
+                    return Err(ErrorStatus::InvalidArgument);
+                }
+
+                let as_ipv4: &'a AbiIpV4Addr = unsafe { core::mem::transmute(addr) };
+                Ok(SocketAddrRef::Ip {
+                    addr: as_ipv4.ip,
+                    port: as_ipv4.port,
+                })
+            }
+            _ => Err(ErrorStatus::InvalidArgument),
         }
-    }
-}
-
-/// Represents a Unix socket.
-pub struct Socket {
-    can_block: bool,
-    sock_state: SocketState,
-    domain: SocketDomain,
-}
-
-unsafe impl Send for Socket {}
-unsafe impl Sync for Socket {}
-
-impl Socket {
-    fn before_drop(&self) {
-        self.sock_state.on_drop()
-    }
-
-    pub const fn can_block(&self) -> bool {
-        self.can_block
-    }
-
-    fn connection_state(&self) -> Option<&ConnOrientedSocket> {
-        match &self.sock_state {
-            SocketState::ConnectionOriented(socket) => Some(socket),
-            _ => None,
-        }
-    }
-
-    fn connectionless_state(&self) -> Option<&ConnectionlessSocket> {
-        match &self.sock_state {
-            SocketState::Connectionless(socket) => Some(socket),
-            _ => None,
-        }
-    }
-
-    /// Write to a connection-less socket, panicks if it is connection based
-    pub fn write_socket(&self, data: &[u8]) -> Result<usize, SocketError> {
-        self.connectionless_state()
-            .map(|state| state.write_bytes(data))
-            .expect("Expected connectionless socket")
-    }
-
-    /// Attempts to read from a connection-less socket.
-    pub fn read_socket(&self, data: &mut [u8]) -> Result<usize, SocketError> {
-        self.connectionless_state()
-            .map(|state| state.stream.read(self.can_block(), data))
-            .ok_or(SocketError::OperationNotSupported)?
-    }
-
-    /// Attempts to set the port of a UDP socket, panicks if it isn't UDP.
-    pub fn set_udp_port(&self, port: u16) {
-        self.connectionless_state()
-            .map(|state| state.set_port(port))
-            .expect("Expected UDP socket")
-    }
-
-    pub fn udp_port(&self) -> Option<u16> {
-        self.connectionless_state()
-            .and_then(|state| state.udp_port())
-    }
-
-    pub const fn sock_type(&self) -> SocketKind {
-        match self.sock_state {
-            SocketState::ConnectionOriented(ref connection_state) => connection_state.ty(),
-            SocketState::Connectionless { .. } => SocketKind::Datagram,
-        }
-    }
-
-    pub const fn domain(&self) -> SocketDomain {
-        self.domain
-    }
-
-    pub fn disconnect(&self, id: SockConnID) {
-        self.connection_state()
-            .map(|state| state.conn_queue.remove_connection(id));
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl<'a> SyscallFFI for SocketAddrRef<'a> {
+    type Args = (*const AbiSockAddr, usize);
+    fn make((abi_ptr_raw, addr_struct_size): Self::Args) -> Result<Self, ErrorStatus> {
+        let abi_ref: &AbiSockAddr = SyscallFFI::make(abi_ptr_raw)?;
+        SocketAddrRef::from_raw(abi_ref, addr_struct_size)
+    }
+}
+
+impl<'a> SyscallFFI for Option<SocketAddrRef<'a>> {
+    type Args = (*const AbiSockAddr, usize);
+    fn make((abi_ptr_raw, addr_struct_size): Self::Args) -> Result<Self, ErrorStatus> {
+        let abi_ref: Option<&AbiSockAddr> = SyscallFFI::make(abi_ptr_raw)?;
+        if let Some(abi_ref) = abi_ref {
+            SocketAddrRef::from_raw(abi_ref, addr_struct_size).map(|ok| Some(ok))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+pub trait Socket: 'static {
+    fn listen(&self, backlog: usize) -> Result<(), SocketError>;
+    fn accept(&self) -> Result<Arc<Self>, SocketError>;
+    fn accept_and_get_addr(&self) -> Result<(Arc<Self>, Option<OwnedSocketAddr>), SocketError> {
+        self.accept().map(|ok| (ok, None))
+    }
+    fn bind(&self, addr: SocketAddrRef) -> Result<(), SocketError>;
+    fn connect(&self, addr: SocketAddrRef) -> Result<(), SocketError>;
+
+    fn receive(&self, buf: &mut [u8], flags: SockMsgFlags) -> Result<usize, SocketError>;
+    fn send(&self, buf: &[u8], flags: SockMsgFlags) -> Result<usize, SocketError>;
+
+    fn send_to(
+        &self,
+        buf: &[u8],
+        flags: SockMsgFlags,
+        addr: SocketAddrRef,
+    ) -> Result<usize, SocketError>;
+    fn recv_from(
+        &self,
+        buf: &mut [u8],
+        flags: SockMsgFlags,
+    ) -> Result<(usize, Option<OwnedSocketAddr>), SocketError> {
+        self.receive(buf, flags).map(|ok| (ok, None))
+    }
+
+    fn set_blocking(&self, value: bool);
+    fn poll_id(&self) -> PollID;
+    /// Clean-up function when the socket's resource is dropped
+    fn on_close(&self);
+}
+
+/// Wrapper around a [`Socket`], represents a Resource thats a socket.
+pub struct SocketResource<T: Socket>(Arc<T>);
+
+impl<T: Socket> SocketResource<T> {
+    #[allow(unused)]
+    pub const unsafe fn inner(&self) -> &Arc<T> {
+        &self.0
+    }
+}
+
+impl<T: Socket> Drop for SocketResource<T> {
+    fn drop(&mut self) {
+        self.0.on_close();
+    }
+}
+
+impl<T: Socket> SocketResource<T> {
+    fn accept(&self) -> Result<Self, SocketError> {
+        Ok(SocketResource(self.0.accept()?))
+    }
+    fn accept_and_get_addr(&self) -> Result<(Self, Option<OwnedSocketAddr>), SocketError> {
+        self.0
+            .accept_and_get_addr()
+            .map(|(r, a)| (SocketResource(r), a))
+    }
+
+    fn read(&self, buf: &mut [u8]) -> Result<usize, SocketError> {
+        self.0.receive(buf, SockMsgFlags::NONE)
+    }
+
+    fn write(&self, buf: &[u8]) -> Result<usize, SocketError> {
+        self.0.send(buf, SockMsgFlags::NONE)
+    }
+}
+
+impl<T: Socket> Deref for SocketResource<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+/// A trait which describes all [`SocketResource<T>`]s
+pub trait SocketResourceTrait: 'static {
+    fn listen(&self, backlog: usize) -> Result<(), SocketError>;
+    fn accept(&self) -> Result<Ri, SocketError>;
+    fn accept_and_get_addr(&self) -> Result<(Ri, Option<OwnedSocketAddr>), SocketError>;
+    fn bind(&self, addr: SocketAddrRef) -> Result<(), SocketError>;
+    fn connect(&self, addr: SocketAddrRef) -> Result<(), SocketError>;
+
+    fn receive(&self, buf: &mut [u8], flags: SockMsgFlags) -> Result<usize, SocketError>;
+    fn send(&self, buf: &[u8], flags: SockMsgFlags) -> Result<usize, SocketError>;
+
+    fn send_to(
+        &self,
+        buf: &[u8],
+        flags: SockMsgFlags,
+        addr: SocketAddrRef,
+    ) -> Result<usize, SocketError>;
+    fn recv_from(
+        &self,
+        buf: &mut [u8],
+        flags: SockMsgFlags,
+    ) -> Result<(usize, Option<OwnedSocketAddr>), SocketError>;
+}
+
+impl<T: Socket> Resource for SocketResource<T> {
+    fn read(
+        &self,
+        off: crate::drivers::vfs::SeekOffset,
+        buf: &mut [u8],
+    ) -> Result<usize, safa_abi::errors::ErrorStatus> {
+        _ = off;
+        Ok(self.read(buf)?)
+    }
+
+    fn write(
+        &self,
+        off: crate::drivers::vfs::SeekOffset,
+        buf: &[u8],
+    ) -> Result<usize, safa_abi::errors::ErrorStatus> {
+        _ = off;
+        Ok(self.write(buf)?)
+    }
+
+    fn poll_id(&self) -> Option<crate::process::poll::PollID> {
+        Some(self.0.poll_id())
+    }
+
+    fn send_command(&self, cmd: u16, arg: u64) -> Result<(), safa_abi::errors::ErrorStatus> {
+        const SET_BLOCKING: u16 = 0;
+        match cmd {
+            SET_BLOCKING => {
+                let can_block = arg != 0;
+                self.set_blocking(can_block);
+                Ok(())
+            }
+            _ => Err(safa_abi::errors::ErrorStatus::InvalidCommand),
+        }
+    }
+
+    fn address_space_generic(&self) -> bool {
+        false
+    }
+
+    fn as_socket(&self) -> Option<&dyn SocketResourceTrait> {
+        Some(self)
+    }
+}
+
+impl<T: Socket> SocketResourceTrait for SocketResource<T> {
+    fn accept(&self) -> Result<Ri, SocketError> {
+        self.accept()
+            .map(|good| resources::add_global_resource(good))
+    }
+    fn accept_and_get_addr(&self) -> Result<(Ri, Option<OwnedSocketAddr>), SocketError> {
+        self.accept_and_get_addr()
+            .map(|(good, addr)| (resources::add_global_resource(good), addr))
+    }
+
+    fn listen(&self, backlog: usize) -> Result<(), SocketError> {
+        self.0.listen(backlog)
+    }
+
+    fn bind(&self, addr: SocketAddrRef) -> Result<(), SocketError> {
+        self.0.bind(addr)
+    }
+
+    fn connect(&self, addr: SocketAddrRef) -> Result<(), SocketError> {
+        self.0.connect(addr)
+    }
+
+    fn recv_from(
+        &self,
+        buf: &mut [u8],
+        flags: SockMsgFlags,
+    ) -> Result<(usize, Option<OwnedSocketAddr>), SocketError> {
+        self.0.recv_from(buf, flags)
+    }
+
+    fn send_to(
+        &self,
+        buf: &[u8],
+        flags: SockMsgFlags,
+        addr: SocketAddrRef,
+    ) -> Result<usize, SocketError> {
+        self.0.send_to(buf, flags, addr)
+    }
+
+    fn receive(&self, buf: &mut [u8], flags: SockMsgFlags) -> Result<usize, SocketError> {
+        self.0.receive(buf, flags)
+    }
+    fn send(&self, buf: &[u8], flags: SockMsgFlags) -> Result<usize, SocketError> {
+        self.0.send(buf, flags)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SocketFamily {
+    Local,
+    Net,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum SocketKind {
-    SeqPacket,
     Stream,
+    SeqPacket,
     Datagram,
 }
 
-struct SockQueue {
-    sockets: HashMap<SockID, Arc<Socket>>,
-    next_id: SockID,
-}
+pub fn create_socket(
+    family: SocketFamily,
+    kind: SocketKind,
+    protocol: u32,
+    can_block: bool,
+) -> Result<Ri, ErrorStatus> {
+    _ = protocol;
+    match (family, kind) {
+        (SocketFamily::Local, kind) => {
+            let local_socket_kind = match kind {
+                SocketKind::SeqPacket => LocalSocketKind::SeqPacket,
+                SocketKind::Stream => LocalSocketKind::Stream,
+                SocketKind::Datagram => return Err(ErrorStatus::TypeMismatch),
+            };
 
-unsafe impl Send for SockQueue {}
-unsafe impl Sync for SockQueue {}
-
-impl SockQueue {
-    fn new() -> Self {
-        Self {
-            sockets: HashMap::new(),
-            next_id: 0,
+            let local_socket = LocalSocket::create(local_socket_kind, can_block);
+            let socket_resource = SocketResource(local_socket);
+            Ok(resources::add_global_resource(socket_resource))
         }
-    }
-
-    fn create(
-        &mut self,
-        domain: SocketDomain,
-        kind: SocketKind,
-        can_block: bool,
-    ) -> ServerSocketDesc {
-        let id = self.next_id;
-
-        let sock = Socket {
-            can_block,
-            domain,
-            sock_state: match kind {
-                SocketKind::SeqPacket | SocketKind::Stream => {
-                    SocketState::ConnectionOriented(ConnOrientedSocket::new(kind))
-                }
-                SocketKind::Datagram => SocketState::Connectionless(ConnectionlessSocket::new()),
-            },
-        };
-
-        let reference = Arc::new(sock);
-        self.sockets.insert(id, reference.clone());
-        self.next_id += 1;
-        ServerSocketDesc::new(reference, id)
-    }
-
-    fn remove_socket(&mut self, socket_id: SockID) -> bool {
-        if let Some(s) = self.sockets.remove(&socket_id) {
-            s.sock_state.on_drop();
-            true
-        } else {
-            false
+        (SocketFamily::Net, SocketKind::Datagram) => {
+            let udp_socket = UdpSocket::create(can_block);
+            let socket_resource = SocketResource(udp_socket);
+            Ok(resources::add_global_resource(socket_resource))
         }
+        (SocketFamily::Net, _) => return Err(ErrorStatus::TypeMismatch),
     }
-}
-static SOCKET_ABSTRACT_BINDINGS: Mutex<heapless::FnvIndexMap<Name, SockID, 4096>> =
-    Mutex::new(heapless::FnvIndexMap::new());
-
-lazy_static! {
-    static ref SOCKET_QUEUE: RwLock<SockQueue> = RwLock::new(SockQueue::new());
-}
-
-/// Creates a new socket returning a Server Descriptor
-pub fn create_socket(domain: SocketDomain, kind: SocketKind, can_block: bool) -> ServerSocketDesc {
-    SOCKET_QUEUE.write().create(domain, kind, can_block)
-}
-
-pub fn bind_abstract_socket(under_name: Name, id: SockID) {
-    SOCKET_ABSTRACT_BINDINGS
-        .lock()
-        .insert(under_name, id)
-        .expect("failed to bind socket");
-}
-
-pub fn get_abstract_binding(name: &Name) -> Option<SockID> {
-    SOCKET_ABSTRACT_BINDINGS.lock().get(name).copied()
-}
-
-/// Removes a socket given it's ID
-pub fn remove_socket(id: SockID) -> bool {
-    SOCKET_QUEUE.write().remove_socket(id)
-}
-
-/// As the client, gets a new reference to the client Socket
-pub fn get_client_socket(id: SockID) -> Option<CliSocketDesc> {
-    SOCKET_QUEUE
-        .read()
-        .sockets
-        .get(&id)
-        .cloned()
-        .map(|reference| CliSocketDesc::new(reference))
 }

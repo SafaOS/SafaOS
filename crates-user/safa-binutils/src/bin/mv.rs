@@ -31,5 +31,5 @@ fn move_paths(from: PathBuf, to: PathBuf) -> io::Result<()> {
 fn main() -> SysResult {
     let args = Args::parse();
     tri_io!(move_paths(args.src, args.dest));
-    SysResult::Success
+    SysResult::ok(0)
 }

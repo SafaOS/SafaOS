@@ -2,10 +2,8 @@ use extra::tri_io;
 use safa_api::errors::{ErrorStatus, SysResult};
 use std::{
     fs::File,
-    io::{self, BufReader, Write, stdin, stdout},
+    io::{self, stdin, stdout, BufReader, Write},
 };
-
-use SysResult::*;
 
 fn cat_file(path: &str) -> io::Result<()> {
     let mut stdout = stdout();
@@ -20,7 +18,7 @@ fn main() -> SysResult {
     let mut args = std::env::args().skip(1);
     if args.len() > 1 {
         println!("cat: too much arguments");
-        return Error(ErrorStatus::Generic);
+        return SysResult::err(ErrorStatus::Generic);
     }
 
     match args.next() {
@@ -42,5 +40,5 @@ fn main() -> SysResult {
         }
     }
 
-    Success
+    SysResult::ok(0)
 }

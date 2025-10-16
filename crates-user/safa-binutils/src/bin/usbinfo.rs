@@ -84,5 +84,5 @@ pub fn main() -> SysResult {
 
         tri_io!(Err(err));
     }
-    SysResult::Success
+    SysResult::ok(0)
 }

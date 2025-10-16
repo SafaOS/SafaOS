@@ -79,11 +79,7 @@ fn syspspawn_inner(
 }
 
 #[syscall_handler]
-fn syspspawn(
-    path: Path,
-    raw_config: &RawPSpawnConfig,
-    dest_pid: Option<&mut Pid>,
-) -> Result<(), ErrorStatus> {
+fn syspspawn(path: Path, raw_config: &RawPSpawnConfig) -> Result<Pid, ErrorStatus> {
     let config: PSpawnConfig = raw_config.try_into()?;
 
     let name = config.name();
@@ -104,10 +100,8 @@ fn syspspawn(
         stdio,
         custom_stack_size,
     )?;
-    if let Some(dest_pid) = dest_pid {
-        *dest_pid = results;
-    }
-    Ok(())
+
+    Ok(results)
 }
 
 #[syscall_handler]
@@ -126,18 +120,14 @@ fn syschdir(path: Path) -> Result<(), ErrorStatus> {
 /// gets the current working directory in `path` and puts the length of the gotten path in
 /// `dest_len` if it is not null
 /// returns ErrorStatus::Generic if the path is too long to fit in the given buffer `path`
-fn sysgetcwd(path: &mut [u8], dest_len: Option<&mut usize>) -> Result<(), ErrorStatus> {
+fn sysgetcwd(path: &mut [u8]) -> Result<usize, ErrorStatus> {
     let this_process = process::current();
 
     let cwd = this_process.cwd();
     let cwd = cwd.as_path();
 
     let len = cwd.len();
-    if let Some(dest_len) = dest_len {
-        *dest_len = len;
-    }
-
     let mut cursor = Cursor::new(path);
     write!(&mut cursor, "{cwd}").map_err(|_| ErrorStatus::Generic)?;
-    Ok(())
+    Ok(len)
 }

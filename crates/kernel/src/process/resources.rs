@@ -7,7 +7,8 @@ use core::{
 use crate::{
     drivers::vfs::SeekOffset,
     process::{self, poll::PollID, vas::MemMappedInterface},
-    thread,
+    sockets::SocketResourceTrait,
+    thread, warn,
 };
 use alloc::{boxed::Box, sync::Arc};
 use hashbrown::HashMap;
@@ -17,6 +18,11 @@ use safa_abi::errors::ErrorStatus;
 pub type Ri = u32;
 
 pub trait Resource: Any {
+    /// Returns Some(&dyn [`SocketResource`]) if self implements it.
+    fn as_socket(&self) -> Option<&dyn SocketResourceTrait> {
+        None
+    }
+
     /// Performs a write operation on the resource.
     fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
         _ = off;
@@ -126,10 +132,6 @@ impl ResourceNode {
 
     pub fn cloneable_to_different_address_space(&self) -> bool {
         self.data.address_space_generic() && self.global.load(core::sync::atomic::Ordering::Acquire)
-    }
-
-    pub fn is_global(&self) -> bool {
-        self.global.load(core::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -244,16 +246,15 @@ impl ResourceManager {
         self.resources.get_mut(&ri)
     }
 
-    /// Forces all resources to be dropped, even if there is an alive shared reference to them
-    /// # Safety
-    /// caller must ensure the process calling this is completely dead,
-    /// I use this to clean up resources if for example a process dead during a blocking syscall,
-    /// only a syscall may hold another shared reference to a resource.
-    pub unsafe fn drop_all(&mut self) {
+    pub fn drop_all(&mut self) {
         let mut toke = core::mem::replace(self, ResourceManager::new());
-        for (_, res) in toke.resources.drain() {
-            while Arc::strong_count(&res) != 1 {
-                unsafe { Arc::decrement_strong_count(&*res) };
+        for (ri, res) in toke.resources.drain() {
+            if Arc::strong_count(&res) != 1 {
+                warn!(
+                    ResourceManager,
+                    "Resource at {ri} has {} references, process dropped...",
+                    Arc::strong_count(&res)
+                );
             }
         }
     }
@@ -279,15 +280,6 @@ where
 {
     let this = process::current();
     this.resources_mut().get(ri).map(|r| then(r))
-}
-
-/// Like [`get_ref`] but muttable
-pub fn get_mut<DO, R>(ri: Ri, then: DO) -> Option<R>
-where
-    DO: FnOnce(&mut ResourceNodeRef) -> R,
-{
-    let this = process::current();
-    this.resources_mut().get_mut(ri).map(|r| then(r))
 }
 
 /// Adds a resource that lives as long as the current process, to the current process

@@ -14,11 +14,8 @@ use crate::{
 use crate::{syscalls::SyscallFFI, thread::Tid};
 
 #[syscall_handler]
-fn syst_fut_wake(addr: &AtomicU32, n: usize, wake_results: Option<&mut usize>) {
-    let num_threads = process::current::wake_futex(addr, n);
-    if let Some(wake_results) = wake_results {
-        *wake_results = num_threads;
-    }
+fn syst_fut_wake(addr: &AtomicU32, n: usize) -> usize {
+    process::current::wake_futex(addr, n)
 }
 
 #[syscall_handler]
@@ -27,11 +24,7 @@ fn syst_fut_wait(addr: &AtomicU32, val: u32, timeout_ms: u64) -> Result<(), Wait
 }
 
 #[syscall_handler]
-fn sys_tspawn(
-    entry_point: VirtAddr,
-    raw_config: &RawTSpawnConfig,
-    target_tid: Option<&mut Tid>,
-) -> Result<(), ErrorStatus> {
+fn sys_tspawn(entry_point: VirtAddr, raw_config: &RawTSpawnConfig) -> Result<Tid, ErrorStatus> {
     let config: TSpawnConfig = raw_config.try_into()?;
 
     let thread_tid = process::current::thread_spawn(
@@ -42,10 +35,8 @@ fn sys_tspawn(
         config.custom_stack_size,
     )
     .map_err(|_| ErrorStatus::MMapError)?;
-    if let Some(target_tid) = target_tid {
-        *target_tid = thread_tid;
-    }
-    Ok(())
+
+    Ok(thread_tid)
 }
 
 struct TSpawnConfig {

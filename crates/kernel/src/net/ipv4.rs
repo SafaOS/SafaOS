@@ -299,7 +299,9 @@ impl IPv4Manager {
         };
 
         match packet.header().protocol {
-            IPv4Protocol::UDP => super::udp::handle_udp_packet(packet.payload()),
+            IPv4Protocol::UDP => {
+                super::udp::handle_udp_packet(packet.header().src_addr, packet.payload())
+            }
             _ => {
                 debug!(
                     IPv4Manager,
