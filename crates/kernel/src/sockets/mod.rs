@@ -1,6 +1,7 @@
-use core::{net::Ipv4Addr, num::NonZero, ops::Deref};
+use core::{net::Ipv4Addr, ops::Deref};
 
 use alloc::sync::Arc;
+use int_enum::IntEnum;
 use safa_abi::{
     errors::{ErrorStatus, IntoErr},
     sockets::SockMsgFlags,
@@ -161,6 +162,16 @@ impl<'a> SyscallFFI for Option<SocketAddrRef<'a>> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, IntEnum)]
+#[repr(u16)]
+pub enum SocketOpt {
+    Blocking = 0,
+    ReadTimeout = 1,
+    WriteTimeout = 2,
+    IpTTL = 3,
+    SockError = 4,
+}
+
 pub trait Socket: 'static {
     fn listen(&self, backlog: usize) -> Result<(), SocketError>;
     fn accept(&self) -> Result<Arc<Self>, SocketError>;
@@ -187,10 +198,9 @@ pub trait Socket: 'static {
         self.receive(buf, flags).map(|ok| (ok, None))
     }
 
-    fn set_blocking(&self, value: bool);
-    fn get_blocking(&self) -> bool;
-    fn set_read_timeout(&self, timeout: Option<NonZero<u64>>);
-    fn set_write_timeout(&self, timeout: Option<NonZero<u64>>);
+    // TODO: use SocketError here?
+    fn set_sock_opt(&self, opt: SocketOpt, value: u64) -> Result<(), ErrorStatus>;
+    fn get_sock_opt(&self, opt: SocketOpt, to_usr_ptr: *mut ()) -> Result<(), ErrorStatus>;
     fn poll_id(&self) -> PollID;
     /// Clean-up function when the socket's resource is dropped
     fn on_close(&self);
@@ -286,35 +296,17 @@ impl<T: Socket> Resource for SocketResource<T> {
     }
 
     fn send_command(&self, cmd: u16, arg: u64) -> Result<(), safa_abi::errors::ErrorStatus> {
-        const SET_BLOCKING: u16 = 0;
-        const GET_BLOCKING: u16 = 1;
-        const SET_READ_TIMEOUT: u16 = 2;
-        const SET_WRITE_TIMEOUT: u16 = 3;
-        match cmd {
-            SET_BLOCKING => {
-                let can_block = arg != 0;
-                self.set_blocking(can_block);
-                Ok(())
-            }
-            GET_BLOCKING => {
-                let ptr = <&mut bool>::make(arg as usize as *mut bool)?;
-                let can_block = self.get_blocking();
+        let cmd = cmd as i16;
+        let is_get = cmd.is_negative();
 
-                *ptr = can_block;
-                Ok(())
-            }
-            SET_READ_TIMEOUT => {
-                let non_zero = NonZero::new(arg);
-                self.set_read_timeout(non_zero);
-                Ok(())
-            }
-            SET_WRITE_TIMEOUT => {
-                let non_zero = NonZero::new(arg);
-                self.set_write_timeout(non_zero);
-                Ok(())
-            }
-            _ => Err(safa_abi::errors::ErrorStatus::InvalidCommand),
-        }
+        let opt = SocketOpt::try_from(cmd.unsigned_abs())
+            .map_err(|_| safa_abi::errors::ErrorStatus::InvalidCommand)?;
+        if is_get {
+            self.get_sock_opt(opt, arg as *mut ())
+        } else {
+            self.set_sock_opt(opt, arg)
+        }?;
+        Ok(())
     }
 
     fn address_space_generic(&self) -> bool {

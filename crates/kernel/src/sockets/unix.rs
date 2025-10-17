@@ -7,13 +7,14 @@ use alloc::{
 };
 use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
-use safa_abi::{poll::PollEvents, sockets::SockMsgFlags};
+use safa_abi::{errors::ErrorStatus, poll::PollEvents, sockets::SockMsgFlags};
 
 use crate::{
     memory::{page_allocator::PageAlloc, paging::PAGE_SIZE},
     process::poll::{self, PollID},
     scheduler::wait_queue::WaitQueue,
     sockets::{Socket, SocketAddrRef, SocketError},
+    syscalls::ffi::SyscallFFI,
     utils::{
         locks::{Mutex, RwLock},
         types::Name,
@@ -543,20 +544,44 @@ impl Socket for LocalSocket {
         self.try_accept_connection()
     }
 
-    fn set_blocking(&self, value: bool) {
-        self.timeout_info.write().can_block = value;
+    fn set_sock_opt(&self, opt: super::SocketOpt, value: u64) -> Result<(), ErrorStatus> {
+        match opt {
+            super::SocketOpt::Blocking => self.timeout_info.write().can_block = value > 0,
+            super::SocketOpt::IpTTL => return Err(ErrorStatus::InvalidCommand),
+            super::SocketOpt::ReadTimeout => {
+                self.timeout_info.write().read_timeout = NonZero::new(value)
+            }
+            super::SocketOpt::WriteTimeout => {
+                self.timeout_info.write().write_timeout = NonZero::new(value)
+            }
+            super::SocketOpt::SockError => return Err(ErrorStatus::InvalidCommand),
+        }
+
+        Ok(())
     }
 
-    fn get_blocking(&self) -> bool {
-        self.timeout_info.read().can_block
-    }
+    fn get_sock_opt(&self, opt: super::SocketOpt, to_usr_ptr: *mut ()) -> Result<(), ErrorStatus> {
+        match opt {
+            super::SocketOpt::Blocking => {
+                let r = <&mut bool>::make(to_usr_ptr.cast())?;
+                let blocking = self.timeout_info.read().can_block;
+                *r = blocking;
+            }
+            super::SocketOpt::IpTTL => return Err(ErrorStatus::InvalidCommand),
+            super::SocketOpt::ReadTimeout => {
+                let r = <&mut Option<NonZero<u64>>>::make(to_usr_ptr.cast())?;
+                let timeout = self.timeout_info.read().read_timeout;
+                *r = timeout;
+            }
+            super::SocketOpt::WriteTimeout => {
+                let r = <&mut Option<NonZero<u64>>>::make(to_usr_ptr.cast())?;
+                let timeout = self.timeout_info.read().write_timeout;
+                *r = timeout;
+            }
+            super::SocketOpt::SockError => return Err(ErrorStatus::InvalidCommand),
+        }
 
-    fn set_read_timeout(&self, timeout: Option<NonZero<u64>>) {
-        self.timeout_info.write().read_timeout = timeout
-    }
-
-    fn set_write_timeout(&self, timeout: Option<NonZero<u64>>) {
-        self.timeout_info.write().write_timeout = timeout
+        Ok(())
     }
 
     fn connect(&self, addr: SocketAddrRef) -> Result<(), SocketError> {

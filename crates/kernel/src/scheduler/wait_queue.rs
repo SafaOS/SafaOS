@@ -92,11 +92,6 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> PendingWait<'_, AVERAGE
             Ok(())
         })
     }
-
-    /// Returns a reference to the wait queue
-    pub fn wait_queue_mut(&mut self) -> &mut WaitQueue<AVERAGE, Reason, Timeout> {
-        &mut *self.0
-    }
 }
 
 impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason, Option<NonZero<u64>>> {

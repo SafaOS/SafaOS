@@ -17,6 +17,8 @@ use crate::{
     warn,
 };
 
+pub const DEFAULT_TTL: u8 = 64;
+
 /// Version and header length.
 #[bitfield(u8)]
 pub struct VersionIHL {
@@ -100,7 +102,12 @@ pub struct IPv4Header {
 }
 
 impl IPv4Header {
-    pub const fn new(payload_len: u16, dst_addr: Ipv4Addr, protocol: IPv4Protocol) -> Self {
+    pub const fn new(
+        payload_len: u16,
+        dst_addr: Ipv4Addr,
+        protocol: IPv4Protocol,
+        time_to_live: u8,
+    ) -> Self {
         let total_len = payload_len + size_of::<Self>() as u16;
         let this = Self {
             version_ihl: VersionIHL::new()
@@ -110,7 +117,7 @@ impl IPv4Header {
             total_length: total_len.to_be_bytes(),
             identification: [0; 2],
             fragment_flags: FragmentFlags::new(),
-            time_to_live: 64,
+            time_to_live,
             protocol,
             header_checksum: [0; 2],
             src_addr: Ipv4Addr::UNSPECIFIED,
@@ -242,11 +249,17 @@ impl PageIPv4Packet {
     }
 
     /// Constructs a new Owned IPv4 packet with the given UDP header and payload.
-    pub fn new_udp(payload: &[u8], src_port: u16, dst_port: u16, dst_addr: Ipv4Addr) -> Self {
+    pub fn new_udp(
+        payload: &[u8],
+        src_port: u16,
+        dst_port: u16,
+        dst_addr: Ipv4Addr,
+        ttl: u8,
+    ) -> Self {
         let udp_header = UDPHeader::new(src_port, dst_port, payload.len() as u16);
         let udp_len = udp_header.length();
 
-        let ipv4_header = IPv4Header::new(udp_len, dst_addr, IPv4Protocol::UDP);
+        let ipv4_header = IPv4Header::new(udp_len, dst_addr, IPv4Protocol::UDP, ttl);
         let mut this = Self::new(ipv4_header);
         this.push(udp_header.as_bytes());
         this.push(payload);

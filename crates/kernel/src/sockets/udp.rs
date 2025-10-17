@@ -1,17 +1,22 @@
-use core::{net::Ipv4Addr, num::NonZero};
+use core::{
+    net::Ipv4Addr,
+    num::NonZero,
+    sync::atomic::{AtomicU8, Ordering},
+};
 
 use alloc::{
     collections::linked_list::LinkedList,
     sync::{Arc, Weak},
 };
-use safa_abi::{poll::PollEvents, sockets::SockMsgFlags};
+use safa_abi::{errors::ErrorStatus, poll::PollEvents, sockets::SockMsgFlags};
 
 use crate::{
     debug,
-    net::ipv4::PageIPv4Packet,
+    net::ipv4::{DEFAULT_TTL, PageIPv4Packet},
     process::poll::{self, PollID},
     scheduler::wait_queue::WaitQueue,
     sockets::{OwnedSocketAddr, Socket, SocketAddrRef, SocketError, unix::Stream},
+    syscalls::ffi::SyscallFFI,
     utils::locks::{Mutex, RwLock},
 };
 
@@ -62,6 +67,7 @@ struct TimeoutInfo {
 
 pub struct UdpSocket {
     timeout_info: RwLock<TimeoutInfo>,
+    ttl: AtomicU8,
     state: RwLock<UdpState>,
     messages: Mutex<Messages>,
     binded_to: RwLock<Option<BindInfo>>,
@@ -72,6 +78,7 @@ pub struct UdpSocket {
 impl UdpSocket {
     pub fn create(can_block: bool) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
+            ttl: AtomicU8::new(DEFAULT_TTL),
             timeout_info: RwLock::new(TimeoutInfo {
                 read_timeout: None,
                 write_timeout: None,
@@ -113,19 +120,48 @@ impl UdpSocket {
 }
 
 impl Socket for UdpSocket {
-    fn set_blocking(&self, value: bool) {
-        self.timeout_info.write().can_block = value
-    }
-    fn get_blocking(&self) -> bool {
-        self.timeout_info.read().can_block
+    fn set_sock_opt(&self, opt: super::SocketOpt, value: u64) -> Result<(), ErrorStatus> {
+        match opt {
+            super::SocketOpt::Blocking => self.timeout_info.write().can_block = value > 0,
+            super::SocketOpt::IpTTL => self.ttl.store(value as u8, Ordering::Release),
+            super::SocketOpt::ReadTimeout => {
+                self.timeout_info.write().read_timeout = NonZero::new(value)
+            }
+            super::SocketOpt::WriteTimeout => {
+                self.timeout_info.write().write_timeout = NonZero::new(value)
+            }
+            super::SocketOpt::SockError => todo!(),
+        }
+
+        Ok(())
     }
 
-    fn set_read_timeout(&self, timeout: Option<core::num::NonZero<u64>>) {
-        self.timeout_info.write().read_timeout = timeout;
-    }
+    fn get_sock_opt(&self, opt: super::SocketOpt, to_usr_ptr: *mut ()) -> Result<(), ErrorStatus> {
+        match opt {
+            super::SocketOpt::Blocking => {
+                let r = <&mut bool>::make(to_usr_ptr.cast())?;
+                let blocking = self.timeout_info.read().can_block;
+                *r = blocking;
+            }
+            super::SocketOpt::IpTTL => {
+                let r = <&mut u8>::make(to_usr_ptr.cast())?;
+                let ttl = self.ttl.load(Ordering::Acquire);
+                *r = ttl;
+            }
+            super::SocketOpt::ReadTimeout => {
+                let r = <&mut Option<NonZero<u64>>>::make(to_usr_ptr.cast())?;
+                let timeout = self.timeout_info.read().read_timeout;
+                *r = timeout;
+            }
+            super::SocketOpt::WriteTimeout => {
+                let r = <&mut Option<NonZero<u64>>>::make(to_usr_ptr.cast())?;
+                let timeout = self.timeout_info.read().write_timeout;
+                *r = timeout;
+            }
+            super::SocketOpt::SockError => todo!(),
+        }
 
-    fn set_write_timeout(&self, timeout: Option<core::num::NonZero<u64>>) {
-        self.timeout_info.write().write_timeout = timeout;
+        Ok(())
     }
 
     fn accept(&self) -> Result<alloc::sync::Arc<Self>, super::SocketError> {
@@ -190,6 +226,7 @@ impl Socket for UdpSocket {
             binded_to.port,
             dst_port,
             dst_addr,
+            self.ttl.load(Ordering::Acquire),
         ))?;
 
         // TODO: truncate the buffer if it's too large...
@@ -217,6 +254,7 @@ impl Socket for UdpSocket {
                     binded_to.port,
                     dst_port,
                     dst_addr,
+                    self.ttl.load(Ordering::Acquire),
                 ))?;
 
                 // TODO: truncate the buffer if it's too large...
