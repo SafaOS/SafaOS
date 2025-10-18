@@ -1,59 +1,136 @@
 use crate::consts::MAX_NAME_LENGTH;
 
+pub unsafe trait ToSocketAddr {
+    /// The family of the socket address, corresponding to a [`SockDomain`].
+    const FAMILY: u32 = Self::DOMAIN.0 as u32;
+    const DOMAIN: SockDomain = SockDomain(Self::FAMILY as u8);
+    /// Converts this address to a generic [SocketAddr].
+    fn as_generic(&self) -> &SocketAddr {
+        unsafe { &*(self as *const Self as *const SocketAddr) }
+    }
+    /// Converts this address to a generic [SocketAddr].
+    fn as_generic_mut(&mut self) -> &mut SocketAddr {
+        unsafe { &mut *(self as *mut Self as *mut SocketAddr) }
+    }
+    /// Converts this address to a generic NonNull pointer to [SocketAddr].
+    fn as_non_null(&mut self) -> NonNull<SocketAddr> {
+        unsafe { NonNull::new_unchecked(self.as_generic_mut()) }
+    }
+}
+
 #[repr(C)]
-/// Configures the Socket Binding Address
+/// A Socket Address
 ///
-/// The actual structure varries for each binding kind, and each family excepts a specific set of kinds
+/// The actual structure varries for each family.
 pub struct SocketAddr {
-    pub family: u32,
+    pub sin_family: u32,
 }
 
-#[repr(C)]
-/// A local family binding, converted from [SockBindAddr]
-pub struct LocalSocketAddr {
-    family: u32,
-    /// Must be valid UTF-8, the actual length is provided to SysSockBind
-    pub name: [u8; MAX_NAME_LENGTH],
-}
+impl SocketAddr {
+    pub fn as_known<T: ToSocketAddr>(&self) -> Option<&T> {
+        if self.sin_family == T::FAMILY {
+            Some(unsafe { &*(self as *const Self as *const T) })
+        } else {
+            None
+        }
+    }
 
-impl LocalSocketAddr {
-    pub const FAMILY: u32 = SockDomain::LOCAL.0 as u32;
-    /// Creates a new abstract binding Addr from a given name bytes,
-    /// name[..name_length] must be valid UTF8 where name_length is
-    ///
-    /// This structures total length - size_of::<[`SockBindAbstractAddr`]>()
-    /// The structures total length is passed to SysSockBind
-    pub const fn new(name: [u8; MAX_NAME_LENGTH]) -> Self {
-        Self {
-            family: Self::FAMILY,
-            name,
+    pub fn as_known_mut<T: ToSocketAddr>(&mut self) -> Option<&mut T> {
+        if self.sin_family == T::FAMILY {
+            Some(unsafe { &mut *(self as *mut Self as *mut T) })
+        } else {
+            None
         }
     }
 }
 
 #[repr(C)]
+/// A local family socket address, converted from [SocketAddr]
+pub struct LocalSocketAddr {
+    sin_family: u32,
+    /// Must be valid UTF-8, the actual length is provided to socket syscalls.
+    pub sin_name: [u8; MAX_NAME_LENGTH],
+}
+
+unsafe impl ToSocketAddr for LocalSocketAddr {
+    const DOMAIN: SockDomain = SockDomain::LOCAL;
+}
+
+impl LocalSocketAddr {
+    /// Creates a new abstract binding Addr from a given name bytes,
+    /// name[..name_length] must be valid UTF8 where name_length is
+    ///
+    /// This structures total length - size_of::<[`SocketAddr`]>()
+    /// The structures total length is passed to sockets syscalls.
+    pub const fn new(name: [u8; MAX_NAME_LENGTH]) -> Self {
+        Self {
+            sin_family: Self::FAMILY,
+            sin_name: name,
+        }
+    }
+
+    /// Creates a new abstract binding Addr from a given name,
+    /// name must be valid UTF8
+    ///
+    /// returns the actual structure length.
+    ///
+    /// Panicks if name.len() > MAX_NAME_LENGTH
+    pub fn new_abstract_from(name: &str) -> (Self, usize) {
+        let mut bytes = [0u8; MAX_NAME_LENGTH];
+        bytes[..name.len()].copy_from_slice(name.as_bytes());
+        (
+            Self {
+                sin_family: Self::FAMILY,
+                sin_name: bytes,
+            },
+            name.len() + size_of::<SocketAddr>(),
+        )
+    }
+
+    pub const fn as_bytes(&self) -> &[u8] {
+        unsafe { &*(self as *const Self as *const [u8; size_of::<Self>()]) }
+    }
+}
+
+/// An IpV4 socket address, converted from [SocketAddr]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InetV4SocketAddr {
-    family: u32,
-    pub port: u16,
-    pub ip: Ipv4Addr,
+    sin_family: u32,
+    pub sin_port: u16,
+    pub sin_addr: Ipv4Addr,
+}
+
+unsafe impl ToSocketAddr for InetV4SocketAddr {
+    const DOMAIN: SockDomain = SockDomain::INETV4;
 }
 
 impl InetV4SocketAddr {
-    pub const FAMILY: u32 = SockDomain::INETV4.0 as u32;
-
     pub const fn new(port: u16, addr: Ipv4Addr) -> Self {
         Self {
-            family: Self::FAMILY,
-            port,
-            ip: addr,
+            sin_family: Self::FAMILY,
+            sin_port: port.to_be(),
+            sin_addr: addr,
         }
+    }
+
+    pub const fn ip(&self) -> Ipv4Addr {
+        self.sin_addr
+    }
+
+    pub const fn port(&self) -> u16 {
+        u16::from_be(self.sin_port)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8] {
+        unsafe { &*(self as *const Self as *const [u8; size_of::<Self>()]) }
     }
 }
 
 use core::{
     net::Ipv4Addr,
     ops::{BitAnd, BitOr, Not},
+    ptr::NonNull,
 };
 
 /// Domain given to [`crate::syscalls::SyscallTable::SysSockCreate`].

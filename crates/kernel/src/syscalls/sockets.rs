@@ -116,30 +116,31 @@ fn out_addr(
         core::slice::from_raw_parts_mut(out_sock_addr_ptr.cast::<u8>().as_ptr(), given_size)
     };
 
-    match value {
+    let size = match value {
         OwnedSocketAddr::Abstract(name) => {
             let name_len = name.len();
             let mut abi_struct = LocalSocketAddr::new([0u8; _]);
-            abi_struct.name[..name_len].copy_from_slice(name.as_bytes());
+            abi_struct.sin_name[..name_len].copy_from_slice(name.as_bytes());
             let abi_struct_size = name_len + size_of::<SocketAddr>();
-            let abi_bytes: [u8; size_of::<LocalSocketAddr>()] =
-                unsafe { core::mem::transmute(abi_struct) };
+            let abi_bytes = abi_struct.as_bytes();
 
             let copy_len = out_bytes.len().min(abi_struct_size);
             out_bytes[..copy_len].copy_from_slice(&abi_bytes[..copy_len]);
-            unsafe { *out_sock_addr_size.as_mut() = abi_struct_size }
+            abi_struct_size
         }
         OwnedSocketAddr::Ip { addr, port } => {
             let abi_struct = InetV4SocketAddr::new(port, addr);
             let abi_struct_size = size_of::<InetV4SocketAddr>();
 
-            let abi_bytes: [u8; size_of::<InetV4SocketAddr>()] =
-                unsafe { core::mem::transmute(abi_struct) };
+            let abi_bytes = abi_struct.as_bytes();
             let copy_len = out_bytes.len().min(abi_struct_size);
+
             out_bytes[..copy_len].copy_from_slice(&abi_bytes[..copy_len]);
-            unsafe { *out_sock_addr_size.as_mut() = abi_struct_size }
+            abi_struct_size
         }
-    }
+    };
+
+    unsafe { *out_sock_addr_size.as_mut() = size }
 }
 
 #[syscall_handler]

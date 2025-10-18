@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 use int_enum::IntEnum;
 use safa_abi::{
     errors::{ErrorStatus, IntoErr},
-    sockets::SockMsgFlags,
+    sockets::{SockMsgFlags, ToSocketAddr},
 };
 
 use crate::{
@@ -112,16 +112,16 @@ impl<'a> SocketAddrRef<'a> {
         addr_struct_size: usize,
     ) -> Result<Self, ErrorStatus> {
         use safa_abi::sockets::InetV4SocketAddr as AbiIpV4Addr;
-        use safa_abi::sockets::LocalSocketAddr as AbiAbstractAddr;
+        use safa_abi::sockets::LocalSocketAddr as AbiLocalAddr;
 
-        match addr.family {
-            AbiAbstractAddr::FAMILY => {
+        match addr.sin_family {
+            AbiLocalAddr::FAMILY => {
                 let name_len = addr_struct_size
                     .checked_sub(size_of::<AbiSockAddr>())
                     .ok_or(ErrorStatus::InvalidArgument)?;
 
-                let as_abs: &'a AbiAbstractAddr = unsafe { core::mem::transmute(addr) };
-                let name_bytes = &as_abs.name[..name_len];
+                let as_abs: &'a AbiLocalAddr = addr.as_known().unwrap();
+                let name_bytes = &as_abs.sin_name[..name_len];
                 let name_utf8 = str::from_utf8(name_bytes)?;
 
                 Ok(SocketAddrRef::Abstract(name_utf8))
@@ -131,10 +131,10 @@ impl<'a> SocketAddrRef<'a> {
                     return Err(ErrorStatus::InvalidArgument);
                 }
 
-                let as_ipv4: &'a AbiIpV4Addr = unsafe { core::mem::transmute(addr) };
+                let as_ipv4: &'a AbiIpV4Addr = addr.as_known().unwrap();
                 Ok(SocketAddrRef::Ip {
-                    addr: as_ipv4.ip,
-                    port: as_ipv4.port,
+                    addr: as_ipv4.ip(),
+                    port: as_ipv4.port(),
                 })
             }
             _ => Err(ErrorStatus::InvalidArgument),
@@ -296,10 +296,9 @@ impl<T: Socket> Resource for SocketResource<T> {
     }
 
     fn send_command(&self, cmd: u16, arg: u64) -> Result<(), safa_abi::errors::ErrorStatus> {
-        let cmd = cmd as i16;
-        let is_get = cmd.is_negative();
-
-        let opt = SocketOpt::try_from(cmd.unsigned_abs())
+        let is_get = (cmd & (1 << 15)) != 0;
+        let opt_raw = cmd & !(1 << 15);
+        let opt = SocketOpt::try_from(opt_raw)
             .map_err(|_| safa_abi::errors::ErrorStatus::InvalidCommand)?;
         if is_get {
             self.get_sock_opt(opt, arg as *mut ())
