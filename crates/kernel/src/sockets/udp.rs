@@ -131,6 +131,9 @@ impl Socket for UdpSocket {
                 self.timeout_info.write().write_timeout = NonZero::new(value)
             }
             super::SocketOpt::SockError => todo!(),
+            super::SocketOpt::IpBroadcast => {
+                // TODO: broadcast permissions
+            }
         }
 
         Ok(())
@@ -159,6 +162,11 @@ impl Socket for UdpSocket {
                 *r = timeout;
             }
             super::SocketOpt::SockError => todo!(),
+            super::SocketOpt::IpBroadcast => {
+                // TODO: broadcast permissions...
+                let r = <&mut bool>::make(to_usr_ptr.cast())?;
+                *r = true;
+            }
         }
 
         Ok(())

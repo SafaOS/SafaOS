@@ -547,14 +547,17 @@ impl Socket for LocalSocket {
     fn set_sock_opt(&self, opt: super::SocketOpt, value: u64) -> Result<(), ErrorStatus> {
         match opt {
             super::SocketOpt::Blocking => self.timeout_info.write().can_block = value > 0,
-            super::SocketOpt::IpTTL => return Err(ErrorStatus::InvalidCommand),
             super::SocketOpt::ReadTimeout => {
                 self.timeout_info.write().read_timeout = NonZero::new(value)
             }
             super::SocketOpt::WriteTimeout => {
                 self.timeout_info.write().write_timeout = NonZero::new(value)
             }
-            super::SocketOpt::SockError => return Err(ErrorStatus::InvalidCommand),
+            super::SocketOpt::SockError
+            | super::SocketOpt::IpBroadcast
+            | super::SocketOpt::IpTTL => {
+                return Err(ErrorStatus::InvalidCommand);
+            }
         }
 
         Ok(())
@@ -567,7 +570,6 @@ impl Socket for LocalSocket {
                 let blocking = self.timeout_info.read().can_block;
                 *r = blocking;
             }
-            super::SocketOpt::IpTTL => return Err(ErrorStatus::InvalidCommand),
             super::SocketOpt::ReadTimeout => {
                 let r = <&mut Option<NonZero<u64>>>::make(to_usr_ptr.cast())?;
                 let timeout = self.timeout_info.read().read_timeout;
@@ -578,7 +580,11 @@ impl Socket for LocalSocket {
                 let timeout = self.timeout_info.read().write_timeout;
                 *r = timeout;
             }
-            super::SocketOpt::SockError => return Err(ErrorStatus::InvalidCommand),
+            super::SocketOpt::SockError
+            | super::SocketOpt::IpBroadcast
+            | super::SocketOpt::IpTTL => {
+                return Err(ErrorStatus::InvalidCommand);
+            }
         }
 
         Ok(())

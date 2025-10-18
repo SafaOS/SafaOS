@@ -169,7 +169,8 @@ pub enum SocketOpt {
     ReadTimeout = 1,
     WriteTimeout = 2,
     IpTTL = 3,
-    SockError = 4,
+    IpBroadcast = 4,
+    SockError = 5,
 }
 
 pub trait Socket: 'static {
