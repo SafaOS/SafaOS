@@ -13,7 +13,7 @@ mod tests;
 pub(super) mod threading;
 pub(super) mod utils;
 
-use core::arch::asm;
+use core::{arch::asm, sync::atomic::Ordering};
 use interrupts::{apic, init_idt};
 use serial::init_serial;
 
@@ -21,7 +21,7 @@ use crate::{
     arch::x86_64::{
         gdt::TaskStateSegment,
         interrupts::{
-            handlers::{FLUSH_CACHE_ALL_ID, HALT_ALL_HANDLER_ID},
+            handlers::{FLUSH_CACHE_ALL_ID, HALT_ALL_HANDLER_ID, HALTED_CPUS},
             ps2,
         },
         registers::RFLAGS,
@@ -183,5 +183,10 @@ pub unsafe fn flush_cache() {
 }
 
 pub unsafe fn halt_all() {
+    let cpus_count = threading::READY_CPUS.load(Ordering::SeqCst);
     apic::send_nmi_all(HALT_ALL_HANDLER_ID);
+    HALTED_CPUS.fetch_add(1, Ordering::SeqCst);
+    while cpus_count > HALTED_CPUS.load(Ordering::Relaxed) {
+        core::hint::spin_loop();
+    }
 }

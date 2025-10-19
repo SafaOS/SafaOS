@@ -266,7 +266,7 @@ pub unsafe fn restore_cpu_status(status: &CPUStatus) -> ! {
 static CPU_LOCALS: Mutex<Vec<&ArchCPULocalStorage>> = Mutex::new(Vec::new());
 static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Process>, fn() -> !)>> =
     SyncUnsafeCell::new(MaybeUninit::uninit());
-static READY_CPUS: AtomicUsize = AtomicUsize::new(1);
+pub static READY_CPUS: AtomicUsize = AtomicUsize::new(1);
 
 unsafe fn set_gs(value: VirtAddr) {
     crate::serial!("gs set to: {value:#x} + 8\n");

@@ -2,11 +2,13 @@ use super::super::syscalls::syscall_base;
 use super::pit;
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 
 use super::idt::{GateDescriptor, IDTT};
 use super::{InterruptFrame, TrapFrame};
 
+use crate::arch::without_interrupts;
 use crate::arch::x86_64::interrupts::apic::send_eoi;
 use crate::arch::x86_64::interrupts::ps2::{self};
 use crate::arch::x86_64::{flush_cache_inner, threading};
@@ -69,10 +71,15 @@ lazy_static! {
 extern "x86-interrupt" fn apic_err(_: InterruptFrame) {
     panic!("APIC error encountured")
 }
+
+pub static HALTED_CPUS: AtomicUsize = AtomicUsize::new(0);
 extern "x86-interrupt" fn halt_handler(_: InterruptFrame) {
-    crate::serial!("halting...\n");
-    send_eoi();
-    khalt()
+    without_interrupts(|| {
+        HALTED_CPUS.fetch_add(1, Ordering::SeqCst);
+        crate::serial!("halting...\n");
+        send_eoi();
+        khalt()
+    });
 }
 
 extern "x86-interrupt" fn flush_cache_handler(_: InterruptFrame) {
