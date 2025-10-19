@@ -1,3 +1,3 @@
 #!/bin/sh
 cd safa-helper
-cargo run -- $@
+cargo run -- "$@"
