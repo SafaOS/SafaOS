@@ -1,7 +1,7 @@
 use core::str;
 use std::{
     io::{Read, Write, stdout},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     time::{Duration, Instant},
 };
@@ -125,7 +125,8 @@ pub enum SubCommand {
     Test(RunArgs),
 }
 
-pub fn build(opts: BuildOpts) {
+/// Builds a SafaOS with the given options, returning the path to the iso file.
+pub fn build(opts: BuildOpts) -> PathBuf {
     Builder::create(opts.output, opts.target_arch)
         .set_testing(opts.tests)
         .set_verbose(opts.verbose)
@@ -188,14 +189,14 @@ fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
 }
 
 /// Runs qemu with options `opts` and iso at `path`, if `tests` is true, will scan output for tests failure or success
-pub fn run(opts: RunOpts, path: &str) {
+pub fn run(opts: RunOpts, iso_path: &Path) {
     let qemu = get_qemu(opts.arch);
     let path_to_ovmf = get_ovmf(opts.arch);
 
     let mut cmd = Command::new(qemu);
 
     cmd.arg("-cdrom")
-        .arg(path)
+        .arg(iso_path)
         .arg("-serial")
         .arg("stdio")
         .arg("-m")

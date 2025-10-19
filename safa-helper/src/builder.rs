@@ -8,7 +8,12 @@ use std::{
 
 use utils::ArchTarget;
 
-pub static ROOT_REPO_PATH: LazyLock<PathBuf> = LazyLock::new(|| env!("CARGO_MANIFEST_DIR").into());
+pub static ROOT_REPO_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("CARGO_MANIFEST_DIR should be set")
+        .to_path_buf()
+});
 
 #[path = "builder/cargo.rs"]
 mod cargo;
@@ -33,9 +38,9 @@ fn remove_dir_all_found<P: AsRef<Path>>(path: P) -> io::Result<()> {
     })?;
     Ok(())
 }
-const KERNEL_PATH: &'static str = "crates/kernel";
+const KERNEL_PATH: &'static str = "safa-core";
 /// A bunch of binary crates which built results are included in the ramdisk in `sys:/bin/`
-const USERSPACE_CRATES_PATH: &'static str = "crates-user";
+const USERSPACE_CRATES_PATH: &'static str = "safa-userspace";
 
 /// Removes all environment variables that could break the build process
 ///
@@ -309,7 +314,7 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    fn package_final_iso(self) {
+    fn package_final_iso(self) -> PathBuf {
         log!("packaging iso");
         let mut cmd = Command::new("xorriso");
         cmd.arg("-as").arg("mkisofs").arg("-R").arg("-r").arg("-J");
@@ -333,7 +338,7 @@ impl<'a> Builder<'a> {
             .arg("--protective-msdos-label")
             .arg(self.build_root_path)
             .arg("-o")
-            .arg(self.out_path)
+            .arg(&self.out_path)
             .spawn()
             .expect("failed to spawn xorriso")
             .wait()
@@ -342,10 +347,12 @@ impl<'a> Builder<'a> {
             panic!("failed to build iso {}", status);
         }
         log!("ISO built successfully");
+
+        self.out_path
     }
 
-    /// Builds the iso
-    pub fn build(self) -> std::io::Result<()> {
+    /// Builds the iso, returning the path to the iso file.
+    pub fn build(self) -> std::io::Result<PathBuf> {
         clear_env();
         remove_dir_all_found(&self.build_root_path)?;
         // the iso is structured like this:

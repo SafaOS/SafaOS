@@ -11,8 +11,8 @@ const TEST_ARCHS: &[ArchTarget] = &[ArchTarget::Arm64, ArchTarget::X86_64];
 fn do_test(args: RunArgs) {
     let run_opts = RunOpts::from_args(&args, true);
     let build_opts = BuildOpts::from_args(true, &args.build_args);
-    cli::build(build_opts);
-    cli::run(run_opts, build_opts.output);
+    let path = cli::build(build_opts);
+    cli::run(run_opts, &path);
 }
 
 fn arch_test_args(arch: ArchTarget) -> RunArgs {

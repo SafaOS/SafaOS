@@ -1,11 +1,13 @@
 [workspace]
+members = ["safa-abi", "macros"]
+
 [package]
 name = "safa-core"
 version = "0.4.0"
 edition = "2024"
 
 [dependencies]
-safa-abi = { path = "../safa-abi" }
+safa-abi = { path = "safa-abi" }
 noto-sans-mono-bitmap = { version = "0.3.0", features = ["size_20"] }
 
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
@@ -13,7 +15,7 @@ spin = { version = "0.10.0", default-features = false, features = [
     "lazy",
 ], git = "https://github.com/safiworks/spin-fork" }
 bitflags = "2.6.0"
-macros = { path = "../macros" }
+macros = { path = "macros" }
 int-enum = "1.1"
 heapless = { version = "0.8.0", features = ["serde"] }
 limine = "0.5.0"

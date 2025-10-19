@@ -23,9 +23,9 @@ jobs:
       - name: Setup
         run: rustup update
       - name: Initialize
-        run: cargo run init --arch x86_64
+        run: ./helper.sh init --arch x86_64
       - name: Build
-        run: cargo run build -v
+        run: ./helper.sh build -v
       - uses: actions/upload-artifact@v4
         with:
           name: x86_64-iso
@@ -63,9 +63,9 @@ jobs:
       - name: Setup
         run: rustup update
       - name: Initialize
-        run: cargo run init --arch x86_64 && cargo run init --arch aarch64
+        run: ./helper.sh init --arch x86_64 && ./helper.sh init --arch aarch64
       - name: Run tests
-        run: cargo test
+        run: ./test-all.sh
       # TODO: add building tests
       - uses: actions/upload-artifact@v4
         with:

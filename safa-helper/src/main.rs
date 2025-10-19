@@ -47,8 +47,8 @@ fn main() {
     );
 
     let build_opts = BuildOpts::from_args(tests, &build_args);
-    cli::build(build_opts);
+    let iso_path = cli::build(build_opts);
     if let Some(opts) = run_opts {
-        cli::run(opts, build_opts.output);
+        cli::run(opts, &iso_path);
     }
 }

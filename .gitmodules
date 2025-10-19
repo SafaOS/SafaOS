@@ -2,12 +2,12 @@
 	path = common
 	url = https://github.com/SafaOS/common
 [submodule "SafaShell"]
-	path = crates-user/Shell
+	path = safa-userspace/Shell
 	url = https://github.com/SafaOS/Shell
 [submodule "limine"]
 	path = limine
 	url = https://github.com/limine-bootloader/limine
 	branch = v9.x-binary
-[submodule "crates-user/OpalWM"]
-	path = crates-user/OpalWM
+[submodule "safa-userspace/OpalWM"]
+	path = safa-userspace/OpalWM
 	url = https://github.com/SafaOS/OpalWM

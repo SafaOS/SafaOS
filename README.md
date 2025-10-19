@@ -12,63 +12,73 @@
 An open-source non-Unix-like OS, written from scratch in Rust for fun.
 
 ## Building
-The crate at the root of the project is called `safa-helper` it is basically the build system.
+You can use the `safa-helper` to build and run SafaOS.
+Running it is either through `./helper.sh [ARGS]` or just:
+
+```
+cd safa-helper
+cargo run -- [ARGS]
+```
+If your platform doesn't support running shell scripts this could work, one if the build system goals is to be portable so If it doesn't work on your platform natively please open an issue (I didn't actually test it on anything other then linux because of lack of motivation).
+
 you need:
 
 - git
-- xorriso
-- make
+- xorriso (TODO: Replace with a more portable tool, perhaps write the ISO packaging code myself?)
+- make (A requirement to build limine, TODO: pre-built limine?)
 - cargo
 - libcurl (should be bundled by default in most operating systems including windows)
 
-First you have to run
+First you have to run (or the `cd safa-helper` trick above...)
 ```
-cargo run init
+./helper.sh init
 ```
+
 once every rust `libstd` update (or if you are not actively working on the project just once every `git pull` would work).
 
 If you want to cross compile SafaOS for an architecture other then your host's run
 ```
-cargo run init -a [arch]
+./helper.sh init -a [arch]
 ```
 currently arch can either be x86_64 or aarch64.
 
-then to build run
+Then to build run
 ```
-cargo run build
+./helper.sh build
 ```
+
 (the `-a|--arch` flag works for build too)
 This should make an iso with the path: `out/safaos.iso` if successful,
 You can also find pre-built artifact isos built using github actions, check the latest successful build for the main branch.
 
 ## Running
-you'll need:
+You'll need:
 
 - qemu-system-[arch]: where arch is either `x86_64` or `aarch64`.
+- all the build dependencies for the target architecture.
 
 ```
-cargo run -- --no-kvm
+./helper.sh run --no-kvm
 ```
 (the `-a|--arch` flag is also available for running, if you want to use it you must likely want to provide the `--no-kvm` flag too)
 
 or run **with** kvm (faster but kvm might not be available or broken)
 ```
-cargo run
+./helper.sh run
 ```
-otherwise you have the iso `out/safaos.iso` feel free to do whatever you want with it,
-you also have
+otherwise you have the iso `out/safaos.iso` feel free to do whatever you want with it.
 
 ### Debugging
-you can also use the `safa-helper` to debug:
+You can also use the `safa-helper` to debug:
 ```
-cargo run -- --debugger --no-kvm
+./helper.sh run --debugger --no-kvm
 ```
 (doesn't work with kvm)
 and then connect to port 1234 with a gdb client i recommend using `rust-lldb`.
 
 ### Additional Information
 ```
-$ cargo run help
+$ ./helper.sh help
 The SafaOS's build system and helper tools
 
 Usage: safa-helper [OPTIONS] [COMMAND]
@@ -93,36 +103,41 @@ Options:
 ```
 
 ## Testing
-you'll need:
+You'll need:
 
 - qemu-system-[arch]: where arch is either `x86_64` or `aarch64`.
 
-to test SafaOS for the current host, run:
+To test SafaOS for the current host, run:
 ```
+./helper.sh test --no-kvm
+```
+or
+```
+cd safa-helper
 cargo run test --no-kvm
 ```
-or use the `-a|--arch` flag to test a specific arch, you can also omit `--no-kvm` if kvm is available.
+You can use the `-a|--arch` flag to test a specific arch, you can also omit `--no-kvm` if kvm is available.
 
 or to test all architectures (requires all `qemu-system-[arch]` variants) run:
 ```
-cargo test
+./test-all.sh
 ```
 then the tests will be ran for all architectures with no kvm and no gui.
 
 ## Project structure
-`crates-user/`: contains userspace programs written in rust, they are compiled and then copied to the ramdisk as `sys:/bin/`, any rust binary crate added to this directory would be automatically detected, compiled and bundled to the ramdisk by the `safa-helper`.
+`safa-userspace/`: contains userspace programs written in rust, they are compiled and then copied to the ramdisk as `sys:/bin/`, any rust binary crate added to this directory would be automatically detected, compiled and bundled to the ramdisk by the `safa-helper`.
 
-`crates`: contains the kernel and other kernel-related crates (only the kernel crate is detected by the `safa-helper`).
+`safa-core/`: contains the kernel and other kernel-related crates (only the kernel crate is detected by the `safa-helper`).
 
 `ramdisk-include`: anything put in this directory will be included in the ramdisk at `sys:/` by the `safa-helper`.
 
 `common`: some constants and files that are used by the build system.
 
-`src`: the source of the SafaOS build system and helper utils aka `safa-helper`.
+`safa-helper/`: The SafaOS build system and helper utils.
 
 ## Current Features
 Check `FEATURES.md`.
-you can also check `crates-user/` for examples of programs written in rust.
+you can also check `safa-userspace/` for examples of programs written in rust.
 
 > Aside from the rust stdandard library another method to interact with the kernel is through the [safa-api](https://github.com/SafaOS/safa-api) which provides low-level wrapper functions around the syscalls, and also some high-level wrappers (such as a userspace allocator which is a very high-level wrapper around the sbrk syscall, ofc the raw sbrk syscall is still exposed).
 
