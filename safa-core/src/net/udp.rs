@@ -160,16 +160,17 @@ pub fn handle_udp_packet(src_ip: Ipv4Addr, bytes: &[u8]) {
 
     let ports = UDP_PORTS.read();
     if let Some(socket) = ports.get(&dst_port) {
-        match socket.write(src_ip, src_port, packet.payload()) {
+        let payload = packet.payload();
+        match socket.write(src_ip, src_port, payload) {
             Err(SocketError::WouldBlockFull) => {} // vola packet lost!
             Err(e) => {
                 crate::error!("Failed to write to socket: {e:?}, at udp port {dst_port}");
             }
             Ok(am) => {
-                if am != bytes.len() {
+                if am != payload.len() {
                     warn!(
                         "FIXME: wrote only {am} bytes of {} in UDP socket",
-                        bytes.len()
+                        payload.len()
                     )
                 }
             }
