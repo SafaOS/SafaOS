@@ -18,9 +18,6 @@ pub static ROOT_REPO_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
 #[path = "builder/cargo.rs"]
 mod cargo;
 
-#[path = "builder/make.rs"]
-mod make;
-
 #[path = "builder/rustc.rs"]
 pub mod rustc;
 
@@ -281,8 +278,6 @@ impl<'a> Builder<'a> {
 
         fs::create_dir_all(&limine_build_path)?;
         fs::create_dir_all(&efi_boot_build_path)?;
-
-        make::build(&limine_path);
 
         let limine_bios_files = self.limine_bios_files();
         let limine_bios_files = limine_bios_files.iter().map(|f| limine_path.join(f));

@@ -25,8 +25,7 @@ you need:
 
 - git
 - xorriso (TODO: Replace with a more portable tool, perhaps write the ISO packaging code myself?)
-- make (A requirement to build limine, TODO: pre-built limine?)
-- cargo
+- a working rust toolchain with cargo
 - libcurl (should be bundled by default in most operating systems including windows)
 
 First you have to run (or the `cd safa-helper` trick above...)
