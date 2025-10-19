@@ -52,38 +52,38 @@ impl From<RawContextPriority> for ContextPriority {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockedReason {
     /// The thread is sleeping until [`.0`] ms of boot time is reached
     SleepingUntil(u64),
+    SleepingFor(NonZero<u64>),
     Waiting,
     Dead,
 }
 
 impl BlockedReason {
-    pub fn block_lifted(&self) -> bool {
+    pub fn try_lift_block(&self, thread: &ArcThread) -> bool {
         match self {
-            Self::SleepingUntil(n) => time!(ms) >= *n,
+            Self::SleepingUntil(n) => {
+                if time!(ms) >= *n {
+                    unsafe { *thread.timeouted.get() = true };
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::SleepingFor(_) => unreachable!("Sleeping for should become SleepingUntil"),
             Self::Waiting => false,
             Self::Dead => false,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextStatus {
     Running,
     Runnable,
     Blocked(BlockedReason),
-}
-
-impl ContextStatus {
-    pub const fn is_running(&self) -> bool {
-        match self {
-            Self::Running => true,
-            _ => false,
-        }
-    }
 }
 
 use alloc::{sync::Arc, vec::Vec};
@@ -278,6 +278,7 @@ pub struct Thread {
     context: UnsafeCell<Context>,
 
     is_dying: AtomicBool,
+    timeouted: UnsafeCell<bool>,
     should_terminate: UnsafeCell<bool>,
     is_dead: AtomicBool,
     parent_process: Arc<Process>,
@@ -308,6 +309,7 @@ impl Thread {
     ) -> Self {
         Self {
             owned_resources: Mutex::new(Vec::new()),
+            timeouted: UnsafeCell::new(false),
             id: cid,
             priority,
             status: SpinLock::new(ContextStatus::Runnable),
@@ -325,6 +327,13 @@ impl Thread {
     /// Returns true if the thread should terminate
     pub fn should_terminate(&self) -> bool {
         unsafe { *self.should_terminate.get() }
+    }
+
+    /// Returns true if the thread operation timed out
+    /// # Safety
+    /// The caller must be from the given thread.
+    pub unsafe fn operation_timeout(&self) -> bool {
+        unsafe { core::mem::take(&mut *self.timeouted.get()) }
     }
 
     /// Returns a mutable reference to the next thread in the scheduler's queue.
@@ -414,7 +423,7 @@ impl Thread {
                     break;
                 }
                 ContextStatus::Blocked(
-                    BlockedReason::SleepingUntil(_) | BlockedReason::Waiting,
+                    BlockedReason::SleepingUntil(_) | BlockedReason::Waiting | BlockedReason::SleepingFor(_),
                 ) => {
                     *status = ContextStatus::Runnable;
                 }
@@ -451,13 +460,13 @@ impl Thread {
         *self.status.lock() = status;
     }
 
-    /// Should only be called by the current thread
-    pub fn sleep_for_ms(&self, ms: NonZero<u64>) -> NonZero<u64> {
+    /// Prepares the current thread to sleep for a given number of milliseconds.
+    ///
+    /// Sleep will begin on the next call to [`thread::current::yield_now()`].
+    pub fn prepare_sleep_for_ms(&self, ms: NonZero<u64>) {
         let mut status_mut = self.status_mut();
-        let timeout_at =
-            unsafe { NonZero::new_unchecked(time!(ms) as u64) }.saturating_add(ms.get());
-        *status_mut = ContextStatus::Blocked(BlockedReason::SleepingUntil(timeout_at.get()));
-        timeout_at
+        unsafe { *self.timeouted.get() = false };
+        *status_mut = ContextStatus::Blocked(BlockedReason::SleepingFor(ms));
     }
 }
 

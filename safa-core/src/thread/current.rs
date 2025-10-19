@@ -6,7 +6,6 @@ use core::sync::atomic::AtomicU32;
 use crate::process::{self, Pid, WaitOnProcReason};
 use crate::scheduler::wait_queue::WaitError;
 use crate::thread::Tid;
-use crate::time;
 use crate::{
     arch::without_interrupts,
     scheduler::{self, SCHEDULER_INITED},
@@ -34,13 +33,16 @@ pub fn sleep_for_ms(ms: u64) -> Result<(), WaitError> {
 
     without_interrupts(|| {
         thread::with_current(|current| {
-            let wake_at = current.sleep_for_ms(ms);
+            current.prepare_sleep_for_ms(ms);
             yield_now();
 
             if current.should_terminate() {
                 Err(WaitError::ForceTerminated)
             } else {
-                assert!(wake_at.get() <= time!(ms), "thread didn't sleep");
+                assert!(
+                    unsafe { current.operation_timeout() },
+                    "thread didn't sleep"
+                );
                 Ok(())
             }
         })

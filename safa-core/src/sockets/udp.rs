@@ -71,7 +71,7 @@ pub struct UdpSocket {
     state: RwLock<UdpState>,
     messages: Mutex<Messages>,
     binded_to: RwLock<Option<BindInfo>>,
-    wait_queue: Mutex<WaitQueue<1, (), Option<NonZero<u64>>>>,
+    wait_queue: Mutex<WaitQueue<1, ()>>,
     weak: Weak<Self>,
 }
 

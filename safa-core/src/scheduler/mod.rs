@@ -6,7 +6,7 @@ use core::hint::likely;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::thread::{ArcThread, ContextPriority, ContextStatus};
+use crate::thread::{ArcThread, BlockedReason, ContextPriority, ContextStatus};
 use crate::utils::path::make_path;
 use alloc::sync::Arc;
 
@@ -14,7 +14,7 @@ use crate::arch::without_interrupts;
 use crate::process::Process;
 use crate::utils::locks::SpinLock;
 use crate::utils::types::Name;
-use crate::{VirtAddr, arch};
+use crate::{VirtAddr, arch, time};
 use alloc::boxed::Box;
 
 pub mod process_list;
@@ -123,8 +123,13 @@ unsafe fn switch_inner(
             let current_context = current_thread.context_unchecked();
             current_context.set_cpu_status(current_cpu_status);
 
-            if status.is_running() {
+            if *status == ContextStatus::Running {
                 *status = ContextStatus::Runnable;
+            }
+
+            if let ContextStatus::Blocked(BlockedReason::SleepingFor(am)) = *status {
+                *status =
+                    ContextStatus::Blocked(BlockedReason::SleepingUntil(am.get() + time!(ms)));
             }
         }
 
@@ -152,7 +157,7 @@ unsafe fn switch_inner(
 
             match &*status {
                 ContextStatus::Runnable => return choose_context!(),
-                ContextStatus::Blocked(reason) if reason.block_lifted() => {
+                ContextStatus::Blocked(reason) if reason.try_lift_block(choose) => {
                     return choose_context!();
                 }
                 ContextStatus::Blocked(_) => None,

@@ -234,7 +234,7 @@ impl VirtualTTY {
             if stdin.newlines_count == 0 {
                 let pending = self.wait_queue.prepare_wait();
                 drop(stdin);
-                pending.enter_wait(WaitReason::CanonicalRead)?;
+                pending.enter_wait(WaitReason::CanonicalRead, None)?;
 
                 return self.read_stdin(buf);
             }

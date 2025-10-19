@@ -10,8 +10,8 @@ use thiserror::Error;
 
 use crate::arch::with_interrupts;
 use crate::thread;
+use crate::thread::ArcThread;
 use crate::utils::locks::{Mutex, MutexGuard};
-use crate::{thread::ArcThread, time};
 
 const MIN_WAIT_THREADS: usize = 4;
 
@@ -21,22 +21,24 @@ const MIN_WAIT_THREADS: usize = 4;
 /// This lock helps guarantee nobody will wake threads before this thread is sleeping for a given condition,
 /// Ensure to make sure the condition applies after holding this lock, before actually beginning sleeping otherwise dropping this is perfectly safe.
 #[derive(Debug)]
-pub struct PendingWait<'a, const AVERAGE: usize, Reason, Timeout: TimeoutType>(
-    MutexGuard<'a, WaitQueue<AVERAGE, Reason, Timeout>>,
-    &'a Mutex<WaitQueue<AVERAGE, Reason, Timeout>>,
+pub struct PendingWait<'a, const AVERAGE: usize, Reason>(
+    MutexGuard<'a, WaitQueue<AVERAGE, Reason>>,
+    &'a Mutex<WaitQueue<AVERAGE, Reason>>,
 );
 
-impl<const AVERAGE: usize, Reason, Timeout: TimeoutType>
-    Mutex<WaitQueue<AVERAGE, Reason, Timeout>>
-{
+impl<const AVERAGE: usize, Reason> Mutex<WaitQueue<AVERAGE, Reason>> {
     /// Returns a [`PendingWait`] instance that holds a lock on self, afterwards call [`PendingWait::enter_wait`].
-    pub fn prepare_wait<'s>(&'s self) -> PendingWait<'s, AVERAGE, Reason, Timeout> {
+    pub fn prepare_wait<'s>(&'s self) -> PendingWait<'s, AVERAGE, Reason> {
         PendingWait(self.lock(), self)
     }
 }
 
-impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> PendingWait<'_, AVERAGE, Reason, Timeout> {
-    fn enter_wait_inner(self, reason: Reason, timeout: Timeout) -> Result<(), WaitError> {
+impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason> {
+    fn enter_wait_inner(
+        self,
+        reason: Reason,
+        timeout: Option<NonZero<u64>>,
+    ) -> Result<(), WaitError> {
         thread::with_current(|thread| {
             if thread.should_terminate() {
                 return Err(WaitError::ForceTerminated);
@@ -44,26 +46,16 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> PendingWait<'_, AVERAGE
 
             let (mut wait_queue_guard, wait_queue) = (self.0, self.1);
 
-            // ensures that the allocator won't context switch
-            wait_queue_guard.threads.reserve(1);
-
-            let timeout_opt = timeout.into_option();
-            let timeouted = with_interrupts(|| {
-                let wake_at = if let Some(timeout) = timeout_opt {
-                    Some(thread.sleep_for_ms(timeout))
+            // Ensures that the allocator won't context switch
+            wait_queue_guard.threads.push((thread.clone(), reason));
+            with_interrupts(|| {
+                if let Some(timeout) = timeout {
+                    thread.prepare_sleep_for_ms(timeout)
                 } else {
                     thread.block_waiting();
-                    None
-                };
-
-                let timeout = Timeout::from_option(wake_at);
-                wait_queue_guard
-                    .threads
-                    .push((thread.clone(), reason, timeout.clone()));
+                }
                 drop(wait_queue_guard);
                 thread::current::yield_now();
-
-                timeout.is_timeout()
             });
 
             let remove_self = || {
@@ -71,7 +63,7 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> PendingWait<'_, AVERAGE
                 let index = wait_queue
                     .threads
                     .iter()
-                    .position(|(t, _, _)| Arc::ptr_eq(t, &thread));
+                    .position(|(t, _)| Arc::ptr_eq(t, &thread));
 
                 if let Some(i) = index {
                     // TODO: should we swap_remove?
@@ -84,7 +76,7 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> PendingWait<'_, AVERAGE
                 return Err(WaitError::ForceTerminated);
             }
 
-            if timeouted {
+            if unsafe { thread.operation_timeout() } {
                 remove_self();
                 return Err(WaitError::Timeout);
             }
@@ -94,7 +86,7 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> PendingWait<'_, AVERAGE
     }
 }
 
-impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason, Option<NonZero<u64>>> {
+impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason> {
     /// Applies the [`PendingWait`], causing the current thread to sleep for at most `timeout_after` ms if Some, until a wake operation on the [`WaitQueue`] happens.
     pub fn enter_wait(
         self,
@@ -102,12 +94,6 @@ impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason, Option<NonZe
         timeout_after: Option<NonZero<u64>>,
     ) -> Result<(), WaitError> {
         self.enter_wait_inner(reason, timeout_after)
-    }
-}
-impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason, ()> {
-    /// Applies the [`PendingWait`], causing the current thread to sleep until a wake operation on the [`WaitQueue`] happens.
-    pub fn enter_wait(self, reason: Reason) -> Result<(), WaitError> {
-        self.enter_wait_inner(reason, ())
     }
 }
 
@@ -131,37 +117,6 @@ impl IntoErr for WaitError {
     }
 }
 
-trait TimeoutType: Clone {
-    fn is_timeout(&self) -> bool;
-    fn into_option(self) -> Option<NonZero<u64>>;
-    fn from_option(opt: Option<NonZero<u64>>) -> Self;
-}
-
-impl TimeoutType for () {
-    fn is_timeout(&self) -> bool {
-        false
-    }
-    fn into_option(self) -> Option<NonZero<u64>> {
-        None
-    }
-    fn from_option(opt: Option<NonZero<u64>>) -> Self {
-        _ = opt;
-        ()
-    }
-}
-
-impl TimeoutType for Option<NonZero<u64>> {
-    fn is_timeout(&self) -> bool {
-        self.is_some_and(|wake_at| wake_at.get() <= time!(ms))
-    }
-    fn into_option(self) -> Option<NonZero<u64>> {
-        self
-    }
-    fn from_option(opt: Option<NonZero<u64>>) -> Self {
-        opt
-    }
-}
-
 /// A wait queue for waiting on threads given a condition,
 /// and waking them up when the condition is met or when the queue is destroyed.
 /// the order of the threads is not guaranteed.
@@ -169,19 +124,14 @@ impl TimeoutType for Option<NonZero<u64>> {
 /// [`AVERAGE`] is the average number of threads that will be stored in the wait queue, used to avoid heap allocations.
 /// [`Reason`] is the reason type for waiting.
 #[derive(Debug)]
-pub struct WaitQueue<
-    const AVERAGE: usize = MIN_WAIT_THREADS,
-    Reason = (),
-    Timeout: TimeoutType = (),
-> {
-    threads: SmallVec<[(ArcThread, Reason, Timeout); AVERAGE]>,
+pub struct WaitQueue<const AVERAGE: usize = MIN_WAIT_THREADS, Reason = ()> {
+    threads: SmallVec<[(ArcThread, Reason); AVERAGE]>,
 }
 
 /// [`WaitQueue`] but timeouts are available
-pub type WaitQueueWithTimeout<const AVERAGE: usize, Reason> =
-    WaitQueue<AVERAGE, Reason, Option<NonZero<u64>>>;
+pub type WaitQueueWithTimeout<const AVERAGE: usize, Reason> = WaitQueue<AVERAGE, Reason>;
 
-impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> WaitQueue<AVERAGE, Reason, Timeout> {
+impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason> {
     /// Creates a new wait queue.
     pub const fn new() -> Self {
         Self {
@@ -191,19 +141,14 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> WaitQueue<AVERAGE, Reas
 
     /// Wakes all threads in the wait queue.
     pub fn wake_all(&mut self) {
-        for (thread, _, _) in self.threads.drain(..) {
+        for (thread, _) in self.threads.drain(..) {
             thread.wake_up();
         }
     }
 
     /// Wakes all threads in the wait queue that satisfy the given condition.
     pub fn wake_on_condition(&mut self, mut condition: impl FnMut(&mut Reason) -> bool) {
-        self.threads.retain(|(thread, reason, wake_at)| {
-            // Will wake up by timeout
-            if wake_at.is_timeout() {
-                return false;
-            }
-
+        self.threads.retain(|(thread, reason)| {
             if condition(reason) {
                 thread.wake_up();
                 false
@@ -223,11 +168,7 @@ impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> WaitQueue<AVERAGE, Reas
     ) -> usize {
         let mut count = 0;
         if count < n {
-            self.threads.retain(|(thread, reason, wake_at)| {
-                if wake_at.is_timeout() {
-                    return false;
-                }
-
+            self.threads.retain(|(thread, reason)| {
                 if condition(reason) {
                     thread.wake_up();
                     count += 1;
@@ -267,9 +208,7 @@ impl<const AVERAGE: usize, Reason: Eq> WaitQueue<AVERAGE, Reason> {
     }
 }
 
-impl<const AVERAGE: usize, Reason, Timeout: TimeoutType> Drop
-    for WaitQueue<AVERAGE, Reason, Timeout>
-{
+impl<const AVERAGE: usize, Reason> Drop for WaitQueue<AVERAGE, Reason> {
     fn drop(&mut self) {
         self.wake_all();
     }

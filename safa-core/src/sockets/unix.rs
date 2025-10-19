@@ -193,7 +193,7 @@ pub struct LocalSocket {
     conn_accepted: UnsafeCell<bool>,
     timeout_info: RwLock<TimeoutInfo>,
     status: RwLock<Status>,
-    wait_queue: Mutex<WaitQueue<1, WaitReason, Option<NonZero<u64>>>>,
+    wait_queue: Mutex<WaitQueue<1, WaitReason>>,
     kind: LocalSocketKind,
     binded_to: Mutex<Option<Arc<Name>>>,
     this: Weak<Self>,
@@ -521,7 +521,7 @@ impl LocalSocket {
                     .this
                     .upgrade()
                     .expect("Upgrading LocalSocket::this should never fail");
-                pending_wait.enter_wait(this)?;
+                pending_wait.enter_wait(this, None)?;
 
                 if !unsafe { *self.conn_accepted.get() } {
                     return Err(SocketError::ConnectionRefused);
