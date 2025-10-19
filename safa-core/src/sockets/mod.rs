@@ -48,13 +48,14 @@ pub enum SocketError {
     InvalidArgument,
     TypeMismatch,
     NotBound,
+    Timeout,
 }
 
 impl From<WaitError> for SocketError {
     fn from(value: WaitError) -> Self {
         match value {
             WaitError::ForceTerminated => Self::ForceTerminated,
-            WaitError::Timeout => unreachable!(),
+            WaitError::Timeout => Self::Timeout,
         }
     }
 }
@@ -85,6 +86,7 @@ impl IntoErr for SocketError {
             Self::InvalidArgument => safa_abi::errors::ErrorStatus::InvalidArgument,
             Self::TypeMismatch => safa_abi::errors::ErrorStatus::TypeMismatch,
             Self::NotBound => safa_abi::errors::ErrorStatus::NotBound,
+            Self::Timeout => safa_abi::errors::ErrorStatus::Timeout,
         }
     }
 }
