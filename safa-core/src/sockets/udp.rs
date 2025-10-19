@@ -5,6 +5,7 @@ use core::{
 };
 
 use alloc::{
+    boxed::Box,
     collections::linked_list::LinkedList,
     sync::{Arc, Weak},
 };
@@ -12,10 +13,11 @@ use safa_abi::{errors::ErrorStatus, poll::PollEvents, sockets::SockMsgFlags};
 
 use crate::{
     debug,
+    memory::page_allocator::PageAlloc,
     net::ipv4::{DEFAULT_TTL, PageIPv4Packet},
     process::poll::{self, PollID},
     scheduler::wait_queue::WaitQueue,
-    sockets::{OwnedSocketAddr, Socket, SocketAddrRef, SocketError, unix::Stream},
+    sockets::{OwnedSocketAddr, Socket, SocketAddrRef, SocketError},
     syscalls::ffi::SyscallFFI,
     utils::locks::{Mutex, RwLock},
 };
@@ -26,25 +28,11 @@ pub enum UdpState {
     Connected { ip: Ipv4Addr, port: u16 },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Message {
     src_ip: Ipv4Addr,
     src_port: u16,
-    size: usize,
-}
-
-pub struct Messages {
-    messages: LinkedList<Message>,
-    stream: Stream,
-}
-
-impl Messages {
-    pub fn new() -> Self {
-        Self {
-            messages: LinkedList::new(),
-            stream: Stream::new(),
-        }
-    }
+    payload: Box<[u8], PageAlloc>,
 }
 
 #[derive(Debug)]
@@ -69,7 +57,7 @@ pub struct UdpSocket {
     timeout_info: RwLock<TimeoutInfo>,
     ttl: AtomicU8,
     state: RwLock<UdpState>,
-    messages: Mutex<Messages>,
+    messages: Mutex<LinkedList<Message>>,
     binded_to: RwLock<Option<BindInfo>>,
     wait_queue: Mutex<WaitQueue<1, ()>>,
     weak: Weak<Self>,
@@ -85,7 +73,7 @@ impl UdpSocket {
                 can_block,
             }),
             state: RwLock::new(UdpState::Disconnected),
-            messages: Mutex::new(Messages::new()),
+            messages: Mutex::new(LinkedList::new()),
             binded_to: RwLock::new(None),
             wait_queue: Mutex::new(WaitQueue::new()),
             weak: weak.clone(),
@@ -99,12 +87,11 @@ impl UdpSocket {
         data: &[u8],
     ) -> Result<usize, SocketError> {
         let mut messages = self.messages.lock();
-        let (data_size, _, data_size_was) = messages.stream.write(data)?;
-
-        messages.messages.push_back(Message {
+        let data_size_was = messages.len();
+        messages.push_back(Message {
             src_ip: from_addr,
             src_port: from_port,
-            size: data_size,
+            payload: data.to_vec_in(PageAlloc).into_boxed_slice(),
         });
 
         self.wait_queue.lock().wake_n_on_condition(|()| true, 1);
@@ -115,7 +102,7 @@ impl UdpSocket {
         };
 
         poll::broadcast_events(self.poll_id(), events_add, PollEvents::NONE);
-        Ok(data_size)
+        Ok(data.len())
     }
 }
 
@@ -285,11 +272,7 @@ impl Socket for UdpSocket {
         let can_block = !flags.contains(SockMsgFlags::DONT_WAIT) && timeout_info.can_block;
 
         let mut messages = self.messages.lock();
-        let message = if flags.contains(SockMsgFlags::PEEK) {
-            messages.messages.front().copied()
-        } else {
-            messages.messages.pop_front()
-        };
+        let message = messages.front();
         let Some(message) = message else {
             if can_block {
                 let pending_wait = self.wait_queue.prepare_wait();
@@ -302,22 +285,26 @@ impl Socket for UdpSocket {
             }
         };
 
-        let size = message.size.min(buf.len());
-        let (amount, len_is, _) = messages
-            .stream
-            .read(&mut buf[..size], flags.contains(SockMsgFlags::PEEK))
-            .expect("Shouldn't return an error if there is messages...");
+        let size = message.payload.len().min(buf.len());
+        buf[..size].copy_from_slice(&message.payload[..size]);
 
+        let src_ip = message.src_ip;
+        let src_port = message.src_port;
+        if !flags.contains(SockMsgFlags::PEEK) {
+            messages.pop_front();
+        }
+
+        let len_is = messages.len();
         if len_is == 0 {
             // Everything removed...
             poll::broadcast_events(self.poll_id(), PollEvents::NONE, PollEvents::DATA_AVAILABLE);
         }
 
         Ok((
-            amount,
+            size,
             Some(OwnedSocketAddr::Ip {
-                addr: message.src_ip,
-                port: message.src_port,
+                addr: src_ip,
+                port: src_port,
             }),
         ))
     }

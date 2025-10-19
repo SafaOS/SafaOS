@@ -38,8 +38,11 @@ impl Stream {
     pub fn read(
         &mut self,
         buf: &mut [u8],
-        peek: bool,
+        pop: usize,
     ) -> Result<(usize, usize, usize), SocketError> {
+        let peek = pop == 0;
+        assert!(pop >= buf.len() || peek);
+
         let before_read_len = self.data.len();
         let size = buf.len().min(before_read_len);
         if size == 0 {
@@ -51,8 +54,8 @@ impl Stream {
             return Ok((size, before_read_len, before_read_len));
         }
 
-        let new_len = before_read_len - size;
-        self.data.copy_within(size.., 0);
+        let new_len = before_read_len - pop;
+        self.data.copy_within(pop.., 0);
         self.data.truncate(new_len);
 
         Ok((size, new_len, before_read_len))
@@ -100,7 +103,8 @@ impl SeqPacketStream {
         .ok_or(SocketError::WouldBlockEmpty)?;
 
         let read_len = buf.len().min(message_len);
-        self.inner.read(&mut buf[..read_len], peek)
+        self.inner
+            .read(&mut buf[..read_len], if peek { 0 } else { message_len })
     }
 }
 
@@ -127,7 +131,7 @@ impl Buffer {
     fn read(&mut self, buf: &mut [u8], peek: bool) -> Result<(usize, usize, usize), SocketError> {
         match self {
             Self::SeqPacket(s) => s.read(buf, peek),
-            Self::Stream(s) => s.read(buf, peek),
+            Self::Stream(s) => s.read(buf, if peek { 0 } else { buf.len() }),
         }
     }
 }
