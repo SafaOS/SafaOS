@@ -1,9 +1,6 @@
 [submodule "common"]
 	path = common
 	url = https://github.com/SafaOS/common
-[submodule "SafaShell"]
-	path = safa-userspace/Shell
-	url = https://github.com/SafaOS/Shell
 [submodule "limine"]
 	path = limine
 	url = https://github.com/limine-bootloader/limine
@@ -11,3 +8,6 @@
 [submodule "safa-userspace/OpalWM"]
 	path = safa-userspace/OpalWM
 	url = https://github.com/SafaOS/OpalWM
+[submodule "safa-userspace/Shell"]
+	path = safa-userspace/Shell
+	url = https://github.com/SafaOS/Shell
