@@ -54,7 +54,7 @@ pub type Pid = u32;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExitInfo {
-    exit_code: usize,
+    exit_code: isize,
     killed_by: Pid,
 }
 
@@ -366,7 +366,7 @@ impl Process {
     pub unsafe fn on_thread_exit(
         this: &Arc<Process>,
         thread: &ArcThread,
-        exit_code: usize,
+        exit_code: isize,
     ) -> bool {
         let tid = thread.tid();
 
@@ -561,7 +561,7 @@ impl Process {
     /// if `killed_by` is `None` the process will be killed by itself
     /// # Safety
     /// If this function was called on the current process, the caller must call it without interrupts enabled.
-    pub unsafe fn kill(this: &Arc<Process>, exit_code: usize, killed_by: Option<Pid>) {
+    pub unsafe fn kill(this: &Arc<Process>, exit_code: isize, killed_by: Option<Pid>) {
         let pid = this.pid();
         let killed_by = killed_by.unwrap_or(pid);
 
@@ -670,7 +670,7 @@ pub struct ProcessInfo {
     pub stack_addr: VirtAddr,
 
     pub killed_by: Option<Pid>,
-    pub exit_code: Option<usize>,
+    pub exit_code: Option<isize>,
     pub is_alive: bool,
 }
 

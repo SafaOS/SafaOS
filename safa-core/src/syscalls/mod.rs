@@ -91,8 +91,8 @@ pub fn syscall(
             SyscallTable::SysPCHDir => process::syschdir_raw((a as *const u8, b)),
             SyscallTable::SysPSpawn => process::syspspawn_raw((a as *const u8, b), c as *const _),
             SyscallTable::SysTSpawn => thread::sys_tspawn_raw(a, b as *const _),
-            SyscallTable::SysPExit => crate::process::current::exit(a),
-            SyscallTable::SysTExit => crate::thread::current::exit(a),
+            SyscallTable::SysPExit => crate::process::current::exit(a as isize),
+            SyscallTable::SysTExit => crate::thread::current::exit(a as isize),
             SyscallTable::SysTYield => {
                 crate::thread::current::yield_now();
                 Ok(0)
@@ -106,9 +106,9 @@ pub fn syscall(
             }
             SyscallTable::SysTFutWake => thread::syst_fut_wake_raw(a as *const AtomicU32, b),
             SyscallTable::SysPTryCleanUp => {
-                process::sysp_try_cleanup_raw(a as Pid, b as *mut usize)
+                process::sysp_try_cleanup_raw(a as Pid, b as *mut isize)
             }
-            SyscallTable::SysPWait => process::sysp_wait_raw(a as Pid, b as *mut usize),
+            SyscallTable::SysPWait => process::sysp_wait_raw(a as Pid, b as *mut isize),
             SyscallTable::SysTWait => process::syst_wait_raw(a as Tid),
             // power
             SyscallTable::SysShutdown => power::shutdown(),
@@ -144,7 +144,7 @@ pub fn syscall(
     let results = inner(number, a, b, c, d, e, f);
     let value = match results {
         Err(ErrorStatus::ForceTerminated) => {
-            crate::thread::current::exit(ErrorStatus::ForceTerminated as usize)
+            crate::thread::current::exit(-(ErrorStatus::ForceTerminated as isize))
         }
         Err(e) => SysResult::err(e),
         Ok(val) => SysResult::ok(val),

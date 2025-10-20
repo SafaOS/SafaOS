@@ -17,7 +17,7 @@ use crate::thread::{self, Tid};
 use macros::syscall_handler;
 
 #[syscall_handler]
-fn sysp_wait(pid: Pid, dest_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
+fn sysp_wait(pid: Pid, dest_code: Option<&mut isize>) -> Result<(), ErrorStatus> {
     let code = thread::current::wait_for_process(pid)?.ok_or(ErrorStatus::InvalidPid)?;
     if let Some(dest_code) = dest_code {
         *dest_code = code;
@@ -34,7 +34,7 @@ fn syst_wait(tid: Tid) -> Result<(), ErrorStatus> {
 }
 
 #[syscall_handler]
-fn sysp_try_cleanup(pid: Pid, dest_exit_code: Option<&mut usize>) -> Result<(), ErrorStatus> {
+fn sysp_try_cleanup(pid: Pid, dest_exit_code: Option<&mut isize>) -> Result<(), ErrorStatus> {
     let cleaned_up = process::current::try_cleanup_process(pid)?;
     if let Some(exit_code) = cleaned_up {
         if let Some(dest_exit_code) = dest_exit_code {

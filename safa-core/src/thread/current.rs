@@ -16,7 +16,7 @@ use crate::{
 ///
 /// Exit codes are Process local and are used to indicate the reason for termination of a process and not a thread
 /// if this thread is the last thread in the process, the process will be terminated with the given exit code, otherwise the exit code will be left unused.
-pub fn exit(code: usize) -> ! {
+pub fn exit(code: isize) -> ! {
     without_interrupts(|| {
         // current thread should be dropped at the end of this
         unsafe { thread::with_current(|curr| curr.kill(code)) }
@@ -65,7 +65,7 @@ pub fn yield_now() {
 
 /// Sleeps the current thread until the process with `pid` exits.
 /// Returns the exit code of the process after cleaning it up.
-pub fn wait_for_process(pid: Pid) -> Result<Option<usize>, WaitError> {
+pub fn wait_for_process(pid: Pid) -> Result<Option<isize>, WaitError> {
     // cycles through the processes one by one until it finds the process with `pid`
     // returns the exit code of the process if it's a zombie and cleans it up
     let Some(found_proc) =

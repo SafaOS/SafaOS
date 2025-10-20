@@ -9,7 +9,7 @@ use crate::process::{Pid, Process};
 use crate::thread::{self, Tid};
 use crate::{VirtAddr, process, scheduler, warn};
 
-pub fn exit(code: usize) -> ! {
+pub fn exit(code: isize) -> ! {
     without_interrupts(|| {
         // current process should be dropped after this
         unsafe {
@@ -68,7 +68,7 @@ pub fn kernel_thread_spawn<T: 'static>(
 /// - Ok(Some(exit_code)) if the process is dead, returns the exit code.
 /// - Err([ErrorStatus::MissingPermissions]) if the current process does not have parentship of the process.
 /// - Err([ErrorStatus::InvalidPid]) if the process with the given pid does not exist.
-pub fn try_cleanup_process(pid: Pid) -> Result<Option<usize>, ErrorStatus> {
+pub fn try_cleanup_process(pid: Pid) -> Result<Option<isize>, ErrorStatus> {
     let found_process =
         scheduler::process_list::find(|process| process.pid() == pid, |process| process.clone())
             .ok_or(ErrorStatus::InvalidPid)?;

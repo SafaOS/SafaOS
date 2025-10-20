@@ -220,7 +220,7 @@ impl ArcThread {
     ///
     /// # Safety
     /// The caller must handle the case that this is the current thread carefully, interrupts must be disabled and all caller resources shall be dropped.
-    pub unsafe fn kill(&self, exit_code: usize) {
+    pub unsafe fn kill(&self, exit_code: isize) {
         let process = &self.parent_process;
         unsafe { Process::on_thread_exit(process, self, exit_code) };
     }
