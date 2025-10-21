@@ -1,3 +1,5 @@
+use core::net::Ipv4Addr;
+
 use safa_abi::net::NicAddrInfoV4;
 
 use crate::{
@@ -27,6 +29,7 @@ pub trait NetworkInterface: Send + Sync {
     fn name(&self) -> &'static str;
 
     fn nic_info(&self) -> NicAddrInfoV4;
+    fn ipv4_address(&self) -> Ipv4Addr;
     fn set_nic_info(&self, info: NicAddrInfoV4);
 }
 

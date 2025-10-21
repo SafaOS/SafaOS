@@ -216,13 +216,16 @@ impl Socket for UdpSocket {
         let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
         // TODO: verify destination address and port before doing allocations
         // TODO: don't do allocations at all and do write timeout
-        crate::net::manager::send_ipv4_packet(&mut PageIPv4Packet::new_udp(
-            buf,
-            binded_to.port,
-            dst_port,
-            dst_addr,
-            self.ttl.load(Ordering::Acquire),
-        ))?;
+        crate::net::manager::send_ipv4_packet(
+            binded_to.ip,
+            &mut PageIPv4Packet::new_udp(
+                buf,
+                binded_to.port,
+                dst_port,
+                dst_addr,
+                self.ttl.load(Ordering::Acquire),
+            ),
+        )?;
 
         // TODO: truncate the buffer if it's too large...
         Ok(buf.len())
@@ -244,13 +247,16 @@ impl Socket for UdpSocket {
                 let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
                 // TODO: verify destination address and port before doing allocations
                 // TODO: don't do allocations at all and do write timeout
-                crate::net::manager::send_ipv4_packet(&mut PageIPv4Packet::new_udp(
-                    buf,
-                    binded_to.port,
-                    dst_port,
-                    dst_addr,
-                    self.ttl.load(Ordering::Acquire),
-                ))?;
+                crate::net::manager::send_ipv4_packet(
+                    binded_to.ip,
+                    &mut PageIPv4Packet::new_udp(
+                        buf,
+                        binded_to.port,
+                        dst_port,
+                        dst_addr,
+                        self.ttl.load(Ordering::Acquire),
+                    ),
+                )?;
 
                 // TODO: truncate the buffer if it's too large...
                 Ok(buf.len())

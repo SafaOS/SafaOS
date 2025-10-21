@@ -25,7 +25,7 @@ use crate::{
         interface::NetworkInterface,
     },
     sleep, sleep_until,
-    utils::locks::Mutex,
+    utils::locks::{Mutex, RwLock},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -891,7 +891,7 @@ pub struct E1000NetCard {
     mac: OnceCell<MacAddress>,
     com: OnceCell<Mutex<E1000Comm>>,
     irq_info: IRQInfo,
-    addr_info: Mutex<NicAddrInfoV4>,
+    addr_info: RwLock<NicAddrInfoV4>,
 }
 
 impl E1000NetCard {
@@ -1216,11 +1216,15 @@ impl NetworkInterface for E1000NetCard {
     }
 
     fn nic_info(&self) -> NicAddrInfoV4 {
-        *self.addr_info.lock()
+        *self.addr_info.read()
     }
 
     fn set_nic_info(&self, info: NicAddrInfoV4) {
-        *self.addr_info.lock() = info;
+        *self.addr_info.write() = info;
+    }
+
+    fn ipv4_address(&self) -> core::net::Ipv4Addr {
+        self.addr_info.read().ipv4_address
     }
 }
 
@@ -1322,7 +1326,7 @@ impl PCIDevice for E1000NetCard {
             mac: OnceCell::new(),
             eeprom_exists: OnceCell::new(),
             com: OnceCell::new(),
-            addr_info: Mutex::new(NicAddrInfoV4::default()),
+            addr_info: RwLock::new(NicAddrInfoV4::default()),
         }
     }
 

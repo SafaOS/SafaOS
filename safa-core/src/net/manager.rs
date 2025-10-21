@@ -94,10 +94,16 @@ impl NetworkManager {
         Ok(())
     }
 
-    pub fn send_ipv4_request(&self, packet: &mut IPv4Packet) -> Result<(), NetworkError> {
-        let header = packet.header();
-        if header.dst_addr == Ipv4Addr::BROADCAST {
-            for interface in &*self.interfaces.read() {
+    pub fn send_ipv4_request(
+        &self,
+        src_addr: Ipv4Addr,
+        packet: &mut IPv4Packet,
+    ) -> Result<(), NetworkError> {
+        let _header = packet.header();
+        // TODO: Arp
+        for interface in &*self.interfaces.read() {
+            let ip = interface.ipv4_address();
+            if src_addr == Ipv4Addr::UNSPECIFIED || ip == src_addr {
                 packet.header_mut().src_addr = interface.nic_info().ipv4_address;
                 packet.put_checksum();
 
@@ -107,12 +113,9 @@ impl NetworkManager {
                     packet.as_bytes(),
                 )?;
             }
-
-            Ok(())
-        } else {
-            // TODO: Arp
-            Err(NetworkError::AddressNotFound)
         }
+
+        Ok(())
     }
 }
 
@@ -137,8 +140,8 @@ pub fn add_interface(interface: &'static dyn NetworkInterfaceSuper) {
 }
 
 /// Sends an IPv4 packet through a network interface which can receive it, returns [`NetworkError::AddressNotFound`] if the Ip Address isn't supported by any interface.
-pub fn send_ipv4_packet(packet: &mut IPv4Packet) -> Result<(), NetworkError> {
-    MANAGER.send_ipv4_request(packet)
+pub fn send_ipv4_packet(src_addr: Ipv4Addr, packet: &mut IPv4Packet) -> Result<(), NetworkError> {
+    MANAGER.send_ipv4_request(src_addr, packet)
 }
 
 #[allow(dead_code)]
@@ -154,12 +157,7 @@ pub fn send_arp(target_ip: Ipv4Addr) -> Result<(), NetworkError> {
             *int,
             EthernetType::ARP,
             MacAddress::BROADCAST,
-            ARP::new_request(
-                int.mac_address(),
-                Ipv4Addr::new(192, 168, 69, 69),
-                target_ip,
-            )
-            .as_bytes(),
+            ARP::new_request(int.mac_address(), int.nic_info().ipv4_address, target_ip).as_bytes(),
         )?;
     }
     Ok(())
