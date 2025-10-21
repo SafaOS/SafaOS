@@ -70,7 +70,7 @@ fn run(path: &Path) -> io::Result<()> {
 
     let our_ip = offer.our_addr;
     let server_ip = offer.server_addr;
-    let accept_from = offer.offerd_from;
+    let accept_from = offer.offered_from;
     match client.request(our_ip, server_ip, accept_from) {
         Ok(()) => {}
         Err(e) => {

@@ -45,10 +45,10 @@ pub struct DHCPOffer {
     pub our_addr: Ipv4Addr,
     pub server_addr: Ipv4Addr,
     pub lease_time: u32,
-    pub offerd_from: SocketAddr,
+    pub offered_from: SocketAddr,
 }
 
-/// An Instance of a DHCP Client that recieves and sends DHCP packets from and to the DHCP server.
+/// An Instance of a DHCP Client that receives and sends DHCP packets from and to the DHCP server.
 pub struct DHCPClient {
     socket: UdpSocket,
     trans_id: u32,
@@ -102,8 +102,8 @@ impl DHCPClient {
             let (len, addr) = socket
                 .recv_from(packet_storage)
                 .map_err(|e| DHCPError::Recv(e))?;
-            if let Some(to_acccept) = recv_from
-                && addr != to_acccept
+            if let Some(to_accept) = recv_from
+                && addr != to_accept
             {
                 continue;
             }
@@ -174,7 +174,7 @@ impl DHCPClient {
             lease_time,
             our_addr: received.yiaddr(),
             server_addr: received.siaddr(),
-            offerd_from: addr,
+            offered_from: addr,
         })
     }
 
