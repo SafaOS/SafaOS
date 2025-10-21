@@ -11,3 +11,6 @@
 [submodule "safa-userspace/Shell"]
 	path = safa-userspace/Shell
 	url = https://github.com/SafaOS/Shell
+[submodule "safa-abi"]
+	path = safa-abi
+	url = https://github.com/SafaOS/safa-abi

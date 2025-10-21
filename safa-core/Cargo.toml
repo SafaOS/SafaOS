@@ -1,5 +1,5 @@
 [workspace]
-members = ["safa-abi", "macros"]
+members = ["macros"]
 
 [package]
 name = "safa-core"
@@ -7,7 +7,7 @@ version = "0.4.0"
 edition = "2024"
 
 [dependencies]
-safa-abi = { path = "safa-abi" }
+safa-abi = { path = "../safa-abi" }
 noto-sans-mono-bitmap = { version = "0.3.0", features = ["size_20"] }
 
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
