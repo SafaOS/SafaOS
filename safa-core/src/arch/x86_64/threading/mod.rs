@@ -348,7 +348,7 @@ fn boot_core_inner(
             status_ref.at(),
             status_ref.stack_at()
         );
-        READY_CPUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        READY_CPUS.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
         restore_cpu_status(status_ref)
     }
 }
