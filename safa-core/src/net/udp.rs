@@ -113,7 +113,7 @@ impl UDPPacket {
         }
 
         for extra in remaining {
-            let word = u16::from_be_bytes([0, *extra]);
+            let word = u16::from_be_bytes([*extra, 0]);
             sum += word as u32;
         }
 
