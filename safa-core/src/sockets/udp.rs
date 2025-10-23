@@ -38,7 +38,7 @@ pub struct Message {
 #[derive(Debug)]
 pub struct BindInfo {
     ip: Ipv4Addr,
-    port: u16,
+    port: NonZero<u16>,
 }
 
 impl Drop for BindInfo {
@@ -183,15 +183,18 @@ impl Socket for UdpSocket {
         match addr {
             SocketAddrRef::Ip { addr, port } => {
                 let mut binded_to = self.binded_to.write();
-                crate::net::udp::bind_socket(
-                    port,
+                let binded_port = crate::net::udp::bind_socket(
+                    NonZero::new(port),
                     self.weak
                         .upgrade()
                         .expect("Upgradng UdpSocket::Weak should never fail..."),
                 )
                 .map_err(|()| SocketError::AddressInUse)?;
-                *binded_to = Some(BindInfo { ip: addr, port });
-                debug!(UdpSocket, "Binded to {}:{}", addr, port);
+                *binded_to = Some(BindInfo {
+                    ip: addr,
+                    port: binded_port,
+                });
+                debug!(UdpSocket, "Binded to {}:{}", addr, binded_port);
                 Ok(())
             }
             SocketAddrRef::Abstract(_) => Err(SocketError::OperationNotSupported),
@@ -220,7 +223,7 @@ impl Socket for UdpSocket {
             binded_to.ip,
             &mut PageIPv4Packet::new_udp(
                 buf,
-                binded_to.port,
+                binded_to.port.get(),
                 dst_port,
                 dst_addr,
                 self.ttl.load(Ordering::Acquire),
@@ -251,7 +254,7 @@ impl Socket for UdpSocket {
                     binded_to.ip,
                     &mut PageIPv4Packet::new_udp(
                         buf,
-                        binded_to.port,
+                        binded_to.port.get(),
                         dst_port,
                         dst_addr,
                         self.ttl.load(Ordering::Acquire),

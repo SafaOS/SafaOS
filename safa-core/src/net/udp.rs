@@ -1,4 +1,4 @@
-use core::net::Ipv4Addr;
+use core::{net::Ipv4Addr, num::NonZero};
 
 use alloc::sync::Arc;
 use hashbrown::HashMap;
@@ -178,14 +178,25 @@ pub fn handle_udp_packet(src_ip: Ipv4Addr, bytes: &[u8]) {
     }
 }
 
-pub fn remove_socket(port: u16) -> bool {
+pub fn remove_socket(port: NonZero<u16>) -> bool {
     let mut ports = UDP_PORTS.write();
-    ports.remove(&port).is_some()
+    ports.remove(&port.get()).is_some()
 }
 
-/// Attempts to bind a socket to a UDP port, returning an error if the port is already in use.
-pub fn bind_socket(port: u16, socket: Arc<UdpSocket>) -> Result<(), ()> {
+/// Attempts to bind a socket to a UDP port, returning an error if the port is already in use or if no port is available.
+pub fn bind_socket(port: Option<NonZero<u16>>, socket: Arc<UdpSocket>) -> Result<NonZero<u16>, ()> {
     let mut ports = UDP_PORTS.write();
-    ports.try_insert(port, socket).map_err(|_| ())?;
-    Ok(())
+    let port = port.map(|p| Ok(p)).unwrap_or_else(|| {
+        let mut curr_port = 1024;
+        while curr_port <= u16::MAX {
+            // TODO: slowwy >_<
+            if !ports.contains_key(&curr_port) {
+                return Ok(NonZero::new(curr_port).unwrap());
+            }
+            curr_port += 1;
+        }
+        Err(())
+    })?;
+    ports.try_insert(port.get(), socket).map_err(|_| ())?;
+    Ok(port)
 }
