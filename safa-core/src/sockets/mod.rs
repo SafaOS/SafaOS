@@ -22,6 +22,7 @@ use crate::{
     utils::types::Name,
 };
 
+use crate::net::ipv4::IPv4Protocol;
 pub mod udp;
 pub mod unix;
 
@@ -175,10 +176,12 @@ pub enum SocketOpt {
     SockError = 5,
 }
 
-pub trait Socket: 'static {
+pub trait Socket: 'static + Send + Sync {
     fn listen(&self, backlog: usize) -> Result<(), SocketError>;
-    fn accept(&self) -> Result<Arc<Self>, SocketError>;
-    fn accept_and_get_addr(&self) -> Result<(Arc<Self>, Option<OwnedSocketAddr>), SocketError> {
+    fn accept(&self) -> Result<Arc<dyn Socket>, SocketError>;
+    fn accept_and_get_addr(
+        &self,
+    ) -> Result<(Arc<dyn Socket>, Option<OwnedSocketAddr>), SocketError> {
         self.accept().map(|ok| (ok, None))
     }
     fn bind(&self, addr: SocketAddrRef) -> Result<(), SocketError>;
@@ -210,22 +213,22 @@ pub trait Socket: 'static {
 }
 
 /// Wrapper around a [`Socket`], represents a Resource thats a socket.
-pub struct SocketResource<T: Socket>(Arc<T>);
+pub struct SocketResource(Arc<dyn Socket>);
 
-impl<T: Socket> SocketResource<T> {
+impl SocketResource {
     #[allow(unused)]
-    pub const unsafe fn inner(&self) -> &Arc<T> {
+    pub const unsafe fn inner(&self) -> &Arc<dyn Socket> {
         &self.0
     }
 }
 
-impl<T: Socket> Drop for SocketResource<T> {
+impl Drop for SocketResource {
     fn drop(&mut self) {
         self.0.on_close();
     }
 }
 
-impl<T: Socket> SocketResource<T> {
+impl SocketResource {
     fn accept(&self) -> Result<Self, SocketError> {
         Ok(SocketResource(self.0.accept()?))
     }
@@ -244,13 +247,14 @@ impl<T: Socket> SocketResource<T> {
     }
 }
 
-impl<T: Socket> Deref for SocketResource<T> {
-    type Target = T;
+impl Deref for SocketResource {
+    type Target = dyn Socket;
     fn deref(&self) -> &Self::Target {
         &*self.0
     }
 }
 
+// TODO: remove in favor of [`Socket`] which is now dyn safe.
 /// A trait which describes all [`SocketResource<T>`]s
 pub trait SocketResourceTrait: 'static {
     fn listen(&self, backlog: usize) -> Result<(), SocketError>;
@@ -275,7 +279,7 @@ pub trait SocketResourceTrait: 'static {
     ) -> Result<(usize, Option<OwnedSocketAddr>), SocketError>;
 }
 
-impl<T: Socket> Resource for SocketResource<T> {
+impl Resource for SocketResource {
     fn read(
         &self,
         off: crate::drivers::vfs::SeekOffset,
@@ -320,7 +324,7 @@ impl<T: Socket> Resource for SocketResource<T> {
     }
 }
 
-impl<T: Socket> SocketResourceTrait for SocketResource<T> {
+impl SocketResourceTrait for SocketResource {
     fn accept(&self) -> Result<Ri, SocketError> {
         self.accept()
             .map(|good| resources::add_global_resource(good))
@@ -386,9 +390,11 @@ pub fn create_socket(
     protocol: u32,
     can_block: bool,
 ) -> Result<Ri, ErrorStatus> {
-    _ = protocol;
-    match (family, kind) {
-        (SocketFamily::Local, kind) => {
+    const UDP_PROTOCOL: u32 = IPv4Protocol::UDP.as_u8() as u32;
+    const ICMP_PROTOCOL: u32 = IPv4Protocol::ICMP.as_u8() as u32;
+
+    match (family, kind, protocol) {
+        (SocketFamily::Local, kind, 0) => {
             let local_socket_kind = match kind {
                 SocketKind::SeqPacket => LocalSocketKind::SeqPacket,
                 SocketKind::Stream => LocalSocketKind::Stream,
@@ -399,11 +405,26 @@ pub fn create_socket(
             let socket_resource = SocketResource(local_socket);
             Ok(resources::add_global_resource(socket_resource))
         }
-        (SocketFamily::Net, SocketKind::Datagram) => {
-            let udp_socket = UdpSocket::create(can_block);
+
+        (SocketFamily::Net, SocketKind::Datagram, 0 | UDP_PROTOCOL) => {
+            let udp_socket = UdpSocket::create(can_block, udp::DatagramProtocol::UDP);
             let socket_resource = SocketResource(udp_socket);
             Ok(resources::add_global_resource(socket_resource))
         }
-        (SocketFamily::Net, _) => return Err(ErrorStatus::TypeMismatch),
+
+        (SocketFamily::Net, SocketKind::Datagram, ICMP_PROTOCOL) => {
+            use core::sync::atomic::{AtomicU16, Ordering};
+
+            static CURR_ICMP_COUNT: AtomicU16 = AtomicU16::new(0);
+
+            let icmp_socket = UdpSocket::create(
+                can_block,
+                udp::DatagramProtocol::ICMP(CURR_ICMP_COUNT.fetch_add(1, Ordering::Relaxed)),
+            );
+            let socket_resource = SocketResource(icmp_socket);
+            Ok(resources::add_global_resource(socket_resource))
+        }
+
+        _ => return Err(ErrorStatus::TypeMismatch),
     }
 }

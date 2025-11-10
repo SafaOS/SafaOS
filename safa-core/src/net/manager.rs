@@ -67,17 +67,17 @@ impl NetworkManager {
     }
 
     /// Handles incoming packets.
-    pub fn handle_packet(&self, interface: &'static dyn NetworkInterface, packet: &[u8]) {
+    pub fn handle_packet(&self, interface: &'static dyn NetworkInterface, packet: &mut [u8]) {
         if packet.len() < 14 {
             warn!(NetworkManager, "Received packet too short, dropping...");
             return;
         }
 
-        let frame = EthernetFrame::from_bytes(packet);
+        let frame = EthernetFrame::from_bytes_mut(packet);
         // TODO: Handle the packet
         debug!(NetworkManager, "Received packet: {:#x?}", frame);
         match frame.header.ethertype {
-            EthernetType::IPV4 => ipv4::handle_ipv4_packet(interface, &frame.payload),
+            EthernetType::IPV4 => ipv4::handle_ipv4_packet(interface, &mut frame.payload),
             other => debug!(NetworkManager, "Unknown ethertype: {:#x?}", other),
         }
     }
@@ -130,7 +130,7 @@ pub fn send_ethernet(
 }
 
 /// Handles incoming packets.
-pub fn handle_packet(interface: &'static dyn NetworkInterface, packet: &[u8]) {
+pub fn handle_packet(interface: &'static dyn NetworkInterface, packet: &mut [u8]) {
     MANAGER.handle_packet(interface, packet);
 }
 

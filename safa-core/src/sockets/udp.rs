@@ -14,12 +14,17 @@ use safa_abi::{errors::ErrorStatus, poll::PollEvents, sockets::SockMsgFlags};
 use crate::{
     debug,
     memory::page_allocator::PageAlloc,
-    net::ipv4::{DEFAULT_TTL, PageIPv4Packet},
+    net::{
+        self,
+        icmp::{EchoIcmpPacket, ICMPType, IcmpPacket},
+        ipv4::{DEFAULT_TTL, PageIPv4Packet},
+    },
     process::poll::{self, PollID},
     scheduler::wait_queue::WaitQueue,
     sockets::{OwnedSocketAddr, Socket, SocketAddrRef, SocketError},
     syscalls::ffi::SyscallFFI,
     utils::locks::{Mutex, RwLock},
+    warn,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +58,15 @@ struct TimeoutInfo {
     can_block: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatagramProtocol {
+    UDP,
+    /// An ICMP datagram socket, contains the ID of data sent using this socket, custom IDs aren't supported yet.
+    ICMP(u16),
+}
+
 pub struct UdpSocket {
+    protocol: DatagramProtocol,
     timeout_info: RwLock<TimeoutInfo>,
     ttl: AtomicU8,
     state: RwLock<UdpState>,
@@ -64,8 +77,9 @@ pub struct UdpSocket {
 }
 
 impl UdpSocket {
-    pub fn create(can_block: bool) -> Arc<Self> {
+    pub fn create(can_block: bool, protocol: DatagramProtocol) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
+            protocol,
             ttl: AtomicU8::new(DEFAULT_TTL),
             timeout_info: RwLock::new(TimeoutInfo {
                 read_timeout: None,
@@ -80,12 +94,7 @@ impl UdpSocket {
         })
     }
 
-    pub fn write(
-        &self,
-        from_addr: Ipv4Addr,
-        from_port: u16,
-        data: &[u8],
-    ) -> Result<usize, SocketError> {
+    pub fn write(&self, from_addr: Ipv4Addr, from_port: u16, data: &[u8]) -> usize {
         let mut messages = self.messages.lock();
         let data_size_was = messages.len();
         messages.push_back(Message {
@@ -102,7 +111,14 @@ impl UdpSocket {
         };
 
         poll::broadcast_events(self.poll_id(), events_add, PollEvents::NONE);
-        Ok(data.len())
+        data.len()
+    }
+
+    #[inline]
+    pub fn this(&self) -> Arc<Self> {
+        self.weak
+            .upgrade()
+            .expect("Upgrading socket's weak should never fail if we have a reference")
     }
 }
 
@@ -159,7 +175,7 @@ impl Socket for UdpSocket {
         Ok(())
     }
 
-    fn accept(&self) -> Result<alloc::sync::Arc<Self>, super::SocketError> {
+    fn accept(&self) -> Result<alloc::sync::Arc<dyn Socket>, super::SocketError> {
         Err(SocketError::OperationNotSupported)
     }
 
@@ -169,6 +185,10 @@ impl Socket for UdpSocket {
     }
 
     fn connect(&self, addr: super::SocketAddrRef) -> Result<(), SocketError> {
+        if self.protocol != DatagramProtocol::UDP {
+            return Err(SocketError::OperationNotSupported);
+        }
+
         match addr {
             SocketAddrRef::Ip { addr, port } => {
                 let mut state = self.state.write();
@@ -180,16 +200,15 @@ impl Socket for UdpSocket {
     }
 
     fn bind(&self, addr: SocketAddrRef) -> Result<(), SocketError> {
+        if self.protocol != DatagramProtocol::UDP {
+            return Err(SocketError::OperationNotSupported);
+        }
+
         match addr {
             SocketAddrRef::Ip { addr, port } => {
                 let mut binded_to = self.binded_to.write();
-                let binded_port = crate::net::udp::bind_socket(
-                    NonZero::new(port),
-                    self.weak
-                        .upgrade()
-                        .expect("Upgradng UdpSocket::Weak should never fail..."),
-                )
-                .map_err(|()| SocketError::AddressInUse)?;
+                let binded_port = crate::net::udp::bind_socket(NonZero::new(port), self.this())
+                    .map_err(|()| SocketError::AddressInUse)?;
                 *binded_to = Some(BindInfo {
                     ip: addr,
                     port: binded_port,
@@ -215,23 +234,52 @@ impl Socket for UdpSocket {
             return Err(SocketError::ConnectionClosed);
         };
 
-        let binded_to = self.binded_to.read();
-        let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
-        // TODO: verify destination address and port before doing allocations
-        // TODO: don't do allocations at all and do write timeout
-        crate::net::manager::send_ipv4_packet(
-            binded_to.ip,
-            &mut PageIPv4Packet::new_udp(
-                buf,
-                binded_to.port.get(),
-                dst_port,
-                dst_addr,
-                self.ttl.load(Ordering::Acquire),
-            ),
-        )?;
+        match self.protocol {
+            DatagramProtocol::UDP => {
+                let binded_to = self.binded_to.read();
+                let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
+                // TODO: verify destination address and port before doing allocations
+                // TODO: don't do allocations at all and do write timeout
+                crate::net::manager::send_ipv4_packet(
+                    binded_to.ip,
+                    &mut PageIPv4Packet::new_udp(
+                        buf,
+                        binded_to.port.get(),
+                        dst_port,
+                        dst_addr,
+                        self.ttl.load(Ordering::Acquire),
+                    ),
+                )?;
 
-        // TODO: truncate the buffer if it's too large...
-        Ok(buf.len())
+                // TODO: truncate the buffer if it's too large...
+                Ok(buf.len())
+            }
+            DatagramProtocol::ICMP(id) => {
+                let packet = IcmpPacket::new(buf).ok_or(SocketError::InvalidArgument)?;
+                let ty = packet.header().ty();
+
+                match ty {
+                    ICMPType::ECHO_REQUEST => {
+                        let echo_packet =
+                            EchoIcmpPacket::new(packet).ok_or(SocketError::InvalidArgument)?;
+
+                        net::icmp::send_echo_request(
+                            dst_addr,
+                            self.this(),
+                            echo_packet,
+                            Some(id),
+                            self.ttl.load(Ordering::Acquire),
+                        )
+                        .map_err(|e| e.into())
+                        .map(|()| buf.len())
+                    }
+                    o => {
+                        warn!(UdpSocket, "Attempt to send unknown ICMP type: {o:?}");
+                        Err(SocketError::InvalidArgument)
+                    }
+                }
+            }
+        }
     }
 
     fn send_to(
@@ -323,7 +371,14 @@ impl Socket for UdpSocket {
     }
 
     fn on_close(&self) {
-        let _b = self.binded_to.write().take();
-        drop(_b);
+        match self.protocol {
+            DatagramProtocol::UDP => {
+                let _b = self.binded_to.write().take();
+                drop(_b);
+            }
+            DatagramProtocol::ICMP(_) => {
+                net::icmp::cleanup_icmp_socket(&self.this());
+            }
+        }
     }
 }

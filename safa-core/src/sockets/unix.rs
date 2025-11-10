@@ -544,8 +544,8 @@ static SOCKET_ABSTRACT_BINDINGS: RwLock<HashMap<Arc<Name>, Arc<LocalSocket>, FxB
     RwLock::new(HashMap::with_hasher(FxBuildHasher));
 
 impl Socket for LocalSocket {
-    fn accept(&self) -> Result<Arc<Self>, SocketError> {
-        self.try_accept_connection()
+    fn accept(&self) -> Result<Arc<dyn Socket>, SocketError> {
+        self.try_accept_connection().map(|i| i as Arc<dyn Socket>)
     }
 
     fn set_sock_opt(&self, opt: super::SocketOpt, value: u64) -> Result<(), ErrorStatus> {

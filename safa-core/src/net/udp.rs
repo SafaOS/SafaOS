@@ -4,12 +4,7 @@ use alloc::sync::Arc;
 use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
 
-use crate::{
-    net::ipv4::IPv4Protocol,
-    sockets::{SocketError, udp::UdpSocket},
-    utils::locks::RwLock,
-    warn,
-};
+use crate::{net::ipv4::IPv4Protocol, sockets::udp::UdpSocket, utils::locks::RwLock, warn};
 
 #[repr(C, packed)]
 struct PseudoHeader {
@@ -161,19 +156,12 @@ pub fn handle_udp_packet(src_ip: Ipv4Addr, bytes: &[u8]) {
     let ports = UDP_PORTS.read();
     if let Some(socket) = ports.get(&dst_port) {
         let payload = packet.payload();
-        match socket.write(src_ip, src_port, payload) {
-            Err(SocketError::WouldBlockFull) => {} // vola packet lost!
-            Err(e) => {
-                crate::error!("Failed to write to socket: {e:?}, at udp port {dst_port}");
-            }
-            Ok(am) => {
-                if am != payload.len() {
-                    warn!(
-                        "FIXME: wrote only {am} bytes of {} in UDP socket",
-                        payload.len()
-                    )
-                }
-            }
+        let am = socket.write(src_ip, src_port, payload);
+        if am != payload.len() {
+            warn!(
+                "FIXME: wrote only {am} bytes of {} in UDP socket",
+                payload.len()
+            )
         }
     }
 }

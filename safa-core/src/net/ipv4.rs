@@ -10,6 +10,8 @@ use macros::display_consts;
 use crate::{
     debug,
     net::{
+        calculate_checksum_of,
+        icmp::IcmpPacket,
         interface::NetworkInterface,
         udp::{UDPHeader, UDPPacket},
     },
@@ -78,6 +80,10 @@ impl IPv4Protocol {
     pub const ENCAP: Self = Self(41);
     pub const OSPF: Self = Self(89);
     pub const SCTP: Self = Self(132);
+
+    pub const fn as_u8(self) -> u8 {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -128,24 +134,7 @@ impl IPv4Header {
     }
 
     pub const fn calculate_checksum(&self) -> u16 {
-        let mut sum = 0u32;
-        let bytes = self.as_bytes();
-
-        let (as_u16, _) = bytes.as_chunks::<2>();
-
-        let mut i = 0;
-        while i < as_u16.len() {
-            let chunk = as_u16[i];
-
-            sum += u16::from_be_bytes(chunk) as u32;
-            i += 1;
-        }
-
-        while sum >> 16 != 0 {
-            sum = (sum >> 16) + (sum & u16::MAX as u32);
-        }
-
-        !(sum as u16)
+        calculate_checksum_of(self.as_bytes())
     }
 
     /// Calculates the checksum and puts it into the header.
@@ -170,16 +159,29 @@ pub struct IPv4Packet([u8]);
 
 impl IPv4Packet {
     /// Creates a new pending IPv4 packet from a byte slice, returns an error if the slice is too small to hold a [`IPv4Header`].
-    pub fn try_from_bytes(bytes: &[u8]) -> Result<&Self, ()> {
+    // pub fn try_from_bytes(bytes: &[u8]) -> Result<&Self, ()> {
+    //     if bytes.len() < size_of::<IPv4Header>() {
+    //         return Err(());
+    //     }
+
+    //     unsafe { Ok(Self::from_bytes_unchecked(bytes)) }
+    // }
+
+    /// Creates a new pending IPv4 packet from a mutable byte slice, returns an error if the slice is too small to hold a [`IPv4Header`].
+    pub fn try_from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, ()> {
         if bytes.len() < size_of::<IPv4Header>() {
             return Err(());
         }
 
-        unsafe { Ok(Self::from_bytes_unchecked(bytes)) }
+        unsafe { Ok(Self::from_bytes_unchecked_mut(bytes)) }
     }
 
-    unsafe fn from_bytes_unchecked(bytes: &[u8]) -> &Self {
-        unsafe { &*(bytes as *const [u8] as *const Self) }
+    // unsafe fn from_bytes_unchecked(bytes: &[u8]) -> &Self {
+    //     unsafe { &*(bytes as *const [u8] as *const Self) }
+    // }
+
+    unsafe fn from_bytes_unchecked_mut(bytes: &mut [u8]) -> &mut Self {
+        unsafe { &mut *(bytes as *mut [u8] as *mut Self) }
     }
 
     pub const fn total_size(&self) -> usize {
@@ -265,6 +267,16 @@ impl PageIPv4Packet {
         this.push(payload);
         this
     }
+
+    /// Constructs a new Owned IPv4 packet with the given ICMP header and payload.
+    // TODO: allocates even though we can avoid it
+    pub fn new_icmp(packet: &IcmpPacket, dst_addr: Ipv4Addr, ttl: u8) -> Self {
+        let payload = packet.as_bytes();
+        let ipv4_header = IPv4Header::new(payload.len() as u16, dst_addr, IPv4Protocol::ICMP, ttl);
+        let mut this = Self::new(ipv4_header);
+        this.push(packet.as_bytes());
+        this
+    }
 }
 
 impl Deref for PageIPv4Packet {
@@ -288,8 +300,8 @@ impl IPv4Manager {
         Self
     }
 
-    fn handle_packet(&self, int: &'static dyn NetworkInterface, raw_packet: &[u8]) {
-        let packet = match IPv4Packet::try_from_bytes(raw_packet) {
+    fn handle_packet(&self, int: &'static dyn NetworkInterface, raw_packet: &mut [u8]) {
+        let packet = match IPv4Packet::try_from_bytes_mut(raw_packet) {
             Ok(packet) if packet.header().total_length() > packet.total_size() => {
                 warn!(
                     IPv4Manager,
@@ -315,6 +327,11 @@ impl IPv4Manager {
             IPv4Protocol::UDP => {
                 super::udp::handle_udp_packet(packet.header().src_addr, packet.payload())
             }
+            IPv4Protocol::ICMP => super::icmp::handle_icmp_packet(
+                packet.header().src_addr,
+                packet.header().dst_addr,
+                packet.payload_mut(),
+            ),
             _ => {
                 debug!(
                     IPv4Manager,
@@ -330,6 +347,6 @@ static IPV4_MANAGER: IPv4Manager = IPv4Manager::new();
 
 /// Handles an incoming IPv4 packet.
 /// TODO: Its probably smarter to handle packets in a separate thread.
-pub fn handle_ipv4_packet(int: &'static dyn NetworkInterface, packet: &[u8]) {
+pub fn handle_ipv4_packet(int: &'static dyn NetworkInterface, packet: &mut [u8]) {
     IPV4_MANAGER.handle_packet(int, packet);
 }

@@ -35,9 +35,17 @@ pub struct EthernetFrame {
 }
 
 impl EthernetFrame {
-    pub fn from_bytes(bytes: &[u8]) -> &Self {
+    // pub fn from_bytes(bytes: &[u8]) -> &Self {
+    //     assert!(bytes.len() >= 14);
+    //     let payload = &bytes[14..];
+    //     unsafe { &*((bytes as *const [u8]).with_metadata_of(payload) as *const Self) }
+    // }
+
+    pub fn from_bytes_mut(bytes: &mut [u8]) -> &mut Self {
         assert!(bytes.len() >= 14);
-        let payload = &bytes[14..];
-        unsafe { &*((bytes as *const [u8]).with_metadata_of(payload) as *const Self) }
+        let ptr = bytes as *mut [u8];
+        let payload = &mut bytes[14..];
+
+        unsafe { &mut *((ptr).with_metadata_of(payload) as *mut Self) }
     }
 }

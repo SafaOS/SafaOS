@@ -6,7 +6,7 @@ use crate::{
     arch::with_interrupts,
     process::current::kernel_thread_spawn,
     sockets::{
-        Socket, SocketAddrRef, SocketError, SocketResource,
+        SocketAddrRef, SocketError, SocketResource,
         unix::{LocalSocket, LocalSocketKind},
     },
     thread::{self, Tid},

@@ -40,8 +40,10 @@ pub struct RxDescriptor {
 }
 
 impl RxDescriptor {
-    pub fn data(&self) -> &[u8] {
-        unsafe { &(&*self.addr.into_virt().into_ptr::<[u8; PAGE_SIZE]>())[..self.len as usize] }
+    pub fn data_mut(&mut self) -> &mut [u8] {
+        unsafe {
+            &mut (&mut *self.addr.into_virt().into_ptr::<[u8; PAGE_SIZE]>())[..self.len as usize]
+        }
     }
 }
 
@@ -1249,7 +1251,7 @@ impl InterruptReceiver for E1000NetCard {
                         error!(E1000NetCard, "Received packet error: {:#x}", desc.error);
                     }
 
-                    let bytes = desc.data();
+                    let bytes = desc.data_mut();
                     crate::net::handle_packet(self, bytes);
 
                     crate::write_ref!(desc.status, 0);
