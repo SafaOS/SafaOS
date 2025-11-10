@@ -186,16 +186,16 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "safa-abi"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dff02820bf9a9206ba3f1ce76dc0ead67e15fbdda32c316ff6452680c71b7a5"
+version = "0.5.4"
+source = "git+https://github.com/SafaOS/safa-abi#4b24d069ab1527685ce2a59ea90889b2a351024b"
 
 [[package]]
 name = "safa-api"
 version = "0.4.3"
-source = "git+https://github.com/SafaOS/safa-api#fc4410ba07ce23aabb08705298a70822a2f4ea5f"
+source = "git+https://github.com/SafaOS/safa-api#1d8161e067105340dc3e8439c7a422e3ee4d46a5"
 dependencies = [
  "safa-abi",
+ "simpldns",
 ]
 
 [[package]]
@@ -252,6 +252,12 @@ dependencies = [
  "serde",
  "serde_core",
 ]
+
+[[package]]
+name = "simpldns"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a029d10222caeab29cc754ba77433f50bf9fed96d6f8c8d6a413ea314e42686d"
 
 [[package]]
 name = "stable_deref_trait"
