@@ -1,5 +1,5 @@
 use core::{
-    net::Ipv4Addr,
+    net::{Ipv4Addr, SocketAddrV4},
     num::NonZero,
     sync::atomic::{AtomicU8, Ordering},
 };
@@ -234,8 +234,41 @@ impl Socket for UdpSocket {
             return Err(SocketError::ConnectionClosed);
         };
 
+        let binded_to = self.binded_to.read();
+        let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
+        // TODO: verify destination address and port before doing allocations
+        // TODO: don't do allocations at all and do write timeout
+        crate::net::manager::send_ipv4_packet(
+            binded_to.ip,
+            &mut PageIPv4Packet::new_udp(
+                buf,
+                binded_to.port.get(),
+                dst_port,
+                dst_addr,
+                self.ttl.load(Ordering::Acquire),
+            ),
+        )?;
+
+        // TODO: truncate the buffer if it's too large...
+        Ok(buf.len())
+    }
+
+    fn send_to(
+        &self,
+        buf: &[u8],
+        flags: safa_abi::sockets::SockMsgFlags,
+        addr: SocketAddrRef,
+    ) -> Result<usize, SocketError> {
+        let addr = match addr {
+            SocketAddrRef::Ip { addr, port } => SocketAddrV4::new(addr, port),
+            _ => return Err(SocketError::OperationNotSupported),
+        };
+        let dst_addr = *addr.ip();
+        let dst_port = addr.port();
+
         match self.protocol {
             DatagramProtocol::UDP => {
+                _ = flags;
                 let binded_to = self.binded_to.read();
                 let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
                 // TODO: verify destination address and port before doing allocations
@@ -279,40 +312,6 @@ impl Socket for UdpSocket {
                     }
                 }
             }
-        }
-    }
-
-    fn send_to(
-        &self,
-        buf: &[u8],
-        flags: safa_abi::sockets::SockMsgFlags,
-        addr: SocketAddrRef,
-    ) -> Result<usize, SocketError> {
-        match addr {
-            SocketAddrRef::Ip {
-                addr: dst_addr,
-                port: dst_port,
-            } => {
-                _ = flags;
-                let binded_to = self.binded_to.read();
-                let binded_to = binded_to.as_ref().ok_or(SocketError::NotBound)?;
-                // TODO: verify destination address and port before doing allocations
-                // TODO: don't do allocations at all and do write timeout
-                crate::net::manager::send_ipv4_packet(
-                    binded_to.ip,
-                    &mut PageIPv4Packet::new_udp(
-                        buf,
-                        binded_to.port.get(),
-                        dst_port,
-                        dst_addr,
-                        self.ttl.load(Ordering::Acquire),
-                    ),
-                )?;
-
-                // TODO: truncate the buffer if it's too large...
-                Ok(buf.len())
-            }
-            SocketAddrRef::Abstract(_) => Err(SocketError::OperationNotSupported),
         }
     }
 
