@@ -33,6 +33,8 @@ fn main() {
                 .arg("update")
                 .arg("--init")
                 .arg("--recursive")
+                .arg("--depth")
+                .arg("1")
                 .spawn()
                 .expect("failed to spawn git")
                 .wait()
