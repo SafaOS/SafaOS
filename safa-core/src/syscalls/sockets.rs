@@ -1,18 +1,16 @@
 use core::{ops::Deref, ptr::NonNull};
 
 use crate::{
-    process::resources::Ri,
+    process::resources::{self, Ri},
     sockets::{
-        OwnedSocketAddr, SocketAddrRef, SocketError, SocketFamily, SocketKind, SocketResourceTrait,
+        OwnedSocketAddr, SocketAddrRef, SocketError, SocketFamily, SocketKind, SocketResource,
     },
-    syscalls::ffi::ResourceDesc,
+    syscalls::ffi::ExpectedResource,
 };
 
 use super::{ErrorStatus, SyscallFFI};
 use macros::syscall_handler;
-use safa_abi::sockets::{
-    InetV4SocketAddr, LocalSocketAddr, SockCreateKind, SockMsgFlags, SocketAddr,
-};
+use safa_abi::sockets::{InetV4SocketAddr, SockCreateKind, SockMsgFlags, SocketAddr};
 
 impl SyscallFFI for SockCreateKind {
     type Args = usize;
@@ -35,35 +33,25 @@ impl SyscallFFI for safa_abi::sockets::SockMsgFlags {
     }
 }
 
-pub struct Socket {
-    _inner_desc: ResourceDesc,
-    socket_ref: NonNull<dyn SocketResourceTrait>,
-}
+pub struct SocketRi(ExpectedResource<SocketResource>);
 
-impl SyscallFFI for Socket {
+impl SyscallFFI for SocketRi {
     type Args = Ri;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        let desc = ResourceDesc::make(args)?;
-        let socket_ref = desc.as_socket().ok_or(ErrorStatus::UnsupportedResource)?;
-        // Safety: ResourceDesc lives on the heap and any borrow of it shall be valid as long as its alive, regardless of moving.
-        let socket_ref = NonNull::from_ref(socket_ref);
-        Ok(Self {
-            _inner_desc: desc,
-            socket_ref,
-        })
+        ExpectedResource::make(args).map(Self)
     }
 }
 
-impl Deref for Socket {
-    type Target = dyn SocketResourceTrait;
+impl Deref for SocketRi {
+    type Target = SocketResource;
     fn deref(&self) -> &Self::Target {
-        unsafe { self.socket_ref.as_ref() }
+        &self.0
     }
 }
 
 #[syscall_handler]
 fn syssock_sendto(
-    sock: Socket,
+    sock: SocketRi,
     buf: &[u8],
     flags: SockMsgFlags,
     addr: Option<SocketAddrRef>,
@@ -98,10 +86,11 @@ fn syssock_create(
 
     let can_block = !flags.contains(SockCreateKind::SOCK_NON_BLOCKING);
     crate::sockets::create_socket(family, kind, protocol, can_block)
+        .map(resources::add_global_resource)
 }
 
 #[syscall_handler]
-fn syssock_listen(sock: Socket, backlog: usize) -> Result<(), SocketError> {
+fn syssock_listen(sock: SocketRi, backlog: usize) -> Result<(), SocketError> {
     sock.listen(backlog)
 }
 
@@ -117,17 +106,6 @@ fn out_addr(
     };
 
     let size = match value {
-        OwnedSocketAddr::Abstract(name) => {
-            let name_len = name.len();
-            let mut abi_struct = LocalSocketAddr::new([0u8; _]);
-            abi_struct.sin_name[..name_len].copy_from_slice(name.as_bytes());
-            let abi_struct_size = name_len + size_of::<SocketAddr>();
-            let abi_bytes = abi_struct.as_bytes();
-
-            let copy_len = out_bytes.len().min(abi_struct_size);
-            out_bytes[..copy_len].copy_from_slice(&abi_bytes[..copy_len]);
-            abi_struct_size
-        }
         OwnedSocketAddr::Ip { addr, port } => {
             let abi_struct = InetV4SocketAddr::new(port, addr);
             let abi_struct_size = size_of::<InetV4SocketAddr>();
@@ -145,7 +123,7 @@ fn out_addr(
 
 #[syscall_handler]
 fn syssock_recv_from(
-    sock: Socket,
+    sock: SocketRi,
     buf: &mut [u8],
     flags: SockMsgFlags,
     out_sock_addr: Option<&mut (Option<NonNull<SocketAddr>>, usize)>,
@@ -167,10 +145,10 @@ fn syssock_recv_from(
 
 #[syscall_handler]
 fn syssock_accept(
-    sock: Socket,
+    sock: SocketRi,
     out_sock_addr: Option<&mut (Option<NonNull<SocketAddr>>, usize)>,
 ) -> Result<Ri, SocketError> {
-    let ri = match out_sock_addr {
+    let resource = match out_sock_addr {
         Some((Some(sock_addr_ptr), sock_addr_size)) => {
             let (ri, addr) = sock.accept_and_get_addr()?;
             if let Some(owned_addr) = addr {
@@ -183,15 +161,15 @@ fn syssock_accept(
         }
         _ => sock.accept()?,
     };
-    Ok(ri)
+    Ok(resources::add_global_resource(resource))
 }
 
 #[syscall_handler]
-fn syssock_connect(sock: Socket, addr: SocketAddrRef) -> Result<(), SocketError> {
+fn syssock_connect(sock: SocketRi, addr: SocketAddrRef) -> Result<(), SocketError> {
     sock.connect(addr)
 }
 
 #[syscall_handler]
-fn syssock_bind(sock: Socket, addr: SocketAddrRef) -> Result<(), SocketError> {
+fn syssock_bind(sock: SocketRi, addr: SocketAddrRef) -> Result<(), SocketError> {
     sock.bind(addr)
 }

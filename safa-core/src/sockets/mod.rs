@@ -9,17 +9,13 @@ use safa_abi::{
 
 use crate::{
     net::manager::NetworkError,
-    process::{
-        poll::PollID,
-        resources::{self, Resource, Ri},
-    },
+    process::{poll::PollID, resources::Resource},
     scheduler::wait_queue::WaitError,
     sockets::{
         udp::UdpSocket,
         unix::{LocalSocket, LocalSocketKind},
     },
     syscalls::ffi::SyscallFFI,
-    utils::types::Name,
 };
 
 use crate::net::ipv4::IPv4Protocol;
@@ -100,12 +96,7 @@ pub enum SocketAddrRef<'a> {
 
 #[derive(Debug, Clone)]
 pub enum OwnedSocketAddr {
-    #[allow(unused)]
-    Abstract(Name),
-    Ip {
-        addr: Ipv4Addr,
-        port: u16,
-    },
+    Ip { addr: Ipv4Addr, port: u16 },
 }
 
 use safa_abi::sockets::SocketAddr as AbiSockAddr;
@@ -216,8 +207,9 @@ pub trait Socket: 'static + Send + Sync {
 pub struct SocketResource(Arc<dyn Socket>);
 
 impl SocketResource {
+    // Used by tests
     #[allow(unused)]
-    pub const unsafe fn inner(&self) -> &Arc<dyn Socket> {
+    pub fn inner(&self) -> &Arc<dyn Socket> {
         &self.0
     }
 }
@@ -229,10 +221,10 @@ impl Drop for SocketResource {
 }
 
 impl SocketResource {
-    fn accept(&self) -> Result<Self, SocketError> {
+    pub fn accept(&self) -> Result<Self, SocketError> {
         Ok(SocketResource(self.0.accept()?))
     }
-    fn accept_and_get_addr(&self) -> Result<(Self, Option<OwnedSocketAddr>), SocketError> {
+    pub fn accept_and_get_addr(&self) -> Result<(Self, Option<OwnedSocketAddr>), SocketError> {
         self.0
             .accept_and_get_addr()
             .map(|(r, a)| (SocketResource(r), a))
@@ -252,31 +244,6 @@ impl Deref for SocketResource {
     fn deref(&self) -> &Self::Target {
         &*self.0
     }
-}
-
-// TODO: remove in favor of [`Socket`] which is now dyn safe.
-/// A trait which describes all [`SocketResource<T>`]s
-pub trait SocketResourceTrait: 'static {
-    fn listen(&self, backlog: usize) -> Result<(), SocketError>;
-    fn accept(&self) -> Result<Ri, SocketError>;
-    fn accept_and_get_addr(&self) -> Result<(Ri, Option<OwnedSocketAddr>), SocketError>;
-    fn bind(&self, addr: SocketAddrRef) -> Result<(), SocketError>;
-    fn connect(&self, addr: SocketAddrRef) -> Result<(), SocketError>;
-
-    fn receive(&self, buf: &mut [u8], flags: SockMsgFlags) -> Result<usize, SocketError>;
-    fn send(&self, buf: &[u8], flags: SockMsgFlags) -> Result<usize, SocketError>;
-
-    fn send_to(
-        &self,
-        buf: &[u8],
-        flags: SockMsgFlags,
-        addr: SocketAddrRef,
-    ) -> Result<usize, SocketError>;
-    fn recv_from(
-        &self,
-        buf: &mut [u8],
-        flags: SockMsgFlags,
-    ) -> Result<(usize, Option<OwnedSocketAddr>), SocketError>;
 }
 
 impl Resource for SocketResource {
@@ -318,57 +285,6 @@ impl Resource for SocketResource {
     fn address_space_generic(&self) -> bool {
         false
     }
-
-    fn as_socket(&self) -> Option<&dyn SocketResourceTrait> {
-        Some(self)
-    }
-}
-
-impl SocketResourceTrait for SocketResource {
-    fn accept(&self) -> Result<Ri, SocketError> {
-        self.accept()
-            .map(|good| resources::add_global_resource(good))
-    }
-    fn accept_and_get_addr(&self) -> Result<(Ri, Option<OwnedSocketAddr>), SocketError> {
-        self.accept_and_get_addr()
-            .map(|(good, addr)| (resources::add_global_resource(good), addr))
-    }
-
-    fn listen(&self, backlog: usize) -> Result<(), SocketError> {
-        self.0.listen(backlog)
-    }
-
-    fn bind(&self, addr: SocketAddrRef) -> Result<(), SocketError> {
-        self.0.bind(addr)
-    }
-
-    fn connect(&self, addr: SocketAddrRef) -> Result<(), SocketError> {
-        self.0.connect(addr)
-    }
-
-    fn recv_from(
-        &self,
-        buf: &mut [u8],
-        flags: SockMsgFlags,
-    ) -> Result<(usize, Option<OwnedSocketAddr>), SocketError> {
-        self.0.recv_from(buf, flags)
-    }
-
-    fn send_to(
-        &self,
-        buf: &[u8],
-        flags: SockMsgFlags,
-        addr: SocketAddrRef,
-    ) -> Result<usize, SocketError> {
-        self.0.send_to(buf, flags, addr)
-    }
-
-    fn receive(&self, buf: &mut [u8], flags: SockMsgFlags) -> Result<usize, SocketError> {
-        self.0.receive(buf, flags)
-    }
-    fn send(&self, buf: &[u8], flags: SockMsgFlags) -> Result<usize, SocketError> {
-        self.0.send(buf, flags)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -389,7 +305,7 @@ pub fn create_socket(
     kind: SocketKind,
     protocol: u32,
     can_block: bool,
-) -> Result<Ri, ErrorStatus> {
+) -> Result<SocketResource, ErrorStatus> {
     const UDP_PROTOCOL: u32 = IPv4Protocol::UDP.as_u8() as u32;
     const ICMP_PROTOCOL: u32 = IPv4Protocol::ICMP.as_u8() as u32;
 
@@ -403,13 +319,13 @@ pub fn create_socket(
 
             let local_socket = LocalSocket::create(local_socket_kind, can_block);
             let socket_resource = SocketResource(local_socket);
-            Ok(resources::add_global_resource(socket_resource))
+            Ok(socket_resource)
         }
 
         (SocketFamily::Net, SocketKind::Datagram, 0 | UDP_PROTOCOL) => {
             let udp_socket = UdpSocket::create(can_block, udp::DatagramProtocol::UDP);
             let socket_resource = SocketResource(udp_socket);
-            Ok(resources::add_global_resource(socket_resource))
+            Ok(socket_resource)
         }
 
         (SocketFamily::Net, SocketKind::Datagram, ICMP_PROTOCOL) => {
@@ -422,7 +338,7 @@ pub fn create_socket(
                 udp::DatagramProtocol::ICMP(CURR_ICMP_COUNT.fetch_add(1, Ordering::Relaxed)),
             );
             let socket_resource = SocketResource(icmp_socket);
-            Ok(resources::add_global_resource(socket_resource))
+            Ok(socket_resource)
         }
 
         _ => return Err(ErrorStatus::TypeMismatch),

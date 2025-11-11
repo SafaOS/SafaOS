@@ -7,7 +7,6 @@ use core::{
 use crate::{
     drivers::vfs::SeekOffset,
     process::{self, poll::PollID, vas::MemMappedInterface},
-    sockets::SocketResourceTrait,
     thread, warn,
 };
 use alloc::{boxed::Box, sync::Arc};
@@ -18,11 +17,6 @@ use safa_abi::errors::ErrorStatus;
 pub type Ri = u32;
 
 pub trait Resource: Any {
-    /// Returns Some(&dyn [`SocketResource`]) if self implements it.
-    fn as_socket(&self) -> Option<&dyn SocketResourceTrait> {
-        None
-    }
-
     /// Performs a write operation on the resource.
     fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
         _ = off;
