@@ -118,8 +118,8 @@ fn main() -> SysResult {
                 continue;
             }
             Err(e) => {
-                println!("error receiving packet: {}", e.as_str());
-                return SysResult::err(e);
+                println!("error receiving packet: {}, retrying...", e.as_str());
+                continue;
             }
             Ok(k) => k,
         };
