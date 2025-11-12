@@ -359,6 +359,11 @@ impl Socket for UdpSocket {
         let message = messages.front();
         let Some(message) = message else {
             if can_block {
+                // error wasn't handled
+                if let Some(err) = self.last_error() {
+                    return Err(err);
+                }
+
                 let pending_wait = self.wait_queue.prepare_wait();
                 drop(messages);
                 // FIXME: retrying doesn't respect timeout...
