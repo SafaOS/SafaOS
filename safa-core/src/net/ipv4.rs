@@ -149,6 +149,11 @@ impl IPv4Header {
     pub const fn as_bytes(&self) -> &[u8] {
         unsafe { core::mem::transmute::<&Self, &[u8; size_of::<Self>()]>(self) }
     }
+
+    #[inline]
+    pub const fn protocol(&self) -> IPv4Protocol {
+        self.protocol
+    }
 }
 
 const _: () = assert!(size_of::<IPv4Header>() == 20);

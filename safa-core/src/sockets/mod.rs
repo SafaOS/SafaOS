@@ -46,6 +46,11 @@ pub enum SocketError {
     TypeMismatch,
     NotBound,
     Timeout,
+    InvalidSize,
+    NetworkUnreachable,
+    HostUnreachable,
+    MissingPermissions,
+    ProtocolUnreachable,
 }
 
 impl From<WaitError> for SocketError {
@@ -84,6 +89,11 @@ impl IntoErr for SocketError {
             Self::TypeMismatch => safa_abi::errors::ErrorStatus::TypeMismatch,
             Self::NotBound => safa_abi::errors::ErrorStatus::NotBound,
             Self::Timeout => safa_abi::errors::ErrorStatus::Timeout,
+            Self::InvalidSize => safa_abi::errors::ErrorStatus::InvalidSize,
+            Self::HostUnreachable => safa_abi::errors::ErrorStatus::HostUnreachable,
+            Self::NetworkUnreachable => safa_abi::errors::ErrorStatus::NetworkUnreachable,
+            Self::MissingPermissions => safa_abi::errors::ErrorStatus::MissingPermissions,
+            Self::ProtocolUnreachable => safa_abi::errors::ErrorStatus::ProtocolNotSupported,
         }
     }
 }

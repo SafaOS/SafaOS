@@ -4,7 +4,12 @@ use alloc::sync::Arc;
 use hashbrown::HashMap;
 use rustc_hash::FxBuildHasher;
 
-use crate::{net::ipv4::IPv4Protocol, sockets::udp::UdpSocket, utils::locks::RwLock, warn};
+use crate::{
+    net::ipv4::IPv4Protocol,
+    sockets::{SocketError, udp::UdpSocket},
+    utils::locks::RwLock,
+    warn,
+};
 
 #[repr(C, packed)]
 struct PseudoHeader {
@@ -187,4 +192,27 @@ pub fn bind_socket(port: Option<NonZero<u16>>, socket: Arc<UdpSocket>) -> Result
     })?;
     ports.try_insert(port.get(), socket).map_err(|_| ())?;
     Ok(port)
+}
+
+/// UDP's handler for a destination unreachable ICMP packet.
+///
+/// returns an Error if the packet is too small to be a UDP Packet.
+pub fn handle_dest_unreachable_udp(
+    error: SocketError,
+    target_ip: Ipv4Addr,
+    packet_payload: &[u8],
+) -> Result<(), ()> {
+    _ = target_ip;
+    let udp_packet = UDPPacket::try_from_bytes(packet_payload)?;
+    let header = udp_packet.header();
+
+    let src_port = header.src_port();
+
+    let ports = UDP_PORTS.read();
+    let Some(socket) = ports.get(&src_port) else {
+        return Ok(());
+    };
+
+    socket.set_error(error);
+    Ok(())
 }

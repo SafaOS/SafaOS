@@ -11,10 +11,10 @@ use crate::{
     debug,
     net::{
         self, calculate_checksum_of,
-        ipv4::PageIPv4Packet,
+        ipv4::{IPv4Header, IPv4Protocol, PageIPv4Packet},
         manager::{NetworkError, NetworkManager},
     },
-    sockets::udp::UdpSocket,
+    sockets::{SocketError, udp::UdpSocket},
     utils::locks::Mutex,
     warn,
 };
@@ -29,11 +29,33 @@ impl ICMPType {
     pub const DESTINATION_UNREACHABLE: ICMPType = ICMPType(3);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct ICMPCode(u8);
+impl ICMPCode {
+    pub const NETWORK_UNREACHABLE: ICMPCode = ICMPCode(0);
+    pub const HOST_UNREACHABLE: ICMPCode = ICMPCode(1);
+    pub const PROTOCOL_UNREACHABLE: ICMPCode = ICMPCode(2);
+    pub const PORT_UNREACHABLE: ICMPCode = ICMPCode(3);
+    pub const FRAGMENTATION_NEEDED: ICMPCode = ICMPCode(4);
+    pub const SOURCE_ROUTE_FAILED: ICMPCode = ICMPCode(5);
+    pub const DESTINATION_NETWORK_UNKNOWN: ICMPCode = ICMPCode(6);
+    pub const DESTINATION_HOST_UNKNOWN: ICMPCode = ICMPCode(7);
+    pub const SOURCE_HOST_ISOLATED: ICMPCode = ICMPCode(8);
+    pub const NETWORK_ADMINISTRATIVELY_PROHIBITED: ICMPCode = ICMPCode(9);
+    pub const HOST_ADMINISTRATIVELY_PROHIBITED: ICMPCode = ICMPCode(10);
+    pub const NETWORK_UNREACHABLE_FOR_TOS: ICMPCode = ICMPCode(11);
+    pub const HOST_UNREACHABLE_FOR_TOS: ICMPCode = ICMPCode(12);
+    pub const COMMUNICATION_ADMINISTRATIVELY_PROHIBITED: ICMPCode = ICMPCode(13);
+    pub const HOST_PRECEDENCE_VIOLATION: ICMPCode = ICMPCode(14);
+    pub const PRECEDENCE_CUTOFF_IN_EFFECT: ICMPCode = ICMPCode(15);
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct IcmpHeader {
     ty: ICMPType,
-    code: u8,
+    code: ICMPCode,
     checksum: u16,
 }
 
@@ -157,7 +179,7 @@ impl EchoIcmpPacket {
         if packet.data().len() < size_of::<EchoHeader>() {
             None
         } else {
-            Some(unsafe { core::mem::transmute::<&IcmpPacket, &EchoIcmpPacket>(packet) })
+            Some(unsafe { core::mem::transmute::<&IcmpPacket, &Self>(packet) })
         }
     }
 
@@ -195,6 +217,38 @@ impl Deref for EchoIcmpPacket {
 impl DerefMut for EchoIcmpPacket {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C, packed)]
+pub struct DestUnreachableICMPHeader {
+    empty: u16,
+    next_mtu: u16,
+    ip_header: IPv4Header,
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct DestUnreachableICMPPacket(IcmpPacket);
+
+impl DestUnreachableICMPPacket {
+    /// Create a new Destination Unreachable ICMP packet from a an IcmpPacket, return None if the data is too small.
+    pub const fn new<'a>(packet: &'a IcmpPacket) -> Option<&'a Self> {
+        if packet.data().len() < size_of::<DestUnreachableICMPHeader>() {
+            None
+        } else {
+            Some(unsafe { core::mem::transmute::<&IcmpPacket, &Self>(packet) })
+        }
+    }
+
+    /// Returns a reference to the Destination Unreachable ICMP header.
+    pub const fn header(&self) -> &DestUnreachableICMPHeader {
+        unsafe { &*self.0.data().as_ptr().cast() }
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.0.data()[size_of::<DestUnreachableICMPHeader>()..]
     }
 }
 
@@ -288,6 +342,17 @@ pub fn handle_icmp_packet(from: Ipv4Addr, our_ip: Ipv4Addr, packet_bytes: &mut [
                 socket.write(from, 0, echo_packet.as_bytes());
             }
         }
+        ICMPType::DESTINATION_UNREACHABLE => {
+            let Some(dest_unreachable_packet) = DestUnreachableICMPPacket::new(packet) else {
+                debug!(
+                    NetworkManager,
+                    "Received ICMP Destination Unreachable payload invalid size: {packet_size}"
+                );
+                return;
+            };
+
+            handle_dest_unreachable(dest_unreachable_packet)
+        }
         o => {
             debug!(
                 NetworkManager,
@@ -295,4 +360,80 @@ pub fn handle_icmp_packet(from: Ipv4Addr, our_ip: Ipv4Addr, packet_bytes: &mut [
             );
         }
     }
+}
+
+fn handle_dest_unreachable(packet: &DestUnreachableICMPPacket) {
+    let code = packet.0.header().code;
+
+    let error = match code {
+        ICMPCode::NETWORK_UNREACHABLE
+        | ICMPCode::DESTINATION_NETWORK_UNKNOWN
+        | ICMPCode::SOURCE_HOST_ISOLATED
+        | ICMPCode::NETWORK_UNREACHABLE_FOR_TOS => SocketError::NetworkUnreachable,
+
+        ICMPCode::HOST_UNREACHABLE
+        | ICMPCode::SOURCE_ROUTE_FAILED
+        | ICMPCode::DESTINATION_HOST_UNKNOWN
+        | ICMPCode::HOST_UNREACHABLE_FOR_TOS
+        | ICMPCode::HOST_PRECEDENCE_VIOLATION
+        | ICMPCode::PRECEDENCE_CUTOFF_IN_EFFECT => SocketError::HostUnreachable,
+
+        ICMPCode::FRAGMENTATION_NEEDED => SocketError::InvalidSize,
+        ICMPCode::PORT_UNREACHABLE => SocketError::ConnectionRefused,
+        ICMPCode::PROTOCOL_UNREACHABLE => SocketError::ProtocolUnreachable,
+
+        ICMPCode::HOST_ADMINISTRATIVELY_PROHIBITED
+        | ICMPCode::NETWORK_ADMINISTRATIVELY_PROHIBITED
+        | ICMPCode::COMMUNICATION_ADMINISTRATIVELY_PROHIBITED => SocketError::MissingPermissions,
+
+        other => {
+            warn!("Received an unknown ICMP Destination unreachable code: {other:?}");
+            return;
+        }
+    };
+
+    let dest_header = packet.header();
+    let data = packet.data();
+
+    let ip_header = dest_header.ip_header;
+    let dst_addr = ip_header.dst_addr;
+
+    let handler = match ip_header.protocol() {
+        IPv4Protocol::ICMP => handle_dest_unreachable_for_icmp,
+        IPv4Protocol::UDP => net::udp::handle_dest_unreachable_udp,
+        _ => return, /* consider it done */
+    };
+
+    if let Err(()) = handler(error, dst_addr, data) {
+        debug!(
+            NetworkManager,
+            "Couldn't handle Destination unreachable, because the payload is too small"
+        );
+    }
+}
+/// ICMP's handler for a destination unreachable ICMP packet.
+///
+/// returns an Error if the packet is too small to be an ICMP Packet.
+fn handle_dest_unreachable_for_icmp(
+    error: SocketError,
+    target_ip: Ipv4Addr,
+    icmp_packet_data: &[u8],
+) -> Result<(), ()> {
+    let packet = IcmpPacket::new(icmp_packet_data).ok_or(())?;
+
+    let header = packet.header();
+    match header.ty {
+        ICMPType::ECHO_REQUEST => {
+            let echo_packet = EchoIcmpPacket::new(packet).ok_or(())?;
+            let echo_header = echo_packet.header();
+            let id = echo_header.id;
+
+            let mut waiting_for_replies = PENDING_ICMP_REPLY.lock();
+            if let Some(socket) = waiting_for_replies.remove(&(target_ip, id)) {
+                socket.set_error(error);
+            }
+        }
+        _ => {} /* consider it done */
+    }
+    Ok(())
 }

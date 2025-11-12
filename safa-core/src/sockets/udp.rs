@@ -9,7 +9,11 @@ use alloc::{
     collections::linked_list::LinkedList,
     sync::{Arc, Weak},
 };
-use safa_abi::{errors::ErrorStatus, poll::PollEvents, sockets::SockMsgFlags};
+use safa_abi::{
+    errors::{ErrorStatus, IntoErr},
+    poll::PollEvents,
+    sockets::SockMsgFlags,
+};
 
 use crate::{
     debug,
@@ -68,6 +72,7 @@ pub enum DatagramProtocol {
 pub struct UdpSocket {
     protocol: DatagramProtocol,
     timeout_info: RwLock<TimeoutInfo>,
+    error: Mutex<Option<SocketError>>,
     ttl: AtomicU8,
     state: RwLock<UdpState>,
     messages: Mutex<LinkedList<Message>>,
@@ -77,8 +82,27 @@ pub struct UdpSocket {
 }
 
 impl UdpSocket {
+    #[inline]
+    pub fn last_error(&self) -> Option<SocketError> {
+        // TODO: Is the atomic operation correct?
+        *self.error.lock()
+    }
+
+    #[inline]
+    pub fn take_error(&self) -> Option<SocketError> {
+        self.error.lock().take()
+    }
+
+    #[inline]
+    pub fn set_error(&self, error: SocketError) {
+        let mut wait_queue = self.wait_queue.lock();
+        *self.error.lock() = Some(error);
+        wait_queue.wake_all();
+    }
+
     pub fn create(can_block: bool, protocol: DatagramProtocol) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
+            error: Mutex::new(None),
             protocol,
             ttl: AtomicU8::new(DEFAULT_TTL),
             timeout_info: RwLock::new(TimeoutInfo {
@@ -133,7 +157,7 @@ impl Socket for UdpSocket {
             super::SocketOpt::WriteTimeout => {
                 self.timeout_info.write().write_timeout = NonZero::new(value)
             }
-            super::SocketOpt::SockError => todo!(),
+            super::SocketOpt::SockError => return Err(ErrorStatus::InvalidCommand),
             super::SocketOpt::IpBroadcast => {
                 // TODO: broadcast permissions
             }
@@ -164,7 +188,11 @@ impl Socket for UdpSocket {
                 let timeout = self.timeout_info.read().write_timeout;
                 *r = timeout;
             }
-            super::SocketOpt::SockError => todo!(),
+            super::SocketOpt::SockError => {
+                let r = <&mut u16>::make(to_usr_ptr.cast())?;
+                let err = self.take_error();
+                *r = err.map(|e| e.into_err() as u16).unwrap_or(0);
+            }
             super::SocketOpt::IpBroadcast => {
                 // TODO: broadcast permissions...
                 let r = <&mut bool>::make(to_usr_ptr.cast())?;
@@ -335,6 +363,10 @@ impl Socket for UdpSocket {
                 drop(messages);
                 // FIXME: retrying doesn't respect timeout...
                 pending_wait.enter_wait((), timeout_info.read_timeout)?;
+                if let Some(err) = self.last_error() {
+                    return Err(err);
+                }
+
                 return self.recv_from(buf, flags);
             } else {
                 return Err(SocketError::WouldBlockEmpty);
