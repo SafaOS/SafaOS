@@ -63,6 +63,8 @@ impl EchoIcmpPacket {
     }
 }
 
+const TIMEOUT_SECONDS: u64 = 1;
+
 fn main() -> SysResult {
     let mut args = std::env::args();
 
@@ -87,7 +89,7 @@ fn main() -> SysResult {
     .expect("Failed to create socket");
     // Timeout after 1 second
     socket
-        .set_sock_opt(SocketOpt::ReadTimeout, 1000u64)
+        .set_sock_opt(SocketOpt::ReadTimeout, TIMEOUT_SECONDS * 1000)
         .expect("Failed to setup socket");
 
     let data: [u8; 56] = std::array::from_fn(|index| b'a' + index as u8);
@@ -119,6 +121,10 @@ fn main() -> SysResult {
             }
             Err(e) => {
                 println!("error receiving packet: {}, retrying...", e.as_str());
+                let elapsed = instat.elapsed();
+                if let Some(dur) = Duration::from_secs(TIMEOUT_SECONDS).checked_sub(elapsed) {
+                    std::thread::sleep(dur);
+                }
                 continue;
             }
             Ok(k) => k,
