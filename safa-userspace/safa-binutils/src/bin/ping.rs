@@ -1,5 +1,6 @@
 use std::{
     net::ToSocketAddrs,
+    num::NonZero,
     time::{Duration, Instant},
 };
 
@@ -119,13 +120,31 @@ fn main() -> SysResult {
                 println!("timeout sending packet, retrying...");
                 continue;
             }
-            Err(e) => {
-                println!("error receiving packet: {}, retrying...", e.as_str());
-                let elapsed = instat.elapsed();
-                if let Some(dur) = Duration::from_secs(TIMEOUT_SECONDS).checked_sub(elapsed) {
-                    std::thread::sleep(dur);
+            Err(supposed_error) => {
+                let mut err: Option<NonZero<u16>> = None;
+
+                unsafe {
+                    socket
+                        .get_sock_opt(SocketOpt::SocketError, &mut err)
+                        .expect("Failed to take socket error");
                 }
-                continue;
+
+                let err = err.map(|s| ErrorStatus::from_u16(s.get()));
+
+                if let Some(e) = err {
+                    println!("error receiving packet: {}, retrying...", e.as_str());
+                    let elapsed = instat.elapsed();
+                    if let Some(dur) = Duration::from_secs(TIMEOUT_SECONDS).checked_sub(elapsed) {
+                        std::thread::sleep(dur);
+                    }
+                    continue;
+                } else {
+                    println!(
+                        "error receiving packet: {}, SocketError wasn't set stopping..",
+                        supposed_error.as_str()
+                    );
+                    return SysResult::err(supposed_error);
+                }
             }
             Ok(k) => k,
         };
