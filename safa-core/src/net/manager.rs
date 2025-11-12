@@ -20,15 +20,13 @@ use crate::{
 pub enum NetworkError {
     PayloadTooLarge,
     NoInterface,
-    AddressNotFound,
 }
 
 impl IntoErr for NetworkError {
     fn into_err(self) -> safa_abi::errors::ErrorStatus {
         match self {
-            Self::PayloadTooLarge => ErrorStatus::StrTooLong,
+            Self::PayloadTooLarge => ErrorStatus::InvalidSize,
             Self::NoInterface => ErrorStatus::Unknown,
-            Self::AddressNotFound => ErrorStatus::AddressNotFound,
         }
     }
 }
@@ -74,8 +72,6 @@ impl NetworkManager {
         }
 
         let frame = EthernetFrame::from_bytes_mut(packet);
-        // TODO: Handle the packet
-        debug!(NetworkManager, "Received packet: {:#x?}", frame);
         match frame.header.ethertype {
             EthernetType::IPV4 => ipv4::handle_ipv4_packet(interface, &mut frame.payload),
             other => debug!(NetworkManager, "Unknown ethertype: {:#x?}", other),

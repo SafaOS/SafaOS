@@ -65,8 +65,8 @@ impl From<WaitError> for SocketError {
 impl From<NetworkError> for SocketError {
     fn from(value: NetworkError) -> Self {
         match value {
-            NetworkError::AddressNotFound | NetworkError::NoInterface => Self::UnknownAddress,
-            NetworkError::PayloadTooLarge => Self::InvalidArgument,
+            NetworkError::NoInterface => Self::UnknownAddress,
+            NetworkError::PayloadTooLarge => Self::InvalidSize,
         }
     }
 }
