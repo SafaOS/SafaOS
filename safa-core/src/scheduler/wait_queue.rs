@@ -9,6 +9,7 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::arch::with_interrupts;
+use crate::scheduler::{self};
 use crate::thread;
 use crate::thread::ArcThread;
 use crate::utils::locks::{Mutex, MutexGuard};
@@ -49,13 +50,19 @@ impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason> {
             // Ensures that the allocator won't context switch
             wait_queue_guard.threads.push((thread.clone(), reason));
             with_interrupts(|| {
-                if let Some(timeout) = timeout {
+                let not_done = if let Some(timeout) = timeout {
+                    // Returns true if we should yield
                     thread.prepare_sleep_for_ms(timeout)
                 } else {
                     thread.block_waiting();
-                }
+                    // Not done yet
+                    true
+                };
                 drop(wait_queue_guard);
-                thread::current::yield_now();
+
+                if not_done {
+                    thread::current::yield_now();
+                }
             });
 
             let remove_self = || {
@@ -79,6 +86,11 @@ impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason> {
             if unsafe { thread.operation_timeout() } {
                 remove_self();
                 return Err(WaitError::Timeout);
+            } else {
+                // If we'd be the one to remove the thread,
+                // we must make sure it is removed from the scheduler's sleeping queue
+                // before it for example can block again and gets awaken early because the scheduler decided so
+                scheduler::remove_sleeping_matches(thread);
             }
 
             Ok(())

@@ -13,8 +13,8 @@ use crate::{
     arch::{threading::CPUStatus, without_interrupts},
     debug, eve,
     process::{Pid, Process, resources::Ri},
-    scheduler::Scheduler,
-    thread, time,
+    scheduler::{self, Scheduler},
+    thread,
     utils::locks::{Mutex, SpinLock, SpinLockGuard},
 };
 
@@ -54,29 +54,11 @@ impl From<RawContextPriority> for ContextPriority {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockedReason {
-    /// The thread is sleeping until [`.0`] ms of boot time is reached
-    SleepingUntil(u64),
-    SleepingFor(NonZero<u64>),
+    // /// The thread is sleeping until [`.0`] ms of boot time is reached
+    // SleepingUntil(u64),
+    // SleepingFor(NonZero<u64>),
     Waiting,
     Dead,
-}
-
-impl BlockedReason {
-    pub fn try_lift_block(&self, thread: &ArcThread) -> bool {
-        match self {
-            Self::SleepingUntil(n) => {
-                if time!(ms) >= *n {
-                    unsafe { *thread.timeouted.get() = true };
-                    true
-                } else {
-                    false
-                }
-            }
-            Self::SleepingFor(_) => unreachable!("Sleeping for should become SleepingUntil"),
-            Self::Waiting => false,
-            Self::Dead => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,27 +207,21 @@ impl ArcThread {
         unsafe { Process::on_thread_exit(process, self, exit_code) };
     }
 
-    // Puts this thread to sleep in the given wait queue, for the given reason [`reason`],
-    // doesn't immediately begin sleeping until the next thread yield.
-    //
-    // # Safety
-    // This function is safe but if used incorrectly can lead to deadlocks, please run without interrupts and then drop any local locks after calling this function, before yielding to begin the sleep.
-    // pub fn sleep_in_queue<const AVERAGE: usize, Reason>(
-    //     self,
-    //     queue: &mut WaitQueue<AVERAGE, Reason>,
-    //     reason: Reason,
-    // ) {
-    //     queue.push(self, reason);
-    // }
-
-    // pub fn sleep_in_queue_with_timeout<const AVERAGE: usize, Reason>(
-    //     self,
-    //     queue: &mut WaitQueueWithTimeout<AVERAGE, Reason>,
-    //     reason: Reason,
-    //     duration: Option<NonZero<u64>>,
-    // ) -> Option<NonZero<u64>> {
-    //     queue.push(self, reason, duration)
-    // }
+    #[must_use = "returns if it slept or not"]
+    /// Prepares the current thread to sleep for a given number of milliseconds.
+    ///
+    /// Sleep will begin on the next call to [`thread::current::yield_now()`].
+    pub fn prepare_sleep_for_ms(&self, ms: NonZero<u64>) -> bool {
+        if scheduler::add_sleeping_thread(self.clone(), ms) {
+            let mut status_mut = self.status_mut();
+            unsafe { *self.timeouted.get() = false };
+            *status_mut = ContextStatus::Blocked(BlockedReason::Waiting);
+            true
+        } else {
+            unsafe { *self.timeouted.get() = true };
+            false
+        }
+    }
 }
 
 impl Drop for ArcThread {
@@ -422,9 +398,7 @@ impl Thread {
                 ContextStatus::Blocked(BlockedReason::Dead) => {
                     break;
                 }
-                ContextStatus::Blocked(
-                    BlockedReason::SleepingUntil(_) | BlockedReason::Waiting | BlockedReason::SleepingFor(_),
-                ) => {
+                ContextStatus::Blocked(BlockedReason::Waiting) => {
                     *status = ContextStatus::Runnable;
                 }
             }
@@ -455,18 +429,20 @@ impl Thread {
         });
     }
 
+    /// Wake up a thread that has been sleeping for a defined time
+    pub fn wake_up_sleeping_for_time(&self) {
+        without_interrupts(|| {
+            let mut status = self.status.lock();
+            if matches!(*status, ContextStatus::Blocked(_)) {
+                *status = ContextStatus::Runnable;
+                unsafe { *self.timeouted.get() = true }
+            }
+        })
+    }
+
     /// Should only be called by the current thread or the scheduler or on a sleeping thread
     pub fn set_status(&self, status: ContextStatus) {
         *self.status.lock() = status;
-    }
-
-    /// Prepares the current thread to sleep for a given number of milliseconds.
-    ///
-    /// Sleep will begin on the next call to [`thread::current::yield_now()`].
-    pub fn prepare_sleep_for_ms(&self, ms: NonZero<u64>) {
-        let mut status_mut = self.status_mut();
-        unsafe { *self.timeouted.get() = false };
-        *status_mut = ContextStatus::Blocked(BlockedReason::SleepingFor(ms));
     }
 }
 

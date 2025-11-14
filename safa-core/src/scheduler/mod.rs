@@ -3,18 +3,20 @@ mod tests;
 
 use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::hint::likely;
+use core::num::NonZero;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::thread::{ArcThread, BlockedReason, ContextPriority, ContextStatus};
+use crate::thread::{ArcThread, ContextPriority, ContextStatus};
 use crate::utils::path::make_path;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use crate::arch::without_interrupts;
 use crate::process::Process;
-use crate::utils::locks::SpinLock;
+use crate::utils::locks::{Mutex, SpinLock};
 use crate::utils::types::Name;
-use crate::{VirtAddr, arch, time};
+use crate::{VirtAddr, arch};
 use alloc::boxed::Box;
 
 pub mod process_list;
@@ -25,6 +27,119 @@ use crate::{
     debug,
     memory::paging::PhysPageTable,
 };
+
+#[derive(Debug, Clone)]
+struct SleepingThread {
+    wake_at: NonZero<u64>,
+    thread: ArcThread,
+}
+
+impl SleepingThread {
+    #[inline(always)]
+    pub const fn new(thread: ArcThread, wakeup_time: NonZero<u64>) -> Self {
+        SleepingThread {
+            wake_at: wakeup_time,
+            thread,
+        }
+    }
+}
+
+struct SleepingThreads {
+    threads: Vec<SleepingThread>,
+    next_wake_at: Option<NonZero<u64>>,
+}
+
+impl SleepingThreads {
+    pub const fn new() -> Self {
+        Self {
+            threads: Vec::new(),
+            next_wake_at: None,
+        }
+    }
+
+    #[inline]
+    pub fn wake_all_matches(&mut self, mut f: impl FnMut(&SleepingThread) -> bool) {
+        let mut i = 0;
+        let mut new_next_wake_at = None;
+
+        while i < self.threads.len() {
+            let Some(thread) = self.threads.get(i) else {
+                break;
+            };
+
+            if f(&thread) {
+                // Swap remove replaces elements so the index is still there for the next iteration.
+                let thread = self.threads.swap_remove(i).thread;
+                // Wakes up sleeping thread...
+                thread.wake_up_sleeping_for_time();
+                continue;
+            }
+
+            if new_next_wake_at.is_none_or(|val| val > thread.wake_at) {
+                new_next_wake_at = Some(thread.wake_at);
+            }
+            i += 1;
+        }
+
+        self.next_wake_at = new_next_wake_at;
+    }
+}
+
+/// Interacting with this must be done by
+/// - [`try_wake_sleeping`] unsafe.
+/// - [`add_sleeping_thread`] safe.
+/// only.
+static SLEEPING_THREADS: Mutex<SleepingThreads> = Mutex::new(SleepingThreads::new());
+
+fn try_wake_sleeping() {
+    let Some(mut sleeping_threads) = SLEEPING_THREADS.try_lock() else {
+        return;
+    };
+
+    let next_wake_at = sleeping_threads.next_wake_at;
+    let Some(next_wake_at_val) = next_wake_at else {
+        return;
+    };
+
+    let time = crate::time!(ms);
+    if time >= next_wake_at_val.get() {
+        sleeping_threads.wake_all_matches(|entry| entry.wake_at.get() <= time);
+    }
+}
+
+/// Adds thread `thread` to the sleeping queue, so that it wake up at `wake_at`.
+///
+/// Returns false if the thread should wake up immediately otherwise true.
+pub fn add_sleeping_thread(thread: ArcThread, wake_after_ms: NonZero<u64>) -> bool {
+    let wake_at = NonZero::new(wake_after_ms.get() + crate::time!(ms)).expect("Shouldn't fail");
+
+    let mut sleeping_threads = SLEEPING_THREADS.lock();
+    if crate::time!(ms) >= wake_at.get() {
+        return false;
+    }
+
+    sleeping_threads
+        .threads
+        .push(SleepingThread::new(thread, wake_at));
+
+    if sleeping_threads.next_wake_at.is_none_or(|v| v > wake_at) {
+        sleeping_threads.next_wake_at = Some(wake_at);
+    }
+    true
+}
+
+/// MUST BE CALLED If you are going to be awaking a sleeping thread early before it goes to sleep again.
+pub fn remove_sleeping_matches(matches: &ArcThread) {
+    let mut sleeping_threads = SLEEPING_THREADS.lock();
+
+    if let Some(idx) = sleeping_threads
+        .threads
+        .iter()
+        .position(|t| Arc::ptr_eq(matches, &t.thread))
+    {
+        sleeping_threads.threads.swap_remove(idx);
+    }
+}
 
 #[derive(Debug)]
 pub struct Scheduler {
@@ -126,11 +241,6 @@ unsafe fn switch_inner(
             if *status == ContextStatus::Running {
                 *status = ContextStatus::Runnable;
             }
-
-            if let ContextStatus::Blocked(BlockedReason::SleepingFor(am)) = *status {
-                *status =
-                    ContextStatus::Blocked(BlockedReason::SleepingUntil(am.get() + time!(ms)));
-            }
         }
 
         let try_choose_thread = |choose: &ArcThread| {
@@ -157,21 +267,27 @@ unsafe fn switch_inner(
 
             match &*status {
                 ContextStatus::Runnable => return choose_context!(),
-                ContextStatus::Blocked(reason) if reason.try_lift_block(choose) => {
-                    return choose_context!();
-                }
                 ContextStatus::Blocked(_) => None,
                 ContextStatus::Running => unreachable!(),
             }
         };
 
-        let mut current = current_thread.next().as_ref().unwrap_or(head_thread);
+        let mut current = current_thread.next().as_ref().unwrap_or_else(|| {
+            try_wake_sleeping();
+            head_thread
+        });
         loop {
             if let Some(results) = try_choose_thread(current) {
                 return results;
             }
 
-            current = current.next().as_ref().unwrap_or(head_thread);
+            current = match current.next().as_ref() {
+                Some(s) => s,
+                None => {
+                    try_wake_sleeping();
+                    head_thread
+                }
+            };
         }
     }
 }

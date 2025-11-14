@@ -33,8 +33,9 @@ pub fn sleep_for_ms(ms: u64) -> Result<(), WaitError> {
 
     without_interrupts(|| {
         thread::with_current(|current| {
-            current.prepare_sleep_for_ms(ms);
-            yield_now();
+            if current.prepare_sleep_for_ms(ms) {
+                yield_now();
+            }
 
             if current.should_terminate() {
                 Err(WaitError::ForceTerminated)
