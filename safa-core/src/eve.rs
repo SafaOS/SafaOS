@@ -64,6 +64,9 @@ fn poll_driver_thread(tid: Tid, driver: &&dyn PolledDriver) -> ! {
 /// it will run until doomsday
 pub fn main() -> ! {
     *logging::SERIAL_LOG.write() = Some(PageString::new());
+
+    crate::drivers::pci::init();
+
     crate::info!("eve has been awaken ...");
     for cpu in 0..unsafe { cpu_local_storages().len().div_ceil(2) } {
         kernel_thread_spawn(

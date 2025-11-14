@@ -225,6 +225,8 @@ fn panic(info: &PanicInfo) -> ! {
     })
 }
 
+/// Basic scheduler, memory, and CPU initialization.
+/// The reset of the initialization is done by [`eve::main`].
 #[unsafe(no_mangle)]
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
@@ -233,7 +235,6 @@ extern "C" fn kstart() -> ! {
     logging::BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
     arch::init_phase2();
-    drivers::pci::init();
 
     unsafe {
         logging::BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
