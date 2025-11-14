@@ -24,7 +24,10 @@ use crate::{
         ethernet::{EthernetHeader, EthernetType},
         interface::NetworkInterface,
     },
+    process,
+    scheduler::wait_queue::WaitQueue,
     sleep, sleep_until,
+    thread::{ContextPriority, Tid},
     utils::locks::{Mutex, RwLock},
 };
 
@@ -894,6 +897,7 @@ pub struct E1000NetCard {
     com: OnceCell<Mutex<E1000Comm>>,
     irq_info: IRQInfo,
     addr_info: RwLock<NicAddrInfoV4>,
+    wait_queue: Mutex<WaitQueue<1>>,
 }
 
 impl E1000NetCard {
@@ -1230,33 +1234,48 @@ impl NetworkInterface for E1000NetCard {
     }
 }
 
+fn e1000_poll_thread(tid: Tid, nic: &'static E1000NetCard) -> ! {
+    info!(E1000NetCard, "Polling on thread {tid}");
+
+    loop {
+        let mut comm = nic.com.get().expect("E1000 Driver not initialized").lock();
+        // NOTE: Won't deadlock if an E1000 interrupt happens because of `Mutex`.
+        let pending_wait = nic.wait_queue.prepare_wait();
+        let curr = (nic.read_command(REG_RDT) + 1) as usize % RX_DESC_COUNT;
+        let desc = &mut comm.receive_descriptors[curr];
+
+        if (desc.status & 1) == 0 {
+            drop(comm);
+            pending_wait.enter_wait((), None).expect("Failed to wait");
+            continue;
+        }
+
+        if desc.error != 0 {
+            error!(E1000NetCard, "Received packet error: {:#x}", desc.error);
+        }
+
+        let bytes = desc.data_mut();
+        crate::net::handle_packet(nic, bytes);
+
+        crate::write_ref!(desc.status, 0);
+        nic.write_command(REG_RDT, curr as u32);
+    }
+}
+
 impl InterruptReceiver for E1000NetCard {
     fn handle_interrupt(&'static self) {
+        // Before we read any registers our anything,
+        // We have to lock the polling thread from reading registers, before polling any registers the polling thread must also lock the wait queue.
+        // TODO: This could be represented better by putting requiring a combined lock on write_comand, read_command
+        let mut wait_queue = self.wait_queue.lock();
+
         let icr = self.read_command(REG_ICR);
         if icr != 0 {
             debug!(E1000NetCard, "Interrupt received: {icr:#x}");
             self.write_command(REG_ICR, icr);
 
             if (icr & (ICR_RXQ0 | ICR_RXT0)) != 0 {
-                let mut comm = self.com.get().expect("E1000 Driver not initialized").lock();
-
-                loop {
-                    let curr = (self.read_command(REG_RDT) + 1) as usize % RX_DESC_COUNT;
-                    let desc = &mut comm.receive_descriptors[curr];
-
-                    if (desc.status & 1) == 0 {
-                        break;
-                    }
-                    if desc.error != 0 {
-                        error!(E1000NetCard, "Received packet error: {:#x}", desc.error);
-                    }
-
-                    let bytes = desc.data_mut();
-                    crate::net::handle_packet(self, bytes);
-
-                    crate::write_ref!(desc.status, 0);
-                    self.write_command(REG_RDT, curr as u32);
-                }
+                wait_queue.wake_all();
             }
         }
 
@@ -1329,6 +1348,7 @@ impl PCIDevice for E1000NetCard {
             eeprom_exists: OnceCell::new(),
             com: OnceCell::new(),
             addr_info: RwLock::new(NicAddrInfoV4::default()),
+            wait_queue: Mutex::new(WaitQueue::new()),
         }
     }
 
@@ -1340,6 +1360,13 @@ impl PCIDevice for E1000NetCard {
             return false;
         }
 
+        process::current::kernel_thread_spawn(
+            e1000_poll_thread,
+            self,
+            Some(ContextPriority::High),
+            None,
+        )
+        .expect("Failed to spawn E1000 poll thread");
         crate::net::add_interface(self);
         true
     }
