@@ -534,6 +534,10 @@ impl Process {
         self.threads_manager.lock()
     }
 
+    pub fn try_threads_manager<'s>(&'s self) -> Option<MutexGuard<'s, ThreadsManager>> {
+        self.threads_manager.try_lock()
+    }
+
     // TODO: Implement ArcProcess
     /// kills the process
     /// if `killed_by` is `None` the process will be killed by itself

@@ -274,7 +274,7 @@ impl ArcThread {
 
             if is_current {
                 // another thread is killing this thread
-                self.set_status(ContextStatus::Blocked(BlockedReason::Dead));
+                self.set_status(ContextStatus::Blocking(BlockedReason::Dead));
                 return false;
             } else {
                 while !self.is_dead() {
@@ -576,6 +576,7 @@ impl Thread {
         self.is_dead.load(core::sync::atomic::Ordering::Relaxed)
     }
 
+    #[must_use = "Returns true if the thread was successfully cleaned up"]
     /// Cleans up the thread's Context
     /// will finish cleanup when the context is dropped
     ///
@@ -583,18 +584,22 @@ impl Thread {
     /// This function is unsafe because it can be called from any thread, and it will
     /// modify the thread's Context. It is the caller's responsibility to ensure that
     /// the thread is not currently running.
-    pub unsafe fn cleanup(&self) {
-        {
-            let mut resource_manager = self.parent_process.resources_mut();
-            let owned_resources = self.owned_resources.try_lock().expect("Thread is active");
+    pub unsafe fn try_cleanup(&self) -> bool {
+        if let Some(mut manager) = self.parent_process.try_threads_manager() {
+            {
+                let mut resource_manager = self.parent_process.resources_mut();
+                let owned_resources = self.owned_resources.try_lock().expect("Thread is active");
 
-            for resource in &*owned_resources {
-                resource_manager.remove_resource(*resource);
+                for resource in &*owned_resources {
+                    resource_manager.remove_resource(*resource);
+                }
             }
-        }
 
-        let mut manager = self.parent_process.threads_manager();
-        manager.remove(self.tid());
+            manager.remove(self.tid());
+            true
+        } else {
+            false
+        }
     }
 
     pub fn status_mut<'a>(&'a self) -> SpinLockGuard<'a, ContextStatus> {
