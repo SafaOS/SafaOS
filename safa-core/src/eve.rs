@@ -1,21 +1,16 @@
 //! Eve is the kernel's main loop (PID 0)
 //! it is responsible for managing a few things related to it's children
 
-use core::cell::SyncUnsafeCell;
-use core::sync::atomic::{AtomicUsize, Ordering};
-
-use crate::arch::threading::cpu_local_storages;
 use crate::drivers::driver_poll::{self, PolledDriver};
-use crate::process::Process;
 use crate::process::current::kernel_thread_spawn;
+use crate::scheduler::{Scheduler, ThreadScheduleReason, cpu_count};
 use crate::serial;
 use crate::thread::{self, ArcThread, ContextPriority, Tid};
 use crate::utils::alloc::PageString;
-use crate::utils::locks::Mutex;
 use crate::utils::path::make_path;
 use crate::{debug, fs, logging, process};
-use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::SyncUnsafeCell;
 use lazy_static::lazy_static;
 use safa_abi::fs::OpenOptions;
 use safa_abi::process::ProcessStdio;
@@ -35,23 +30,6 @@ lazy_static! {
         SyncUnsafeCell::new(driver_poll::take_poll());
 }
 
-pub enum CleanupItem {
-    Thread {
-        context_switch_count: &'static AtomicUsize,
-        at_context_switch_count: usize,
-        thread: ArcThread,
-    },
-    Process {
-        proc: Arc<Process>,
-    },
-}
-
-unsafe impl Send for CleanupItem {}
-unsafe impl Sync for CleanupItem {}
-
-static SHOULD_WAKEUP: AtomicUsize = AtomicUsize::new(0);
-static TO_CLEANUP: Mutex<Vec<CleanupItem>> = Mutex::new(Vec::new());
-
 fn poll_driver_thread(tid: Tid, driver: &&dyn PolledDriver) -> ! {
     debug!(
         "polling driver in thread: {}, thread TID: {tid}",
@@ -60,27 +38,36 @@ fn poll_driver_thread(tid: Tid, driver: &&dyn PolledDriver) -> ! {
     driver.poll_function()
 }
 
-/// the main loop of Eve
-/// it will run until doomsday
+fn thread_reaper_thread(tid: Tid, scheduler: &Scheduler) -> ! {
+    debug!("Thread cleaner spawned tid: {tid}");
+    loop {
+        // The idea is once we reach this point, no other thread is currently scheduling for execution with in this scheduler.
+        // So we can safely clean up all threads.
+        //
+        // TODO: I found this to be faster than cleaning up in a different thread, even though cleaning up in a different thread could allow for immediate cleanup on SMP.
+        scheduler.cleanup_all_and_wait();
+    }
+}
+
 pub fn main() -> ! {
     *logging::SERIAL_LOG.write() = Some(PageString::new());
+    crate::info!("eve has been awaken ...");
 
     crate::drivers::pci::init();
 
-    crate::info!("eve has been awaken ...");
-    for cpu in 0..unsafe { cpu_local_storages().len().div_ceil(2) } {
+    for cpu in 0..cpu_count() {
+        let scheduler = Scheduler::get_all()[cpu];
         kernel_thread_spawn(
-            cleanup_thread,
-            &(),
-            Some(ContextPriority::Medium),
+            thread_reaper_thread,
+            scheduler,
+            Some(ContextPriority::Immediate),
             Some(cpu),
         )
         .expect("Failed to spawn a cleanup thread");
     }
-    // TODO: make a macro or a const function to do this automatically
-    serial!("Hello, world!, running tests...\n",);
 
-    // FIXME: use threads
+    // TODO: make a macro or a const function to do this automatically
+
     for poll_driver in unsafe { &*POLLING.get() } {
         process::current::kernel_thread_spawn(
             poll_driver_thread,
@@ -90,6 +77,8 @@ pub fn main() -> ! {
         )
         .expect("failed to spawn a thread function for a polled driver");
     }
+
+    serial!("Hello, world!, running tests...\n",);
 
     #[cfg(not(test))]
     {
@@ -127,43 +116,6 @@ pub fn main() -> ! {
     thread::current::exit(0)
 }
 
-fn cleanup_thread(tid: Tid, _arg: &()) -> ! {
-    debug!("Clean-up thread running with id: {}\n", tid);
-    loop {
-        if SHOULD_WAKEUP.load(Ordering::Acquire) > 0 {
-            let cleanup_item = {
-                let mut to_cleanup = TO_CLEANUP.lock();
-                if SHOULD_WAKEUP.load(Ordering::Acquire) == 0 {
-                    continue;
-                }
-
-                let pos = to_cleanup.iter().position(|item| match item {
-                    CleanupItem::Thread {
-                        context_switch_count,
-                        at_context_switch_count,
-                        ..
-                    } => context_switch_count.load(Ordering::Acquire) >= *at_context_switch_count,
-                    CleanupItem::Process { proc } => (!proc.is_alive()) && proc.can_cleanup_proc(),
-                });
-
-                pos.map(|i| to_cleanup.swap_remove(i))
-            };
-
-            if let Some(clean_up) = cleanup_item {
-                match clean_up {
-                    CleanupItem::Thread { thread, .. } => unsafe {
-                        thread.cleanup();
-                    },
-                    CleanupItem::Process { proc } => assert!(proc.try_cleanup()),
-                }
-
-                SHOULD_WAKEUP.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-        core::hint::spin_loop();
-    }
-}
-
 pub fn idle_function() -> ! {
     crate::serial!("entered idle\n");
     crate::khalt()
@@ -173,27 +125,7 @@ pub fn idle_function() -> ! {
 /// when the scheduler switches to another thread
 /// # Safety
 /// If any context switch occurs after this function is called the thread will be dropped
-pub unsafe fn schedule_thread_cleanup(
-    thread: ArcThread,
-    context_switch_count_ref: &'static AtomicUsize,
-) {
-    let mut to_cleanup = TO_CLEANUP.lock();
-    // reserve space for the new item
-    to_cleanup.reserve(1);
-    to_cleanup.push(CleanupItem::Thread {
-        thread,
-        context_switch_count: context_switch_count_ref,
-        at_context_switch_count: context_switch_count_ref.load(Ordering::Acquire) + 2,
-    });
-    SHOULD_WAKEUP.fetch_add(1, Ordering::SeqCst);
-}
-
-/// Schedules a Process for cleanup
-/// when all it's threads are cleaned up
-pub fn schedule_proc_cleanup(proc: Arc<Process>) {
-    let mut to_cleanup = TO_CLEANUP.lock();
-    // reserve space for the new item
-    to_cleanup.reserve(1);
-    to_cleanup.push(CleanupItem::Process { proc });
-    SHOULD_WAKEUP.fetch_add(1, Ordering::SeqCst);
+pub unsafe fn schedule_thread_cleanup(thread: ArcThread) {
+    let scheduler = thread.scheduler();
+    unsafe { scheduler.schedule_thread(thread, ThreadScheduleReason::Cleanup) };
 }

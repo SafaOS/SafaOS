@@ -6,7 +6,6 @@ use core::{
 };
 
 use crate::{
-    eve,
     memory::{AlignTo, AlignToPage, copy_to_userspace, paging::EntryFlags, userspace_copy_within},
     process::{
         threads::ThreadsManager,
@@ -535,27 +534,6 @@ impl Process {
         self.threads_manager.lock()
     }
 
-    /// Returns true if the process can be cleaned-up now.
-    pub fn can_cleanup_proc(&self) -> bool {
-        self.threads_manager
-            .try_lock()
-            .is_some_and(|guard| guard.is_empty())
-    }
-
-    /// Attempts to cleanup process if all it's thread were already removed, the memory space can be deallocated as a whole.
-    /// returns true if the process was cleaned up, false otherwise
-    pub fn try_cleanup(&self) -> bool {
-        if self.can_cleanup_proc() {
-            unsafe {
-                self.cleanup();
-            }
-
-            true
-        } else {
-            false
-        }
-    }
-
     // TODO: Implement ArcProcess
     /// kills the process
     /// if `killed_by` is `None` the process will be killed by itself
@@ -564,9 +542,6 @@ impl Process {
     pub unsafe fn kill(this: &Arc<Process>, exit_code: isize, killed_by: Option<Pid>) {
         let pid = this.pid();
         let killed_by = killed_by.unwrap_or(pid);
-
-        // !!!!! Cleanup must be done before this thread is removed !!!!!
-        eve::schedule_proc_cleanup(this.clone());
 
         let mut threads = this.threads_manager.lock();
         let mut wait_queue = this.wait_queue.lock();

@@ -234,6 +234,25 @@ unsafe fn set_tpidr(value: VirtAddr) {
     }
 }
 
+#[repr(transparent)]
+#[derive(Debug)]
+pub struct CPULocal(Scheduler);
+impl CPULocal {
+    /// Allocates a new CPU local storage with the given scheduler.
+    ///
+    /// Should be safe.
+    pub fn allocate_with_scheduler(scheduler: Scheduler) -> &'static mut Self {
+        let boxed = Box::new(CPULocal(scheduler));
+
+        let r = Box::leak(boxed);
+        r
+    }
+
+    pub fn scheduler(&self) -> &Scheduler {
+        &self.0
+    }
+}
+
 /// Creates a cpu local storage from a given process and an idle function
 /// creates and adds a thread to the given process that is the idle thread for the caller CPU
 ///
@@ -252,12 +271,9 @@ unsafe fn create_cpu_local(
 
     let status = unsafe { thread.context_unchecked().cpu_status() };
 
-    let cpu_local_boxed = Box::new(Scheduler::new(thread));
+    let cpu_local_boxed = Scheduler::new_in_cpu(thread);
 
-    unsafe {
-        let cpu_local_ref = Box::into_non_null(cpu_local_boxed).as_ref();
-        Ok((cpu_local_ref, status))
-    }
+    Ok((&cpu_local_boxed.0, status))
 }
 
 unsafe fn add_new_cpu_local(

@@ -18,8 +18,8 @@ cfg_if! {
 /// Contains everything related to threading, such as code for context switching
 pub mod threading {
     pub use super::arch::threading::{
-        CPUStatus, cpu_local_storage_ptr, cpu_local_storages, init_cpus, invoke_context_switch,
-        restore_cpu_status,
+        CPULocal, CPUStatus, cpu_local_storage_ptr, cpu_local_storages, init_cpus,
+        invoke_context_switch, restore_cpu_status,
     };
 }
 

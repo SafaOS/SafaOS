@@ -212,7 +212,15 @@ impl ThreadsManager {
     }
 
     pub fn remove(&mut self, tid: Tid) -> bool {
-        self.threads.remove(&tid).is_some()
+        if let Some(thread) = self.threads.remove(&tid) {
+            // Last thread in process, cleanup process.
+            if self.is_empty() {
+                unsafe { thread.process().cleanup() }
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Attempts to remove an unoccupied thread ID, returning `true` if the ID was removed,

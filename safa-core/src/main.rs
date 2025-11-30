@@ -21,6 +21,7 @@
 #![feature(unsafe_cell_access)]
 #![feature(macro_metavar_expr_concat)]
 #![feature(set_ptr_value)]
+#![feature(debug_closure_helpers)]
 
 #[cfg(test)]
 mod test;

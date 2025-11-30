@@ -263,7 +263,7 @@ pub unsafe fn restore_cpu_status(status: &CPUStatus) -> ! {
     }
 }
 
-static CPU_LOCALS: Mutex<Vec<&ArchCPULocalStorage>> = Mutex::new(Vec::new());
+static CPU_LOCALS: Mutex<Vec<&CPULocal>> = Mutex::new(Vec::new());
 static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Process>, fn() -> !)>> =
     SyncUnsafeCell::new(MaybeUninit::uninit());
 pub static READY_CPUS: AtomicUsize = AtomicUsize::new(1);
@@ -286,7 +286,7 @@ unsafe fn create_cpu_local(
     tss_ptr: *mut TaskStateSegment,
     process: &Arc<Process>,
     idle_function: fn() -> !,
-) -> Result<(&'static ArchCPULocalStorage, NonNull<CPUStatus>), MapToError> {
+) -> Result<(&'static CPULocal, NonNull<CPUStatus>), MapToError> {
     assert!(!tss_ptr.is_null());
 
     let (thread, _) = process.threads_manager().create_thread(
@@ -299,16 +299,10 @@ unsafe fn create_cpu_local(
 
     let status = unsafe { thread.context_unchecked().cpu_status() };
 
-    let cpu_local = Scheduler::new(thread);
-    let arch_cpu_local_boxed = Box::new(ArchCPULocalStorage {
-        cpu_local,
-        tss_ptr,
-        ptr_to_self: core::ptr::dangling(),
-    });
+    let cpu_local = Scheduler::new_in_cpu(thread);
+    cpu_local.tss_ptr = tss_ptr;
 
-    let cpu_local_ref = Box::leak(arch_cpu_local_boxed);
-    (*cpu_local_ref).ptr_to_self = cpu_local_ref;
-    Ok((&*cpu_local_ref, status))
+    Ok((cpu_local, status))
 }
 
 unsafe fn add_new_cpu_local(
@@ -322,8 +316,7 @@ unsafe fn add_new_cpu_local(
     };
     unsafe {
         set_gs(
-            VirtAddr::from_ptr(cpu_local as *const ArchCPULocalStorage)
-                + offset_of!(ArchCPULocalStorage, ptr_to_self),
+            VirtAddr::from_ptr(cpu_local as *const CPULocal) + offset_of!(CPULocal, ptr_to_self),
         );
     }
     CPU_LOCALS.lock().push(cpu_local);
@@ -392,17 +385,39 @@ pub unsafe fn init_cpus(process: &Arc<Process>, idle_function: fn() -> !) -> Non
 }
 
 #[repr(C)]
-pub(in crate::arch::x86_64) struct ArchCPULocalStorage {
-    cpu_local: Scheduler,
-    pub tss_ptr: *mut TaskStateSegment,
+pub struct CPULocal {
+    scheduler: Scheduler,
+    pub(in crate::arch::x86_64) tss_ptr: *mut TaskStateSegment,
     ptr_to_self: *const Self,
 }
 
-unsafe impl Send for ArchCPULocalStorage {}
-unsafe impl Sync for ArchCPULocalStorage {}
+impl CPULocal {
+    /// Allocates a new CPU local storage with the given scheduler.
+    ///
+    /// Should be safe.
+    pub fn allocate_with_scheduler(scheduler: Scheduler) -> &'static mut Self {
+        let boxed = Box::new(CPULocal {
+            scheduler,
+            tss_ptr: core::ptr::null_mut(),
+            ptr_to_self: core::ptr::null(),
+        });
 
-pub(in crate::arch::x86_64) fn arch_cpu_local_storage_ptr() -> *mut ArchCPULocalStorage {
-    let ptr: *mut ArchCPULocalStorage;
+        let r = Box::leak(boxed);
+        r.ptr_to_self = r as *const Self;
+        r
+    }
+
+    /// Returns a reference to the scheduler associated with this CPU local storage.
+    pub const fn scheduler(&self) -> &Scheduler {
+        &self.scheduler
+    }
+}
+
+unsafe impl Send for CPULocal {}
+unsafe impl Sync for CPULocal {}
+
+pub(in crate::arch::x86_64) fn arch_cpu_local_storage_ptr() -> *mut CPULocal {
+    let ptr: *mut CPULocal;
     unsafe { asm!("mov {}, gs:0", out(reg) ptr) }
     ptr
 }
@@ -411,11 +426,8 @@ pub fn cpu_local_storage_ptr() -> *mut Scheduler {
     arch_cpu_local_storage_ptr().cast()
 }
 
-/// Returns a list of pointers of CPU local storage to each cpu, can then be used by the scheduler to manage distrubting threads across CPUs
+/// Returns a list of pointers of CPU local storage to each cpu, can then be used by the scheduler to manage distributing threads across CPUs
 pub unsafe fn cpu_local_storages() -> &'static [&'static Scheduler] {
     // only is called after the CPUs are initialized so should be safe
-    unsafe {
-        &*((&*CPU_LOCALS.data_ptr()).as_slice() as *const [&ArchCPULocalStorage]
-            as *const [&Scheduler])
-    }
+    unsafe { &*((&*CPU_LOCALS.data_ptr()).as_slice() as *const [&CPULocal] as *const [&Scheduler]) }
 }
