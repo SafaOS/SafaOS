@@ -212,19 +212,25 @@ extern "C" fn context_switch(switch_frame: ContextSwitchFrame) -> ! {
     let mut capture = switch_frame.capture;
     let frame = switch_frame.int;
 
-    capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
-    capture.ring0_rsp = if unsafe { *SCHEDULER_INITED.get() } {
-        unsafe { get_kernel_tss_stack() }
-    } else {
-        VirtAddr::null()
-    };
-
     capture.rsp = frame.stack_pointer;
     capture.rip = frame.insturaction;
 
     capture.cs = frame.code_segment;
     capture.ss = frame.stack_segment;
     capture.rflags = frame.flags;
+
+    unsafe { context_switch_and_return_inner(capture) }
+}
+
+#[inline(always)]
+unsafe fn context_switch_and_return_inner(mut capture: CPUStatus) -> ! {
+    capture.ring0_rsp = if unsafe { *SCHEDULER_INITED.get() } {
+        unsafe { get_kernel_tss_stack() }
+    } else {
+        VirtAddr::null()
+    };
+
+    capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
 
     unsafe {
         let swtch_results = swtch(capture);
@@ -248,7 +254,17 @@ extern "C" fn context_switch(switch_frame: ContextSwitchFrame) -> ! {
     }
 }
 
-#[inline(always)]
+#[unsafe(no_mangle)]
+extern "C" fn context_switch_and_return(capture: CPUStatus) {
+    unsafe { context_switch_and_return_inner(capture) }
+}
+
+unsafe extern "C" {
+    // TODO: please remember to use
+    fn thread_yield_wrapper();
+}
+
+#[inline(never)]
 pub fn invoke_context_switch() {
     unsafe { asm!("int 0x20") }
 }
