@@ -73,3 +73,18 @@ pub fn time_us() -> u64 {
     }
     count / (freq / 1000 / 1000)
 }
+
+#[inline(always)]
+#[allow(unused)]
+/// Returns the number of CPU cycles since the CPU was started
+pub fn cpu_cycles() -> u64 {
+    let count: u64;
+    unsafe {
+        core::arch::asm!(
+            "isb",
+            "mrs {cnt}, cntpct_el0",
+            cnt = out(reg) count,
+        );
+    }
+    count
+}

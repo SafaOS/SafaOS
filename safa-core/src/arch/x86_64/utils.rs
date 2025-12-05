@@ -151,3 +151,13 @@ pub fn time_us() -> u64 {
         ticks / ticks_per_us
     }
 }
+
+#[inline(always)]
+#[allow(unused)]
+/// Returns the number of CPU cycles since the CPU was started
+pub fn cpu_cycles() -> u64 {
+    unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    }
+}
