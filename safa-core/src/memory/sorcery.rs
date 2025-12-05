@@ -63,6 +63,9 @@ unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
             let flags = if entry.entry_type == EntryType::FRAMEBUFFER {
                 flags | EntryFlags::FRAMEBUFFER_CACHED
+            } else if entry.entry_type == EntryType::USABLE {
+                // Normal memory == normal caching
+                flags
             } else {
                 flags | EntryFlags::DEVICE_UNCACHEABLE
             };
