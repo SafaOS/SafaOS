@@ -1,4 +1,9 @@
-use core::alloc::{GlobalAlloc, Layout};
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    ptr::NonNull,
+};
+
+use alloc::alloc::{AllocError, Allocator};
 
 use crate::{
     debug,
@@ -30,8 +35,9 @@ impl Block {
         }
     }
 
-    pub unsafe fn data(&mut self) -> *mut u8 {
-        unsafe { (self as *mut Self).offset(1).cast() }
+    pub unsafe fn data(&mut self) -> NonNull<[u8]> {
+        let ptr: NonNull<u8> = unsafe { (NonNull::from_mut(self)).offset(1).cast() };
+        NonNull::slice_from_raw_parts(ptr, self.size - size_of::<Block>())
     }
     /// divides self into 2 buddies
     /// returns the right buddy
@@ -258,7 +264,7 @@ impl BuddyAllocator<'_> {
         while self.coalescence_buddies() {}
     }
 
-    pub fn allocmut(&mut self, layout: Layout) -> *mut u8 {
+    pub fn allocmut(&mut self, layout: Layout) -> Option<NonNull<[u8]>> {
         let size = actual_size(layout.size());
 
         let block = if let Some(block) = self.find_free_block(size) {
@@ -270,10 +276,10 @@ impl BuddyAllocator<'_> {
 
         if let Some(block) = block {
             block.free = false;
-            return unsafe { block.data() };
+            return Some(unsafe { block.data() });
         } else {
             if self.expand_heap_by(size).is_none() {
-                return core::ptr::null_mut();
+                return None;
             };
 
             self.allocmut(layout)
@@ -289,9 +295,16 @@ impl BuddyAllocator<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+/// Buddy allocator, suitable for allocating small amounts of memory in powers of 2.
+pub struct BuddyAlloc;
+
 unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.lock().allocmut(layout)
+        self.lock()
+            .allocmut(layout)
+            .map(|s| s.as_ptr() as *mut u8)
+            .unwrap_or(core::ptr::null_mut())
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -302,8 +315,21 @@ unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
     }
 }
 
+unsafe impl Allocator for BuddyAlloc {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        GLOBAL_ALLOCATOR.lock().allocmut(layout).ok_or(AllocError)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        unsafe {
+            _ = layout;
+            GLOBAL_ALLOCATOR.lock().deallocmut(ptr.as_ptr())
+        }
+    }
+}
+
 #[global_allocator]
-static GLOBAL_ALLOCATOR: LazyLock<Mutex<BuddyAllocator>> = LazyLock::new(|| {
+static GLOBAL_ALLOCATOR: LazyLock<Mutex<BuddyAllocator<'static>>> = LazyLock::new(|| {
     Mutex::new(BuddyAllocator::create().expect("Failed to create buddy allocator"))
 });
 

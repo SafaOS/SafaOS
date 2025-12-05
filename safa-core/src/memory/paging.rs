@@ -149,6 +149,8 @@ impl PageTable {
     }
 
     /// Map `page_num` pages starting at `start_virt_addr` to frames starting at `start_phys_addr` and flushes cache if successful
+    ///
+    /// Same as [`map_contiguous_to_frames`] but instead of using a frame iterator, we take in raw addresses and the page number.
     pub unsafe fn map_contiguous_pages(
         &mut self,
         start_virt_addr: VirtAddr,
@@ -159,21 +161,10 @@ impl PageTable {
         let size = page_num * PAGE_SIZE;
         let start_page = Page::containing_address(start_virt_addr);
         let start_frame = Frame::containing_address(start_phys_addr);
-        let end_page = Page::containing_address(start_virt_addr + size);
         let end_frame = Frame::containing_address(start_phys_addr + size);
 
-        let page_iter = Page::iter_pages(start_page, end_page);
         let frame_iter = Frame::iter_frames(start_frame, end_frame);
-        let iter = page_iter.zip(frame_iter);
-
-        for (page, frame) in iter {
-            unsafe {
-                self.map_to_uncached(page, frame, flags)?;
-            }
-        }
-
-        self.flush_cache();
-        Ok(())
+        unsafe { self.map_contiguous_to_frames(start_page, frame_iter, flags) }
     }
 
     /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
@@ -212,6 +203,27 @@ impl PageTable {
 
         self.flush_cache();
         Ok(end_addr)
+    }
+
+    #[inline]
+    /// Maps a contiguous range of pages to frames from an iterator.
+    /// `start_page` is the first page to map, and `frames` is an iterator over the frames to map to.
+    pub unsafe fn map_contiguous_to_frames<I: Iterator<Item = Frame>>(
+        &mut self,
+        start_page: Page,
+        frames: I,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        let mut current_page = start_page;
+        for frame in frames {
+            unsafe {
+                self.map_to_uncached(current_page, frame, flags)?;
+            }
+
+            current_page = current_page.next();
+        }
+        self.flush_cache();
+        Ok(())
     }
 
     /// Deallocates and unmaps pages from `from` to `to` then flushes the cache if necessary
@@ -330,6 +342,10 @@ impl PhysPageTable {
 
     pub fn phys_addr(&self) -> PhysAddr {
         self.inner.phys_addr()
+    }
+
+    pub fn frame_ptr(&self) -> FramePtr<PageTable> {
+        self.inner
     }
 }
 

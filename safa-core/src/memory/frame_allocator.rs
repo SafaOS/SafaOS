@@ -22,7 +22,7 @@ pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
 
 /// A pointer to some data in a physical frame that is mapped to a virtual address in the hddm
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct FramePtr<T: ?Sized>(NonNull<T>);
 impl<T: ?Sized> FramePtr<T> {
     pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
@@ -42,6 +42,14 @@ impl<T: ?Sized> FramePtr<T> {
         self.0.as_ptr()
     }
 }
+
+impl<T: ?Sized> Clone for FramePtr<T> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+
+impl<T: ?Sized> Copy for FramePtr<T> {}
 
 impl<T: ?Sized> Deref for FramePtr<T> {
     type Target = T;
