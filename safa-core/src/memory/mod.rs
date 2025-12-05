@@ -3,6 +3,7 @@ pub mod frame_allocator;
 pub mod page_allocator;
 pub mod paging;
 pub mod sorcery;
+pub mod vmm;
 
 // FIXME: relays on unstable limine behaviour by assuming limine maps the HHDM at 0xffff800000000000 for x86_64
 // The reason why I cannot do my own HHDM offset is because of the framebuffer which limine returns a virtual pointer to, so I don't know how I should map to a different address,
