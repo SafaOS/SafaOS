@@ -1,15 +1,16 @@
 #[cfg(test)]
 mod tests;
 
-use core::cell::{SyncUnsafeCell, UnsafeCell};
+use core::cell::UnsafeCell;
 use core::hint::likely;
 use core::num::NonZero;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use crate::arch::threading::CPULocal;
+use crate::arch::smp::CPULocal;
 use crate::scheduler::wait_queue::{PendingWait, WaitQueue};
-use crate::thread::{ArcThread, ContextPriority, ContextStatus, ThreadList};
+use crate::thread::{ArcThread, ContextPriority, ContextStatus, Thread, ThreadList};
+use crate::timer::time_since_boot_ms;
 use crate::utils::path::make_path;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -123,7 +124,7 @@ pub struct Scheduler {
     helper_threads: Mutex<WaitQueue<0, SchedulerHelperSleepReason>>,
     ready_queues: SpinLock<[ThreadList; PRIORITIES_COUNT]>,
     idle_thread: ArcThread,
-    pub current_thread: UnsafeCell<ArcThread>,
+    current_thread: UnsafeCell<ArcThread>,
     /// The head thread is the thread that is the head of the thread queue
     // pub head_thread: SpinLock<ArcThread>,
     threads_count: AtomicUsize,
@@ -206,7 +207,7 @@ impl Scheduler {
     ) {
         let head = &mut queues[index];
         unsafe {
-            *thread.scheduler.get() = Some(NonNull::from_ref(self));
+            thread.set_scheduler(self);
         }
 
         if front {
@@ -311,7 +312,7 @@ impl Scheduler {
         let current_thread = unsafe { &mut *self.current_thread.get() };
         let curr_pid = current_thread.process().pid();
 
-        let time_now = crate::time!(ms);
+        let time_now = time_since_boot_ms();
         let Some(time_now) = NonZero::new(time_now) else {
             return None;
         };
@@ -367,7 +368,7 @@ impl Scheduler {
 
         let schd = unsafe { &mut *new_thread.schedule_priority.get() };
         schd.queue_index = queue_index as u32;
-        schd.last_scheduled = NonZero::new(crate::time!(ms));
+        schd.last_scheduled = NonZero::new(time_since_boot_ms());
 
         let context_priority = new_thread.priority();
         let process_pid = new_thread.process().pid();
@@ -389,8 +390,15 @@ impl Scheduler {
         }
     }
 
-    pub fn new_in_cpu(idle_thread: ArcThread) -> &'static mut CPULocal {
-        let r = CPULocal::allocate_with_scheduler(Self {
+    /// Constructs a new scheduler
+    ///
+    /// NOTE: The idle thread is not aware of this scheduler being its parent yet...
+    pub fn new(idle_thread: ArcThread) -> Self {
+        // The next time it is scheduled to run its going to be blocked.
+        unsafe {
+            idle_thread.block_waiting();
+        }
+        Self {
             idle_thread: idle_thread.clone(),
             waiting_threads: Mutex::new(Vec::new()),
             awaiting_cleanup: Mutex::new(Vec::new()),
@@ -401,15 +409,14 @@ impl Scheduler {
             is_thread_yielding: UnsafeCell::new(false),
             context_switch_count: AtomicUsize::new(0),
             helper_threads: Mutex::new(WaitQueue::new()),
-        });
-
-        unsafe {
-            *idle_thread.scheduler.get() = Some(NonNull::from_ref(r.scheduler()));
-            // The next time it is scheduled to run its going to be blocked.
-            idle_thread.block_waiting();
         }
-        r
     }
+
+    /// Returns the idle thread in this scheduler
+    pub fn idle_thread(&self) -> &Thread {
+        &self.idle_thread
+    }
+
     /// Get a reference to the current thread
     /// # Safety:
     /// this reference shall not be given to other threads.
@@ -429,26 +436,26 @@ unsafe impl Sync for Scheduler {}
 
 impl Scheduler {
     /// Get a reference to the current Scheduler
-    pub fn get() -> &'static Self {
-        unsafe { &*arch::threading::cpu_local_storage_ptr().cast() }
-    }
-    /// Get a reference to all Schedulers for all CPUs
-    pub fn get_all() -> &'static [&'static Self] {
-        unsafe { arch::threading::cpu_local_storages() }
+    pub fn get() -> Option<&'static Self> {
+        unsafe { CPULocal::get_current_ptr().as_ref().scheduler() }
     }
 }
 
 /// Returns the number of CPUs.
 pub fn cpu_count() -> usize {
-    Scheduler::get_all().len()
+    CPULocal::get_all().len()
 }
 
-pub static SCHEDULER_INITED: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);
-
-/// Scheduler should be initialized first
-pub(super) unsafe fn before_thread_yield() {
+#[must_use = "returns whether or not the scheduler was initialized"]
+pub(super) unsafe fn before_thread_yield() -> bool {
     unsafe {
-        *Scheduler::get().is_thread_yielding.get() = true;
+        if let Some(scheduler) = Scheduler::get() {
+            *scheduler.is_thread_yielding.get() = true;
+            true
+        } else {
+            core::hint::cold_path();
+            false
+        }
     }
 }
 
@@ -459,12 +466,8 @@ pub(super) unsafe fn before_thread_yield() {
 /// if the address space has changed, please copy the context to somewhere accessible first
 ///
 /// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
-pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
-    if !unsafe { *SCHEDULER_INITED.get() } {
-        return None;
-    }
-
-    let scheduler = Scheduler::get();
+pub fn swtch(cpu_local: &CPULocal, context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
+    let scheduler = cpu_local.scheduler()?;
     let is_thread_yielding = unsafe { scheduler.is_thread_yielding.get().replace(false) };
 
     let (cpu_status, _, address_space_changed) =
@@ -504,10 +507,9 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
         .expect("failed to create Eve");
 
         unsafe {
-            let status = arch::threading::init_cpus(&process, idle_function);
+            let status = arch::smp::init_cpus(&process, idle_function);
             let status_ref = status.as_ref();
             self::add_process(process, root_thread, None);
-            *SCHEDULER_INITED.get() = true;
 
             debug!(
                 Scheduler,
@@ -526,15 +528,21 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
 /// by default (if `cpu` is None) chooses the least full CPU to append to otherwise if CPU is Some(i) and i is a valid CPU index, chooses that CPU
 /// use Some(0) to append to the boot CPU
 pub fn add_thread(thread: ArcThread, cpu: Option<usize>) {
-    let schedulers = Scheduler::get_all();
+    let cpu_locals = CPULocal::get_all();
 
     let (cpu_index, scheduler) = if let Some(cpu) = cpu
-        && let Some(scheduler) = schedulers.get(cpu)
-    {
+        && let Some(scheduler) = cpu_locals.get(cpu).map(|c| {
+            c.scheduler()
+                .expect("Attempt to add a thread before schedulers were initialized")
+        }) {
         (cpu, scheduler)
     } else {
-        schedulers
+        cpu_locals
             .iter()
+            .map(|c| {
+                c.scheduler()
+                    .expect("Attempt to add a thread before schedulers were initialized")
+            })
             .enumerate()
             .min_by_key(|(_, scheduler)| scheduler.threads_count.load(Ordering::Relaxed))
             .expect("no CPU found")

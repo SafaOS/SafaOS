@@ -12,6 +12,7 @@ pub(super) mod pci;
 pub(super) mod power;
 pub(super) mod registers;
 pub(super) mod serial;
+pub(super) mod smp;
 #[cfg(test)]
 mod tests;
 pub(super) mod threading;
@@ -70,7 +71,7 @@ fn enable_fp() {
     }
 }
 #[inline(always)]
-fn setup_cpu_generic0() {
+fn setup_cpu_basics() {
     unsafe {
         stack_init();
     }
@@ -79,14 +80,19 @@ fn setup_cpu_generic0() {
     enable_fp();
 }
 
-fn setup_cpu_generic1() {
+fn setup_cpu_mp() {
+    smp::init_cpu_local();
+}
+
+fn setup_cpu_pherphials() {
     gic::gic_init_cpu();
     timer::setup_generic_timer();
 }
 
 #[inline(always)]
 pub fn init_phase1() {
-    setup_cpu_generic0();
+    setup_cpu_basics();
+    setup_cpu_mp();
     cpu::init();
 }
 
@@ -94,7 +100,7 @@ pub fn init_phase1() {
 pub fn init_phase2() {
     gic::init_gic();
     timer::init_generic_timer();
-    setup_cpu_generic1();
+    setup_cpu_pherphials();
     HALT_ALL_SGI.clear_pending_all().enable_all();
 }
 

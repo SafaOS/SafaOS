@@ -16,6 +16,7 @@ use crate::{
     process::{Pid, Process, resources::Ri},
     scheduler::{SchedulePriority, Scheduler, ThreadScheduleReason},
     thread,
+    timer::time_since_boot_ms,
     utils::locks::{Mutex, SpinLock, SpinLockGuard},
 };
 
@@ -316,7 +317,9 @@ impl ArcThread {
     /// # Safety
     /// The caller must handle the case that this is the current thread carefully and interrupts must be disabled.
     pub unsafe fn prepare_sleep_for_ms(&self, ms: NonZero<u64>) -> bool {
-        let time = ms.saturating_add(crate::time!(ms));
+        let current_time_ms = time_since_boot_ms();
+        let time = ms.saturating_add(current_time_ms);
+
         unsafe {
             self.scheduler()
                 .schedule_thread(self.clone(), ThreadScheduleReason::SleepUntil(time));
@@ -507,7 +510,7 @@ pub struct Thread {
 
     /// The scheduler that this thread belongs to.
     /// null until scheduled
-    pub scheduler: UnsafeCell<Option<NonNull<Scheduler>>>,
+    scheduler: UnsafeCell<Option<NonNull<Scheduler>>>,
     // For safety we have to follow 2 rules:
     // 1. reads must be performed by the scheduler
     // 2. writes must be performed with the scheduler's lock held
@@ -515,6 +518,10 @@ pub struct Thread {
 }
 
 impl Thread {
+    /// Sets the parent scheduler of this thread
+    pub unsafe fn set_scheduler(&self, schd: &Scheduler) {
+        unsafe { *self.scheduler.get() = Some(NonNull::from_ref(schd)) }
+    }
     /// Takes ownership of a given resource list
     pub fn take_resources(&self, ri: &[Ri]) {
         let mut owned_resources = self.owned_resources.lock();
@@ -667,7 +674,11 @@ where
     // Safety:
     // The reference would always point to the current thread as long as it's really is the current thread,
     // and The lifetime of this reference is local to this function which is running within this thread.
-    f(unsafe { Scheduler::get().current_thread_ref() })
+    f(unsafe {
+        Scheduler::get()
+            .expect("Attempted to get the current thread, while scheduler wasn't initialized")
+            .current_thread_ref()
+    })
 }
 
 /// Returns true if [`other`] is the current thread.

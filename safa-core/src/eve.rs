@@ -1,6 +1,7 @@
 //! Eve is the kernel's main loop (PID 0)
 //! it is responsible for managing a few things related to it's children
 
+use crate::arch::smp::CPULocal;
 use crate::drivers::driver_poll::{self, PolledDriver};
 use crate::process::current::kernel_thread_spawn;
 use crate::scheduler::{Scheduler, ThreadScheduleReason, cpu_count};
@@ -56,7 +57,11 @@ pub fn main() -> ! {
     crate::drivers::pci::init();
 
     for cpu in 0..cpu_count() {
-        let scheduler = Scheduler::get_all()[cpu];
+        let cpu_local = &CPULocal::get_all()[cpu];
+        let scheduler = cpu_local
+            .scheduler()
+            .expect("Schedulers should be initialized before calling eve");
+
         kernel_thread_spawn(
             thread_reaper_thread,
             scheduler,

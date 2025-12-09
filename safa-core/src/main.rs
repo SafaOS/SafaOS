@@ -45,6 +45,7 @@ mod sockets;
 mod syscalls;
 mod terminal;
 mod thread;
+mod timer;
 mod utils;
 mod vtty;
 
@@ -75,17 +76,6 @@ macro_rules! serial {
     };
 }
 
-/// Returns the number of milliseconds since the CPU was started
-#[macro_export]
-macro_rules! time {
-    (ms) => {
-        $crate::arch::utils::time_ms()
-    };
-    (us) => {
-        $crate::arch::utils::time_us()
-    };
-}
-
 #[macro_export]
 /// Sleeps n ms
 ///
@@ -95,10 +85,10 @@ macro_rules! time {
 /// sleep!(N) (ms)
 macro_rules! sleep {
     ($ms: expr_2021) => {{
-        let start_time = $crate::time!(ms);
-        let timeout_time = start_time + $ms as u64;
+        use $crate::timer::SystemInstant;
+        let instant = SystemInstant::now();
 
-        while $crate::time!(ms) < timeout_time {
+        while instant.elapsed().as_millis() < $ms as u128 {
             core::hint::spin_loop()
         }
     }};
@@ -127,12 +117,12 @@ macro_rules! sleep_until {
     }};
 
     ($timeout_ms: literal ms, $cond: expr_2021) => {{
-        let start_time = $crate::time!(ms);
-        let timeout_time = start_time + $timeout_ms;
-        let mut success = true;
+        use $crate::timer::SystemInstant;
+        let instant = SystemInstant::now();
 
+        let mut success = true;
         while !$cond {
-            if $crate::time!(ms) >= timeout_time {
+            if instant.elapsed().as_millis() >= $timeout_ms as u128 {
                 success = $cond;
                 break;
             }
@@ -144,12 +134,12 @@ macro_rules! sleep_until {
     }};
 
     ($timeout_ms: literal ms, let $name: ident = $expr: expr; until $cond: expr) => {{
-        let start_time = $crate::time!(ms);
-        let timeout_time = start_time + $timeout_ms;
+        use $crate::timer::SystemInstant;
+        let instant = SystemInstant::now();
 
         let mut $name = $expr;
         while !$cond {
-            if $crate::time!(ms) >= timeout_time {
+            if instant.elapsed().as_millis() >= $timeout_ms as u128 {
                 break;
             }
 
@@ -171,8 +161,10 @@ pub fn khalt() -> ! {
 #[allow(unused_imports)]
 use core::panic::PanicInfo;
 use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
 
 use crate::arch::registers::CPUID;
+use crate::arch::smp::READY_CPUS;
 use crate::arch::without_interrupts;
 use crate::utils::locks::SpinLock;
 
@@ -187,7 +179,9 @@ fn panic(info: &PanicInfo) -> ! {
         }
 
         // Wait for halt to complete
-        crate::sleep!(10 ms);
+        if READY_CPUS.load(Ordering::SeqCst) > 1 {
+            crate::sleep!(10 ms);
+        }
         static _PANICK_LOCK: SpinLock<()> = SpinLock::new(());
         let _guard = _PANICK_LOCK.lock();
 

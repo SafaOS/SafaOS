@@ -12,7 +12,7 @@ use crate::{
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy)]
-    struct VMMMFlags: u8 {
+    pub struct VMMMFlags: u8 {
         /// By default the region is read-only.
         const WRITEABLE = 1 << 0;
         /// By default the region is not executable.
@@ -232,7 +232,7 @@ impl VMMObject {
     }
 
     #[inline(always)]
-    pub fn objects_page(&self) -> NonNull<VMMObjectsPage> {
+    fn objects_page(&self) -> NonNull<VMMObjectsPage> {
         unsafe {
             NonNull::new_unchecked(
                 ((self as *const VMMObject) as usize).to_previous_page() as *mut VMMObjectsPage
@@ -240,7 +240,7 @@ impl VMMObject {
         }
     }
 
-    pub fn objects_page_mut(&mut self) -> &mut VMMObjectsPage {
+    fn objects_page_mut(&mut self) -> &mut VMMObjectsPage {
         unsafe { self.objects_page().as_mut() }
     }
 
@@ -684,6 +684,7 @@ impl VirtualMemoryManager {
 #[test_case]
 fn allocate_random_regions() {
     use crate::memory::paging::PhysPageTable;
+    use crate::timer::{DurationFmt, SystemInstant};
     const RUNS: usize = 1000;
     let pseudo_page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
     let mut vmm = VirtualMemoryManager::new(
@@ -696,7 +697,7 @@ fn allocate_random_regions() {
     let size_choices = [1024, 2048, 4096, 8192];
     let mut results = heapless::Vec::<VirtAddr, { RUNS }>::new();
 
-    let time_start = crate::time!(us);
+    let start_instant = SystemInstant::now();
     for _ in 0..RUNS {
         let size = size_choices[curr_i % size_choices.len()];
         let addr = vmm
@@ -706,11 +707,11 @@ fn allocate_random_regions() {
         curr_i += 1;
     }
 
-    let time_end = crate::time!(us);
+    let time_taken = start_instant.elapsed();
     crate::test_log!(
-        "Time taken to allocate {} regions: {} us",
+        "Time taken to allocate {} regions: {}",
         RUNS,
-        time_end - time_start
+        DurationFmt::new(time_taken),
     );
 
     assert_eq!(
@@ -722,7 +723,7 @@ fn allocate_random_regions() {
     // ======== Deallocation ========
     // deallocating random regions
 
-    let time_start = crate::time!(us);
+    let start_instant = SystemInstant::now();
     for index in 0..RUNS {
         let cpu_cycles = crate::arch::utils::cpu_cycles() as usize;
         let random_i = (index + cpu_cycles) % results.len();
@@ -730,12 +731,12 @@ fn allocate_random_regions() {
         vmm.deallocate_at(addr)
             .expect("Failed to deallocate a region");
     }
-    let time_end = crate::time!(us);
+    let time_taken = start_instant.elapsed();
 
     crate::test_log!(
-        "Time taken to deallocate {} regions: {} us",
+        "Time taken to deallocate {} regions: {}",
         RUNS,
-        time_end - time_start
+        DurationFmt::new(time_taken),
     );
 
     assert_eq!(vmm.len(), 1, "Failed to deallocate and combine all regions");
@@ -751,7 +752,10 @@ fn allocate_random_regions_advanced() {
     }
 
     use crate::memory::paging::PhysPageTable;
+    use crate::timer::{DurationFmt, SystemInstant};
+
     const RUNS: usize = 1000;
+
     let pseudo_page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
     let mut vmm = VirtualMemoryManager::new(
         VirtAddr::from(0x1000),
@@ -785,7 +789,7 @@ fn allocate_random_regions_advanced() {
 
     let mut results = heapless::Vec::<VirtAddr, { RUNS }>::new();
 
-    let time_start = crate::time!(us);
+    let start_instant = SystemInstant::now();
     for _ in 0..RUNS {
         let instruction = instructions[curr_i % instructions.len()];
         curr_i += 1;
@@ -812,12 +816,12 @@ fn allocate_random_regions_advanced() {
         };
         results.push(addr).expect("Failed to push address");
     }
+    let time_taken = start_instant.elapsed();
 
-    let time_end = crate::time!(us);
     crate::test_log!(
         "Time taken to allocate {} regions: {} us",
         results.len(),
-        time_end - time_start
+        DurationFmt::new(time_taken),
     );
 
     assert!(
@@ -831,7 +835,7 @@ fn allocate_random_regions_advanced() {
     // deallocating random regions
 
     let to_deallocate = results.len();
-    let time_start = crate::time!(us);
+    let start_instant = SystemInstant::now();
     for index in 0..to_deallocate {
         let cpu_cycles = crate::arch::utils::cpu_cycles() as usize;
         let random_i = (index + cpu_cycles) % results.len();
@@ -839,12 +843,12 @@ fn allocate_random_regions_advanced() {
         vmm.deallocate_at(addr)
             .expect("Failed to deallocate a region");
     }
-    let time_end = crate::time!(us);
+    let time_taken = start_instant.elapsed();
 
     crate::test_log!(
-        "Time taken to deallocate {} regions: {} us",
+        "Time taken to deallocate {} regions: {}",
         to_deallocate,
-        time_end - time_start
+        DurationFmt::new(time_taken),
     );
 
     assert_eq!(vmm.len(), 1, "Failed to deallocate and combine all regions");

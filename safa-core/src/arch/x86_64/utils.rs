@@ -1,7 +1,9 @@
-use core::hint::unlikely;
-use core::{arch::x86_64::__cpuid, cell::SyncUnsafeCell};
+use core::arch::x86_64::__cpuid;
+use core::num::NonZero;
 use serde::Serialize;
 use spin::Lazy;
+
+use crate::arch::x86_64::smp::CPULocal;
 
 #[derive(Serialize, Debug)]
 pub struct CpuInfo {
@@ -107,49 +109,11 @@ impl CpuInfo {
 
 pub static CPU_INFO: Lazy<CpuInfo> = Lazy::new(CpuInfo::fetch);
 
-pub static TICKS_PER_MS: SyncUnsafeCell<u64> = SyncUnsafeCell::new(0);
-pub static APIC_TIMER_TICKS_PER_MS: SyncUnsafeCell<u64> = SyncUnsafeCell::new(1);
-
-#[inline(always)]
-/// Returns the number of clock cpu cycles per 1ms
-fn ticks_per_ms() -> u64 {
-    unsafe { core::ptr::read(TICKS_PER_MS.get()) }
-}
-
-#[inline(always)]
-// actually used in macros but rust thinks it is unused for some reason
-#[allow(unused)]
-/// Returns the number of milliseconds since the CPU was started
-pub fn time_ms() -> u64 {
-    let ticks_per_ms = ticks_per_ms();
-    let ticks = unsafe {
-        core::arch::x86_64::_mm_lfence();
-        core::arch::x86_64::_rdtsc()
-    };
-    if unlikely(ticks_per_ms == 0) {
-        0
-    } else {
-        ticks / ticks_per_ms
-    }
-}
-
-#[inline(always)]
-// actually used in macros but rust thinks it is unused for some reason
-#[allow(unused)]
-/// Returns the number of microseconds since the CPU was started
-pub fn time_us() -> u64 {
-    let ticks_per_ms = ticks_per_ms();
-    let ticks_per_us = ticks_per_ms / 1000;
-
-    let ticks = unsafe {
-        core::arch::x86_64::_mm_lfence();
-        core::arch::x86_64::_rdtsc()
-    };
-    if unlikely(ticks_per_us == 0) {
-        0
-    } else {
-        ticks / ticks_per_us
-    }
+#[inline]
+/// Returns the frequency of the CPU
+pub fn cpu_timer_freq_mhz() -> NonZero<u64> {
+    let cpu_local = unsafe { CPULocal::get_current_ptr().as_ref() };
+    cpu_local.tsc_freq()
 }
 
 #[inline(always)]

@@ -3,8 +3,6 @@ use core::{
     ptr::NonNull,
 };
 
-use alloc::alloc::{AllocError, Allocator};
-
 use crate::{
     debug,
     memory::{AlignTo, AlignToPage, paging::MapToError},
@@ -295,10 +293,6 @@ impl BuddyAllocator<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-/// Buddy allocator, suitable for allocating small amounts of memory in powers of 2.
-pub struct BuddyAlloc;
-
 unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         self.lock()
@@ -311,19 +305,6 @@ unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator<'static>>> {
         unsafe {
             _ = layout;
             self.lock().deallocmut(ptr);
-        }
-    }
-}
-
-unsafe impl Allocator for BuddyAlloc {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        GLOBAL_ALLOCATOR.lock().allocmut(layout).ok_or(AllocError)
-    }
-
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe {
-            _ = layout;
-            GLOBAL_ALLOCATOR.lock().deallocmut(ptr.as_ptr())
         }
     }
 }

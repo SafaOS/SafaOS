@@ -8,7 +8,7 @@ use crate::scheduler::wait_queue::WaitError;
 use crate::thread::Tid;
 use crate::{
     arch::without_interrupts,
-    scheduler::{self, SCHEDULER_INITED},
+    scheduler::{self},
     thread, warn,
 };
 
@@ -53,16 +53,13 @@ pub fn sleep_for_ms(ms: u64) -> Result<(), WaitError> {
 
 /// Yields execution to the next thread that is ready to run, in the thread queue for the current CPU.
 pub fn yield_now() {
-    without_interrupts(|| {
-        if !unsafe { *SCHEDULER_INITED.get() } {
+    without_interrupts(|| unsafe {
+        let procced = crate::scheduler::before_thread_yield();
+        if !procced {
             return;
         }
-
-        unsafe {
-            crate::scheduler::before_thread_yield();
-        }
         crate::arch::threading::invoke_context_switch()
-    });
+    })
 }
 
 /// Sleeps the current thread until the process with `pid` exits.

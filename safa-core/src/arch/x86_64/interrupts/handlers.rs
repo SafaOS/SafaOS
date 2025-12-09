@@ -1,5 +1,4 @@
 use super::super::syscalls::syscall_base;
-use super::pit;
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -59,7 +58,6 @@ lazy_static! {
         (0x13, simd_exception_handler, ATTR_TRAP),
         (0x20, threading::context_switch_stub, ATTR_INT, 1),
         (0x21, keyboard_interrupt_handler, ATTR_INT),
-        (0x22, pit::pit_handler, ATTR_INT),
         (HALT_ALL_HANDLER_ID, halt_handler, ATTR_INT),
         (FLUSH_CACHE_ALL_ID, flush_cache_handler, ATTR_INT),
         (APIC_ERROR_HANDLER_ID, apic_err, ATTR_INT),

@@ -10,7 +10,7 @@ use crate::process::resources::{self, Ri};
 use crate::syscalls::ffi::SyscallFFI;
 use crate::thread::Tid;
 
-use crate::time;
+use crate::timer::time_since_boot_ms;
 use crate::{VirtAddr, arch::power};
 
 pub mod ffi;
@@ -115,7 +115,7 @@ pub fn syscall(
             SyscallTable::SysReboot => power::reboot(),
             SyscallTable::SysUptime => {
                 let dest_uptime = <&mut u64>::make(a as *mut u64)?;
-                *dest_uptime = time!(ms);
+                *dest_uptime = time_since_boot_ms();
 
                 Ok(0)
             }

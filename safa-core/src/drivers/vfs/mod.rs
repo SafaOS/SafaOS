@@ -9,7 +9,7 @@ use crate::{
         paging::PAGE_SIZE,
     },
     process::{self, resources::Resource, vas::MemMappedInterface},
-    time,
+    timer::{DurationFmt, SystemInstant},
     utils::{
         locks::Mutex,
         path::PathParts,
@@ -526,7 +526,7 @@ impl VFS {
         );
 
         let moment_memory_usage = frame_allocator::mapped_frames();
-        let the_now = time!(ms);
+        let the_now = SystemInstant::now();
         // temporary directory
         let tempfs = RwLock::new(ramfs::RamFS::create());
         this.mount(DriveName::new_const("tmp"), tempfs).unwrap();
@@ -552,14 +552,14 @@ impl VFS {
         this.mount(DriveName::new_const("sys"), ramfs)
             .expect("failed mounting");
 
-        let elapsed = time!(ms) - the_now;
+        let elapsed = the_now.elapsed();
         let used_memory = frame_allocator::mapped_frames() - moment_memory_usage;
         let total_memory_used = frame_allocator::mapped_frames();
 
         debug!(
             VFS,
-            "done in ({}ms) ({}KiB mapped, {}KiB total) ...",
-            elapsed,
+            "done in ({}) ({}KiB mapped, {}KiB total) ...",
+            DurationFmt::new(elapsed),
             used_memory * PAGE_SIZE / 1024,
             total_memory_used * PAGE_SIZE / 1024
         );

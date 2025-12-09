@@ -7,13 +7,14 @@ pub(super) mod pci;
 pub(super) mod power;
 pub(super) mod registers;
 pub(super) mod serial;
+pub mod smp;
 mod syscalls;
 #[cfg(test)]
 mod tests;
 pub(super) mod threading;
 pub(super) mod utils;
 
-use core::{arch::asm, sync::atomic::Ordering};
+use core::{arch::asm, num::NonZero, ptr::NonNull, sync::atomic::Ordering};
 use interrupts::{apic, init_idt};
 use serial::init_serial;
 
@@ -25,7 +26,6 @@ use crate::{
             ps2,
         },
         registers::RFLAGS,
-        utils::TICKS_PER_MS,
     },
     info, warn,
 };
@@ -78,26 +78,38 @@ fn _enable_avx() {
 #[inline]
 pub fn init_phase1() {
     init_serial();
-    // CPU 0 is initialized in a special way
-    _ = setup_cpu_generic0();
+    let tss = setup_cpu_generic0();
+    setup_cpu_generic1(tss);
 }
-#[must_use = "returns a pointer to the TSS of the current CPU, this pointer must be stored in the CPU Local Storage"]
-pub(super) fn setup_cpu_generic0() -> *mut TaskStateSegment {
+
+#[must_use = "Returns a pointer to the task state segment of the current CPU"]
+pub(super) fn setup_cpu_generic0() -> NonNull<TaskStateSegment> {
     let tss = init_gdt();
     init_idt();
     tss
 }
 
-pub(super) fn setup_cpu_generic1(tsc_ticks_per_ms: &mut u64) {
+/// NOTE: Requires allocations if you are not on the BSP
+pub(super) fn setup_cpu_generic1(tss: NonNull<TaskStateSegment>) {
+    smp::init_cpu_local(tss, NonZero::<u64>::MAX)
+}
+
+pub(super) fn setup_cpu_generic2() {
     info!("enabling apic interrupts...");
-    apic::enable_apic_interrupts_generic(tsc_ticks_per_ms);
+    apic::enable_apic_interrupts_generic();
+    info!("enabling apic timer...");
+    let tsc_freq = apic::setup_timer();
+    unsafe {
+        smp::set_tsc_frequency(tsc_freq);
+    }
     info!("enabling sse...");
     enable_sse();
 }
+
 /// Complexer init ran after terminal initialization.
 #[inline]
 pub fn init_phase2() {
-    setup_cpu_generic1(unsafe { &mut *TICKS_PER_MS.get() });
+    setup_cpu_generic2();
 
     match ps2::setup_controller() {
         Ok((true, true)) => (apic::enable_apic_keyboard(), apic::enable_apic_mouse()),
@@ -130,6 +142,7 @@ pub fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
+#[allow(unused)]
 pub fn with_interrupts<R>(f: impl FnOnce() -> R) -> R {
     unsafe {
         let interrupts_were_enabled = RFLAGS::read().interrupts_enabled();
@@ -183,7 +196,7 @@ pub unsafe fn flush_cache() {
 }
 
 pub unsafe fn halt_all() {
-    let cpus_count = threading::READY_CPUS.load(Ordering::SeqCst);
+    let cpus_count = smp::READY_CPUS.load(Ordering::SeqCst);
     apic::send_nmi_all(HALT_ALL_HANDLER_ID);
     HALTED_CPUS.fetch_add(1, Ordering::SeqCst);
     while cpus_count > HALTED_CPUS.load(Ordering::Relaxed) {

@@ -2,6 +2,7 @@
 use core::{
     arch::asm,
     cell::SyncUnsafeCell,
+    ptr::NonNull,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -9,7 +10,7 @@ use lazy_static::lazy_static;
 
 use crate::{
     VirtAddr,
-    arch::x86_64::threading::{STACK_SIZE, arch_cpu_local_storage_ptr},
+    arch::x86_64::{smp::CPULocal, threading::STACK_SIZE},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -119,20 +120,16 @@ lazy_static! {
 }
 
 /// Sets the TSS addr for the current CPU
-pub unsafe fn set_kernel_tss_stack(stack_end: VirtAddr) {
-    unsafe {
-        let cpu_local = &*arch_cpu_local_storage_ptr();
-        let tss = cpu_local.tss_ptr;
-        (*tss).privilege_stack_table[0] = stack_end;
-    }
+#[inline]
+pub unsafe fn set_kernel_tss_stack(cpu_local: &CPULocal, stack_end: VirtAddr) {
+    let tss = unsafe { cpu_local.tss_mut() };
+    tss.privilege_stack_table[0] = stack_end;
 }
 /// Gets the TSS addr for the current CPU
-pub unsafe fn get_kernel_tss_stack() -> VirtAddr {
-    unsafe {
-        let cpu_local = &*arch_cpu_local_storage_ptr();
-        let tss = cpu_local.tss_ptr;
-        (*tss).privilege_stack_table[0]
-    }
+#[inline]
+pub unsafe fn get_kernel_tss_stack(cpu_local: &CPULocal) -> VirtAddr {
+    let tss = unsafe { cpu_local.tss_mut() };
+    tss.privilege_stack_table[0]
 }
 
 pub type GDTType = [GDTEntry; 7];
@@ -223,7 +220,7 @@ lazy_static! {
 }
 
 #[must_use = "returns a pointer to the TSS of the current CPU, this pointer must be stored in the CPU Local Storage"]
-pub fn init_gdt() -> *mut TaskStateSegment {
+pub fn init_gdt() -> NonNull<TaskStateSegment> {
     let this_gdt_index = NEXT_GDT_DESCRIPTOR.fetch_add(1, Ordering::SeqCst);
     let gdt_descriptor: &GDTDescriptor = &GDT_DESCRIPTORS[this_gdt_index];
 
@@ -253,6 +250,6 @@ pub fn init_gdt() -> *mut TaskStateSegment {
         );
 
         reload_tss();
-        TSS[this_gdt_index].get()
+        NonNull::new_unchecked(TSS[this_gdt_index].get())
     }
 }
