@@ -67,9 +67,9 @@ restore_cpu_status:
     # loads the translation table and the stack pointer
     msr ttbr0_el1, x1
     # reload address space
-    tlbi VMALLE1
     dsb ISH
-    isb
+    tlbi VMALLE1
+    ISB
 
     msr sp_el0, x2
 

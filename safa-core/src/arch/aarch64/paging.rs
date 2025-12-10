@@ -239,8 +239,9 @@ pub(super) unsafe fn set_current_higher_page_table_phys(phys_addr: PhysAddr) {
         // reload address space
         asm!(
             "
+            dsb ish
             tlbi VMALLE1
-            dsb ISH
+            dsb ish
             isb
             "
         );

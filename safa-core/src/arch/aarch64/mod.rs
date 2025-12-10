@@ -175,7 +175,7 @@ pub unsafe fn flush_cache() {
     unsafe {
         asm!(
             "
-            dsb ishst
+            dsb ish
             tlbi vmalle1is
             dsb ish
             isb
