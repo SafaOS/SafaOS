@@ -34,5 +34,5 @@ unsafe extern "C" {
 /// Current implementations for all current architectures are safe however, you must make sure `start` and `end` are a multiple of [`PAGE_SIZE`], and end > start.
 pub unsafe fn flush_cache_range(page_table: &PageTable, start: VirtAddr, end: VirtAddr) {
     _ = page_table;
-    unsafe { flush_cache_range_inner(start, end) }
+    super::without_interrupts(|| unsafe { flush_cache_range_inner(start, end) })
 }
