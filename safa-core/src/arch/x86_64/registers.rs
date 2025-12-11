@@ -60,9 +60,16 @@ impl RFLAGS {
 pub struct CPUID(u8);
 
 impl CPUID {
+    pub unsafe fn new(id: u8) -> Self {
+        Self(id)
+    }
     pub fn get() -> Self {
         // If there is no APIC it means there is no CPUs yet except for the boot cpu
         Self(APIC.get().map(|a| a.lapic_id()).unwrap_or(0))
+    }
+
+    pub(super) const fn lapic_id(self) -> u8 {
+        self.0
     }
 }
 

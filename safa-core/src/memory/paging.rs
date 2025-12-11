@@ -83,9 +83,9 @@ impl Iterator for IterPage {
 }
 
 impl PageTable {
-    pub fn flush_cache(&mut self) {
+    pub fn flush_cache(&mut self, start_page: Page, end_page: Page) {
         unsafe {
-            arch::flush_cache();
+            arch::tlb::flush_cache_range(self, start_page.virt_addr(), end_page.virt_addr());
         }
     }
 
@@ -99,7 +99,7 @@ impl PageTable {
     ) -> Result<(), MapToError> {
         unsafe {
             self.map_to_uncached(page, frame, flags)?;
-            self.flush_cache();
+            self.flush_cache(page, page);
             Ok(())
         }
     }
@@ -116,7 +116,7 @@ impl PageTable {
                 return Err(e);
             }
 
-            self.flush_cache();
+            self.flush_cache(page, page);
             Ok(())
         }
     }
@@ -144,7 +144,7 @@ impl PageTable {
     pub unsafe fn unmap(&mut self, page: Page) {
         unsafe {
             self.unmap_uncached(page);
-            self.flush_cache();
+            self.flush_cache(page, page);
         }
     }
 
@@ -201,7 +201,7 @@ impl PageTable {
             }
         }
 
-        self.flush_cache();
+        self.flush_cache(from_page, to_page);
         Ok(end_addr)
     }
 
@@ -222,7 +222,8 @@ impl PageTable {
 
             current_page = current_page.next();
         }
-        self.flush_cache();
+
+        self.flush_cache(start_page, current_page);
         Ok(())
     }
 
@@ -238,7 +239,7 @@ impl PageTable {
                 self.free_unmap_uncached(page);
             }
         }
-        self.flush_cache();
+        self.flush_cache(from_page, to_page);
     }
 
     pub unsafe fn unmap_without_freeing(&mut self, from: VirtAddr, to: VirtAddr) {
@@ -252,7 +253,7 @@ impl PageTable {
                 self.unmap_uncached(page);
             }
         }
-        self.flush_cache();
+        self.flush_cache(from_page, to_page);
     }
 }
 

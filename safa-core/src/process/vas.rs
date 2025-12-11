@@ -185,6 +185,7 @@ impl ProcVASA {
         };
 
         let pages = Page::iter_pages(map_start, map_end);
+
         for page in pages {
             let frame = frames_to_use
                 .next()
@@ -199,7 +200,7 @@ impl ProcVASA {
             }
         }
 
-        self.page_table.flush_cache();
+        self.page_table.flush_cache(map_start, map_end);
 
         self.lookup_start = map_end.virt_addr() + guard_bytes;
         Ok((map_start, map_end))

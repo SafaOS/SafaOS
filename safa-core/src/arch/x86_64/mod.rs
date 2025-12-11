@@ -12,6 +12,7 @@ mod syscalls;
 #[cfg(test)]
 mod tests;
 pub(super) mod threading;
+pub(super) mod tlb;
 pub(super) mod utils;
 
 use core::{arch::asm, num::NonZero, ptr::NonNull, sync::atomic::Ordering};
@@ -22,7 +23,7 @@ use crate::{
     arch::x86_64::{
         gdt::TaskStateSegment,
         interrupts::{
-            handlers::{FLUSH_CACHE_ALL_ID, HALT_ALL_HANDLER_ID, HALTED_CPUS},
+            handlers::{HALT_ALL_NMI, HALTED_CPUS},
             ps2,
         },
         registers::RFLAGS,
@@ -101,6 +102,7 @@ pub(super) fn setup_cpu_generic2() {
     let tsc_freq = apic::setup_timer();
     unsafe {
         smp::set_tsc_frequency(tsc_freq);
+        smp::set_cpu_id();
     }
     info!("enabling sse...");
     enable_sse();
@@ -174,30 +176,9 @@ pub unsafe fn hlt() {
     unsafe { core::arch::asm!("hlt") }
 }
 
-pub unsafe fn flush_cache_inner() {
-    unsafe {
-        // TODO: use INVLPG
-        core::arch::asm!(
-            "
-            mov rax, cr3
-            mov cr3, rax
-            ",
-        )
-    }
-}
-
-pub unsafe fn flush_cache() {
-    without_interrupts(|| {
-        unsafe {
-            flush_cache_inner();
-        }
-        apic::send_nmi_all(FLUSH_CACHE_ALL_ID);
-    });
-}
-
 pub unsafe fn halt_all() {
     let cpus_count = smp::READY_CPUS.load(Ordering::SeqCst);
-    apic::send_nmi_all(HALT_ALL_HANDLER_ID);
+    apic::send_nmi_all(HALT_ALL_NMI);
     HALTED_CPUS.fetch_add(1, Ordering::SeqCst);
     while cpus_count > HALTED_CPUS.load(Ordering::Relaxed) {
         core::hint::spin_loop();

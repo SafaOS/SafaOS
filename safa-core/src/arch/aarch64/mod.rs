@@ -17,6 +17,7 @@ pub(super) mod smp;
 mod tests;
 pub(super) mod threading;
 mod timer;
+pub(super) mod tlb;
 pub(super) mod utils;
 
 global_asm!(
@@ -167,19 +168,5 @@ pub unsafe fn halt_all() {
 pub unsafe fn hlt() {
     unsafe {
         asm!("wfe");
-    }
-}
-
-/// Performs a TLB shootdown
-pub unsafe fn flush_cache() {
-    unsafe {
-        asm!(
-            "
-            dsb ish
-            tlbi vmalle1is
-            dsb ish
-            isb
-            "
-        );
     }
 }

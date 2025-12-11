@@ -6,7 +6,11 @@ use core::{
 };
 
 use crate::{
-    memory::{AlignTo, AlignToPage, copy_to_userspace, paging::EntryFlags, userspace_copy_within},
+    arch::paging::PageTable,
+    memory::{
+        AlignTo, AlignToPage, copy_to_userspace, frame_allocator::FramePtr, paging::EntryFlags,
+        userspace_copy_within,
+    },
     process::{
         threads::ThreadsManager,
         vas::{ProcVASA, TrackedMemoryMapping},
@@ -108,6 +112,12 @@ unsafe impl Send for Process {}
 unsafe impl Sync for Process {}
 
 impl Process {
+    /// Returns a pointer to this process's page table
+    #[allow(unused)]
+    pub fn page_table(&self) -> FramePtr<PageTable> {
+        unsafe { &*self.vasa.data_ptr() }.page_table.frame_ptr()
+    }
+
     pub const fn pid(&self) -> Pid {
         self.pid
     }

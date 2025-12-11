@@ -3,9 +3,10 @@ use crate::{
     PhysAddr, VirtAddr,
     arch::{
         paging::PageTable,
+        registers::CPUID,
         x86_64::{
             acpi,
-            interrupts::handlers::{APIC_ERROR_HANDLER_ID, MOUSE_HANDLER_ID},
+            interrupts::handlers::{APIC_ERROR_HANDLER_ID, MOUSE_HANDLER_ID, NMI_REASON},
             io::outb,
             registers::{rdmsr, wrmsr},
         },
@@ -23,12 +24,25 @@ use core::num::NonZero;
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum APICDeliveryMode {
+    /// Delivers the interrupt specified in the vector field to the target processor or processors.
     Fixed = 0,
+    /// Same as fixed mode, except that the interrupt is delivered to the processor executing at the lowest priority among the set of processors specified in the destination field. The ability for a processor to send a lowest priority IPI is model specific and should be avoided by BIOS and operating system software.
     LowestPiriority = 1,
+    /// Delivers an SMI interrupt to the target processor or processors. The vector field must be programmed to 00H for future compatibility.
     SMI = 0b010,
     Reserved = 0b011,
+    /// Delivers an NMI interrupt to the target processor or processors. The vector information is ignored.
     NMI = 0b100,
+    /// Delivers an INIT request to the target processor or processors, which causes them to perform an INIT.
     INIT = 0b101,
+    /// Sends a special start-up IPI (called a SIPI) to the target processor or processors.
+    ///
+    /// The vector typically points to a start-up routine that is part of the BIOS boot-strap code
+    /// (see Section 8.4, Multiple-Processor (MP) Initialization).
+    ///
+    /// IPIs sent with this delivery mode are not automatically retried if the source APIC is unable to deliver it.
+    ///
+    /// It is up to the software to deter- mine if the SIPI was not successfully delivered and to reissue the SIPI if necessary.
     StartUp = 0b110,
     Reserved2 = 0b111,
 }
@@ -48,9 +62,13 @@ impl APICDeliveryMode {
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum APICDestShorthand {
+    /// No short hand. the destination is controlled by the other interrupt register.
     NoShortHand = 0,
+    /// Send to only Self
     SelfOnly = 1,
+    /// Send to all CPUs
     All = 2,
+    /// Send to all CPUs excluding Self
     ExcludingSelf = 3,
 }
 
@@ -82,18 +100,15 @@ pub struct APICICReg {
     delivery_send_pending: bool,
     #[bits(1)]
     __: (),
+    /// Clear for INIT level de-assert, otherwise set.
     /// Level
     ///
     /// 0 == De-assert
     ///
     /// 1 == Assert
-    assert: bool,
-    /// Trigger Mode
-    ///
-    /// 0 == Edge Triggered
-    ///
-    /// 1 == Level TRiggered
-    level_triggered: bool,
+    no_init_level_deassert: bool,
+    /// Set for INIT level de-assert, otherwise clear
+    init_level_deassert: bool,
     #[bits(2)]
     __: (),
     #[bits(2)]
@@ -200,8 +215,8 @@ impl Apic {
         let value_bits = value.into_bits();
         let (value_low, value_high) = (value_bits as u32, (value_bits >> 32) as u32);
         unsafe {
-            low.write_volatile(value_low);
             high.write_volatile(value_high);
+            low.write_volatile(value_low);
         }
     }
 
@@ -226,18 +241,34 @@ impl Apic {
 
     #[inline]
     /// Sends an NMI to all processors
-    pub fn send_nmi_all(&self, vector: u8) {
+    pub fn send_nmi_all(&self, reason: usize) {
         static _NMI_SEND: SpinLock<()> = SpinLock::new(());
         let _guard = _NMI_SEND.lock();
+        NMI_REASON.store(reason, core::sync::atomic::Ordering::Relaxed);
 
         self.write_ic_reg(
             APICICReg::new()
-                .with_destination_shorthand(APICDestShorthand::ExcludingSelf)
-                .with_vector(vector),
+                .with_delivery_mode(APICDeliveryMode::NMI)
+                .with_destination_shorthand(APICDestShorthand::ExcludingSelf),
         );
 
         while self.read_ic_reg().delivery_send_pending() {
             core::hint::spin_loop();
+        }
+    }
+
+    #[inline]
+    /// Send an IPI to a target CPU
+    pub fn send_ipi_to(&self, vector: u8, target: CPUID) {
+        self.write_ic_reg(
+            APICICReg::new()
+                .with_destination_shorthand(APICDestShorthand::NoShortHand)
+                .with_vector(vector)
+                .with_destination_field(target.lapic_id()),
+        );
+
+        while self.read_ic_reg().delivery_send_pending() {
+            core::hint::spin_loop()
         }
     }
 
@@ -394,10 +425,19 @@ impl Apic {
 pub static APIC: LazyLock<Apic> = LazyLock::new(|| Apic::get().expect("Apic not supported"));
 
 /// Sends an NMI to all processors
-pub fn send_nmi_all(vector: u8) {
+pub fn send_nmi_all(reason: usize) {
     // If not then the apic isn't initialized and so is other processors
     if let Some(apic) = APIC.get() {
-        apic.send_nmi_all(vector)
+        apic.send_nmi_all(reason)
+    }
+}
+
+#[inline]
+/// Send an IPI to a target CPU
+pub fn send_ipi_to(vector: u8, target: CPUID) {
+    // If not then the apic isn't initialized and so is other processors
+    if let Some(apic) = APIC.get() {
+        apic.send_ipi_to(vector, target)
     }
 }
 

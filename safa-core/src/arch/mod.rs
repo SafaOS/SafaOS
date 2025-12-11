@@ -28,8 +28,11 @@ pub mod smp {
 
 #[allow(unused_imports)]
 pub use arch::with_interrupts;
-pub use arch::{flush_cache, halt_all, hlt, init_phase1, init_phase2, without_interrupts};
+pub use arch::{halt_all, hlt, init_phase1, init_phase2, without_interrupts};
 
+pub mod tlb {
+    pub use super::arch::tlb::flush_cache_range;
+}
 pub mod power {
     pub use super::arch::power::{reboot, shutdown};
 }

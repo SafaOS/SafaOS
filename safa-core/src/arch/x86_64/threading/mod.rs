@@ -4,6 +4,7 @@ use crate::{
     PhysAddr,
     arch::{
         smp::CPULocal,
+        with_interrupts,
         x86_64::{
             gdt::{get_kernel_tss_stack, set_kernel_tss_stack},
             interrupts::InterruptFrame,
@@ -183,6 +184,15 @@ unsafe extern "x86-interrupt" {
     pub fn context_switch_stub(_: InterruptFrame) -> !;
 }
 
+/// Calls `f` with thread yields disabled, and interrupts enabled.
+pub fn without_yielding<R>(f: impl FnOnce(&'static CPULocal) -> R) -> R {
+    let current_cpu = CPULocal::get_current();
+    let old_value = unsafe { current_cpu.disable_yielding() };
+    let r = with_interrupts(|| f(current_cpu));
+    unsafe { current_cpu.set_yield_enable(old_value) };
+    r
+}
+
 #[repr(C)]
 struct ContextSwitchFrame {
     capture: CPUStatus,
@@ -209,12 +219,15 @@ extern "C" fn context_switch(switch_frame: ContextSwitchFrame) -> ! {
 unsafe fn context_switch_and_return_inner(mut capture: CPUStatus) -> ! {
     let cpu_local = CPULocal::get_current();
 
-    unsafe {
-        capture.ring0_rsp = get_kernel_tss_stack(&cpu_local);
-        capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
-    }
-
-    let swtch_results = swtch(cpu_local, capture);
+    let swtch_results = if core::hint::likely(cpu_local.can_thread_yield()) {
+        unsafe {
+            capture.ring0_rsp = get_kernel_tss_stack(&cpu_local);
+            capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
+        }
+        swtch(cpu_local, capture)
+    } else {
+        None
+    };
 
     super::interrupts::apic::send_eoi();
     if let Some((new_context_ptr, address_space_changed)) = swtch_results {

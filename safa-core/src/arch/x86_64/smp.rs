@@ -1,5 +1,5 @@
 use core::{
-    cell::SyncUnsafeCell,
+    cell::{SyncUnsafeCell, UnsafeCell},
     mem::{MaybeUninit, offset_of},
     num::NonZero,
     ptr::NonNull,
@@ -14,12 +14,14 @@ use crate::{
     VirtAddr,
     arch::{
         self,
-        paging::{CURRENT_RING0_PAGE_TABLE, set_current_page_table_phys},
+        paging::{CURRENT_RING0_PAGE_TABLE, PageTable, set_current_page_table_phys},
+        registers::CPUID,
         threading::{CPUStatus, restore_cpu_status},
-        x86_64::{gdt::TaskStateSegment, registers::wrmsr},
+        x86_64::{gdt::TaskStateSegment, registers::wrmsr, tlb::TLBIRequest},
     },
     debug,
     limine::MP_RESPONSE,
+    memory::frame_allocator::FramePtr,
     process::Process,
     scheduler::Scheduler,
     thread::ContextPriority,
@@ -33,17 +35,72 @@ pub static READY_CPUS: AtomicUsize = AtomicUsize::new(1);
 #[repr(C)]
 pub struct CPULocal {
     scheduler: Option<Scheduler>,
+
     tss_ptr: NonNull<TaskStateSegment>,
     tsc_frequency: NonZero<u64>,
+    tlb_request: UnsafeCell<TLBIRequest>,
+    cpuid: CPUID,
+    /// !!!!! TODO: REMOVE WHEN THE STACK IS IN THE HIGHER-HALF !!!!!!
+    ///
+    /// This is used when an operation on this CPU needs to wait for other CPUS' responses.
+    pub responses_count: AtomicUsize,
     ptr_to_self: *const Self,
+    can_thread_yield: UnsafeCell<bool>,
 }
 
 impl CPULocal {
+    #[inline]
+    pub(super) unsafe fn disable_yielding(&self) -> bool {
+        unsafe { self.can_thread_yield.get().replace(false) }
+    }
+
+    #[inline]
+    pub(super) unsafe fn set_yield_enable(&self, enable_yielidng: bool) {
+        unsafe { *self.can_thread_yield.get() = enable_yielidng }
+    }
+
+    #[inline]
+    pub fn can_thread_yield(&self) -> bool {
+        unsafe { *self.can_thread_yield.get() }
+    }
+
+    #[inline]
+    pub(super) unsafe fn tlbi_request_lock<'a>(&'a self) -> &'a mut TLBIRequest {
+        let r = unsafe { self.tlb_request.as_ref_unchecked() };
+        // Will unlock self once processed
+        core::mem::forget(r.shootdown_lock.lock());
+        unsafe { self.tlb_request.as_mut_unchecked() }
+    }
+
+    #[inline]
+    pub(super) unsafe fn tlbi_request_read<'a>(&'a self) -> &'a TLBIRequest {
+        let r = unsafe { self.tlb_request.as_ref_unchecked() };
+        r
+    }
+
+    #[inline]
+    pub(super) const fn cpuid(&self) -> CPUID {
+        self.cpuid
+    }
+
+    /// If the scheduler is initialized returns the current thread's PID.
+    ///
+    /// Safety: Current pid may change during or after this call.
+    #[inline]
+    pub(super) fn current_pagetable(&self) -> Option<FramePtr<PageTable>> {
+        self.scheduler()
+            .map(|s| unsafe { s.current_thread_ref().process().page_table() })
+    }
+
     fn new(tss_ptr: NonNull<TaskStateSegment>, tsc_frequency: NonZero<u64>) -> Self {
         Self {
             tsc_frequency,
             tss_ptr,
+            tlb_request: UnsafeCell::new(TLBIRequest::new()),
             scheduler: None,
+            cpuid: unsafe { CPUID::new(0) },
+            responses_count: AtomicUsize::new(0),
+            can_thread_yield: UnsafeCell::new(true),
             ptr_to_self: core::ptr::null(),
         }
     }
@@ -126,6 +183,12 @@ pub unsafe fn set_tsc_frequency(freq: NonZero<u64>) {
     }
 }
 
+pub unsafe fn set_cpu_id() {
+    unsafe {
+        CPULocal::get_current_ptr().as_mut().cpuid = CPUID::get();
+    }
+}
+
 /// Sets the current CPU's scheduler
 fn set_local_scheduler(scheduler: Scheduler) {
     unsafe {
@@ -191,19 +254,18 @@ pub unsafe fn init_cpus(process: &Arc<Process>, idle_function: fn() -> !) -> Non
     let cpus = (*MP_RESPONSE).cpus();
     crate::arch::smp_misc::reserve_cpus(cpus.len() - 1);
 
-    let jmp_to = unsafe {
-        // the current CPU should take local 0
-        *BOOT_CORE_ARGS.get() = MaybeUninit::new((process.clone(), idle_function));
-        init_local_scheduler(process, idle_function)
-    };
+    // the current CPU should take local 0
+    unsafe { *BOOT_CORE_ARGS.get() = MaybeUninit::new((process.clone(), idle_function)) };
 
     for cpu in &cpus[1..] {
         cpu.goto_address.write(boot_cpu);
     }
 
-    while READY_CPUS.load(core::sync::atomic::Ordering::Relaxed) != cpus.len() {
-        core::hint::spin_loop();
-    }
+    super::with_interrupts(|| {
+        while READY_CPUS.load(core::sync::atomic::Ordering::Relaxed) != cpus.len() {
+            core::hint::spin_loop();
+        }
+    });
 
-    jmp_to
+    init_local_scheduler(process, idle_function)
 }
