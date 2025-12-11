@@ -611,7 +611,39 @@ impl VirtualMemoryManager {
         }
     }
 
-    fn map_inner<I: Iterator<Item = Frame> + ExactSizeIterator>(
+    /// Marks a region as used by this VMM as DMA, even if it isn't mapped.
+    ///
+    /// Behaves the same as [`Self::map`] but without mapping or touching the region.
+    pub fn mark_used(
+        &mut self,
+        start_addr: VirtAddr,
+        size: usize,
+        flags: VMMMFlags,
+    ) -> Result<(), VMMAllocError> {
+        self.allocate_at(start_addr, size, ObjectState::DMAAllocated(flags))
+    }
+
+    #[must_use = "Returns whether or not a region was found and unmapped"]
+    /// Unmaps the region starting at `start_addr`, returning whether or not it was found, if it wasn't it is likely a kernel bug.
+    pub fn unmap(&mut self, start_addr: VirtAddr) -> bool {
+        let Some((deallocated, del_size)) = self.deallocate_at(start_addr) else {
+            return false;
+        };
+
+        let end_addr = start_addr + del_size;
+        match deallocated {
+            ObjectState::Free => unreachable!("Attempt to deallocate an unallocated object."),
+            ObjectState::Allocated(_) | ObjectState::LazyAllocated(_) /* TODO: Proper Lazy Allocation implementation */ => unsafe {
+                self.page_table.free_unmap(start_addr, end_addr);
+            },
+            /* DMA is responsible for itself */
+            ObjectState::DMAAllocated(_) => {},
+        }
+
+        true
+    }
+
+    pub fn map<I: Iterator<Item = Frame> + ExactSizeIterator>(
         &mut self,
         starting_addr: Option<VirtAddr>,
         size: usize,
