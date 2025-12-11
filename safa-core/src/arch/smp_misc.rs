@@ -1,20 +1,16 @@
-use core::{
-    alloc::Layout,
-    cell::SyncUnsafeCell,
-    mem::MaybeUninit,
-    ptr::NonNull,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use core::{alloc::Layout, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::alloc::Global;
 
-use crate::arch::smp::CPULocal;
+use crate::{arch::smp::CPULocal, utils::locks::SpinLock};
 
 /// A Global Storage for CPUS' Local storages
 pub struct CPULocalsContainer {
     bsp_cpu_local: MaybeUninit<CPULocal>,
+    bsp_cpu_local_ptr: MaybeUninit<&'static CPULocal>,
     cpu_locals_ptr: NonNull<[&'static CPULocal]>,
     smp_cpu_locals: NonNull<[CPULocal]>,
+    allocated_len: usize,
 }
 
 unsafe impl Send for CPULocalsContainer {}
@@ -24,15 +20,19 @@ impl CPULocalsContainer {
     pub const fn new() -> Self {
         Self {
             bsp_cpu_local: MaybeUninit::uninit(),
+            bsp_cpu_local_ptr: MaybeUninit::uninit(),
             cpu_locals_ptr: NonNull::from_ref(&[]),
             smp_cpu_locals: NonNull::from_ref(&[]),
+            allocated_len: 0,
         }
     }
 
-    pub fn set_cpu(&mut self, index: usize, local: CPULocal) -> &mut CPULocal {
+    fn set_cpu(&mut self, index: usize, local: CPULocal) -> NonNull<CPULocal> {
         if index == 0 {
             let ptr = self.bsp_cpu_local.write(local);
             ptr.on_allocated();
+            let ptr = NonNull::from_mut(ptr);
+            self.bsp_cpu_local_ptr = MaybeUninit::new(unsafe { ptr.as_ref() });
             ptr
         } else {
             let smp_index = index - 1;
@@ -40,12 +40,28 @@ impl CPULocalsContainer {
                 let place = &mut self.smp_cpu_locals.as_mut()[smp_index];
                 *place = local;
                 place.on_allocated();
-                place
+                NonNull::from_mut(place)
             }
         }
     }
 
-    pub fn reserve(&'static mut self, extra_cpus_count: usize) {
+    unsafe fn cpu_locals<'a>(&'a self) -> &'static [&'static CPULocal] {
+        if self.allocated_len == 1 {
+            core::hint::cold_path();
+            unsafe { core::slice::from_ref(&*self.bsp_cpu_local_ptr.as_ptr()) }
+        } else {
+            unsafe { &self.cpu_locals_ptr.as_ref()[..self.allocated_len] }
+        }
+    }
+
+    pub fn insert_next(&mut self, local: CPULocal) -> NonNull<CPULocal> {
+        let index = self.allocated_len;
+        let results = self.set_cpu(index, local);
+        self.allocated_len += 1;
+        results
+    }
+
+    pub fn reserve(&mut self, extra_cpus_count: usize) {
         use core::alloc::Allocator;
         let layout0 = Layout::from_size_align(
             size_of::<CPULocal>() * extra_cpus_count,
@@ -77,7 +93,8 @@ impl CPULocalsContainer {
         for i in 0..self.cpu_locals_ptr.len() {
             unsafe {
                 if i == 0 {
-                    self.cpu_locals_ptr.as_mut()[0] = self.bsp_cpu_local.assume_init_ref();
+                    let r = &*self.bsp_cpu_local.as_ptr();
+                    self.cpu_locals_ptr.as_mut()[0] = r;
                 } else {
                     self.cpu_locals_ptr.as_mut()[i] = &self.smp_cpu_locals.as_ref()[i - 1];
                 }
@@ -86,16 +103,15 @@ impl CPULocalsContainer {
     }
 }
 
-static CPU_LOCAL_CONTAINER: SyncUnsafeCell<CPULocalsContainer> =
-    SyncUnsafeCell::new(CPULocalsContainer::new());
-static NEXT_CPU_LOCAL_INDEX: AtomicUsize = AtomicUsize::new(0);
+static CPU_LOCAL_CONTAINER: SpinLock<CPULocalsContainer> = SpinLock::new(CPULocalsContainer::new());
 
 /// By default we can only hold one CPU Local storage and we don't allocate
 ///
 /// but if SMP was detected this function has to be called with the amount of extra CPUs to reserve space for, once the allocator is initialized.
 pub fn reserve_cpus(cpus_count: usize) {
     if cpus_count != 0 {
-        unsafe { &mut *CPU_LOCAL_CONTAINER.get() }.reserve(cpus_count);
+        let mut l = CPU_LOCAL_CONTAINER.lock();
+        l.reserve(cpus_count);
     }
 }
 
@@ -103,13 +119,12 @@ pub fn reserve_cpus(cpus_count: usize) {
 ///
 /// [`reserve_cpus`] must be called if you want to allocate more than 1 CPU, if you attempt to allocate to much CPU Locals, this will panic
 pub fn allocate_cpu_local(local: CPULocal) -> &'static mut CPULocal {
-    let index = NEXT_CPU_LOCAL_INDEX.fetch_add(1, Ordering::Relaxed);
-    unsafe { &mut *CPU_LOCAL_CONTAINER.get() }.set_cpu(index, local)
+    unsafe { CPU_LOCAL_CONTAINER.lock().insert_next(local).as_mut() }
 }
 
 /// Gets references to all allocated CPU Locals
 pub fn get_all_cpu_locals() -> &'static [&'static CPULocal] {
-    unsafe { (*CPU_LOCAL_CONTAINER.get()).cpu_locals_ptr.as_ref() }
+    unsafe { CPU_LOCAL_CONTAINER.lock().cpu_locals() }
 }
 
 impl CPULocal {
