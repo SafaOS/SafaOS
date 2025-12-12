@@ -154,7 +154,7 @@ unsafe fn map_top_2gb(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocErro
 }
 
 /// Inits the page table and the VMM
-pub fn init_page_table() {
+pub fn init_all() {
     debug!(PageTable, "initializing root page table ... ");
     let _ = unsafe { super::paging::current_higher_root_table() };
     let vmm = create_vmm().expect("Failed to create root VMM");

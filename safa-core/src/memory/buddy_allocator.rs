@@ -131,7 +131,7 @@ impl BuddyAllocator<'_> {
     }
 
     pub fn create() -> Result<Self, MapToError> {
-        let (possible_start, _) = super::sorcery::HEAP;
+        let (possible_start, _) = super::init::HEAP;
 
         let start = possible_start.to_next_multiple_of(size_of::<Block>());
         let start = start.to_next_multiple_of(2);

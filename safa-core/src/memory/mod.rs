@@ -1,8 +1,8 @@
 pub mod buddy_allocator;
 pub mod frame_allocator;
+pub mod init;
 pub mod page_allocator;
 pub mod paging;
-pub mod sorcery;
 pub mod vmm;
 
 // FIXME: relays on unstable limine behaviour by assuming limine maps the HHDM at 0xffff800000000000 for x86_64

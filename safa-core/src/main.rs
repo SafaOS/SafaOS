@@ -225,7 +225,7 @@ fn panic(info: &PanicInfo) -> ! {
 #[unsafe(no_mangle)]
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
-    memory::sorcery::init_page_table();
+    memory::init::init_all();
     info!("terminal initialized");
     logging::BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
