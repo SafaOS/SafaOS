@@ -6,8 +6,8 @@ use core::{arch::asm, ops::Index};
 
 use crate::VirtAddr;
 use crate::arch::x86_64::interrupts::apic;
+use crate::memory::init::{HEAP, LARGE_HEAP};
 use crate::memory::paging::{EntryFlags, Page};
-use crate::memory::sorcery::{HEAP, LARGE_HEAP};
 use crate::memory::vmm::{VMMAllocError, VirtualMemoryManager};
 use crate::{
     PhysAddr,
