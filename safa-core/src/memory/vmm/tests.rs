@@ -21,7 +21,11 @@ fn allocate_random_regions() {
     for _ in 0..RUNS {
         let size = size_choices[curr_i % size_choices.len()];
         let addr = vmm
-            .allocate_next_region(size, ObjectState::Allocated(VMMMFlags::empty()))
+            .allocate_next_region(
+                &"TEST_CASE",
+                size,
+                ObjectState::Allocated(VMMMFlags::empty()),
+            )
             .expect("Allocations ran out of memory");
         results.push(addr).expect("Failed to push address");
         curr_i += 1;
@@ -116,16 +120,23 @@ fn allocate_random_regions_advanced() {
 
         let addr = match instruction {
             Instruction::AllocateRandom(size) => vmm
-                .allocate_next_region(size, ObjectState::Allocated(VMMMFlags::empty()))
+                .allocate_next_region(
+                    &"TEST_CASE_NEXT",
+                    size,
+                    ObjectState::Allocated(VMMMFlags::empty()),
+                )
                 .expect("Allocations ran out of memory"),
             Instruction::NextSpecificAllocation => {
                 let Some((addr, size)) = specific_allocations.pop() else {
                     continue;
                 };
                 let addr = VirtAddr::from(addr);
-                if let Err(err) =
-                    vmm.allocate_at(addr, size, ObjectState::Allocated(VMMMFlags::empty()))
-                {
+                if let Err(err) = vmm.allocate_at(
+                    &"TEST_CASE_SPEC",
+                    addr,
+                    size,
+                    ObjectState::Allocated(VMMMFlags::empty()),
+                ) {
                     panic!(
                         "Failed to allocate specific region: {:#?}, addr: {:#?}, size: {}",
                         err, addr, size

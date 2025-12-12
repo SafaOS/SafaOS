@@ -140,6 +140,7 @@ pub fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
+#[allow(unused)]
 pub fn with_interrupts<R>(f: impl FnOnce() -> R) -> R {
     let daif = get_daif();
     unsafe {

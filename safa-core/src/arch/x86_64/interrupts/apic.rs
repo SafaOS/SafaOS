@@ -2,7 +2,6 @@ use super::pit;
 use crate::{
     PhysAddr, VirtAddr,
     arch::{
-        paging::PageTable,
         registers::CPUID,
         x86_64::{
             acpi,
@@ -12,13 +11,13 @@ use crate::{
         },
     },
     info,
-    memory::paging::{EntryFlags, MapToError},
+    memory::vmm::{VMMAllocError, VMMMFlags, VirtualMemoryManager},
     serial,
     utils::locks::{LazyLock, SpinLock},
 };
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
-use core::num::NonZero;
+use core::{cell::UnsafeCell, num::NonZero};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -121,9 +120,9 @@ pub struct APICICReg {
 /// The APIC driver
 pub struct Apic {
     lapic_phys_addr: PhysAddr,
-    lapic_virt_addr: VirtAddr,
+    lapic_virt_addr: UnsafeCell<VirtAddr>,
     ioapic_phys_addr: PhysAddr,
-    ioapic_virt_addr: VirtAddr,
+    ioapic_virt_addr: UnsafeCell<VirtAddr>,
 }
 
 impl Apic {
@@ -131,7 +130,6 @@ impl Apic {
     pub fn get() -> Option<Self> {
         let lapic_phys = rdmsr(0x1B) & 0xFFFFF000;
         let lapic_phys_addr = PhysAddr::from(lapic_phys);
-        let lapic_virt_addr = lapic_phys_addr.into_virt();
 
         let ioapic_phys_addr = unsafe {
             let madt = (*acpi::MADT_DESC)?;
@@ -140,28 +138,35 @@ impl Apic {
             let addr = PhysAddr::from((*record).ioapic_address as usize);
             addr
         };
-        let ioapic_virt_addr = ioapic_phys_addr.into_virt();
         Some(Self {
             ioapic_phys_addr,
-            ioapic_virt_addr,
-            lapic_virt_addr,
+            ioapic_virt_addr: UnsafeCell::new(VirtAddr::null()),
+            lapic_virt_addr: UnsafeCell::new(VirtAddr::null()),
             lapic_phys_addr,
         })
     }
-    /// Maps the IOAPIC and the Local APIC to the `dest` page table
-    pub fn map(&self, dest: &mut PageTable) -> Result<(), MapToError> {
-        let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+    /// Maps the IOAPIC and the Local APIC to the `dest` VMM
+    ///
+    /// # Safety:
+    /// Must be called only once per APIC Driver
+    pub fn map(&self, dest: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
+        let flags = VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE;
+
+        let lapic_addr =
+            dest.map_direct_phys(&"LOCAL APIC", None, self.lapic_phys_addr, 1, flags)?;
+        let io_apic_addr =
+            dest.map_direct_phys(&"IO APIC", None, self.ioapic_phys_addr, 1, flags)?;
 
         unsafe {
-            dest.map_contiguous_pages(self.lapic_virt_addr, self.lapic_phys_addr, 1, flags)?;
-            dest.map_contiguous_pages(self.ioapic_virt_addr, self.ioapic_phys_addr, 1, flags)?;
+            *self.lapic_virt_addr.get() = lapic_addr;
+            *self.ioapic_virt_addr.get() = io_apic_addr;
         }
         Ok(())
     }
 
     #[inline(always)]
     const fn get_lapic_reg_addr(&self, lapic_reg: u16) -> VirtAddr {
-        self.lapic_virt_addr + lapic_reg as usize
+        unsafe { *self.lapic_virt_addr.get() + lapic_reg as usize }
     }
 
     #[inline(always)]
@@ -185,8 +190,8 @@ impl Apic {
 
     pub unsafe fn write_ioapic_val_to_reg(&self, reg: u8, val: u32) {
         unsafe {
-            let ioregsel_addr = self.ioapic_virt_addr.into_ptr::<u32>();
-            let iowin_addr = (self.ioapic_virt_addr + 0x10).into_ptr::<u32>();
+            let ioregsel_addr = (*self.ioapic_virt_addr.get()).into_ptr::<u32>();
+            let iowin_addr = (*self.ioapic_virt_addr.get() + 0x10).into_ptr::<u32>();
 
             core::ptr::write_volatile(ioregsel_addr, reg as u32);
             core::ptr::write_volatile(iowin_addr, val);
@@ -195,8 +200,8 @@ impl Apic {
 
     pub fn read_ioapic_reg(&self, reg: u8) -> u32 {
         unsafe {
-            let ioregsel_addr = self.ioapic_virt_addr.into_ptr::<u32>();
-            let iowin_addr = (self.ioapic_virt_addr + 0x10).into_ptr::<u32>();
+            let ioregsel_addr = (*self.ioapic_virt_addr.get()).into_ptr::<u32>();
+            let iowin_addr = (*self.ioapic_virt_addr.get() + 0x10).into_ptr::<u32>();
 
             core::ptr::write_volatile(ioregsel_addr, reg as u32);
             core::ptr::read_volatile(iowin_addr)
@@ -409,7 +414,8 @@ impl Apic {
 
             info!(
                 "enabled APIC, lapic_id is {lapic_id}, ioapic_id is {ioapic_id}, IO APIC is at {:#x}, local APIC is at {:#x}",
-                self.ioapic_virt_addr, self.lapic_virt_addr
+                *self.ioapic_virt_addr.get(),
+                *self.lapic_virt_addr.get(),
             );
 
             self.configure_error();
@@ -421,6 +427,8 @@ impl Apic {
         self.lapic_phys_addr
     }
 }
+
+unsafe impl Sync for Apic {}
 
 pub static APIC: LazyLock<Apic> = LazyLock::new(|| Apic::get().expect("Apic not supported"));
 
@@ -540,7 +548,7 @@ pub fn setup_timer() -> NonZero<u64> {
     APIC.setup_timer()
 }
 
-/// Maps the IOAPIC and the Local APIC to the `dest` page table
-pub fn map_apic(dest: &mut PageTable) -> Result<(), MapToError> {
+/// Maps the IOAPIC and the Local APIC to the `dest` VMM
+pub fn map_apic(dest: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
     APIC.map(dest)
 }

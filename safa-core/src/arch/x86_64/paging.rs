@@ -6,9 +6,9 @@ use core::{arch::asm, ops::Index};
 
 use crate::VirtAddr;
 use crate::arch::x86_64::interrupts::apic;
-use crate::arch::x86_64::pci;
 use crate::memory::paging::{EntryFlags, Page};
 use crate::memory::sorcery::{HEAP, LARGE_HEAP};
+use crate::memory::vmm::{VMMAllocError, VirtualMemoryManager};
 use crate::{
     PhysAddr,
     memory::{
@@ -361,11 +361,8 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
 }
 
 /// Maps architecture specific devices such as the UART serial in aarch64
-pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
-    unsafe {
-        pci::map_pcie(table)?;
-        apic::map_apic(table)?;
-    }
+pub unsafe fn map_devices(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
+    apic::map_apic(vmm)?;
     // a hack to handle sharing the higher half in x86_64
     let (heap_start, heap_end) = HEAP;
     let (large_heap_start, large_heap_end) = LARGE_HEAP;
@@ -373,6 +370,7 @@ pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
     let (_, _, _, heap_p4_index) = translate(heap_start);
     let (_, _, _, heap_end_p4_index) = translate(heap_end);
 
+    let table = vmm.table_mut();
     for entry in &mut table.entries[heap_p4_index..heap_end_p4_index] {
         entry.map()?;
         crate::serial!("entry: {entry:#x?}\n");

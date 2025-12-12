@@ -3,12 +3,9 @@ use lazy_static::lazy_static;
 use super::acpi;
 use crate::{
     PhysAddr,
-    arch::{
-        paging::PageTable,
-        x86_64::{acpi::MCFGEntry, interrupts::apic::APIC},
-    },
+    arch::x86_64::{acpi::MCFGEntry, interrupts::apic::APIC},
     drivers::{interrupts::IntTrigger, pci::PCI},
-    memory::paging::{EntryFlags, MapToError},
+    memory::vmm::{self, VMMMFlags},
 };
 
 lazy_static! {
@@ -18,30 +15,30 @@ lazy_static! {
         entry
     };
 }
-/// Maps PCIe to the `dest` page table
-pub unsafe fn map_pcie(dest: &mut PageTable) -> Result<(), MapToError> {
-    if let Some(pci_entry) = *PCI_MCFG_ENTRY {
-        let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
-
-        let pci_phys = pci_entry.physical_addr;
-        // bus count * slot count * 4096 = size
-        // page num = size / 4096
-        let pci_page_num = (pci_entry.pci_num1 - pci_entry.pci_num0) as usize * 256;
-
-        unsafe {
-            dest.map_contiguous_pages(pci_phys.into_virt(), pci_phys, pci_page_num, flags)?;
-        }
-    }
-
-    Ok(())
-}
 
 pub fn init() -> Option<PCI> {
     if let Some(entry) = *PCI_MCFG_ENTRY {
         assert_eq!(entry.pci_sgn, 0);
 
-        let addr = entry.physical_addr;
-        Some(PCI::new(addr, entry.pci_num0, entry.pci_num1))
+        let flags = VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE;
+
+        let pci_phys = entry.physical_addr;
+        // bus count * slot count * 4096 = size
+        // page num = size / 4096
+        let pci_page_num = (entry.pci_num1 - entry.pci_num0) as usize * 256;
+
+        let virt_addr = vmm::with_root(|vmm| {
+            vmm.map_direct_phys(
+                &"PCIE",
+                // TODO: maybe make it so the VirtAddr is dynamic?
+                None,
+                pci_phys,
+                pci_page_num,
+                flags,
+            )
+        })
+        .expect("Failed to allocate space for the PCIE");
+        Some(PCI::new(virt_addr, entry.pci_num0, entry.pci_num1))
     } else {
         None
     }

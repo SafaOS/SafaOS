@@ -126,6 +126,12 @@ impl Iterator for FrameIter {
     }
 }
 
+impl ExactSizeIterator for FrameIter {
+    fn len(&self) -> usize {
+        (self.end.start_address() - self.start.start_address()) / PAGE_SIZE
+    }
+}
+
 impl Debug for Frame {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Frame")

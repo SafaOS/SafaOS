@@ -1,28 +1,32 @@
+use core::cell::SyncUnsafeCell;
 use core::fmt::{self, Write};
-use core::hint::unlikely;
 
+use crate::memory::vmm::{VMMMFlags, VirtualMemoryManager};
 use crate::utils::locks::SpinLock;
 use crate::{PhysAddr, VirtAddr};
-use lazy_static::lazy_static;
-lazy_static! {
-    static ref PL011: VirtAddr = super::cpu::PL011BASE.into_virt();
+
+// hack to allow debug prints before the DTB is parsed in QEMU
+pub static PL011: SyncUnsafeCell<VirtAddr> =
+    SyncUnsafeCell::new(PhysAddr::from(0x09000000).into_virt());
+
+pub unsafe fn map_serial(vmm: &mut VirtualMemoryManager) {
+    let phys_addr = *super::cpu::PL011BASE;
+    let virt_addr = vmm
+        .map_direct_phys(&"PL011", None, phys_addr, 1, VMMMFlags::WRITEABLE)
+        .expect("Failed to map Serial");
+
+    unsafe { *PL011.get() = virt_addr }
 }
 
 #[inline(always)]
 fn putbyte(c: u8) {
-    unsafe {
-        if c == b'\n' {
-            putbyte(b'\r');
-        }
-
-        if unlikely(!super::cpu::serial_ready()) {
-            // hack to allow debug prints before the DTB is parsed
-            let qemu_addr = PhysAddr::from(0x09000000).into_virt();
-            core::ptr::write_volatile(qemu_addr.into_ptr::<u8>(), c);
-        } else {
-            core::ptr::write_volatile(PL011.into_ptr(), c);
-        }
+    if c == b'\n' {
+        putbyte(b'\r');
     }
+
+    unsafe {
+        (*PL011.get()).into_ptr::<u8>().write_volatile(c);
+    };
 }
 
 fn putc(c: char) {

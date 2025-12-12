@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 use msi::{MSIXCap, MSIXInfo};
 
 use crate::{
-    PhysAddr,
+    PhysAddr, VirtAddr,
     drivers::{
         interrupts::IRQInfo, net::e1000::E1000NetCard, pci::extended_caps::CaptabilitiesIter,
     },
@@ -337,9 +337,9 @@ impl<'a> PCIDeviceInfo<'a> {
 impl PCI {
     /// Requires that `addr` is mapped in the HHDM
     /// TODO: For now only PCIe is implemented
-    pub fn new(addr: PhysAddr, start_bus: u8, end_bus: u8) -> Self {
+    pub fn new(addr: VirtAddr, start_bus: u8, end_bus: u8) -> Self {
         Self {
-            base_ptr: addr.into_virt().into_ptr::<()>(),
+            base_ptr: addr.into_ptr::<()>(),
             start_bus,
             end_bus,
         }

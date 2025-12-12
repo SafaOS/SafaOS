@@ -83,6 +83,7 @@ pub fn main() -> ! {
         .expect("failed to spawn a thread function for a polled driver");
     }
 
+    crate::memory::vmm::with_root(|vmm| vmm.debug_regions());
     serial!("Hello, world!, running tests...\n",);
 
     #[cfg(not(test))]

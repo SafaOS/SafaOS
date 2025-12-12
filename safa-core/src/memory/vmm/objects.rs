@@ -37,7 +37,7 @@ impl VMMObjectsPage {
     const fn new() -> Self {
         Self {
             bitmap: 0,
-            objects: [const { ObjectsEntry::Empty }; 101],
+            objects: [const { ObjectsEntry::Empty }; MAX_OBJECTS_COUNT],
             next: None,
         }
     }
@@ -92,14 +92,18 @@ impl VMMObjectsPage {
 #[derive(Debug, Clone, Copy)]
 pub enum ObjectState {
     Free,
+    #[allow(unused)]
     Allocated(VMMMFlags),
+    #[allow(unused)]
     DMAAllocated(VMMMFlags),
+    #[allow(unused)]
     LazyAllocated(VMMMFlags),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct VMMObject {
     addr: VirtAddr,
+    pub name: &'static &'static str,
     pub state: ObjectState,
     /// Size of the region in bytes.
     ///
@@ -252,6 +256,7 @@ impl VMMObject {
 
     pub const fn new_free(addr: VirtAddr, size: usize) -> Self {
         Self {
+            name: &"UNNAMED",
             addr,
             state: ObjectState::Free,
             size,

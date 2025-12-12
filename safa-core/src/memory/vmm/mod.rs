@@ -8,11 +8,11 @@ use core::{mem::MaybeUninit, ptr::NonNull};
 use alloc::alloc::Allocator;
 
 use crate::{
-    VirtAddr,
+    PhysAddr, VirtAddr,
     arch::paging::PageTable,
-    debug, error, info,
+    error, info,
     memory::{
-        AlignToPage, HHDM,
+        AlignToPage,
         frame_allocator::{self, Frame, FramePtr},
         paging::{EntryFlags, MapToError, PAGE_SIZE, Page},
         vmm::objects::{ObjectState, VMMObject, VMMObjectsPage},
@@ -29,6 +29,7 @@ bitflags::bitflags! {
         const EXECUTABLE = 1 << 1;
         const USER_ACCESSIBLE = 1 << 2;
         const UNCACHABLE = 1 << 3;
+        const FRAMEBUFFER_CACHED = 1 << 4;
     }
 }
 
@@ -89,6 +90,14 @@ impl Drop for VirtualMemoryManager {
 }
 
 impl VirtualMemoryManager {
+    pub fn table_mut(&mut self) -> &mut PageTable {
+        &mut *self.page_table
+    }
+
+    pub unsafe fn table_ptr(&self) -> FramePtr<PageTable> {
+        self.page_table
+    }
+
     pub fn new(start_addr: VirtAddr, size: usize, page_table: FramePtr<PageTable>) -> Self {
         let mut objects =
             VMMObjectsPage::allocate().expect("Failed to allocate memory for storing VMM objects");
@@ -192,6 +201,7 @@ impl VirtualMemoryManager {
 
     fn allocate_at(
         &mut self,
+        name: &'static &'static str,
         start_addr: VirtAddr,
         size: usize,
         obj_state: ObjectState,
@@ -238,7 +248,7 @@ impl VirtualMemoryManager {
                     .split_at(offset, size)
                     .map_err(|()| VMMAllocError::OutOfMemory)?;
                 curr_obj.state = obj_state;
-
+                curr_obj.name = name;
                 if let Some(new_head) = new_head {
                     self.len += 1;
                     if is_head {
@@ -263,6 +273,7 @@ impl VirtualMemoryManager {
 
     fn allocate_next_region(
         &mut self,
+        name: &'static &'static str,
         size: usize,
         allocation_state: ObjectState,
     ) -> Result<VirtAddr, VMMAllocError> {
@@ -277,6 +288,8 @@ impl VirtualMemoryManager {
                     .map_err(|()| VMMAllocError::OutOfMemory)?;
 
                 curr_obj.state = allocation_state;
+                curr_obj.name = name;
+
                 let curr_addr = curr_obj.addr();
 
                 if let Some(new_next) = new_next {
@@ -295,14 +308,15 @@ impl VirtualMemoryManager {
         Err(VMMAllocError::OutOfMemory)
     }
 
-    fn debug_regions(&self) {
+    pub fn debug_regions(&self) {
         crate::debug!(VirtualMemoryManager, "Memory Regions: ");
         let mut current = Some(self.head());
 
         while let Some(obj) = current {
             crate::debug!(
                 VirtualMemoryManager,
-                "Region at {:#x}: size = {:#x}, state = {:?}",
+                "{} at {:#x}: size = {:#x}, state = {:?}",
+                obj.name,
                 obj.addr(),
                 obj.size(),
                 obj.state
@@ -316,11 +330,12 @@ impl VirtualMemoryManager {
     /// Behaves the same as [`Self::map`] but without mapping or touching the region.
     pub fn mark_used(
         &mut self,
+        name: &'static &'static str,
         start_addr: VirtAddr,
         size: usize,
         flags: VMMMFlags,
     ) -> Result<(), VMMAllocError> {
-        self.allocate_at(start_addr, size, ObjectState::DMAAllocated(flags))
+        self.allocate_at(name, start_addr, size, ObjectState::DMAAllocated(flags))
     }
 
     #[must_use = "Returns whether or not a region was found and unmapped"]
@@ -348,13 +363,14 @@ impl VirtualMemoryManager {
     /// `size` must be a multiple of [`PAGE_SIZE`] or it panicks.
     pub fn map_new(
         &mut self,
+        name: &'static &'static str,
         starting_addr: Option<VirtAddr>,
         size: usize,
         flags: VMMMFlags,
         mode: VMMAllocMode,
     ) -> Result<VirtAddr, VMMAllocError> {
         assert!(size.is_multiple_of(PAGE_SIZE));
-        self.map_inner::<core::iter::Empty<Frame>>(starting_addr, size, flags, mode, None)
+        self.map_inner::<core::iter::Empty<Frame>>(name, starting_addr, size, flags, mode, None)
     }
 
     /// like [`Self::map_new`] but you provide the physical addresses that this region is mapped to.
@@ -362,16 +378,46 @@ impl VirtualMemoryManager {
     /// The provided frames total size must be equal to or more than the requested allocation size or it will return an error [`VMMAllocError::InvalidSize`].
     pub fn map_direct<I: Iterator<Item = Frame> + ExactSizeIterator>(
         &mut self,
+        name: &'static &'static str,
         starting_addr: Option<VirtAddr>,
         size: usize,
         flags: VMMMFlags,
-        frames: Option<I>,
+        frames: I,
     ) -> Result<VirtAddr, VMMAllocError> {
-        self.map_inner(starting_addr, size, flags, VMMAllocMode::Normal, frames)
+        assert!(size.is_multiple_of(PAGE_SIZE));
+
+        self.map_inner(
+            name,
+            starting_addr,
+            size,
+            flags,
+            VMMAllocMode::Normal,
+            Some(frames),
+        )
+    }
+
+    /// Variaint of [`Self::map_direct`]
+    pub fn map_direct_phys(
+        &mut self,
+        name: &'static &'static str,
+        start_addr: Option<VirtAddr>,
+        start_phys: PhysAddr,
+        page_count: usize,
+        flags: VMMMFlags,
+    ) -> Result<VirtAddr, VMMAllocError> {
+        let size = page_count * PAGE_SIZE;
+        let end_addr = start_phys + size;
+        let frames = Frame::iter_frames(
+            Frame::containing_address(start_phys),
+            Frame::containing_address(end_addr),
+        );
+
+        self.map_direct(name, start_addr, size, flags, frames)
     }
 
     fn map_inner<I: Iterator<Item = Frame> + ExactSizeIterator>(
         &mut self,
+        name: &'static &'static str,
         starting_addr: Option<VirtAddr>,
         size: usize,
         flags: VMMMFlags,
@@ -397,8 +443,10 @@ impl VirtualMemoryManager {
         };
 
         let allocated_start_addr = match starting_addr {
-            Some(addr) => self.allocate_at(addr, size, obj_state).map(|()| addr)?,
-            None => self.allocate_next_region(size, obj_state)?,
+            Some(addr) => self
+                .allocate_at(name, addr, size, obj_state)
+                .map(|()| addr)?,
+            None => self.allocate_next_region(name, size, obj_state)?,
         };
 
         let mut map_flags = EntryFlags::empty();
@@ -413,6 +461,10 @@ impl VirtualMemoryManager {
 
         if flags.contains(VMMMFlags::UNCACHABLE) {
             map_flags |= EntryFlags::DEVICE_UNCACHEABLE;
+        }
+
+        if flags.contains(VMMMFlags::FRAMEBUFFER_CACHED) {
+            map_flags |= EntryFlags::FRAMEBUFFER_CACHED;
         }
 
         if flags.contains(VMMMFlags::USER_ACCESSIBLE) {
@@ -448,7 +500,7 @@ unsafe impl Send for VirtualMemoryManager {}
 static VMM: SpinLock<MaybeUninit<VirtualMemoryManager>> = SpinLock::new(MaybeUninit::uninit());
 
 #[derive(Debug, Clone, Copy)]
-pub struct VMMAlloc;
+pub struct VMMAlloc(&'static &'static str);
 
 unsafe impl Allocator for VMMAlloc {
     fn allocate(
@@ -465,7 +517,13 @@ unsafe impl Allocator for VMMAlloc {
         let mut vmm_guard = VMM.lock();
         let vmm = unsafe { vmm_guard.assume_init_mut() };
         let addr = vmm
-            .map_new(None, size, VMMMFlags::WRITEABLE, VMMAllocMode::Normal)
+            .map_new(
+                self.0,
+                None,
+                size,
+                VMMMFlags::WRITEABLE,
+                VMMAllocMode::Normal,
+            )
             .map_err(|e| {
                 error!(VirtualMemoryManager, "VMM map returned error: {e:?}");
                 alloc::alloc::AllocError
@@ -491,23 +549,19 @@ unsafe impl Allocator for VMMAlloc {
     }
 }
 
-pub fn init(page_table: FramePtr<PageTable>, hhdm_size: usize) {
+/// Calls `f` with the higher half's [`VirtualMemoryManager`].
+#[inline(always)]
+pub fn with_root<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut VirtualMemoryManager) -> R,
+{
     let mut vmm_guard = VMM.lock();
-    let vmm = vmm_guard.write(VirtualMemoryManager::new(
-        HHDM,
-        VirtAddr::from(usize::MAX) - HHDM,
-        page_table,
-    ));
+    f(unsafe { vmm_guard.assume_init_mut() })
+}
 
-    debug!(
-        VirtualMemoryManager,
-        "Marking {HHDM:?} ({hhdm_size:#x}bytes) as used"
-    );
-    vmm.mark_used(
-        HHDM,
-        hhdm_size,
-        VMMMFlags::WRITEABLE | VMMMFlags::EXECUTABLE,
-    )
-    .expect("VMM Failed to mark HHDM as used");
+pub fn init(vmm: VirtualMemoryManager) {
+    let mut vmm_guard = VMM.lock();
+    let vmm = vmm_guard.write(vmm);
     info!(VirtualMemoryManager, "Initialized");
+    vmm.debug_regions();
 }

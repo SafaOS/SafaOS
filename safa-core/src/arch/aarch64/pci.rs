@@ -4,32 +4,34 @@ use crate::{
     info,
     memory::{
         AlignToPage,
-        paging::{EntryFlags, PAGE_SIZE},
+        paging::PAGE_SIZE,
+        vmm::{self, VMMMFlags},
     },
 };
 
-use super::{cpu, paging::current_higher_root_table};
+use super::cpu;
 
 pub fn init() -> Option<PCI> {
     let (start_phys_addr, size, bus_start, bus_end) = (*cpu::PCIE)?;
-    let start_virt_addr = start_phys_addr.into_virt();
 
     info!("initializing PCI from bus: {bus_start:#x} to bus: {bus_end:#x}");
 
     let page_num = size.to_next_page() / PAGE_SIZE;
-    unsafe {
-        current_higher_root_table()
-            .map_contiguous_pages(
-                start_virt_addr,
-                start_phys_addr,
-                page_num,
-                EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
-            )
-            .expect("failed to map PCIe");
-    }
-    info!("mapped PCIe from {start_virt_addr:#x} with size {size:#x}");
+
+    let virt_addr = vmm::with_root(|vmm| {
+        vmm.map_direct_phys(
+            &"PCIE",
+            None,
+            start_phys_addr,
+            page_num,
+            VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE,
+        )
+    })
+    .expect("Failed to map memory for the PCIE");
+
+    info!("mapped PCIe from {virt_addr:#x} with size {size:#x}");
     // FIXME: hardcoded bus numbers
-    Some(PCI::new(start_phys_addr, bus_start as u8, bus_end as u8))
+    Some(PCI::new(virt_addr, bus_start as u8, bus_end as u8))
 }
 
 pub fn build_msi_data(vector: u32, trigger: IntTrigger) -> u32 {

@@ -6,6 +6,7 @@ use crate::{
     memory::{
         frame_allocator::{self, Frame, FramePtr},
         paging::{EntryFlags, MapToError, Page},
+        vmm::VirtualMemoryManager,
     },
 };
 use core::{
@@ -341,14 +342,9 @@ impl PageTable {
 }
 
 /// Maps architecture specific devices such as the UART serial in aarch64
-pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
+pub unsafe fn map_devices(vmm: &mut VirtualMemoryManager) -> Result<(), MapToError> {
     unsafe {
-        let flags = EntryFlags::WRITE;
-        table.map_to(
-            Page::containing_address(super::cpu::PL011BASE.into_virt()),
-            Frame::containing_address(*super::cpu::PL011BASE),
-            flags,
-        )?;
+        super::serial::map_serial(vmm);
         Ok(())
     }
 }

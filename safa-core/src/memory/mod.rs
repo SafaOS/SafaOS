@@ -209,8 +209,8 @@ impl VirtAddr {
 
 impl PhysAddr {
     #[inline(always)]
-    pub fn into_virt(self) -> VirtAddr {
-        VirtAddr(self.0 | *HHDM)
+    pub const fn into_virt(self) -> VirtAddr {
+        VirtAddr(self.0 | HHDM.0)
     }
 }
 impl<T> From<*const T> for VirtAddr {

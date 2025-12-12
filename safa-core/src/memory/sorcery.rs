@@ -1,8 +1,4 @@
-use super::{
-    VirtAddr,
-    frame_allocator::FramePtr,
-    paging::{EntryFlags, PAGE_SIZE},
-};
+use super::{VirtAddr, paging::PAGE_SIZE};
 use ::limine::memory_map::EntryType;
 
 use crate::{
@@ -10,7 +6,10 @@ use crate::{
     arch::{self, paging::set_current_higher_page_table},
     debug,
     limine::{self, executable_phys_address, executable_virt_address},
-    memory::{AlignToPage, HHDM, frame_allocator},
+    memory::{
+        AlignToPage, HHDM, frame_allocator,
+        vmm::{VMMAllocError, VMMMFlags, VirtualMemoryManager},
+    },
 };
 
 use super::paging::{MapToError, PageTable};
@@ -31,51 +30,50 @@ pub const LARGE_HEAP: (VirtAddr, VirtAddr) = {
     (end, end + (0x100000000000 / 4))
 };
 
-fn create_root_page_table() -> Result<FramePtr<PageTable>, MapToError> {
+fn create_vmm() -> Result<VirtualMemoryManager, VMMAllocError> {
     let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 
     let mut table = unsafe { frame.into_ptr::<PageTable>() };
     table.zeroize();
-    unsafe {
-        let dest = &mut *table;
+    let mut vmm = VirtualMemoryManager::new(HHDM, VirtAddr::from(usize::MAX) - HHDM, table);
 
-        map_hhdm(dest)?;
-        arch::paging::map_devices(dest)?;
-        map_top_2gb(dest)?;
+    unsafe {
+        map_hhdm(&mut vmm)?;
+        map_top_2gb(&mut vmm)?;
+
+        arch::paging::map_devices(&mut vmm)?;
     }
 
-    Ok(table)
+    Ok(vmm)
 }
 
-unsafe fn map_hhdm(dest: &mut PageTable) -> Result<VirtAddr, MapToError> {
+unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAllocError> {
     debug!(
         PageTable,
         "mapping HHDM, limine's: {:#x}",
         limine::get_phy_offset()
     );
 
-    let flags = EntryFlags::WRITE;
+    let flags = VMMMFlags::WRITEABLE;
     for entry in limine::mmap_request().entries() {
         let phys_addr = PhysAddr::from(entry.base as usize);
         let size_bytes = entry.length as usize;
         let size = size_bytes.to_next_page();
 
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
-            let flags = if entry.entry_type == EntryType::FRAMEBUFFER {
-                flags | EntryFlags::FRAMEBUFFER_CACHED
+            let (flags, name) = if entry.entry_type == EntryType::FRAMEBUFFER {
+                (flags | VMMMFlags::FRAMEBUFFER_CACHED, &"FRAMEBUFFER")
             } else if entry.entry_type == EntryType::USABLE {
                 // Normal memory == normal caching
-                flags
+                (flags, &"HHDM")
             } else {
-                flags | EntryFlags::DEVICE_UNCACHEABLE
+                (flags | VMMMFlags::UNCACHABLE, &"HHDM")
             };
 
             let virt_addr = phys_addr.into_virt();
             let page_num = size / PAGE_SIZE;
 
-            unsafe {
-                dest.map_contiguous_pages(virt_addr, phys_addr, page_num, flags)?;
-            }
+            dest.map_direct_phys(name, Some(virt_addr), phys_addr, page_num, flags)?;
         }
     }
 
@@ -99,16 +97,17 @@ unsafe extern "C" {
     static section_rodata_end: u8;
 }
 
-unsafe fn map_top_2gb(dest: &mut PageTable) -> Result<(), MapToError> {
+unsafe fn map_top_2gb(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
     unsafe {
         debug!(PageTable, "mapping kernel");
+
         let virt_addr = executable_virt_address();
         let phys_addr = executable_phys_address();
 
         let mut map_section = |name: &'static str,
                                section_virt_begin: VirtAddr,
                                section_virt_end: VirtAddr,
-                               flags: EntryFlags| {
+                               flags: VMMMFlags| {
             let section_off = section_virt_begin - virt_addr;
             let section_phys_begin = phys_addr + section_off;
             let section_size = section_virt_end - section_virt_begin;
@@ -118,34 +117,35 @@ unsafe fn map_top_2gb(dest: &mut PageTable) -> Result<(), MapToError> {
                 section_phys_begin + section_size
             );
 
-            dest.map_contiguous_pages(
-                section_virt_begin,
+            vmm.map_direct_phys(
+                &"KERNEL",
+                Some(section_virt_begin),
                 section_phys_begin,
                 section_size.div_ceil(PAGE_SIZE),
                 flags,
             )?;
 
             debug!(PageTable, "Mapped {name}");
-            Ok(())
+            Ok::<_, VMMAllocError>(())
         };
 
         map_section(
             ".text",
             VirtAddr::from_ptr(&section_text_begin),
             VirtAddr::from_ptr(&section_text_end),
-            EntryFlags::empty(),
+            VMMMFlags::EXECUTABLE,
         )?;
         map_section(
             ".rodata",
             VirtAddr::from_ptr(&section_rodata_begin),
             VirtAddr::from_ptr(&section_rodata_end),
-            EntryFlags::DISABLE_EXEC,
+            VMMMFlags::empty(),
         )?;
         map_section(
             ".data",
             VirtAddr::from_ptr(&section_data_begin),
             VirtAddr::from_ptr(&section_data_end),
-            EntryFlags::WRITE | EntryFlags::DISABLE_EXEC,
+            VMMMFlags::WRITEABLE,
         )?;
 
         debug!(PageTable, "mapped kernel");
@@ -153,13 +153,16 @@ unsafe fn map_top_2gb(dest: &mut PageTable) -> Result<(), MapToError> {
     }
 }
 
+/// Inits the page table and the VMM
 pub fn init_page_table() {
     debug!(PageTable, "initializing root page table ... ");
     let _ = unsafe { super::paging::current_higher_root_table() };
-    let table = create_root_page_table().unwrap();
+    let vmm = create_vmm().expect("Failed to create root VMM");
     unsafe {
-        set_current_higher_page_table(table);
+        set_current_higher_page_table(vmm.table_ptr());
     }
+
+    super::vmm::init(vmm);
     // de-allocating the previous root table
     // FIXME: could still be used by other cpus so i don't free it for now
     // let frame = previous_table.frame();
