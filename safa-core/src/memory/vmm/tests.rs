@@ -23,6 +23,7 @@ fn allocate_random_regions() {
         let addr = vmm
             .allocate_next_region(
                 &"TEST_CASE",
+                None,
                 size,
                 ObjectState::Allocated(VMMMFlags::empty()),
             )
@@ -122,6 +123,7 @@ fn allocate_random_regions_advanced() {
             Instruction::AllocateRandom(size) => vmm
                 .allocate_next_region(
                     &"TEST_CASE_NEXT",
+                    None,
                     size,
                     ObjectState::Allocated(VMMMFlags::empty()),
                 )

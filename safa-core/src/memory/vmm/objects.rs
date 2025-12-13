@@ -168,6 +168,27 @@ impl VMMObject {
         new_prev_ref.next = Some(self.as_non_null());
     }
 
+    /// Tries to grow self stealing `size` bytes from the right.
+    pub fn try_grow(&mut self, size: usize) -> (Option<NonNull<Self>>, bool) {
+        let Some(right) = self.next_mut() else {
+            return (None, false);
+        };
+
+        if right.allocated() || size > right.size() {
+            return (None, false);
+        }
+
+        if size == right.size() {
+            return self.try_absorb_right();
+        } else {
+            // PUSH THE RIGHT!
+            right.addr += size;
+            right.size -= size;
+            self.size += size;
+            return (self.next, true);
+        }
+    }
+
     /// Attempts to absorb the next object into this one.
     ///
     /// returns a ptr to the new object if successful, otherwise and if there is no next None.

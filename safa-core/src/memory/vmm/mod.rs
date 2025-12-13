@@ -5,7 +5,7 @@ mod objects;
 
 use core::{mem::MaybeUninit, ptr::NonNull};
 
-use alloc::alloc::Allocator;
+use alloc::alloc::{AllocError, Allocator};
 
 use crate::{
     PhysAddr, VirtAddr,
@@ -33,6 +33,43 @@ bitflags::bitflags! {
     }
 }
 
+impl VMMMFlags {
+    pub fn to_entry_flags(self) -> EntryFlags {
+        let mut map_flags = EntryFlags::empty();
+
+        if self.contains(VMMMFlags::WRITEABLE) {
+            map_flags.insert(EntryFlags::WRITE);
+        }
+
+        if !self.contains(VMMMFlags::EXECUTABLE) {
+            map_flags.insert(EntryFlags::DISABLE_EXEC);
+        }
+
+        if self.contains(VMMMFlags::UNCACHABLE) {
+            map_flags.insert(EntryFlags::DEVICE_UNCACHEABLE);
+        }
+
+        if self.contains(VMMMFlags::FRAMEBUFFER_CACHED) {
+            map_flags.insert(EntryFlags::FRAMEBUFFER_CACHED);
+        }
+
+        if self.contains(VMMMFlags::USER_ACCESSIBLE) {
+            map_flags.insert(EntryFlags::USER_ACCESSIBLE);
+        }
+
+        map_flags
+    }
+}
+
+/// Describes a VMM Location request
+#[derive(Debug, Clone, Copy)]
+pub enum Location {
+    /// Address is just a hint, picked location would be after it or at it.
+    Hint(VirtAddr),
+    /// Address is fixed, the location would be picked at it.
+    Fixed(VirtAddr),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum VMMAllocMode {
     /// Normal allocation mode
@@ -49,7 +86,7 @@ pub enum VMMAllocMode {
 pub enum VMMAllocError {
     OutOfMemory,
     OutOfRange,
-    AlreadyUsed,
+    Used,
     InvalidSize,
 }
 
@@ -134,20 +171,71 @@ impl VirtualMemoryManager {
     }
 
     /// Lookup a VMM Object that contains the given address.
-    pub fn lookup_addr(&self, addr: VirtAddr) -> Option<&VMMObject> {
+    pub fn lookup_addr_mut(&mut self, addr: VirtAddr) -> Option<&mut VMMObject> {
         if self.start_addr > addr || self.start_addr + self.size <= addr {
             return None;
         }
 
-        let mut current = Some(self.head());
+        let mut current = Some(self.head_mut());
         while let Some(obj) = current {
             if obj.addr() <= addr && obj.region_end() > addr {
                 return Some(obj);
             }
-            current = obj.next();
+            current = obj.next_mut();
         }
 
         unreachable!("Should find the address because it is within the VMM range")
+    }
+
+    fn grow_region(
+        &mut self,
+        addr: VirtAddr,
+        extra_bytes: usize,
+    ) -> Result<(VirtAddr, ObjectState, usize), VMMAllocError> {
+        let Some(obj) = self.lookup_addr_mut(addr) else {
+            return Err(VMMAllocError::OutOfRange);
+        };
+
+        assert!(obj.allocated(), "Attempt to grow an unallocated object");
+
+        let (new_right, grew) = obj.try_grow(extra_bytes);
+
+        let state = obj.state;
+        let addr = obj.addr();
+        let size = obj.size();
+
+        if grew {
+            // We absobed tail
+            if new_right.is_none() {
+                self.tail = obj.as_non_null();
+            }
+            Ok((addr, state, size))
+        } else {
+            Err(VMMAllocError::Used)
+        }
+    }
+
+    pub fn grow_map(&mut self, addr: VirtAddr, needed: usize) -> Result<(), VMMAllocError> {
+        let (addr, state, size) = self.grow_region(addr, needed)?;
+        let unmapped_addr = addr + (size - needed);
+        let unmapped_size = needed;
+        match state {
+            ObjectState::Allocated(s) => {
+                unsafe {
+                    self.page_table.alloc_map(
+                        unmapped_addr,
+                        unmapped_addr + unmapped_size,
+                        s.to_entry_flags(),
+                    )?;
+                };
+            }
+            ObjectState::LazyAllocated(_) => {}
+
+            ObjectState::DMAAllocated(_) => unreachable!("Grew a DMA Allocated region"),
+            ObjectState::Free => unreachable!(),
+        }
+
+        Ok(())
     }
 
     fn deallocate_at(&mut self, addr: VirtAddr) -> Option<(ObjectState, usize)> {
@@ -235,12 +323,12 @@ impl VirtualMemoryManager {
                         prev.state
                     );
                 }
-                return Err(VMMAllocError::AlreadyUsed);
+                return Err(VMMAllocError::Used);
             }
 
             if curr_obj.addr() <= start_addr && curr_obj.region_end() >= end_addr {
                 if curr_obj.allocated() {
-                    return Err(VMMAllocError::AlreadyUsed);
+                    return Err(VMMAllocError::Used);
                 }
 
                 let offset = start_addr - curr_obj.addr();
@@ -274,15 +362,35 @@ impl VirtualMemoryManager {
     fn allocate_next_region(
         &mut self,
         name: &'static &'static str,
+        hint: Option<VirtAddr>,
         size: usize,
         allocation_state: ObjectState,
     ) -> Result<VirtAddr, VMMAllocError> {
         // Prefer higher addresses, that is why we reverse
-        let mut current = Some(self.tail_mut());
-        let mut is_tail = true;
+        let mut current = Some(if hint.is_none() {
+            self.tail_mut()
+        } else {
+            self.head_mut()
+        });
 
         while let Some(curr_obj) = current {
-            if !curr_obj.allocated() && curr_obj.size() >= size {
+            let is_tail = curr_obj.next().is_none();
+
+            if hint.is_none_or(|h| curr_obj.addr() >= h || (curr_obj.region_end() >= (h + size)))
+                && !curr_obj.allocated()
+                && curr_obj.size() >= size
+            {
+                // If we are in the region hint describes, steal it and fragment, otherwise hint is out of the region or hint is at exactly that region.
+                if let Some(h) = hint
+                    && curr_obj.addr() < h
+                    && curr_obj.region_end() >= (h + size)
+                {
+                    // FIXME: More efficient implementation
+                    return self
+                        .allocate_at(name, h, size, allocation_state)
+                        .map(|()| h);
+                }
+
                 let new_next = curr_obj
                     .split_to_fit(size)
                     .map_err(|()| VMMAllocError::OutOfMemory)?;
@@ -301,9 +409,11 @@ impl VirtualMemoryManager {
                 return Ok(curr_addr);
             }
 
-            current = curr_obj.prev_mut();
-            // Praying to the gods of optimizations to do this
-            is_tail = false;
+            current = if hint.is_none() {
+                curr_obj.prev_mut()
+            } else {
+                curr_obj.next_mut()
+            };
         }
         Err(VMMAllocError::OutOfMemory)
     }
@@ -364,7 +474,7 @@ impl VirtualMemoryManager {
     pub fn map_new(
         &mut self,
         name: &'static &'static str,
-        starting_addr: Option<VirtAddr>,
+        starting_addr: Option<Location>,
         size: usize,
         flags: VMMMFlags,
         mode: VMMAllocMode,
@@ -379,7 +489,7 @@ impl VirtualMemoryManager {
     pub fn map_direct<I: Iterator<Item = Frame> + ExactSizeIterator>(
         &mut self,
         name: &'static &'static str,
-        starting_addr: Option<VirtAddr>,
+        starting_addr: Option<Location>,
         size: usize,
         flags: VMMMFlags,
         frames: I,
@@ -400,7 +510,7 @@ impl VirtualMemoryManager {
     pub fn map_direct_phys(
         &mut self,
         name: &'static &'static str,
-        start_addr: Option<VirtAddr>,
+        start_addr: Option<Location>,
         start_phys: PhysAddr,
         page_count: usize,
         flags: VMMMFlags,
@@ -418,7 +528,7 @@ impl VirtualMemoryManager {
     fn map_inner<I: Iterator<Item = Frame> + ExactSizeIterator>(
         &mut self,
         name: &'static &'static str,
-        starting_addr: Option<VirtAddr>,
+        starting_addr: Option<Location>,
         size: usize,
         flags: VMMMFlags,
         mode: VMMAllocMode,
@@ -443,34 +553,16 @@ impl VirtualMemoryManager {
         };
 
         let allocated_start_addr = match starting_addr {
-            Some(addr) => self
+            Some(Location::Fixed(addr)) => self
                 .allocate_at(name, addr, size, obj_state)
                 .map(|()| addr)?,
-            None => self.allocate_next_region(name, size, obj_state)?,
+            None => self.allocate_next_region(name, None, size, obj_state)?,
+            Some(Location::Hint(hint)) => {
+                self.allocate_next_region(name, Some(hint), size, obj_state)?
+            }
         };
 
-        let mut map_flags = EntryFlags::empty();
-
-        if flags.contains(VMMMFlags::WRITEABLE) {
-            map_flags |= EntryFlags::WRITE;
-        }
-
-        if !flags.contains(VMMMFlags::EXECUTABLE) {
-            map_flags |= EntryFlags::DISABLE_EXEC;
-        }
-
-        if flags.contains(VMMMFlags::UNCACHABLE) {
-            map_flags |= EntryFlags::DEVICE_UNCACHEABLE;
-        }
-
-        if flags.contains(VMMMFlags::FRAMEBUFFER_CACHED) {
-            map_flags |= EntryFlags::FRAMEBUFFER_CACHED;
-        }
-
-        if flags.contains(VMMMFlags::USER_ACCESSIBLE) {
-            map_flags |= EntryFlags::USER_ACCESSIBLE;
-        }
-
+        let map_flags = flags.to_entry_flags();
         match (mode, frames) {
             (VMMAllocMode::Normal, Some(frames)) => unsafe {
                 // Safety: We have got exclusive access to the whole address space we own, once a region is allocated,
@@ -500,28 +592,31 @@ unsafe impl Send for VirtualMemoryManager {}
 static VMM: SpinLock<MaybeUninit<VirtualMemoryManager>> = SpinLock::new(MaybeUninit::uninit());
 
 #[derive(Debug, Clone, Copy)]
-pub struct VMMAlloc(&'static &'static str);
+pub struct VMMAlloc(&'static &'static str, Option<VirtAddr>, VMMMFlags);
 
-unsafe impl Allocator for VMMAlloc {
-    fn allocate(
-        &self,
-        layout: core::alloc::Layout,
-    ) -> Result<NonNull<[u8]>, alloc::alloc::AllocError> {
-        assert!(
-            layout.align() <= PAGE_SIZE,
-            "Alignment {} too big for VMM",
-            layout.align()
-        );
-        let size = layout.size().to_next_page();
+impl VMMAlloc {
+    #[inline]
+    pub const fn new(name: &'static &'static str) -> Self {
+        Self(name, None, VMMMFlags::WRITEABLE)
+    }
 
-        let mut vmm_guard = VMM.lock();
-        let vmm = unsafe { vmm_guard.assume_init_mut() };
+    #[inline]
+    pub const fn with_hint(mut self, hint: VirtAddr) -> Self {
+        self.1 = Some(hint);
+        self
+    }
+
+    fn allocate_new(
+        self,
+        vmm: &mut VirtualMemoryManager,
+        size: usize,
+    ) -> Result<NonNull<[u8]>, AllocError> {
         let addr = vmm
             .map_new(
                 self.0,
-                None,
+                self.1.map(|h| Location::Hint(h)),
                 size,
-                VMMMFlags::WRITEABLE,
+                self.2,
                 VMMAllocMode::Normal,
             )
             .map_err(|e| {
@@ -533,6 +628,97 @@ unsafe impl Allocator for VMMAlloc {
             NonNull::new(addr.into_ptr::<u8>()).expect("VMM map returned a null VirtAddr"),
             size,
         ))
+    }
+}
+
+unsafe impl Allocator for VMMAlloc {
+    fn allocate(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<NonNull<[u8]>, alloc::alloc::AllocError> {
+        debug_assert!(
+            layout.align() <= PAGE_SIZE,
+            "Alignment {} too big for VMM",
+            layout.align()
+        );
+        let size = layout.size().to_next_page();
+
+        let mut vmm_guard = VMM.lock();
+        let vmm = unsafe { vmm_guard.assume_init_mut() };
+        self.allocate_new(vmm, size)
+    }
+
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<NonNull<[u8]>, alloc::alloc::AllocError> {
+        debug_assert!(
+            new_layout.size() >= old_layout.size(),
+            "`new_layout.size()` must be greater than or equal to `old_layout.size()`"
+        );
+        debug_assert!(
+            new_layout.align() <= PAGE_SIZE,
+            "Alignment {} too big for VMM",
+            new_layout.align()
+        );
+
+        let new_size = new_layout.size().to_next_page();
+        let old_size = old_layout.size().to_next_page();
+
+        if new_size == old_size {
+            return Ok(NonNull::slice_from_raw_parts(ptr, new_size));
+        }
+
+        let needed = new_size - old_size;
+
+        let addr = VirtAddr::from_ptr(ptr.as_ptr());
+
+        let mut vmm_guard = VMM.lock();
+        let vmm = unsafe { vmm_guard.assume_init_mut() };
+
+        let try_grow = vmm.grow_map(addr, needed);
+        match try_grow {
+            Ok(()) => {
+                return Ok(NonNull::slice_from_raw_parts(ptr, new_size));
+            }
+            Err(VMMAllocError::Used) => {
+                let new_memory = self.allocate_new(vmm, new_size)?;
+                unsafe {
+                    new_memory
+                        .cast::<u8>()
+                        .copy_from_nonoverlapping(ptr.cast::<u8>(), old_layout.size())
+                };
+
+                assert!(
+                    vmm.unmap(VirtAddr::from_ptr(ptr.as_ptr())),
+                    "Attempt to grow an unallocated region"
+                );
+                Ok(new_memory)
+            }
+            Err(VMMAllocError::OutOfMemory) => {
+                // TODO: Handle OOM
+                error!(VirtualMemoryManager, "OOM!!!!");
+                return Err(AllocError);
+            }
+            Err(VMMAllocError::OutOfRange) => unreachable!("Attempt to grow an unallocated region"),
+            Err(_) => unreachable!(),
+        }
+    }
+
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        let results = unsafe { self.grow(ptr, old_layout, new_layout)? };
+
+        let to_zeroize = results.len() - old_layout.size();
+        let zeroize_begin = unsafe { results.cast::<u8>().add(old_layout.size()) };
+        unsafe { zeroize_begin.write_bytes(0, to_zeroize) };
+        Ok(results)
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: core::alloc::Layout) {

@@ -1,3 +1,5 @@
+use core::cell::SyncUnsafeCell;
+
 use super::{VirtAddr, paging::PAGE_SIZE};
 use ::limine::memory_map::EntryType;
 
@@ -8,11 +10,19 @@ use crate::{
     limine::{self, executable_phys_address, executable_virt_address},
     memory::{
         AlignToPage, HHDM, frame_allocator,
-        vmm::{VMMAllocError, VMMMFlags, VirtualMemoryManager},
+        vmm::{Location, VMMAllocError, VMMMFlags, VirtualMemoryManager},
     },
 };
 
 use super::paging::{MapToError, PageTable};
+
+static HEAP0_HINT: SyncUnsafeCell<VirtAddr> =
+    SyncUnsafeCell::new(VirtAddr::from(0xffffe00000000000));
+
+/// A hint to avoid fragmentation for a large free area for a heap
+pub fn heap0_hint() -> VirtAddr {
+    unsafe { *HEAP0_HINT.get() }
+}
 
 pub const HEAP: (VirtAddr, VirtAddr) = {
     // assuming HHDM starts at 0xffff000000000000
@@ -38,7 +48,9 @@ fn create_vmm() -> Result<VirtualMemoryManager, VMMAllocError> {
     let mut vmm = VirtualMemoryManager::new(HHDM, VirtAddr::from(usize::MAX) - HHDM, table);
 
     unsafe {
-        map_hhdm(&mut vmm)?;
+        let hhdm_end = map_hhdm(&mut vmm)?;
+        // 1TiB after HHDM end.
+        *HEAP0_HINT.get() = hhdm_end + (1024 * 1024 * 1024 * 1024);
         map_top_2gb(&mut vmm)?;
 
         arch::paging::map_devices(&mut vmm)?;
@@ -73,7 +85,13 @@ unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAlloc
             let virt_addr = phys_addr.into_virt();
             let page_num = size / PAGE_SIZE;
 
-            dest.map_direct_phys(name, Some(virt_addr), phys_addr, page_num, flags)?;
+            dest.map_direct_phys(
+                name,
+                Some(Location::Fixed(virt_addr)),
+                phys_addr,
+                page_num,
+                flags,
+            )?;
         }
     }
 
@@ -119,7 +137,7 @@ unsafe fn map_top_2gb(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocErro
 
             vmm.map_direct_phys(
                 &"KERNEL",
-                Some(section_virt_begin),
+                Some(Location::Fixed(section_virt_begin)),
                 section_phys_begin,
                 section_size.div_ceil(PAGE_SIZE),
                 flags,
