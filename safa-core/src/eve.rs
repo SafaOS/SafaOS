@@ -3,6 +3,7 @@
 
 use crate::arch::smp::CPULocal;
 use crate::drivers::driver_poll::{self, PolledDriver};
+use crate::memory::paging::PAGE_SIZE;
 use crate::process::current::kernel_thread_spawn;
 use crate::scheduler::{Scheduler, ThreadScheduleReason, cpu_count};
 use crate::serial;
@@ -51,7 +52,7 @@ fn thread_reaper_thread(tid: Tid, scheduler: &Scheduler) -> ! {
 }
 
 pub fn main() -> ! {
-    *logging::SERIAL_LOG.write() = Some(PageString::new());
+    *logging::SERIAL_LOG.write() = Some(PageString::with_capacity(&"Journal", PAGE_SIZE * 4));
     crate::info!("eve has been awaken ...");
 
     crate::drivers::pci::init();
@@ -83,7 +84,9 @@ pub fn main() -> ! {
         .expect("failed to spawn a thread function for a polled driver");
     }
 
+    // NOTE: May deadlock because the journal could request memory while lock is held (this is why we allocate 4 pages).
     crate::memory::vmm::with_root(|vmm| vmm.debug_regions());
+
     serial!("Hello, world!, running tests...\n",);
 
     #[cfg(not(test))]

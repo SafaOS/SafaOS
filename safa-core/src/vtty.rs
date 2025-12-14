@@ -71,9 +71,9 @@ pub struct VirtualTTY {
 impl VirtualTTY {
     const fn new_inner() -> Self {
         Self {
-            stdout: Mutex::new(PageVec::new()),
+            stdout: Mutex::new(PageVec::new(&"VirtualTTY::Stdout")),
             stdin: Mutex::new(Stdin {
-                inner: PageVec::new(),
+                inner: PageVec::new(&"VirtualTTY::Stdin"),
                 newlines_count: 0,
             }),
             flags: RwLock::new(TTYFlags::CANONICAL.union(TTYFlags::ECHO)),

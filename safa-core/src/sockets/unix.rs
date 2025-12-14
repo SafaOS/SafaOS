@@ -10,7 +10,7 @@ use rustc_hash::FxBuildHasher;
 use safa_abi::{errors::ErrorStatus, poll::PollEvents, sockets::SockMsgFlags};
 
 use crate::{
-    memory::{page_allocator::PageAlloc, paging::PAGE_SIZE},
+    memory::{paging::PAGE_SIZE, vmm::VMMAlloc},
     process::poll::{self, PollID},
     scheduler::wait_queue::WaitQueue,
     sockets::{Socket, SocketAddrRef, SocketError},
@@ -25,13 +25,16 @@ const STREAM_SIZE: usize = (PAGE_SIZE * 2) - size_of::<heapless::Vec<u8, 0>>();
 /// One side of a stream connection.
 #[derive(Debug)]
 pub(super) struct Stream {
-    data: Box<heapless::Vec<u8, STREAM_SIZE>, PageAlloc>,
+    data: Box<heapless::Vec<u8, STREAM_SIZE>, VMMAlloc>,
 }
 
 impl Stream {
     pub fn new() -> Self {
         Self {
-            data: Box::new_in(heapless::Vec::new(), PageAlloc),
+            data: Box::new_in(
+                heapless::Vec::new(),
+                VMMAlloc::new(&"sockets::unix::Stream"),
+            ),
         }
     }
 

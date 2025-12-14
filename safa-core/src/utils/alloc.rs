@@ -4,26 +4,26 @@ use core::fmt::Write;
 use core::ops::{Deref, DerefMut};
 use core::str;
 
-use crate::memory::page_allocator::PageAlloc;
+use crate::memory::vmm::VMMAlloc;
 use alloc::vec::Vec;
 
 use super::bstr::BStr;
 
 #[derive(Debug, Clone)]
-pub struct PageVec<T>(Vec<T, PageAlloc>);
+pub struct PageVec<T>(Vec<T, VMMAlloc>);
 
 impl<T> PageVec<T> {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self(Vec::with_capacity_in(capacity, PageAlloc))
+    pub fn with_capacity(name: &'static &'static str, capacity: usize) -> Self {
+        Self(Vec::with_capacity_in(capacity, VMMAlloc::new(name)))
     }
 
-    pub const fn new() -> Self {
-        Self(Vec::new_in(PageAlloc))
+    pub const fn new(name: &'static &'static str) -> Self {
+        Self(Vec::new_in(VMMAlloc::new(name)))
     }
 }
 
 impl<T> Deref for PageVec<T> {
-    type Target = Vec<T, PageAlloc>;
+    type Target = Vec<T, VMMAlloc>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -36,20 +36,20 @@ impl<T> DerefMut for PageVec<T> {
     }
 }
 
-impl<T> AsMut<Vec<T, PageAlloc>> for PageVec<T> {
-    fn as_mut(&mut self) -> &mut Vec<T, PageAlloc> {
+impl<T> AsMut<Vec<T, VMMAlloc>> for PageVec<T> {
+    fn as_mut(&mut self) -> &mut Vec<T, VMMAlloc> {
         &mut self.0
     }
 }
 
-impl<T> AsRef<Vec<T, PageAlloc>> for PageVec<T> {
-    fn as_ref(&self) -> &Vec<T, PageAlloc> {
+impl<T> AsRef<Vec<T, VMMAlloc>> for PageVec<T> {
+    fn as_ref(&self) -> &Vec<T, VMMAlloc> {
         &self.0
     }
 }
 
-impl<T> From<Vec<T, PageAlloc>> for PageVec<T> {
-    fn from(v: Vec<T, PageAlloc>) -> Self {
+impl<T> From<Vec<T, VMMAlloc>> for PageVec<T> {
+    fn from(v: Vec<T, VMMAlloc>) -> Self {
         Self(v)
     }
 }
@@ -61,9 +61,9 @@ pub struct PageBString {
 
 impl PageBString {
     #[inline]
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(name: &'static &'static str, capacity: usize) -> Self {
         Self {
-            inner: PageVec::with_capacity(capacity),
+            inner: PageVec::with_capacity(name, capacity),
         }
     }
 
@@ -123,15 +123,15 @@ pub struct PageString {
 }
 
 impl PageString {
-    pub const fn new() -> Self {
+    pub const fn new(name: &'static &'static str) -> Self {
         Self {
-            inner: PageVec::new(),
+            inner: PageVec::new(name),
         }
     }
 
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(name: &'static &'static str, capacity: usize) -> Self {
         Self {
-            inner: PageVec::with_capacity(capacity),
+            inner: PageVec::with_capacity(name, capacity),
         }
     }
 

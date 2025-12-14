@@ -17,7 +17,7 @@ use safa_abi::{
 
 use crate::{
     debug,
-    memory::page_allocator::PageAlloc,
+    memory::vmm::VMMAlloc,
     net::{
         self,
         icmp::{EchoIcmpPacket, ICMPType, IcmpPacket},
@@ -41,7 +41,7 @@ pub enum UdpState {
 pub struct Message {
     src_ip: Ipv4Addr,
     src_port: u16,
-    payload: Box<[u8], PageAlloc>,
+    payload: Box<[u8], VMMAlloc>,
 }
 
 #[derive(Debug)]
@@ -124,7 +124,9 @@ impl UdpSocket {
         messages.push_back(Message {
             src_ip: from_addr,
             src_port: from_port,
-            payload: data.to_vec_in(PageAlloc).into_boxed_slice(),
+            payload: data
+                .to_vec_in(VMMAlloc::new(&"sockets::udp::Message"))
+                .into_boxed_slice(),
         });
 
         self.wait_queue.lock().wake_n_on_condition(|()| true, 1);

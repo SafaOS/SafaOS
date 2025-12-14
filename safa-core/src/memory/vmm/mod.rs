@@ -9,7 +9,7 @@ use alloc::alloc::{AllocError, Allocator};
 
 use crate::{
     PhysAddr, VirtAddr,
-    arch::paging::PageTable,
+    arch::{paging::PageTable, without_interrupts},
     error, info,
     memory::{
         AlignToPage,
@@ -643,9 +643,11 @@ unsafe impl Allocator for VMMAlloc {
         );
         let size = layout.size().to_next_page();
 
-        let mut vmm_guard = VMM.lock();
-        let vmm = unsafe { vmm_guard.assume_init_mut() };
-        self.allocate_new(vmm, size)
+        without_interrupts(|| {
+            let mut vmm_guard = VMM.lock();
+            let vmm = unsafe { vmm_guard.assume_init_mut() };
+            self.allocate_new(vmm, size)
+        })
     }
 
     unsafe fn grow(
@@ -675,36 +677,40 @@ unsafe impl Allocator for VMMAlloc {
 
         let addr = VirtAddr::from_ptr(ptr.as_ptr());
 
-        let mut vmm_guard = VMM.lock();
-        let vmm = unsafe { vmm_guard.assume_init_mut() };
+        without_interrupts(|| {
+            let mut vmm_guard = VMM.lock();
+            let vmm = unsafe { vmm_guard.assume_init_mut() };
 
-        let try_grow = vmm.grow_map(addr, needed);
-        match try_grow {
-            Ok(()) => {
-                return Ok(NonNull::slice_from_raw_parts(ptr, new_size));
-            }
-            Err(VMMAllocError::Used) => {
-                let new_memory = self.allocate_new(vmm, new_size)?;
-                unsafe {
-                    new_memory
-                        .cast::<u8>()
-                        .copy_from_nonoverlapping(ptr.cast::<u8>(), old_layout.size())
-                };
+            let try_grow = vmm.grow_map(addr, needed);
+            match try_grow {
+                Ok(()) => {
+                    return Ok(NonNull::slice_from_raw_parts(ptr, new_size));
+                }
+                Err(VMMAllocError::Used) => {
+                    let new_memory = self.allocate_new(vmm, new_size)?;
+                    unsafe {
+                        new_memory
+                            .cast::<u8>()
+                            .copy_from_nonoverlapping(ptr.cast::<u8>(), old_layout.size())
+                    };
 
-                assert!(
-                    vmm.unmap(VirtAddr::from_ptr(ptr.as_ptr())),
-                    "Attempt to grow an unallocated region"
-                );
-                Ok(new_memory)
+                    assert!(
+                        vmm.unmap(VirtAddr::from_ptr(ptr.as_ptr())),
+                        "Attempt to grow an unallocated region"
+                    );
+                    Ok(new_memory)
+                }
+                Err(VMMAllocError::OutOfMemory) => {
+                    // TODO: Handle OOM
+                    error!(VirtualMemoryManager, "OOM!!!!");
+                    return Err(AllocError);
+                }
+                Err(VMMAllocError::OutOfRange) => {
+                    unreachable!("Attempt to grow an unallocated region")
+                }
+                Err(_) => unreachable!(),
             }
-            Err(VMMAllocError::OutOfMemory) => {
-                // TODO: Handle OOM
-                error!(VirtualMemoryManager, "OOM!!!!");
-                return Err(AllocError);
-            }
-            Err(VMMAllocError::OutOfRange) => unreachable!("Attempt to grow an unallocated region"),
-            Err(_) => unreachable!(),
-        }
+        })
     }
 
     unsafe fn grow_zeroed(
@@ -724,14 +730,16 @@ unsafe impl Allocator for VMMAlloc {
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: core::alloc::Layout) {
         _ = layout;
 
-        let mut vmm_guard = VMM.lock();
-        let vmm = unsafe { vmm_guard.assume_init_mut() };
+        without_interrupts(|| {
+            let mut vmm_guard = VMM.lock();
+            let vmm = unsafe { vmm_guard.assume_init_mut() };
 
-        let addr = VirtAddr::from_ptr(ptr.as_ptr());
-        assert!(
-            vmm.unmap(addr),
-            "Attempt to VMM Deallocate an unallocated region."
-        );
+            let addr = VirtAddr::from_ptr(ptr.as_ptr());
+            assert!(
+                vmm.unmap(addr),
+                "Attempt to VMM Deallocate an unallocated region."
+            );
+        });
     }
 }
 
@@ -741,8 +749,10 @@ pub fn with_root<F, R>(f: F) -> R
 where
     F: FnOnce(&mut VirtualMemoryManager) -> R,
 {
-    let mut vmm_guard = VMM.lock();
-    f(unsafe { vmm_guard.assume_init_mut() })
+    without_interrupts(|| {
+        let mut vmm_guard = VMM.lock();
+        f(unsafe { vmm_guard.assume_init_mut() })
+    })
 }
 
 pub fn init(vmm: VirtualMemoryManager) {

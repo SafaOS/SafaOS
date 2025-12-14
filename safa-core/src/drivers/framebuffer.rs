@@ -5,13 +5,14 @@ use crate::{
     memory::{
         frame_allocator::Frame,
         paging::{PAGE_SIZE, Page},
+        vmm::VMMAlloc,
     },
     utils::locks::{Mutex, MutexGuard},
 };
 use alloc::{boxed::Box, vec::Vec};
 use lazy_static::lazy_static;
 
-use crate::{debug, limine, memory::page_allocator::PageAlloc, utils::display::RGB};
+use crate::{debug, limine, utils::display::RGB};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -33,7 +34,7 @@ pub struct FrameBufferInfo {
 pub struct FrameBuffer<'a> {
     info: FrameBufferInfo,
     buffer_display_index: usize,
-    pixel_buffer: Box<[u32], PageAlloc>,
+    pixel_buffer: Box<[u32], VMMAlloc>,
     video_buffer: &'a mut [u8],
 }
 
@@ -43,8 +44,10 @@ impl<'a> FrameBuffer<'a> {
         pixels_buffers_count: usize,
         info: FrameBufferInfo,
     ) -> Self {
-        let mut pixel_buffer =
-            Vec::with_capacity_in((info.width * info.height) * pixels_buffers_count, PageAlloc);
+        let mut pixel_buffer = Vec::with_capacity_in(
+            (info.width * info.height) * pixels_buffers_count,
+            VMMAlloc::new(&"FRAMEBUFFER_DRIVER"),
+        );
         unsafe {
             pixel_buffer.set_len(pixel_buffer.capacity());
         }

@@ -38,7 +38,7 @@ impl KernelInfoFile {
     }
 
     fn fetch(_: &mut GenericRodFSFile) -> Option<PageString> {
-        let mut page_string = PageString::with_capacity(1024);
+        let mut page_string = PageString::with_capacity(&"kernelinfo", 1024);
         let kernel_info = KernelInfo::fetch();
         serde_json::to_writer_pretty(&mut page_string, &kernel_info)
             .ok()

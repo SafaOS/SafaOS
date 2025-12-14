@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use serde::{ser::SerializeStruct, Serialize};
+use serde::{Serialize, ser::SerializeStruct};
 
 use crate::{
     drivers::{pci::XHCI_DEVICE, vfs::rodatafs::GenericRodFSFile, xhci::usb_device::USBDevice},
@@ -36,7 +36,7 @@ impl USBInfoFile {
     }
 
     pub fn fetch(_: &mut GenericRodFSFile) -> Option<PageString> {
-        let mut page_string = PageString::with_capacity(1024);
+        let mut page_string = PageString::with_capacity(&"usbinfo", 1024);
         let mem_info = USBInfo::fetch();
 
         serde_json::to_writer_pretty(&mut page_string, &mem_info)

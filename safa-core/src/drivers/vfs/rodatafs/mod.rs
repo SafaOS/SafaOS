@@ -204,7 +204,7 @@ pub struct InternalStructure {
 
 impl InternalStructure {
     pub fn new() -> Self {
-        let mut inner = PageVec::with_capacity(1);
+        let mut inner = PageVec::with_capacity(&"RodFS", 1);
         inner.push(RodFSObject::new_collection("", 0));
 
         InternalStructure { inner }

@@ -245,7 +245,7 @@ impl Debug for IPv4Packet {
 pub struct PageIPv4Packet(PageVec<u8>);
 impl PageIPv4Packet {
     pub fn new(header: IPv4Header) -> Self {
-        let mut packet = PageVec::with_capacity(size_of::<IPv4Header>());
+        let mut packet = PageVec::with_capacity(&"IPv4Packet", size_of::<IPv4Header>());
         packet.extend_from_slice(header.as_bytes());
         Self(packet)
     }

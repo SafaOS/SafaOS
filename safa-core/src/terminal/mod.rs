@@ -246,7 +246,7 @@ impl<T: TTYInterface> TTY<T> {
     pub fn new(interface: T) -> Self {
         Self {
             stdin: Stdin::new(),
-            stdout_buffer: PageBString::with_capacity(4096),
+            stdout_buffer: PageBString::with_capacity(&"TTY::stdout_buffer", 4096),
             interface,
             settings: TTYSettings::DRAW_GRAPHICS
                 | TTYSettings::CANONICAL_MODE
