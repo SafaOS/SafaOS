@@ -16,7 +16,7 @@ flush_cache_range_inner:
     cmp x0, x1
     b.lo .Loop
 
-    dsb ish
+    dsb sy
     isb
     ret
 "
