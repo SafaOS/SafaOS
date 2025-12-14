@@ -126,6 +126,7 @@ impl BuddyAllocator {
 
     pub fn expand_heap_by<'b>(&mut self, size: usize) -> Option<NonNull<Block>> {
         let size = size
+            .max(self.heap.len())
             .to_next_page()
             .next_power_of_two()
             .to_next_multiple_of(size_of::<Block>());
