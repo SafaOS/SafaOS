@@ -222,7 +222,7 @@ impl FrameBufferDriver {
             let mut frames = Vec::with_capacity(page_n);
             for i in 0..page_n {
                 let page_addr = virt_addr + i * PAGE_SIZE;
-                let page = Page::containing_address(page_addr);
+                let page = Page::containing(page_addr);
                 let frame = current_higher_root_table()
                     .get_frame(page)
                     .expect("Failed to get Frame of a page belonging to a created double buffer");

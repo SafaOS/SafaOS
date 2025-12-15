@@ -6,7 +6,6 @@ use core::{arch::asm, ops::Index};
 
 use crate::VirtAddr;
 use crate::arch::x86_64::interrupts::apic;
-use crate::memory::init::{HEAP, LARGE_HEAP};
 use crate::memory::paging::{EntryFlags, Page};
 use crate::memory::vmm::{VMMAllocError, VirtualMemoryManager};
 use crate::{
@@ -248,8 +247,7 @@ impl PageTable {
         frame: Frame,
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
-        let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.virt_addr());
+        let (level_1_index, level_2_index, level_3_index, level_4_index) = translate(page.addr());
 
         let final_flags: ArchEntryFlags = flags.into();
 
@@ -270,8 +268,7 @@ impl PageTable {
 
     /// gets the frame page points to
     pub fn get_frame(&self, page: Page) -> Option<Frame> {
-        let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.virt_addr());
+        let (level_1_index, level_2_index, level_3_index, level_4_index) = translate(page.addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
         let level_1_table = level_2_table[level_2_index].mapped_to()?;
@@ -283,8 +280,7 @@ impl PageTable {
 
     /// get a mutable reference to the entry for a given page
     fn get_entry(&self, page: Page) -> Option<&mut Entry> {
-        let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.virt_addr());
+        let (level_1_index, level_2_index, level_3_index, level_4_index) = translate(page.addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
         let level_1_table = level_2_table[level_2_index].mapped_to()?;
@@ -362,29 +358,21 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
 
 /// Maps architecture specific devices such as the UART serial in aarch64
 pub unsafe fn map_devices(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
+    use crate::memory::HHDM;
+
     apic::map_apic(vmm)?;
     // a hack to handle sharing the higher half in x86_64
-    let (heap_start, heap_end) = HEAP;
-    let (large_heap_start, large_heap_end) = LARGE_HEAP;
+    let (hhdm_start, end) = (HHDM, HHDM + 0x400000000000);
 
-    let (_, _, _, heap_p4_index) = translate(heap_start);
-    let (_, _, _, heap_end_p4_index) = translate(heap_end);
+    let (_, _, _, heap_p4_index) = translate(hhdm_start);
+    let (_, _, _, heap_end_p4_index) = translate(end);
 
-    let table = vmm.table_mut();
+    let table = unsafe { vmm.table_mut() };
     for entry in &mut table.entries[heap_p4_index..heap_end_p4_index] {
         entry.map()?;
         crate::serial!("entry: {entry:#x?}\n");
     }
 
-    let (_, _, _, lheap_p4_index) = translate(large_heap_start);
-    let (_, _, _, lheap_end_p4_index) = translate(large_heap_end);
-
-    for entry in &mut table.entries[lheap_p4_index..lheap_end_p4_index] {
-        entry.map()?;
-    }
-
-    crate::serial!(
-        "mapped from {heap_p4_index} to {heap_end_p4_index} and from: {lheap_p4_index} to {lheap_end_p4_index}...\n"
-    );
+    crate::serial!("mapped from {heap_p4_index} to {heap_end_p4_index}...\n");
     Ok(())
 }

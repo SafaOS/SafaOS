@@ -302,13 +302,13 @@ pub fn userspace_copy_within(
     let end_dest_addr = dest_addr + size;
 
     let src_iter = Page::iter_pages(
-        Page::containing_address(src_addr),
-        Page::containing_address(end_src_addr + PAGE_SIZE),
+        Page::containing(src_addr),
+        Page::containing(end_src_addr + PAGE_SIZE),
     );
 
     let dest_iter = Page::iter_pages(
-        Page::containing_address(dest_addr),
-        Page::containing_address(end_dest_addr + PAGE_SIZE),
+        Page::containing(dest_addr),
+        Page::containing(end_dest_addr + PAGE_SIZE),
     );
 
     let pages_iter = src_iter.zip(dest_iter);
@@ -338,10 +338,9 @@ pub fn userspace_copy_within(
             }
         };
 
-        let (curr_src_diff, to_copy) =
-            calc_within(curr_src_page.virt_addr(), src_addr, end_src_addr);
+        let (curr_src_diff, to_copy) = calc_within(curr_src_page.addr(), src_addr, end_src_addr);
 
-        let (curr_dest_diff, _) = calc_within(curr_dest_page.virt_addr(), dest_addr, end_dest_addr);
+        let (curr_dest_diff, _) = calc_within(curr_dest_page.addr(), dest_addr, end_dest_addr);
 
         let src_phys_addr = src_frame.phys_addr() + curr_src_diff;
         let dest_phys_addr = dest_frame.phys_addr() + curr_dest_diff;
@@ -370,8 +369,8 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
     let mut to_copy = obj.len();
 
     for i in 0..pages_required {
-        let page = Page::containing_address(addr + copied);
-        let diff = if i == 0 { addr - page.virt_addr() } else { 0 };
+        let page = Page::containing(addr + copied);
+        let diff = if i == 0 { addr - page.addr() } else { 0 };
         let will_copy = if (to_copy + diff) >= PAGE_SIZE {
             PAGE_SIZE - diff
         } else {

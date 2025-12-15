@@ -11,7 +11,7 @@ use crate::{
     memory::{
         AlignToPage,
         frame_allocator::{self, Frame},
-        paging::{self, MapToError, PAGE_SIZE, Page, PhysPageTable},
+        paging::{self, MapToError, PAGE_SIZE, Page, PhysPageTable, SyncPageTable},
     },
     process::resources::Resource,
 };
@@ -42,11 +42,11 @@ pub struct TrackedMemoryMapping {
 
 impl TrackedMemoryMapping {
     pub const fn end(&self) -> VirtAddr {
-        self.end_page.virt_addr()
+        self.end_page.addr()
     }
 
     pub const fn start(&self) -> VirtAddr {
-        self.start_page.virt_addr()
+        self.start_page.addr()
     }
 
     /// Syncs the writes done to this mapping to the underlying File Descriptor
@@ -92,8 +92,8 @@ impl Drop for TrackedMemoryMapping {
         unsafe {
             _ = self.sync();
 
-            let mut start_addr = self.start_page.virt_addr();
-            let end_addr = self.end_page.virt_addr();
+            let mut start_addr = self.start_page.addr();
+            let end_addr = self.end_page.addr();
 
             if let Some(ref int) = self.interface {
                 let interface_start = start_addr;
@@ -116,6 +116,7 @@ impl Drop for TrackedMemoryMapping {
 /// Process Virtual Address Space Allocator
 pub struct ProcVASA {
     pub(super) page_table: ManuallyDrop<PhysPageTable>,
+    sync_page_table: SyncPageTable,
     executable_end: VirtAddr,
     lookup_start: VirtAddr,
 
@@ -124,9 +125,11 @@ pub struct ProcVASA {
 }
 
 impl ProcVASA {
-    pub const fn new(page_table: PhysPageTable, executable_end: VirtAddr) -> Self {
+    pub fn new(page_table: PhysPageTable, executable_end: VirtAddr) -> Self {
+        let ptr = page_table.frame_ptr();
         Self {
             page_table: ManuallyDrop::new(page_table),
+            sync_page_table: unsafe { SyncPageTable::new(ptr) },
             executable_end,
             data_break: executable_end,
             // Gives sbrk 64 GiB of memory to use
@@ -150,8 +153,8 @@ impl ProcVASA {
     ) -> Result<(Page, Page), MapToError> {
         if n == 0 {
             return Ok((
-                Page::containing_address(VirtAddr::null()),
-                Page::containing_address(VirtAddr::null()),
+                Page::containing(VirtAddr::null()),
+                Page::containing(VirtAddr::null()),
             ));
         }
 
@@ -161,18 +164,17 @@ impl ProcVASA {
         let lookup_start = addr_hint
             .map(|a| a.to_next_page())
             .unwrap_or(self.lookup_start);
-        let mut looking_at = Page::containing_address(lookup_start);
+        let mut looking_at = Page::containing(lookup_start);
 
         let (map_start, map_end) = loop {
             while self.page_table.get_frame(looking_at).is_some() {
                 looking_at = looking_at.next();
             }
 
-            let map_start = Page::containing_address(VirtAddr::from(
-                looking_at.virt_addr().saturating_sub(guard_bytes),
+            let map_start = Page::containing(VirtAddr::from(
+                looking_at.addr().saturating_sub(guard_bytes),
             ));
-            let map_end =
-                Page::containing_address(looking_at.virt_addr() + bytes_wanted + guard_bytes);
+            let map_end = Page::containing(looking_at.addr() + bytes_wanted + guard_bytes);
 
             for page in Page::iter_pages(map_start, map_end) {
                 if self.page_table.get_frame(page).is_some() {
@@ -180,12 +182,13 @@ impl ProcVASA {
                 }
             }
 
-            let actual_map_end = Page::containing_address(map_end.virt_addr() - guard_bytes);
+            let actual_map_end = Page::containing(map_end.addr() - guard_bytes);
             break (looking_at, actual_map_end);
         };
 
         let pages = Page::iter_pages(map_start, map_end);
 
+        let mut op = self.sync_page_table.begin();
         for page in pages {
             let frame = frames_to_use
                 .next()
@@ -194,15 +197,13 @@ impl ProcVASA {
 
             unsafe {
                 assert_ne!(
-                    self.page_table.map_zeroed_to_uncached(page, frame, flags),
+                    op.map_zeroed_to(page, frame, flags),
                     Err(MapToError::AlreadyMapped)
                 );
             }
         }
 
-        self.page_table.flush_cache(map_start, map_end);
-
-        self.lookup_start = map_end.virt_addr() + guard_bytes;
+        self.lookup_start = map_end.addr() + guard_bytes;
         Ok((map_start, map_end))
     }
 
@@ -263,15 +264,16 @@ impl ProcVASA {
         use crate::memory::paging::EntryFlags;
 
         let page_end = self.executable_end + PAGE_SIZE * self.data_break_pages;
-        let new_page = Page::containing_address(page_end);
+        let new_page = Page::containing(page_end);
 
         unsafe {
-            self.page_table
+            self.sync_page_table
+                .begin()
                 .map_zeroed(new_page, EntryFlags::WRITE | EntryFlags::USER_ACCESSIBLE)?;
         }
 
         self.data_break_pages += 1;
-        Ok(new_page.virt_addr())
+        Ok(new_page.addr())
     }
 
     fn page_unextend_data(&mut self) -> VirtAddr {
@@ -281,10 +283,10 @@ impl ProcVASA {
 
         let page_end = self.executable_end + PAGE_SIZE * self.data_break_pages;
         let page_addr = page_end - PAGE_SIZE;
-        let page = Page::containing_address(page_addr);
+        let page = Page::containing(page_addr);
 
         unsafe {
-            self.page_table.unmap(page);
+            self.sync_page_table.begin().unmap(page);
         }
 
         self.data_break_pages -= 1;

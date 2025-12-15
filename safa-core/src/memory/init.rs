@@ -24,22 +24,6 @@ pub fn heap0_hint() -> VirtAddr {
     unsafe { *HEAP0_HINT.get() }
 }
 
-pub const HEAP: (VirtAddr, VirtAddr) = {
-    // assuming HHDM starts at 0xffff000000000000
-    // this allows for 224 TiBs of HHDM
-    // assuming it starts at 0xffff800000000000
-    // this allows for 96 TiBs of HHDM meaning you don't really have to worry`
-    let end = VirtAddr::from(0xffffe00000000000);
-    // 2 TiB from end
-    (end, end + (0x100000000000 / 8))
-};
-
-pub const LARGE_HEAP: (VirtAddr, VirtAddr) = {
-    let (_, end) = HEAP;
-    // 4 TiB from end
-    (end, end + (0x100000000000 / 4))
-};
-
 fn create_vmm() -> Result<VirtualMemoryManager, VMMAllocError> {
     let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
 

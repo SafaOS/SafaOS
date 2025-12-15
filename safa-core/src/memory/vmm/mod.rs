@@ -14,7 +14,7 @@ use crate::{
     memory::{
         AlignToPage,
         frame_allocator::{self, Frame, FramePtr},
-        paging::{EntryFlags, MapToError, PAGE_SIZE, Page},
+        paging::{EntryFlags, MapToError, PAGE_SIZE, Page, SyncPageTable},
         vmm::objects::{ObjectState, VMMObject, VMMObjectsPage},
     },
     utils::locks::SpinLock,
@@ -102,57 +102,16 @@ impl From<MapToError> for VMMAllocError {
 }
 
 #[derive(Debug)]
-pub struct VirtualMemoryManager {
-    page_table: FramePtr<PageTable>,
+struct VMMInner {
     start_addr: VirtAddr,
     size: usize,
     root_objects_set: FramePtr<VMMObjectsPage>,
     head: NonNull<VMMObject>,
     tail: NonNull<VMMObject>,
     len: usize,
-    next_vmm: Option<&'static VirtualMemoryManager>,
 }
 
-impl Drop for VirtualMemoryManager {
-    fn drop(&mut self) {
-        // Deallocate all the [`VMMObjectsPage`]s
-        let mut curr = Some(self.root_objects_set);
-        while let Some(mut page) = curr {
-            let next = page.next.take();
-            // TODO: unmap memory?
-            frame_allocator::deallocate_frame(page.frame());
-            curr = next;
-        }
-    }
-}
-
-impl VirtualMemoryManager {
-    pub fn table_mut(&mut self) -> &mut PageTable {
-        &mut *self.page_table
-    }
-
-    pub unsafe fn table_ptr(&self) -> FramePtr<PageTable> {
-        self.page_table
-    }
-
-    pub fn new(start_addr: VirtAddr, size: usize, page_table: FramePtr<PageTable>) -> Self {
-        let mut objects =
-            VMMObjectsPage::allocate().expect("Failed to allocate memory for storing VMM objects");
-        let object = VMMObject::new_free(start_addr, size);
-        let object_ptr = objects.add_object(object).expect("Failed to insert object");
-
-        VirtualMemoryManager {
-            start_addr,
-            size,
-            root_objects_set: objects,
-            head: object_ptr,
-            tail: object_ptr,
-            page_table,
-            len: 1,
-            next_vmm: None,
-        }
-    }
-
+impl VMMInner {
     fn tail_mut(&mut self) -> &mut VMMObject {
         unsafe { self.tail.as_mut() }
     }
@@ -213,78 +172,6 @@ impl VirtualMemoryManager {
         } else {
             Err(VMMAllocError::Used)
         }
-    }
-
-    pub fn grow_map(&mut self, addr: VirtAddr, needed: usize) -> Result<(), VMMAllocError> {
-        let (addr, state, size) = self.grow_region(addr, needed)?;
-        let unmapped_addr = addr + (size - needed);
-        let unmapped_size = needed;
-        match state {
-            ObjectState::Allocated(s) => {
-                unsafe {
-                    self.page_table.alloc_map(
-                        unmapped_addr,
-                        unmapped_addr + unmapped_size,
-                        s.to_entry_flags(),
-                    )?;
-                };
-            }
-            ObjectState::LazyAllocated(_) => {}
-
-            ObjectState::DMAAllocated(_) => unreachable!("Grew a DMA Allocated region"),
-            ObjectState::Free => unreachable!(),
-        }
-
-        Ok(())
-    }
-
-    fn deallocate_at(&mut self, addr: VirtAddr) -> Option<(ObjectState, usize)> {
-        if self.start_addr > addr || self.start_addr + self.size <= addr {
-            return None;
-        }
-
-        let mut current = Some(self.head_mut());
-        while let Some(obj) = current.take() {
-            if obj.addr() == addr {
-                assert!(
-                    obj.allocated(),
-                    "Attempt to free unallocated memory, this is a bug"
-                );
-
-                let old_state = core::mem::replace(&mut obj.state, ObjectState::Free);
-                let size = obj.size();
-
-                let (new_right, right_removed) = obj.try_absorb_right();
-                let (new_left, left_removed) = obj.try_absorb_left();
-                let obj_ptr = obj.as_non_null();
-
-                if right_removed {
-                    self.len -= 1;
-                    if new_right.is_none() {
-                        // We absorbed the tail
-                        self.tail = obj_ptr;
-                    }
-                }
-                if left_removed {
-                    self.len -= 1;
-                    if new_left.is_none() {
-                        // We absorbed the head
-                        self.head = obj_ptr;
-                    }
-                }
-
-                return Some((old_state, size));
-            }
-
-            assert!(
-                !(obj.addr() > addr && obj.region_end() > addr),
-                "Attempt to free memory inside of the object's range and not at the start"
-            );
-
-            current = obj.next_mut();
-        }
-
-        unreachable!("Should find the address because it is within the VMM range")
     }
 
     fn allocate_at(
@@ -418,21 +305,53 @@ impl VirtualMemoryManager {
         Err(VMMAllocError::OutOfMemory)
     }
 
-    pub fn debug_regions(&self) {
-        crate::debug!(VirtualMemoryManager, "Memory Regions: ");
-        let mut current = Some(self.head());
-
-        while let Some(obj) = current {
-            crate::debug!(
-                VirtualMemoryManager,
-                "{} at {:#x}: size = {:#x}, state = {:?}",
-                obj.name,
-                obj.addr(),
-                obj.size(),
-                obj.state
-            );
-            current = obj.next();
+    fn deallocate_at(&mut self, addr: VirtAddr) -> Option<(ObjectState, usize)> {
+        if self.start_addr > addr || self.start_addr + self.size <= addr {
+            return None;
         }
+
+        let mut current = Some(self.head_mut());
+        while let Some(obj) = current.take() {
+            if obj.addr() == addr {
+                assert!(
+                    obj.allocated(),
+                    "Attempt to free unallocated memory, this is a bug"
+                );
+
+                let old_state = core::mem::replace(&mut obj.state, ObjectState::Free);
+                let size = obj.size();
+
+                let (new_right, right_removed) = obj.try_absorb_right();
+                let (new_left, left_removed) = obj.try_absorb_left();
+                let obj_ptr = obj.as_non_null();
+
+                if right_removed {
+                    self.len -= 1;
+                    if new_right.is_none() {
+                        // We absorbed the tail
+                        self.tail = obj_ptr;
+                    }
+                }
+                if left_removed {
+                    self.len -= 1;
+                    if new_left.is_none() {
+                        // We absorbed the head
+                        self.head = obj_ptr;
+                    }
+                }
+
+                return Some((old_state, size));
+            }
+
+            assert!(
+                !(obj.addr() > addr && obj.region_end() > addr),
+                "Attempt to free memory inside of the object's range and not at the start"
+            );
+
+            current = obj.next_mut();
+        }
+
+        unreachable!("Should find the address because it is within the VMM range")
     }
 
     /// Marks a region as used by this VMM as DMA, even if it isn't mapped.
@@ -447,11 +366,108 @@ impl VirtualMemoryManager {
     ) -> Result<(), VMMAllocError> {
         self.allocate_at(name, start_addr, size, ObjectState::DMAAllocated(flags))
     }
+}
+
+impl Drop for VMMInner {
+    fn drop(&mut self) {
+        // Deallocate all the [`VMMObjectsPage`]s
+        let mut curr = Some(self.root_objects_set);
+        while let Some(mut page) = curr {
+            let next = page.next.take();
+            // TODO: unmap memory?
+            frame_allocator::deallocate_frame(page.frame());
+            curr = next;
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VirtualMemoryManager {
+    page_table: SyncPageTable,
+    inner: SpinLock<VMMInner>,
+    next_vmm: Option<&'static VirtualMemoryManager>,
+}
+
+impl VirtualMemoryManager {
+    pub unsafe fn table_mut(&mut self) -> &mut PageTable {
+        unsafe { &mut *self.page_table.inner_ptr_mut() }
+    }
+
+    pub unsafe fn table_ptr(&self) -> FramePtr<PageTable> {
+        unsafe { *self.page_table.inner_ptr() }
+    }
+
+    pub fn new(start_addr: VirtAddr, size: usize, page_table: FramePtr<PageTable>) -> Self {
+        let mut objects =
+            VMMObjectsPage::allocate().expect("Failed to allocate memory for storing VMM objects");
+        let object = VMMObject::new_free(start_addr, size);
+        let object_ptr = objects.add_object(object).expect("Failed to insert object");
+
+        VirtualMemoryManager {
+            inner: SpinLock::new(VMMInner {
+                start_addr,
+                size,
+                root_objects_set: objects,
+                head: object_ptr,
+                tail: object_ptr,
+                len: 1,
+            }),
+
+            page_table: unsafe { SyncPageTable::new(page_table) },
+            next_vmm: None,
+        }
+    }
+
+    pub fn grow_map(&self, addr: VirtAddr, needed: usize) -> Result<(), VMMAllocError> {
+        let mut inner = self.inner.lock();
+        let (addr, state, size) = inner.grow_region(addr, needed)?;
+
+        let unmapped_addr = addr + (size - needed);
+        let unmapped_size = needed;
+        match state {
+            ObjectState::Allocated(s) => {
+                unsafe {
+                    let mut op = self.page_table.begin();
+                    drop(inner);
+                    op.alloc_map(
+                        unmapped_addr,
+                        unmapped_addr + unmapped_size,
+                        s.to_entry_flags(),
+                    )?;
+                };
+            }
+            ObjectState::LazyAllocated(_) => {}
+
+            ObjectState::DMAAllocated(_) => unreachable!("Grew a DMA Allocated region"),
+            ObjectState::Free => unreachable!(),
+        }
+
+        Ok(())
+    }
+
+    pub fn debug_regions(&self) {
+        crate::debug!(VirtualMemoryManager, "Memory Regions: ");
+        let inner = self.inner.lock();
+        let mut current = Some(inner.head());
+
+        while let Some(obj) = current {
+            crate::debug!(
+                VirtualMemoryManager,
+                "{} at {:#x}: size = {:#x}, state = {:?}",
+                obj.name,
+                obj.addr(),
+                obj.size(),
+                obj.state
+            );
+            current = obj.next();
+        }
+    }
 
     #[must_use = "Returns whether or not a region was found and unmapped"]
     /// Unmaps the region starting at `start_addr`, returning whether or not it was found, if it wasn't it is likely a kernel bug.
     pub fn unmap(&mut self, start_addr: VirtAddr) -> bool {
-        let Some((deallocated, del_size)) = self.deallocate_at(start_addr) else {
+        let mut inner = self.inner.lock();
+        let Some((deallocated, del_size)) = inner.deallocate_at(start_addr) else {
             return false;
         };
 
@@ -459,7 +475,9 @@ impl VirtualMemoryManager {
         match deallocated {
             ObjectState::Free => unreachable!("Attempt to deallocate an unallocated object."),
             ObjectState::Allocated(_) | ObjectState::LazyAllocated(_) /* TODO: Proper Lazy Allocation implementation */ => unsafe {
-                self.page_table.free_unmap(start_addr, end_addr);
+                let mut op = self.page_table.begin();
+                drop(inner);
+                op.free_unmap(start_addr, end_addr);
             },
             /* DMA is responsible for itself */
             ObjectState::DMAAllocated(_) => {},
@@ -526,7 +544,7 @@ impl VirtualMemoryManager {
     }
 
     fn map_inner<I: Iterator<Item = Frame> + ExactSizeIterator>(
-        &mut self,
+        &self,
         name: &'static &'static str,
         starting_addr: Option<Location>,
         size: usize,
@@ -552,33 +570,33 @@ impl VirtualMemoryManager {
             (VMMAllocMode::Lazy, Some(_)) => unreachable!("Cannot lazy allocate DMA memory"),
         };
 
+        let mut inner = self.inner.lock();
         let allocated_start_addr = match starting_addr {
-            Some(Location::Fixed(addr)) => self
+            Some(Location::Fixed(addr)) => inner
                 .allocate_at(name, addr, size, obj_state)
                 .map(|()| addr)?,
-            None => self.allocate_next_region(name, None, size, obj_state)?,
+            None => inner.allocate_next_region(name, None, size, obj_state)?,
             Some(Location::Hint(hint)) => {
-                self.allocate_next_region(name, Some(hint), size, obj_state)?
+                inner.allocate_next_region(name, Some(hint), size, obj_state)?
             }
         };
 
         let map_flags = flags.to_entry_flags();
+
+        let mut op = self.page_table.begin();
+        drop(inner);
         match (mode, frames) {
             (VMMAllocMode::Normal, Some(frames)) => unsafe {
                 // Safety: We have got exclusive access to the whole address space we own, once a region is allocated,
                 // we can safely map it, no one else can access it.
-                self.page_table.map_contiguous_to_frames(
-                    Page::containing_address(allocated_start_addr),
+                op.map_contiguous_to_frames(
+                    Page::containing(allocated_start_addr),
                     frames,
                     map_flags,
                 )?;
             },
             (VMMAllocMode::Normal | VMMAllocMode::Lazy, None) => unsafe {
-                self.page_table.alloc_map(
-                    allocated_start_addr,
-                    allocated_start_addr + size,
-                    map_flags,
-                )?;
+                op.alloc_map(allocated_start_addr, allocated_start_addr + size, map_flags)?;
             },
             _ => unreachable!(),
         }

@@ -514,8 +514,8 @@ impl<'a, T: Readable> Elf<'a, T> {
             let start_addr = VirtAddr::from(header.vaddr);
             let end_addr = start_addr + size_in_mem + PAGE_SIZE;
 
-            let start_page = Page::containing_address(start_addr);
-            let end_page = Page::containing_address(end_addr);
+            let start_page = Page::containing(start_addr);
+            let end_page = Page::containing(end_addr);
 
             unsafe {
                 for page in Page::iter_pages(start_page, end_page) {
@@ -523,7 +523,7 @@ impl<'a, T: Readable> Elf<'a, T> {
                         let frame =
                             frame_allocator::allocate_frame().ok_or(ElfError::MapToError)?;
 
-                        page_table.map_to(page, frame, entry_flags)?;
+                        page_table.map_to_uncached(page, frame, entry_flags)?;
 
                         let slice = slice::from_raw_parts_mut(
                             frame.virt_addr().into_ptr::<usize>(),

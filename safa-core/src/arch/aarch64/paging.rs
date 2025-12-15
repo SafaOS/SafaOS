@@ -286,7 +286,7 @@ impl PageTable {
         frame: Frame,
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
-        let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.virt_addr());
+        let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.addr());
         let flags: ArchEntryFlags = flags.into();
         let l1 = self[l0_index].map()?;
         let l2 = l1[l1_index].map()?;
@@ -303,7 +303,7 @@ impl PageTable {
 
     /// gets the frame page points to
     pub fn get_frame(&self, page: Page) -> Option<Frame> {
-        let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.virt_addr());
+        let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.addr());
         let l1 = self[l0_index].mapped_to()?;
         let l2 = l1[l1_index].mapped_to()?;
         let l3 = l2[l2_index].mapped_to()?;
@@ -314,7 +314,7 @@ impl PageTable {
 
     /// get a mutable reference to the entry for a given page
     fn get_entry(&self, page: Page) -> Option<&mut Entry> {
-        let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.virt_addr());
+        let (_, l0_index, l1_index, l2_index, l3_index) = translate(page.addr());
         let l1 = self[l0_index].mapped_to()?;
         let l2 = l1[l1_index].mapped_to()?;
         let l3 = l2[l2_index].mapped_to()?;

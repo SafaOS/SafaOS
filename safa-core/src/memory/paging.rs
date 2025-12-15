@@ -3,10 +3,12 @@ use crate::{
     arch,
     drivers::vfs::FSError,
     memory::{AlignToPage, PhysAddr},
+    utils::locks::{SpinLock, SpinLockGuard},
 };
 use bitflags::bitflags;
 use core::{
     fmt::{Debug, LowerHex},
+    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
 use safa_abi::errors::IntoErr;
@@ -43,13 +45,13 @@ pub struct IterPage {
 }
 
 impl Page {
-    pub const fn containing_address(address: VirtAddr) -> Self {
+    pub const fn containing(address: VirtAddr) -> Self {
         Self {
             start_address: address.to_previous_page(),
         }
     }
 
-    pub const fn virt_addr(&self) -> VirtAddr {
+    pub const fn addr(&self) -> VirtAddr {
         self.start_address
     }
 
@@ -83,41 +85,9 @@ impl Iterator for IterPage {
 }
 
 impl PageTable {
-    pub fn flush_cache(&mut self, start_page: Page, end_page: Page) {
+    pub unsafe fn flush_cache(&mut self, start_page: Page, end_page: Page) {
         unsafe {
-            arch::tlb::flush_cache_range(self, start_page.virt_addr(), end_page.virt_addr());
-        }
-    }
-
-    /// maps a virtual `Page` to physical `Frame`
-    /// flushes the cache if necessary
-    pub unsafe fn map_to(
-        &mut self,
-        page: Page,
-        frame: Frame,
-        flags: EntryFlags,
-    ) -> Result<(), MapToError> {
-        unsafe {
-            self.map_to_uncached(page, frame, flags)?;
-            self.flush_cache(page, page);
-            Ok(())
-        }
-    }
-
-    /// maps a virtual `Page` to a new physical `Frame` filling the frame with zeros
-    /// flushes the cache if necessary
-    pub unsafe fn map_zeroed(&mut self, page: Page, flags: EntryFlags) -> Result<(), MapToError> {
-        unsafe {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-
-            if let Err(e) = self.map_zeroed_to_uncached(page, frame, flags) {
-                frame_allocator::deallocate_frame(frame);
-                return Err(e);
-            }
-
-            self.flush_cache(page, page);
-            Ok(())
+            arch::tlb::flush_cache_range(self, start_page.addr(), end_page.addr());
         }
     }
 
@@ -140,14 +110,8 @@ impl PageTable {
         }
     }
 
-    /// unmaps a page, flushes the cache if necessary
-    pub unsafe fn unmap(&mut self, page: Page) {
-        unsafe {
-            self.unmap_uncached(page);
-            self.flush_cache(page, page);
-        }
-    }
-
+    /// You likely want to use [`PendingOp::map_contigous_pages`], see [`SyncPageTable`], this is not thread safe.
+    ///
     /// Map `page_num` pages starting at `start_virt_addr` to frames starting at `start_phys_addr` and flushes cache if successful
     ///
     /// Same as [`map_contiguous_to_frames`] but instead of using a frame iterator, we take in raw addresses and the page number.
@@ -159,7 +123,7 @@ impl PageTable {
         flags: EntryFlags,
     ) -> Result<(), MapToError> {
         let size = page_num * PAGE_SIZE;
-        let start_page = Page::containing_address(start_virt_addr);
+        let start_page = Page::containing(start_virt_addr);
         let start_frame = Frame::containing_address(start_phys_addr);
         let end_frame = Frame::containing_address(start_phys_addr + size);
 
@@ -167,48 +131,10 @@ impl PageTable {
         unsafe { self.map_contiguous_to_frames(start_page, frame_iter, flags) }
     }
 
-    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
-    /// returns Err if any of the frames couldn't be allocated
-    /// the mapped pages are zeroed
-    ///
-    /// flushes the cache if successful
-    ///
-    /// returns the end virtual address aligned up to PAGE_SIZE
-    #[must_use = "the actual end address is returned"]
-    pub unsafe fn alloc_map(
-        &mut self,
-        from: VirtAddr,
-        to: VirtAddr,
-        flags: EntryFlags,
-    ) -> Result<VirtAddr, MapToError> {
-        let end_addr = to.to_next_page();
-
-        let from_page = Page::containing_address(from);
-        let to_page = Page::containing_address(end_addr);
-
-        let iter = Page::iter_pages(from_page, to_page);
-
-        for page in iter {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-            let virt_addr = frame.virt_addr();
-            unsafe {
-                self.map_to_uncached(page, frame, flags)?;
-            }
-
-            unsafe {
-                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
-            }
-        }
-
-        self.flush_cache(from_page, to_page);
-        Ok(end_addr)
-    }
-
     #[inline]
     /// Maps a contiguous range of pages to frames from an iterator.
     /// `start_page` is the first page to map, and `frames` is an iterator over the frames to map to.
-    pub unsafe fn map_contiguous_to_frames<I: Iterator<Item = Frame>>(
+    unsafe fn map_contiguous_to_frames<I: Iterator<Item = Frame>>(
         &mut self,
         start_page: Page,
         frames: I,
@@ -223,14 +149,16 @@ impl PageTable {
             current_page = current_page.next();
         }
 
-        self.flush_cache(start_page, current_page);
+        unsafe { self.flush_cache(start_page, current_page) };
         Ok(())
     }
 
+    /// You should use [`PendingOp::free_unmap`], see [`SyncPageTable`], this is not thread safe.
+    ///
     /// Deallocates and unmaps pages from `from` to `to` then flushes the cache if necessary
     pub unsafe fn free_unmap(&mut self, from: VirtAddr, to: VirtAddr) {
-        let from_page = Page::containing_address(from);
-        let to_page = Page::containing_address(to);
+        let from_page = Page::containing(from);
+        let to_page = Page::containing(to);
 
         let iter = Page::iter_pages(from_page, to_page);
 
@@ -239,12 +167,14 @@ impl PageTable {
                 self.free_unmap_uncached(page);
             }
         }
-        self.flush_cache(from_page, to_page);
+
+        unsafe { self.flush_cache(from_page, to_page) };
     }
 
+    /// You should use [`PendingOp::unmap_without_freeing`], see [`SyncPageTable`], this is not thread safe.
     pub unsafe fn unmap_without_freeing(&mut self, from: VirtAddr, to: VirtAddr) {
-        let from_page = Page::containing_address(from);
-        let to_page = Page::containing_address(to);
+        let from_page = Page::containing(from);
+        let to_page = Page::containing(to);
 
         let iter = Page::iter_pages(from_page, to_page);
 
@@ -253,7 +183,8 @@ impl PageTable {
                 self.unmap_uncached(page);
             }
         }
-        self.flush_cache(from_page, to_page);
+
+        unsafe { self.flush_cache(from_page, to_page) };
     }
 }
 
@@ -360,5 +291,202 @@ impl Drop for PhysPageTable {
         }
     }
 }
-
 unsafe impl Send for PhysPageTable {}
+
+#[derive(Debug)]
+/// A wrapper to perform safe Synced operations on a [`FramePtr<PageTable>`].
+pub struct SyncPageTable(SpinLock<FramePtr<PageTable>>);
+impl SyncPageTable {
+    #[inline(always)]
+    pub const unsafe fn new(ptr: FramePtr<PageTable>) -> Self {
+        SyncPageTable(SpinLock::new(ptr))
+    }
+
+    #[allow(unused)]
+    pub unsafe fn inner_ptr_mut(&mut self) -> &mut FramePtr<PageTable> {
+        unsafe { &mut *self.0.data_ptr() }
+    }
+
+    pub unsafe fn inner_ptr(&self) -> &FramePtr<PageTable> {
+        unsafe { &*self.0.data_ptr() }
+    }
+
+    /// Begin an operation or more on this Page Table.
+    pub fn begin<'a>(&'a self) -> PendingOp<'a> {
+        PendingOp {
+            guard: ManuallyDrop::new(self.0.lock()),
+            start: Page::containing(VirtAddr::from(usize::MAX)),
+            end: Page::containing(VirtAddr::null()),
+        }
+    }
+}
+
+// A pending Page Table operation, not completed until dropped, while this is alive a lock is held on the Page Table pointer.
+//
+// Because some bad hardware implementations may require interrupts (ahem ahem x86_64) in other CPUs for TLB Invalidation to be done, one must not hold another SpinLock before dropping this.
+#[derive(Debug)]
+pub struct PendingOp<'a> {
+    guard: ManuallyDrop<SpinLockGuard<'a, FramePtr<PageTable>>>,
+    start: Page,
+    end: Page,
+}
+
+impl<'a> PendingOp<'a> {
+    fn update_range(&mut self, start: Page, end: Page) {
+        self.start = self.start.min(start);
+        self.end = self.end.max(end);
+    }
+
+    /// maps a virtual `Page` to physical `Frame`.
+    pub unsafe fn map_to(
+        &mut self,
+        page: Page,
+        frame: Frame,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        unsafe {
+            self.guard.map_to_uncached(page, frame, flags)?;
+            self.update_range(page, page);
+            Ok(())
+        }
+    }
+
+    /// maps a virtual `Page` to a new physical `Frame` filling the frame with zeros
+    /// flushes the cache if necessary
+    pub unsafe fn map_zeroed(&mut self, page: Page, flags: EntryFlags) -> Result<(), MapToError> {
+        unsafe {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+
+            if let Err(e) = self.guard.map_zeroed_to_uncached(page, frame, flags) {
+                frame_allocator::deallocate_frame(frame);
+                return Err(e);
+            }
+
+            self.update_range(page, page);
+            Ok(())
+        }
+    }
+
+    /// Maps a virtual `Page` to a physical `Frame` filling the frame with zeros
+    pub unsafe fn map_zeroed_to(
+        &mut self,
+        page: Page,
+        frame: Frame,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        unsafe {
+            self.map_to(page, frame, flags)?;
+
+            let addr = frame.virt_addr();
+            let ptr = addr.into_ptr::<[u8; PAGE_SIZE]>();
+            ptr.write_bytes(0, 1);
+
+            Ok(())
+        }
+    }
+
+    /// Unmaps a page.
+    pub unsafe fn unmap(&mut self, page: Page) {
+        unsafe {
+            self.guard.unmap_uncached(page);
+            self.update_range(page, page);
+        }
+    }
+
+    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
+    /// returns Err if any of the frames couldn't be allocated
+    /// the mapped pages are zeroed
+    ///
+    /// flushes the cache if successful
+    ///
+    /// returns the end virtual address aligned up to PAGE_SIZE
+    #[must_use = "the actual end address is returned"]
+    pub unsafe fn alloc_map(
+        &mut self,
+        from: VirtAddr,
+        to: VirtAddr,
+        flags: EntryFlags,
+    ) -> Result<VirtAddr, MapToError> {
+        let end_addr = to.to_next_page();
+
+        let from_page = Page::containing(from);
+        let to_page = Page::containing(end_addr);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+            let virt_addr = frame.virt_addr();
+            unsafe {
+                self.guard.map_to_uncached(page, frame, flags)?;
+            }
+
+            unsafe {
+                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
+            }
+        }
+
+        self.update_range(from_page, to_page);
+        Ok(end_addr)
+    }
+
+    #[inline]
+    /// Maps a contiguous range of pages to frames from an iterator.
+    /// `start_page` is the first page to map, and `frames` is an iterator over the frames to map to.
+    pub unsafe fn map_contiguous_to_frames<I: Iterator<Item = Frame>>(
+        &mut self,
+        start_page: Page,
+        frames: I,
+        flags: EntryFlags,
+    ) -> Result<(), MapToError> {
+        let mut current_page = start_page;
+        for frame in frames {
+            unsafe {
+                self.guard.map_to_uncached(current_page, frame, flags)?;
+            }
+
+            current_page = current_page.next();
+        }
+
+        self.update_range(start_page, current_page);
+        Ok(())
+    }
+
+    /// Deallocates and unmaps pages from `from` to `to` then flushes the cache if necessary
+    pub unsafe fn free_unmap(&mut self, from: VirtAddr, to: VirtAddr) {
+        let from_page = Page::containing(from);
+        let to_page = Page::containing(to);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            unsafe {
+                self.guard.free_unmap_uncached(page);
+            }
+        }
+
+        self.update_range(from_page, to_page);
+    }
+}
+
+impl<'a> Drop for PendingOp<'a> {
+    fn drop(&mut self) {
+        let mut inner_ptr = **self.guard;
+        unsafe {
+            ManuallyDrop::drop(&mut self.guard);
+            if (self.start, self.end)
+                == (
+                    Page::containing(VirtAddr::from(usize::MAX)),
+                    Page::containing(VirtAddr::null()),
+                )
+            {
+                return;
+            }
+
+            assert!(self.start <= self.end, "{:?} > {:?}", self.start, self.end);
+            inner_ptr.flush_cache(self.start, self.end)
+        };
+    }
+}

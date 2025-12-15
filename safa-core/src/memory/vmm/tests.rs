@@ -7,11 +7,12 @@ use crate::timer::{DurationFmt, SystemInstant};
 fn allocate_random_regions() {
     const RUNS: usize = 1000;
     let pseudo_page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-    let mut vmm = VirtualMemoryManager::new(
+    let vmm = VirtualMemoryManager::new(
         VirtAddr::from(0x1000),
         0xFFFFFFFFFFF,
         pseudo_page_table.frame_ptr(),
     );
+    let mut vmm_inner = vmm.inner.lock();
 
     let mut curr_i = 0;
     let size_choices = [1024, 2048, 4096, 8192];
@@ -20,7 +21,7 @@ fn allocate_random_regions() {
     let start_instant = SystemInstant::now();
     for _ in 0..RUNS {
         let size = size_choices[curr_i % size_choices.len()];
-        let addr = vmm
+        let addr = vmm_inner
             .allocate_next_region(
                 &"TEST_CASE",
                 None,
@@ -40,7 +41,7 @@ fn allocate_random_regions() {
     );
 
     assert_eq!(
-        vmm.len(),
+        vmm_inner.len(),
         RUNS + 1, /* free region */
         "Not all regions allocated"
     );
@@ -53,7 +54,8 @@ fn allocate_random_regions() {
         let cpu_cycles = crate::arch::utils::cpu_cycles() as usize;
         let random_i = (index + cpu_cycles) % results.len();
         let addr = results.swap_remove(random_i);
-        vmm.deallocate_at(addr)
+        vmm_inner
+            .deallocate_at(addr)
             .expect("Failed to deallocate a region");
     }
     let time_taken = start_instant.elapsed();
@@ -64,7 +66,12 @@ fn allocate_random_regions() {
         DurationFmt::new(time_taken),
     );
 
-    assert_eq!(vmm.len(), 1, "Failed to deallocate and combine all regions");
+    assert_eq!(
+        vmm_inner.len(),
+        1,
+        "Failed to deallocate and combine all regions"
+    );
+    drop(vmm_inner);
     vmm.debug_regions();
 }
 
@@ -82,11 +89,12 @@ fn allocate_random_regions_advanced() {
     const RUNS: usize = 1000;
 
     let pseudo_page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-    let mut vmm = VirtualMemoryManager::new(
+    let vmm = VirtualMemoryManager::new(
         VirtAddr::from(0x1000),
         0xFFFFFFFFFFF,
         pseudo_page_table.frame_ptr(),
     );
+    let mut vmm_inner = vmm.inner.lock();
 
     let mut curr_i = 0;
 
@@ -120,7 +128,7 @@ fn allocate_random_regions_advanced() {
         curr_i += 1;
 
         let addr = match instruction {
-            Instruction::AllocateRandom(size) => vmm
+            Instruction::AllocateRandom(size) => vmm_inner
                 .allocate_next_region(
                     &"TEST_CASE_NEXT",
                     None,
@@ -133,7 +141,7 @@ fn allocate_random_regions_advanced() {
                     continue;
                 };
                 let addr = VirtAddr::from(addr);
-                if let Err(err) = vmm.allocate_at(
+                if let Err(err) = vmm_inner.allocate_at(
                     &"TEST_CASE_SPEC",
                     addr,
                     size,
@@ -158,9 +166,9 @@ fn allocate_random_regions_advanced() {
     );
 
     assert!(
-        vmm.len() >= results.len(),
+        vmm_inner.len() >= results.len(),
         "VMM has {} objects, but expected at least {}",
-        vmm.len(),
+        vmm_inner.len(),
         results.len()
     );
 
@@ -173,7 +181,8 @@ fn allocate_random_regions_advanced() {
         let cpu_cycles = crate::arch::utils::cpu_cycles() as usize;
         let random_i = (index + cpu_cycles) % results.len();
         let addr = results.swap_remove(random_i);
-        vmm.deallocate_at(addr)
+        vmm_inner
+            .deallocate_at(addr)
             .expect("Failed to deallocate a region");
     }
     let time_taken = start_instant.elapsed();
@@ -184,6 +193,11 @@ fn allocate_random_regions_advanced() {
         DurationFmt::new(time_taken),
     );
 
-    assert_eq!(vmm.len(), 1, "Failed to deallocate and combine all regions");
+    assert_eq!(
+        vmm_inner.len(),
+        1,
+        "Failed to deallocate and combine all regions"
+    );
+    drop(vmm_inner);
     vmm.debug_regions();
 }
