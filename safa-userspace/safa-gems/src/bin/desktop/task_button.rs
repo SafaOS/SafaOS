@@ -164,7 +164,7 @@ impl<G: Gem, Canvas: DrawingCanvas> Element<Canvas, G> for TaskButton {
                 is_hovering = false;
                 is_held = true;
             } else if self.is_held {
-                libopal::window::focus_window(self.win_id);
+                _ = libopal::window::focus_window(self.win_id);
             }
         }
 

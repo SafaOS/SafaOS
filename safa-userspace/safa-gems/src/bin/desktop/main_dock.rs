@@ -53,11 +53,15 @@ impl MainDock {
     }
 
     pub fn attached(&mut self, win: u16) {
-        let info = libopal::window::window_info(win);
+        let Ok(info) = libopal::window::window_info(win) else {
+            return;
+        };
 
         let icon = (|| {
             if let Some(icon) = info.icon_id() {
-                let raw_data = libopal::icon::get_icon_data_bmp(icon);
+                let Ok(raw_data) = libopal::icon::get_icon_data_bmp(icon) else {
+                    return fallback_icon();
+                };
                 let bmp = match BMPImage::from_slice(&raw_data) {
                     Ok(k) => k,
                     Err(e) => {
