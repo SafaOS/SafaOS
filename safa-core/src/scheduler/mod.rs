@@ -137,34 +137,35 @@ impl Scheduler {
     ///
     /// this is done by [`eve::thread_reaper_thread`].
     pub fn cleanup_all_and_wait(&self) {
-        let mut cleanup_queue = self.awaiting_cleanup.lock();
+        loop {
+            let mut cleanup_queue = self.awaiting_cleanup.lock();
 
-        let mut all_cleaned = true;
-        let mut i = 0;
-        while i < cleanup_queue.len() {
-            let cleaned = unsafe { cleanup_queue[i].try_cleanup() };
-            if cleaned {
-                cleanup_queue.swap_remove(i);
-                all_cleaned &= cleaned;
-                continue;
-            } else {
-                all_cleaned = false;
+            let mut all_cleaned = true;
+            let mut i = 0;
+            while i < cleanup_queue.len() {
+                let cleaned = unsafe { cleanup_queue[i].try_cleanup() };
+                if cleaned {
+                    cleanup_queue.swap_remove(i);
+                    all_cleaned &= cleaned;
+                    continue;
+                } else {
+                    all_cleaned = false;
+                }
+
+                i += 1;
             }
 
-            i += 1;
-        }
-
-        if all_cleaned {
-            let pending_wait = self.helper_prepare_wait();
-            drop(cleanup_queue);
-            pending_wait
-                .enter_wait(SchedulerHelperSleepReason::WaitingToDoCleaning, None)
-                .expect("Failed to wait for new cleanup threads to be added")
-        } else {
-            core::hint::cold_path();
-            drop(cleanup_queue);
-            crate::thread::current::yield_now();
-            self.cleanup_all_and_wait()
+            if all_cleaned {
+                let pending_wait = self.helper_prepare_wait();
+                drop(cleanup_queue);
+                pending_wait
+                    .enter_wait(SchedulerHelperSleepReason::WaitingToDoCleaning, None)
+                    .expect("Failed to wait for new cleanup threads to be added")
+            } else {
+                core::hint::cold_path();
+                drop(cleanup_queue);
+                crate::thread::current::yield_now();
+            }
         }
     }
 
