@@ -210,7 +210,6 @@ impl Drop for LocalSocket {
     fn drop(&mut self) {
         self.unbind_mut();
         poll::stop_tracking_id(self.poll_id());
-        crate::serial!("IT SHOULD BE DROPPED NOW\n");
     }
 }
 
