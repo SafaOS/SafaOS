@@ -369,7 +369,10 @@ impl Apic {
             core::ptr::write_volatile(addr, timer.encode_u32());
             core::ptr::write_volatile(divide, 0x3);
 
-            core::ptr::write_volatile(init, 5 * ticks_per_ms as u32);
+            core::ptr::write_volatile(
+                init,
+                crate::scheduler::TIME_PER_QUANTUM * ticks_per_ms as u32,
+            );
         }
     }
 
