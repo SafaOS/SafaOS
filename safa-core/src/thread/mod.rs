@@ -17,7 +17,7 @@ use crate::{
     scheduler::{SchedulePriority, Scheduler, ThreadScheduleReason},
     thread,
     timer::time_since_boot_ms,
-    utils::locks::{Mutex, SpinLock, SpinLockGuard},
+    utils::locks::{Mutex, SPIN_AMOUNT, SpinLock, SpinLockGuard},
 };
 
 pub mod current;
@@ -333,6 +333,7 @@ impl ArcThread {
     #[inline]
     fn loop_until_blocked_inner<'a>(
         &'a self,
+        can_yield: bool,
     ) -> Result<(BlockedReason, SpinLockGuard<'a, ContextStatus>), ()> {
         loop {
             core::hint::spin_loop();
@@ -345,13 +346,19 @@ impl ArcThread {
             }
 
             drop(status);
-            thread::current::yield_now();
+            if can_yield {
+                thread::current::yield_now();
+            } else {
+                for _ in 0..(SPIN_AMOUNT / 10) {
+                    core::hint::spin_loop();
+                }
+            }
         }
     }
 
     #[inline(always)]
-    fn loop_until_blocked(&self) -> Result<BlockedReason, ()> {
-        self.loop_until_blocked_inner().map(|(o, _)| o)
+    fn loop_until_blocked(&self, can_yield: bool) -> Result<BlockedReason, ()> {
+        self.loop_until_blocked_inner(can_yield).map(|(o, _)| o)
     }
 
     #[inline(always)]
@@ -364,8 +371,9 @@ impl ArcThread {
         &'a self,
         expected: BlockedReason,
         new: ContextStatus,
+        can_yield: bool,
     ) -> Result<SpinLockGuard<'a, ContextStatus>, Option<BlockedReason>> {
-        self.loop_until_blocked_inner()
+        self.loop_until_blocked_inner(can_yield)
             .map(|(o, mut status)| {
                 if *status == ContextStatus::Blocked(expected) {
                     *status = new;
@@ -398,7 +406,7 @@ impl ArcThread {
                 ContextStatus::Blocking(_) => {
                     drop(status);
                     Some(
-                        self.loop_until_blocked()
+                        self.loop_until_blocked(true)
                             .expect("Blocking thread should go only from blocking to blocked"),
                     )
                 }
@@ -428,9 +436,11 @@ impl ArcThread {
     /// # Safety
     /// Designed to only be called by the scheduler.
     pub unsafe fn before_sleep_wakeup(&self) {
-        if let Ok(status_guard) = self
-            .loop_until_blocked_compare_exchange(BlockedReason::Sleeping, ContextStatus::Runnable)
-        {
+        if let Ok(status_guard) = self.loop_until_blocked_compare_exchange(
+            BlockedReason::Sleeping,
+            ContextStatus::Runnable,
+            false,
+        ) {
             unsafe { *self.timeouted.get() = true }
             drop(status_guard);
         }

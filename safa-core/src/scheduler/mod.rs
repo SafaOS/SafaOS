@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 
 use crate::arch::without_interrupts;
 use crate::process::Process;
-use crate::utils::locks::{Mutex, SpinLock};
+use crate::utils::locks::{Mutex, TrackedSpinLock};
 use crate::utils::types::Name;
 use crate::{VirtAddr, arch};
 use alloc::boxed::Box;
@@ -35,7 +35,7 @@ const MIN_PRIORITY: u8 = 0;
 const MAX_PRIORITY: u8 = 4;
 const PRIORITIES_COUNT: usize = (MAX_PRIORITY - MIN_PRIORITY) as usize + 1;
 
-const TIME_PER_QUANTUM: u32 = 5;
+pub const TIME_PER_QUANTUM: u32 = 3;
 /// NOTE: Each quantum is equal to 5ms
 const INITIAL_QUANTUM: u32 = 2;
 /// NOTE: Each quantum is equal to 5ms so this is a multiple of 5ms.
@@ -122,7 +122,7 @@ pub struct Scheduler {
     waiting_threads: Mutex<Vec<(ArcThread, NonZero<u64>)>>,
     awaiting_cleanup: Mutex<Vec<ArcThread>>,
     helper_threads: Mutex<WaitQueue<0, SchedulerHelperSleepReason>>,
-    ready_queues: SpinLock<[ThreadList; PRIORITIES_COUNT]>,
+    ready_queues: TrackedSpinLock<[ThreadList; PRIORITIES_COUNT]>,
     idle_thread: ArcThread,
     current_thread: UnsafeCell<ArcThread>,
     /// The head thread is the thread that is the head of the thread queue
@@ -233,7 +233,12 @@ impl Scheduler {
     }
 
     #[inline]
-    fn try_wake_waiting_threads(&self, queues: &mut [ThreadList], time_now: NonZero<u64>) {
+    fn try_wake_waiting_threads(
+        &self,
+        queues: &mut [ThreadList],
+        time_now: NonZero<u64>,
+        current_thread: &ArcThread,
+    ) {
         const MAX_TIME: NonZero<u64> = NonZero::new(u64::MAX).expect("Is zero??????!??");
 
         if likely(self.next_wake_time.load(Ordering::Relaxed) > time_now.get()) {
@@ -245,15 +250,15 @@ impl Scheduler {
 
             let mut i = 0;
             while i < waiting_threads.len() {
-                let (_, time) = waiting_threads[i];
+                let (th, time) = &waiting_threads[i];
 
-                if time.get() <= time_now.get() {
+                if likely(th != current_thread) && time.get() <= time_now.get() {
                     let (thread, _) = waiting_threads.swap_remove(i);
                     unsafe { thread.before_sleep_wakeup() };
                     // Same index
                     self.add_single_thread(queues, thread);
                 } else {
-                    next_add_time = next_add_time.min(time);
+                    next_add_time = next_add_time.min(*time);
                     i += 1;
                 }
             }
@@ -326,7 +331,7 @@ impl Scheduler {
 
         let mut schd_queues = self.ready_queues.lock();
 
-        self.try_wake_waiting_threads(&mut *schd_queues, time_now);
+        self.try_wake_waiting_threads(&mut *schd_queues, time_now, &current_thread);
         self.try_boost_threads(&mut *schd_queues, time_now);
 
         // Reschedule the current thread if no threads, meaning we are the IDLE thread
@@ -404,7 +409,7 @@ impl Scheduler {
             waiting_threads: Mutex::new(Vec::new()),
             awaiting_cleanup: Mutex::new(Vec::new()),
             next_wake_time: AtomicU64::new(u64::MAX),
-            ready_queues: SpinLock::new(core::array::from_fn(|_| ThreadList::new_empty())),
+            ready_queues: TrackedSpinLock::new(core::array::from_fn(|_| ThreadList::new_empty())),
             current_thread: UnsafeCell::new(idle_thread.clone()),
             threads_count: AtomicUsize::new(0),
             is_thread_yielding: UnsafeCell::new(false),
