@@ -127,7 +127,14 @@ pub fn main() -> ! {
 
 pub fn idle_function() -> ! {
     crate::serial!("entered idle\n");
-    crate::khalt()
+    let scheduler = Scheduler::get().expect("IDLE Started without scheduler");
+    loop {
+        if scheduler.try_pop_waiting_thread() || !scheduler.is_idle() {
+            // Give up the CPU to the next thread
+            crate::thread::current::yield_now();
+        }
+        core::hint::spin_loop();
+    }
 }
 
 /// Schedules a thread's Context for cleanup

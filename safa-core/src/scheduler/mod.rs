@@ -131,6 +131,7 @@ pub struct Scheduler {
 
     is_thread_yielding: UnsafeCell<bool>,
     context_switch_count: AtomicUsize,
+    is_idle: UnsafeCell<bool>,
 }
 impl Scheduler {
     /// Cleanup all threads waiting for cleanup in the scheduler, and waits for new threads to be added.
@@ -216,6 +217,10 @@ impl Scheduler {
         } else {
             unsafe { head.push_back(thread) };
         }
+
+        unsafe {
+            *self.is_idle.get() = false;
+        }
     }
 
     fn add_single_thread(&self, queues: &mut [ThreadList], thread: ArcThread) {
@@ -230,6 +235,36 @@ impl Scheduler {
         };
 
         self.add_single_thread_to(queues, thread, queue, add_front)
+    }
+
+    #[inline]
+    pub fn try_pop_waiting_thread(&self) -> bool {
+        without_interrupts(|| {
+            let mut popped = false;
+            let mut waiting_threads = self.waiting_threads.lock();
+            let time_now = time_since_boot_ms();
+
+            let mut next_add_time: NonZero<u64> = NonZero::<u64>::MAX;
+
+            let mut i = 0;
+            while i < waiting_threads.len() {
+                let (_, time) = &waiting_threads[i];
+
+                if time.get() <= time_now {
+                    let (thread, _) = waiting_threads.swap_remove(i);
+                    unsafe { thread.before_sleep_wakeup() };
+                    unsafe { self.schedule_thread(thread, ThreadScheduleReason::Unblocked) };
+                    popped = true;
+                } else {
+                    next_add_time = next_add_time.min(*time);
+                    i += 1;
+                }
+            }
+
+            self.next_wake_time
+                .store(next_add_time.get(), Ordering::Relaxed);
+            popped
+        })
     }
 
     #[inline]
@@ -323,23 +358,29 @@ impl Scheduler {
             return None;
         };
 
-        let curr_schd = unsafe { &mut *current_thread.schedule_priority.get() };
-        curr_schd.update_time(time_now);
-        if !yield_if_has_time && curr_schd.has_time() {
-            return None;
-        }
+        let is_idle_thread = *current_thread == self.idle_thread;
+        let push_to = if !is_idle_thread {
+            let curr_schd = unsafe { &mut *current_thread.schedule_priority.get() };
+            curr_schd.update_time(time_now);
+            if !yield_if_has_time && curr_schd.has_time() {
+                return None;
+            }
+            Some(curr_schd.get_next_priority_queue())
+        } else {
+            None
+        };
 
         let mut schd_queues = self.ready_queues.lock();
 
         self.try_wake_waiting_threads(&mut *schd_queues, time_now, &current_thread);
         self.try_boost_threads(&mut *schd_queues, time_now);
 
-        // Reschedule the current thread if no threads, meaning we are the IDLE thread
-        let (new_thread, queue_index) = self
-            .get_next_thread(&mut *schd_queues)
-            .unwrap_or_else(|| (self.idle_thread.clone(), 0));
+        let mut is_idle = false;
 
-        let push_to = curr_schd.get_next_priority_queue();
+        let results = self.get_next_thread(&mut *schd_queues);
+        // If there are no threads at all we schedule the IDLE thread, that if the current thread is blocking, otherwise we can run the current thread.
+        let next_thread_idle = results.is_none();
+
         if likely(!current_thread.is_dead()) {
             let current_context = unsafe { current_thread.context_unchecked() };
             current_context.set_cpu_status(current_cpu_status);
@@ -349,28 +390,30 @@ impl Scheduler {
                 ContextStatus::Runnable | ContextStatus::Running => {
                     *current_status = ContextStatus::Runnable;
                     drop(current_status);
-                    self.add_single_thread_to(
-                        &mut *schd_queues,
-                        current_thread.clone(),
-                        push_to as usize,
-                        false,
-                    );
+                    if let Some(push_to) = push_to {
+                        self.add_single_thread_to(
+                            &mut *schd_queues,
+                            current_thread.clone(),
+                            push_to as usize,
+                            false,
+                        );
+                    }
                 }
-                ContextStatus::Blocked(_) => {}
+                ContextStatus::Blocked(_) => {
+                    is_idle = next_thread_idle;
+                }
                 // The reason why we do that is to prevent anyone to wake up the thread before this causing it to be double scheduled.
                 // Do nothing, its going to add itself once it is unblocked
-                ContextStatus::Blocking(r) => *current_status = ContextStatus::Blocked(*r),
+                ContextStatus::Blocking(r) => {
+                    *current_status = ContextStatus::Blocked(*r);
+                    is_idle = next_thread_idle;
+                }
             }
         }
 
-        if self.idle_thread != new_thread {
-            new_thread.set_status(ContextStatus::Running);
-        } else {
-            // Once its rescheduled, it will be blocked.
-            new_thread.set_status(ContextStatus::Blocking(
-                crate::thread::BlockedReason::Waiting,
-            ));
-        }
+        let (new_thread, queue_index) = results.unwrap_or_else(|| (self.idle_thread.clone(), 0));
+
+        new_thread.set_status(ContextStatus::Running);
 
         let schd = unsafe { &mut *new_thread.schedule_priority.get() };
         schd.queue_index = queue_index as u32;
@@ -381,12 +424,14 @@ impl Scheduler {
         let address_space_changed = curr_pid != process_pid;
 
         debug_assert!(
-            address_space_changed
-                || new_thread.tid() != current_thread.tid()
-                || self.idle_thread == new_thread,
+            address_space_changed || new_thread.tid() != current_thread.tid() || next_thread_idle,
             "Thread ID is equal, id: {}",
             new_thread.tid()
         );
+
+        unsafe {
+            *self.is_idle.get() = is_idle;
+        }
         unsafe {
             let context = new_thread.context_unchecked();
 
@@ -415,6 +460,7 @@ impl Scheduler {
             is_thread_yielding: UnsafeCell::new(false),
             context_switch_count: AtomicUsize::new(0),
             helper_threads: Mutex::new(WaitQueue::new()),
+            is_idle: UnsafeCell::new(true),
         }
     }
 
@@ -434,6 +480,11 @@ impl Scheduler {
     /// returns the old thread count
     pub fn sub_thread_count(&self) -> usize {
         self.threads_count.fetch_sub(1, Ordering::Relaxed)
+    }
+
+    /// Scheduler is IDLE hint
+    pub fn is_idle(&self) -> bool {
+        unsafe { *self.is_idle.get() }
     }
 }
 
