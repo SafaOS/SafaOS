@@ -205,9 +205,11 @@ impl<'a> StackTrace<'a> {
 impl<'a> Display for StackTrace<'a> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         unsafe {
+            const MAX_TRACES: usize = 16;
+
             let mut fp = self.0;
             writeln!(f, "\x1B[34mStack trace:")?;
-            loop {
+            for _ in 0..MAX_TRACES {
                 let return_address = fp.return_ptr();
 
                 let name = {
