@@ -279,9 +279,10 @@ impl LocalSocket {
                 loop {
                     let mut queue_guard = accept_queue.lock();
 
-                    if let Some(connection) = queue_guard.try_pop_one(|reason| Some(reason.clone()))
-                    {
-                        unsafe { *connection.conn_accepted.get() = true };
+                    if let Some(connection) = queue_guard.try_pop_one(|reason| {
+                        unsafe { *reason.conn_accepted.get() = true };
+                        Some(reason.clone())
+                    }) {
                         let new = Self::create_connected(connection, can_block);
                         break Ok(new);
                     } else if !can_block {
