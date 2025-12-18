@@ -106,10 +106,10 @@ unsafe fn map_top_2gb(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocErro
         let virt_addr = executable_virt_address();
         let phys_addr = executable_phys_address();
 
-        let mut map_section = |name: &'static str,
-                               section_virt_begin: VirtAddr,
-                               section_virt_end: VirtAddr,
-                               flags: VMMMFlags| {
+        let map_section = |name: &'static str,
+                           section_virt_begin: VirtAddr,
+                           section_virt_end: VirtAddr,
+                           flags: VMMMFlags| {
             let section_off = section_virt_begin - virt_addr;
             let section_phys_begin = phys_addr + section_off;
             let section_size = section_virt_end - section_virt_begin;
@@ -162,9 +162,9 @@ pub fn init_all() {
     let vmm = create_vmm().expect("Failed to create root VMM");
     unsafe {
         set_current_higher_page_table(vmm.table_ptr());
+        super::vmm::init(vmm);
     }
 
-    super::vmm::init(vmm);
     // de-allocating the previous root table
     // FIXME: could still be used by other cpus so i don't free it for now
     // let frame = previous_table.frame();

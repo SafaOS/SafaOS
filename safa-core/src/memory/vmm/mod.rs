@@ -3,7 +3,7 @@ pub mod tests;
 
 mod objects;
 
-use core::{mem::MaybeUninit, ptr::NonNull};
+use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::alloc::{AllocError, Allocator};
 
@@ -110,6 +110,8 @@ struct VMMInner {
     tail: NonNull<VMMObject>,
     len: usize,
 }
+
+unsafe impl Send for VMMInner {}
 
 impl VMMInner {
     fn tail_mut(&mut self) -> &mut VMMObject {
@@ -353,19 +355,6 @@ impl VMMInner {
 
         unreachable!("Should find the address because it is within the VMM range")
     }
-
-    /// Marks a region as used by this VMM as DMA, even if it isn't mapped.
-    ///
-    /// Behaves the same as [`Self::map`] but without mapping or touching the region.
-    pub fn mark_used(
-        &mut self,
-        name: &'static &'static str,
-        start_addr: VirtAddr,
-        size: usize,
-        flags: VMMMFlags,
-    ) -> Result<(), VMMAllocError> {
-        self.allocate_at(name, start_addr, size, ObjectState::DMAAllocated(flags))
-    }
 }
 
 impl Drop for VMMInner {
@@ -465,7 +454,7 @@ impl VirtualMemoryManager {
 
     #[must_use = "Returns whether or not a region was found and unmapped"]
     /// Unmaps the region starting at `start_addr`, returning whether or not it was found, if it wasn't it is likely a kernel bug.
-    pub fn unmap(&mut self, start_addr: VirtAddr) -> bool {
+    pub fn unmap(&self, start_addr: VirtAddr) -> bool {
         let mut inner = self.inner.lock();
         let Some((deallocated, del_size)) = inner.deallocate_at(start_addr) else {
             return false;
@@ -490,7 +479,7 @@ impl VirtualMemoryManager {
     ///
     /// `size` must be a multiple of [`PAGE_SIZE`] or it panicks.
     pub fn map_new(
-        &mut self,
+        &self,
         name: &'static &'static str,
         starting_addr: Option<Location>,
         size: usize,
@@ -505,7 +494,7 @@ impl VirtualMemoryManager {
     ///
     /// The provided frames total size must be equal to or more than the requested allocation size or it will return an error [`VMMAllocError::InvalidSize`].
     pub fn map_direct<I: Iterator<Item = Frame> + ExactSizeIterator>(
-        &mut self,
+        &self,
         name: &'static &'static str,
         starting_addr: Option<Location>,
         size: usize,
@@ -526,7 +515,7 @@ impl VirtualMemoryManager {
 
     /// Variaint of [`Self::map_direct`]
     pub fn map_direct_phys(
-        &mut self,
+        &self,
         name: &'static &'static str,
         start_addr: Option<Location>,
         start_phys: PhysAddr,
@@ -607,7 +596,8 @@ impl VirtualMemoryManager {
 
 unsafe impl Send for VirtualMemoryManager {}
 
-static VMM: SpinLock<MaybeUninit<VirtualMemoryManager>> = SpinLock::new(MaybeUninit::uninit());
+static VMM: SyncUnsafeCell<MaybeUninit<VirtualMemoryManager>> =
+    SyncUnsafeCell::new(MaybeUninit::uninit());
 
 #[derive(Debug, Clone, Copy)]
 pub struct VMMAlloc(&'static &'static str, Option<VirtAddr>, VMMMFlags);
@@ -626,7 +616,7 @@ impl VMMAlloc {
 
     fn allocate_new(
         self,
-        vmm: &mut VirtualMemoryManager,
+        vmm: &VirtualMemoryManager,
         size: usize,
     ) -> Result<NonNull<[u8]>, AllocError> {
         let addr = vmm
@@ -661,11 +651,7 @@ unsafe impl Allocator for VMMAlloc {
         );
         let size = layout.size().to_next_page();
 
-        without_interrupts(|| {
-            let mut vmm_guard = VMM.lock();
-            let vmm = unsafe { vmm_guard.assume_init_mut() };
-            self.allocate_new(vmm, size)
-        })
+        with_root(|vmm| self.allocate_new(vmm, size))
     }
 
     unsafe fn grow(
@@ -695,10 +681,7 @@ unsafe impl Allocator for VMMAlloc {
 
         let addr = VirtAddr::from_ptr(ptr.as_ptr());
 
-        without_interrupts(|| {
-            let mut vmm_guard = VMM.lock();
-            let vmm = unsafe { vmm_guard.assume_init_mut() };
-
+        with_root(|vmm| {
             let try_grow = vmm.grow_map(addr, needed);
             match try_grow {
                 Ok(()) => {
@@ -747,17 +730,14 @@ unsafe impl Allocator for VMMAlloc {
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: core::alloc::Layout) {
         _ = layout;
+        let addr = VirtAddr::from_ptr(ptr.as_ptr());
 
-        without_interrupts(|| {
-            let mut vmm_guard = VMM.lock();
-            let vmm = unsafe { vmm_guard.assume_init_mut() };
-
-            let addr = VirtAddr::from_ptr(ptr.as_ptr());
+        with_root(|vmm| {
             assert!(
                 vmm.unmap(addr),
                 "Attempt to VMM Deallocate an unallocated region."
             );
-        });
+        })
     }
 }
 
@@ -765,16 +745,17 @@ unsafe impl Allocator for VMMAlloc {
 #[inline(always)]
 pub fn with_root<F, R>(f: F) -> R
 where
-    F: FnOnce(&mut VirtualMemoryManager) -> R,
+    F: FnOnce(&VirtualMemoryManager) -> R,
 {
     without_interrupts(|| {
-        let mut vmm_guard = VMM.lock();
-        f(unsafe { vmm_guard.assume_init_mut() })
+        let vmm_guard = unsafe { &mut *VMM.get() };
+        f(unsafe { vmm_guard.assume_init_ref() })
     })
 }
 
-pub fn init(vmm: VirtualMemoryManager) {
-    let mut vmm_guard = VMM.lock();
+/// Safety: VMM must not be initialized yet, this function is not thread-safe.
+pub unsafe fn init(vmm: VirtualMemoryManager) {
+    let vmm_guard = unsafe { &mut *VMM.get() };
     let vmm = vmm_guard.write(vmm);
     info!(VirtualMemoryManager, "Initialized");
     vmm.debug_regions();
