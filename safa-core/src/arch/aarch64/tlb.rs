@@ -8,16 +8,18 @@ global_asm!(
 flush_cache_range_inner:
     lsr x0, x0, #12
     lsr x1, x1, #12
-    dsb ish
-.Loop:
-    TLBI vaae1is, x0
+
+    dsb ishst
+.TlbFlushLoop:
+    TLBI vale1is, x0
 
     add x0, x0, 1
     cmp x0, x1
-    b.lo .Loop
+    b.lo .TlbFlushLoop
 
+.End:
     dsb ish
-    isb
+    isb sy
     ret
 "
 );
