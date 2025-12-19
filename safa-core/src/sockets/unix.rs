@@ -250,7 +250,7 @@ impl LocalSocket {
         }
     }
 
-    fn create_connected(connect_with: Arc<LocalSocket>, can_block: bool) -> Arc<Self> {
+    fn create_connected(connect_with: &Arc<LocalSocket>, can_block: bool) -> Arc<Self> {
         let mut status_guard = connect_with.status.write();
         let kind = connect_with.kind;
 
@@ -278,11 +278,9 @@ impl LocalSocket {
                 loop {
                     let mut queue_guard = accept_queue.lock();
 
-                    if let Some(connection) = queue_guard.try_pop_one(|reason| {
-                        unsafe { *reason.conn_accepted.get() = true };
-                        Some(reason.clone())
-                    }) {
-                        let new = Self::create_connected(connection, can_block);
+                    if let Some(new) = queue_guard
+                        .try_pop_one(|reason| Some(Self::create_connected(reason, can_block)))
+                    {
                         break Ok(new);
                     } else if !can_block {
                         break Err(SocketError::WouldBlockNoConnectionRequests);
