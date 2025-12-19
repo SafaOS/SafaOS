@@ -65,9 +65,7 @@ const MAX_TRB_COUNT: usize = 256;
 impl<'s> InterruptReceiver for XHCI<'s> {
     fn handle_interrupt(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
-        let events = self.event_ring.lock().dequeue_events();
-
-        for event in events {
+        self.event_ring.lock().dequeue_events(|event| {
             if let Some(response_event) = event.into_event_trb() {
                 match response_event {
                     EventResponseTRB::CommandCompletion(res) => {
@@ -114,7 +112,7 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                     }
                 }
             }
-        }
+        });
 
         unsafe {
             // We only use interrupter 0 for now

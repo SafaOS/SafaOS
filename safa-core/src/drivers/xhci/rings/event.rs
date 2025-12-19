@@ -8,8 +8,6 @@ use super::{
     trbs::TRB,
 };
 
-use alloc::vec::Vec;
-
 /**
 > xHci Spec Section 6.5 Event Ring Segment Table Figure 6-40: Event Ring Segment Table Entry
 
@@ -98,10 +96,9 @@ impl<'a> XHCIEventRing<'a> {
         );
     }
 
-    pub fn dequeue_events(&mut self) -> Vec<TRB> {
-        let mut results = Vec::new();
+    pub fn dequeue_events(&mut self, on_dequeue: impl Fn(TRB)) {
         while let Some(next) = self.dequeue_trb() {
-            results.push(next.clone());
+            on_dequeue(next.clone());
         }
 
         self.update_edrp();
@@ -110,7 +107,6 @@ impl<'a> XHCIEventRing<'a> {
             .event_ring_deque
             .with_handler_busy(true);
         write_ref!(self.interrupter_registers.event_ring_deque, edrp);
-        results
     }
 
     fn dequeue_trb(&mut self) -> Option<&TRB> {
