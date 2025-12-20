@@ -66,8 +66,11 @@ restore_cpu_status:
     # x0 has to be a higher half address or everything breaks....
     # loads the translation table and the stack pointer
     msr ttbr0_el1, x1
+    # Ensure writes are visible before reloading address space
+    dsb ish
+    isb
+
     # reload address space
-    dsb ishst
     tlbi VMALLE1
     dsb ish
     ISB
