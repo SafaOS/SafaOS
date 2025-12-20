@@ -162,6 +162,7 @@ impl PageTable {
 
         let iter = Page::iter_pages(from_page, to_page);
 
+        unsafe { self.sync_before_free() };
         for page in iter {
             unsafe {
                 self.free_unmap_uncached(page);
@@ -178,6 +179,7 @@ impl PageTable {
 
         let iter = Page::iter_pages(from_page, to_page);
 
+        unsafe { self.sync_before_free() };
         for page in iter {
             unsafe {
                 self.unmap_uncached(page);
@@ -389,6 +391,7 @@ impl<'a> PendingOp<'a> {
     /// Unmaps a page.
     pub unsafe fn unmap(&mut self, page: Page) {
         unsafe {
+            self.guard.sync_before_free();
             self.guard.unmap_uncached(page);
             self.update_range(page, page);
         }
@@ -460,6 +463,7 @@ impl<'a> PendingOp<'a> {
         let to_page = Page::containing(to);
 
         let iter = Page::iter_pages(from_page, to_page);
+        unsafe { self.guard.sync_before_free() };
 
         for page in iter {
             unsafe {

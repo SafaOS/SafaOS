@@ -183,8 +183,8 @@ impl Entry {
     /// the caller must ensure that the entry is not used anymore
     unsafe fn deallocate(&mut self) {
         if let Some(frame) = self.frame() {
-            frame_allocator::deallocate_frame(frame);
             self.set(ArchEntryFlags::empty(), PhysAddr::null());
+            frame_allocator::deallocate_frame(frame);
         }
     }
 }
@@ -271,6 +271,8 @@ impl PageTable {
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
     pub unsafe fn free(&mut self, level: u8) {
         unsafe {
+            core::arch::asm!("dsb ish; isb sy");
+
             for entry in &mut self.0 {
                 if entry.flags().contains(ArchEntryFlags::PRESENT) {
                     entry.free(level - 1);
@@ -320,6 +322,13 @@ impl PageTable {
         let l3 = l2[l2_index].mapped_to()?;
 
         Some(&mut l3[l3_index])
+    }
+
+    /// Synchronizes memory before freeing a page, on aarch64 this is a dsb + isb, required so that writes+reads are completed before freeing the page
+    ///
+    /// TODO: Refactor paging, this is a really bad temporary solution because I am lazy
+    pub unsafe fn sync_before_free(&mut self) {
+        unsafe { core::arch::asm!("dsb ish; isb sy") }
     }
 
     /// Unmaps & frees a page without flushing the cache
