@@ -104,11 +104,6 @@ impl Entry {
         }
     }
 
-    /// Synchronizes memory before freeing a page, on x86_64 this is a nop.
-    ///
-    /// TODO: Refactor paging, this is a really bad temporary solution because I am lazy
-    pub unsafe fn sync_before_free(&mut self) {}
-
     #[inline(always)]
     /// changes the entry flags to `flags`
     /// if the entry is not present it allocates a new frame and uses it's address as entry's
@@ -244,6 +239,11 @@ impl PageTable {
             }
         }
     }
+
+    /// Synchronizes memory before freeing a page, on x86_64 this is a nop.
+    ///
+    /// TODO: Refactor paging, this is a really bad temporary solution because I am lazy
+    pub unsafe fn sync_before_free(&mut self) {}
 
     /// maps a virtual `Page` to physical `Frame`, without flushing the cache
     pub unsafe fn map_to_uncached(
