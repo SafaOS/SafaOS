@@ -1,7 +1,6 @@
 use core::{
     cell::{SyncUnsafeCell, UnsafeCell},
     mem::{MaybeUninit, offset_of},
-    num::NonZero,
     ptr::NonNull,
     sync::atomic::AtomicUsize,
 };
@@ -37,7 +36,6 @@ pub struct CPULocal {
     scheduler: Option<Scheduler>,
 
     tss_ptr: NonNull<TaskStateSegment>,
-    tsc_frequency: NonZero<u64>,
     tlb_request: UnsafeCell<TLBIRequest>,
     cpuid: CPUID,
     /// !!!!! TODO: REMOVE WHEN THE STACK IS IN THE HIGHER-HALF !!!!!!
@@ -92,9 +90,8 @@ impl CPULocal {
             .map(|s| unsafe { s.current_thread_ref().process().page_table() })
     }
 
-    fn new(tss_ptr: NonNull<TaskStateSegment>, tsc_frequency: NonZero<u64>) -> Self {
+    fn new(tss_ptr: NonNull<TaskStateSegment>) -> Self {
         Self {
-            tsc_frequency,
             tss_ptr,
             tlb_request: UnsafeCell::new(TLBIRequest::new()),
             scheduler: None,
@@ -143,11 +140,6 @@ impl CPULocal {
     pub(super) unsafe fn tss_mut(&self) -> &mut TaskStateSegment {
         unsafe { &mut *self.tss_ptr.as_ptr() }
     }
-    /// Returns the frequency of the TSC
-    #[inline]
-    pub(super) fn tsc_freq(&self) -> NonZero<u64> {
-        self.tsc_frequency
-    }
 }
 
 unsafe impl Send for CPULocal {}
@@ -167,19 +159,12 @@ fn add_cpu_local(local: CPULocal) -> NonNull<CPULocal> {
 }
 
 /// Initializes CPU Local storage
-pub fn init_cpu_local(tss_ptr: NonNull<TaskStateSegment>, tsc_frequency: NonZero<u64>) {
-    let new = CPULocal::new(tss_ptr, tsc_frequency);
+pub fn init_cpu_local(tss_ptr: NonNull<TaskStateSegment>) {
+    let new = CPULocal::new(tss_ptr);
     let ptr = add_cpu_local(new);
 
     unsafe {
         set_gs(VirtAddr::from_ptr(ptr.as_ptr()) + offset_of!(CPULocal, ptr_to_self));
-    }
-}
-
-/// Sets the frequency of the TSC once calibrated
-pub unsafe fn set_tsc_frequency(freq: NonZero<u64>) {
-    unsafe {
-        CPULocal::get_current_ptr().as_mut().tsc_frequency = freq;
     }
 }
 

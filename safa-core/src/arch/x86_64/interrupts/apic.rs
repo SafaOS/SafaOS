@@ -1,4 +1,3 @@
-use super::pit;
 use crate::{
     PhysAddr, VirtAddr,
     arch::{
@@ -8,6 +7,7 @@ use crate::{
             interrupts::handlers::{APIC_ERROR_HANDLER_ID, MOUSE_HANDLER_ID, NMI_REASON},
             io::outb,
             registers::{rdmsr, wrmsr},
+            tsc,
         },
     },
     info,
@@ -326,13 +326,12 @@ impl Apic {
 
         info!("enabling apic timer for lapic: {lapic_id}...");
 
-        let ticks_per_ms;
-
         let addr = self.get_lapic_reg(0x320);
         let init = self.get_lapic_reg(0x380);
         let divide = self.get_lapic_reg(0x3E0).cast::<u8>();
         let current_counter = self.get_lapic_reg(0x390);
 
+        let ticks_per_us;
         // calibrate the timer
         unsafe {
             const SLEEP_MS: u32 = 10;
@@ -348,19 +347,16 @@ impl Apic {
             let read_tsc_ticks = || crate::arch::utils::cpu_cycles();
 
             // Calibration
-            let beginning_apic = read_apic_count();
             let beginning_tsc = read_tsc_ticks();
+            let beginning_apic = read_apic_count();
 
             let end_tsc = beginning_tsc + (tsc_frequency.get() * (SLEEP_MS * 1000) as u64);
             // Loop until TSC reaches the count and [SLEEP_MS] has passed.
             while read_tsc_ticks() < end_tsc {}
             let end_apic = read_apic_count();
 
-            ticks_per_ms = (end_apic - beginning_apic) as u64 / SLEEP_MS as u64;
-            info!(
-                "APIC Timer calibrated with {} ticks in 100ms",
-                ticks_per_ms * 100
-            );
+            ticks_per_us = ((end_apic - beginning_apic) as u64 / SLEEP_MS as u64) / 1000;
+            info!("APIC Timer calibrated with {} ticks in 1us", ticks_per_us);
         }
 
         // enable the timer
@@ -371,7 +367,7 @@ impl Apic {
 
             core::ptr::write_volatile(
                 init,
-                crate::scheduler::TIME_PER_QUANTUM * ticks_per_ms as u32,
+                (crate::scheduler::TIME_PER_QUANTUM * 1000) * ticks_per_us as u32,
             );
         }
     }
@@ -397,11 +393,12 @@ impl Apic {
         }
     }
 
-    /// Calibrates the TSC and setups the APIC timer returning the number of ticks per microsecond (frequency in MHz) after calibration of the TSC.
-    fn setup_timer(&self) -> NonZero<u64> {
-        let freq = calibrate_tsc();
+    /// Setups the APIC timer.
+    ///
+    /// Requires the TSC to be calibrated first.
+    fn setup_timer(&self) {
+        let freq = tsc::tsc_freq_mhz();
         self.enable_apic_timer(freq);
-        freq
     }
 
     /// Setups the APIC and related devices for the current CPU
@@ -529,25 +526,13 @@ pub fn enable_apic_mouse() {
     APIC.enable_apic_mouse()
 }
 
-/// Returns the frequency in MHz of the TSC once calibrated
-pub fn calibrate_tsc() -> NonZero<u64> {
-    static _CALIBRATE_LOCK: SpinLock<()> = SpinLock::new(());
-    let _guard = _CALIBRATE_LOCK.lock();
-    serial!("calbrating tsc\n");
-    unsafe {
-        let freq = pit::calibrate_tsc();
-        info!("calibrated TSC with {} ticks in 1us", freq);
-        freq
-    }
-}
-
 /// Genericly enables APIC interrupts for the current CPU
 pub fn enable_apic_interrupts_generic() {
     APIC.setup_local()
 }
 
-/// Calibrates the TSC and setups the APIC timer returning (frequency) after calibration of the TSC.
-pub fn setup_timer() -> NonZero<u64> {
+/// Setups the APIC timer, requires the TSC to be calibrated first.
+pub fn setup_timer() {
     APIC.setup_timer()
 }
 

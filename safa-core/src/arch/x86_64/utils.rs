@@ -3,7 +3,7 @@ use core::num::NonZero;
 use serde::Serialize;
 use spin::Lazy;
 
-use crate::arch::x86_64::smp::CPULocal;
+use crate::arch::x86_64::tsc;
 
 #[derive(Serialize, Debug)]
 pub struct CpuInfo {
@@ -112,16 +112,12 @@ pub static CPU_INFO: Lazy<CpuInfo> = Lazy::new(CpuInfo::fetch);
 #[inline]
 /// Returns the frequency of the CPU
 pub fn cpu_timer_freq_mhz() -> NonZero<u64> {
-    let cpu_local = unsafe { CPULocal::get_current_ptr().as_ref() };
-    cpu_local.tsc_freq()
+    tsc::tsc_freq_mhz()
 }
 
 #[inline(always)]
 #[allow(unused)]
 /// Returns the number of CPU cycles since the CPU was started
 pub fn cpu_cycles() -> u64 {
-    unsafe {
-        core::arch::x86_64::_mm_lfence();
-        core::arch::x86_64::_rdtsc()
-    }
+    tsc::read_tsc()
 }

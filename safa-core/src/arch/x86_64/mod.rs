@@ -1,5 +1,8 @@
 mod acpi;
 mod gdt;
+mod pit;
+mod tsc;
+
 pub(super) mod interrupts;
 pub(super) mod io;
 pub mod paging;
@@ -15,7 +18,7 @@ pub(super) mod threading;
 pub(super) mod tlb;
 pub(super) mod utils;
 
-use core::{arch::asm, num::NonZero, ptr::NonNull, sync::atomic::Ordering};
+use core::{arch::asm, ptr::NonNull, sync::atomic::Ordering};
 use interrupts::{apic, init_idt};
 use serial::init_serial;
 
@@ -81,6 +84,7 @@ pub fn init_phase1() {
     init_serial();
     let tss = setup_cpu_generic0();
     setup_cpu_generic1(tss);
+    tsc::calibrate_tsc();
 }
 
 #[must_use = "Returns a pointer to the task state segment of the current CPU"]
@@ -92,16 +96,15 @@ pub(super) fn setup_cpu_generic0() -> NonNull<TaskStateSegment> {
 
 /// NOTE: Requires allocations if you are not on the BSP
 pub(super) fn setup_cpu_generic1(tss: NonNull<TaskStateSegment>) {
-    smp::init_cpu_local(tss, NonZero::<u64>::MAX)
+    smp::init_cpu_local(tss)
 }
 
 pub(super) fn setup_cpu_generic2() {
     info!("enabling apic interrupts...");
     apic::enable_apic_interrupts_generic();
     info!("enabling apic timer...");
-    let tsc_freq = apic::setup_timer();
+    apic::setup_timer();
     unsafe {
-        smp::set_tsc_frequency(tsc_freq);
         smp::set_cpu_id();
     }
     info!("enabling sse...");
