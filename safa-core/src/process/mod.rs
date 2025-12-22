@@ -132,12 +132,15 @@ impl Process {
     /// All threads must first be removed, switched from and cleaned-up.
     unsafe fn cleanup(&self) {
         unsafe {
-            assert!(!self.vasa.is_locked());
-            assert!(!self.resources.is_locked());
+            let mut vasa = self.vasa.try_lock().expect("Process should be inactive");
+            let mut resources = self
+                .resources
+                .try_write()
+                .expect("Process should be inactive");
 
             // Safety: We know the process is dead if this function was called.
-            self.resources.write().drop_all();
-            ManuallyDrop::drop(&mut self.vasa.lock().page_table);
+            resources.drop_all();
+            ManuallyDrop::drop(&mut vasa.page_table);
         }
     }
 
@@ -639,7 +642,7 @@ impl Process {
 
 /// Returns the current process. (The process that is a parent of the current thread)
 pub fn current() -> Arc<Process> {
-    thread::with_current(|curr| curr.process().clone())
+    thread::with_current_ref(|curr| curr.process().clone())
 }
 
 /// Fast, cheaper access to the current process's pid

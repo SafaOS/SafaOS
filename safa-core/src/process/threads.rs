@@ -85,7 +85,6 @@ impl ThreadsManager {
         let process_mut = Arc::get_mut(process)
             .expect("More than one reference while trying to create a ThreadsManager");
         let vasa = process_mut.vasa.get_mut();
-        let resources = process_mut.resources.get_mut();
 
         let (
             thread_mem_tracker,
@@ -130,9 +129,6 @@ impl ThreadsManager {
             )?
         };
 
-        resources.add_global_resource(thread_mem_tracker);
-        resources.add_global_resource(ke_stack_tracker);
-
         let next_tid = this.new_tid();
         assert_eq!(next_tid, 0);
         *process_mut.context_count.get_mut() = 1;
@@ -142,6 +138,8 @@ impl ThreadsManager {
             context,
             process,
             process.default_priority,
+            ke_stack_tracker,
+            thread_mem_tracker,
         ));
         this.threads.insert(next_tid, root_thread.clone());
         Ok((this, root_thread))
@@ -194,14 +192,10 @@ impl ThreadsManager {
             cpu_status,
             parent,
             priority.unwrap_or(parent.default_priority),
+            ke_stack_tracker,
+            th_mem_tracker,
         );
         let thread = ArcThread::new(thread);
-
-        let mut resources = parent.resources_mut();
-        let th_mem_ri = resources.add_local_resource(th_mem_tracker);
-        let ke_stack_ri = resources.add_local_resource(ke_stack_tracker);
-
-        thread.take_resources(&[th_mem_ri, ke_stack_ri]);
 
         let new_tid = self.new_tid();
         self.threads.insert(new_tid, thread.clone());

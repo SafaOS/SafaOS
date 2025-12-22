@@ -39,7 +39,7 @@ impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason> {
         reason: Reason,
         timeout: Option<NonZero<u64>>,
     ) -> Result<(), WaitError> {
-        thread::with_current(|thread| {
+        thread::with_current_arc(|thread| {
             if thread.should_terminate() {
                 return Err(WaitError::ForceTerminated);
             }

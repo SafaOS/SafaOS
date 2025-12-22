@@ -4,6 +4,7 @@ use core::{
     cell::UnsafeCell,
     fmt::Debug,
     hash::{Hash, Hasher},
+    mem::ManuallyDrop,
     num::NonZero,
     ops::Deref,
     ptr::NonNull,
@@ -12,12 +13,12 @@ use core::{
 
 use crate::{
     arch::{threading::CPUStatus, without_interrupts},
-    debug, eve,
-    process::{Pid, Process, resources::Ri},
+    debug,
+    process::{Pid, Process, vas::TrackedMemoryMapping},
     scheduler::{SchedulePriority, Scheduler, ThreadScheduleReason},
     thread,
     timer::time_since_boot_ms,
-    utils::locks::{Mutex, SPIN_AMOUNT, SpinLock, SpinLockGuard},
+    utils::locks::{SPIN_AMOUNT, SpinLock, SpinLockGuard},
 };
 
 pub mod current;
@@ -69,7 +70,7 @@ pub enum ContextStatus {
     Blocking(BlockedReason),
 }
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::sync::Arc;
 use safa_abi::process::RawContextPriority;
 
 #[derive(Debug)]
@@ -80,6 +81,7 @@ struct Slot {
 
 pub struct ThreadList {
     head: Option<Slot>,
+    len: usize,
 }
 
 impl Debug for ThreadList {
@@ -105,7 +107,7 @@ impl Debug for ThreadList {
 impl ThreadList {
     /// Create an empty thread list
     pub const fn new_empty() -> Self {
-        Self { head: None }
+        Self { head: None, len: 0 }
     }
 
     /// Safety:
@@ -119,7 +121,13 @@ impl ThreadList {
                 thread,
                 next_slot_ptr,
             }),
+            len: 1,
         }
+    }
+
+    /// Returns whether the list is empty
+    pub fn is_empty(&self) -> bool {
+        self.head.is_none()
     }
 
     /// Push a thread to the back of the list
@@ -137,6 +145,7 @@ impl ThreadList {
                 let next_ptr = thread.next.get();
                 unsafe { *tail_ptr.as_mut() = Some(thread) };
                 *tail_ptr = unsafe { NonNull::new_unchecked(next_ptr) };
+                self.len += 1;
             }
         }
     }
@@ -158,6 +167,7 @@ impl ThreadList {
                     thread: new_head,
                     next_slot_ptr,
                 });
+                self.len += 1;
             }
         }
     }
@@ -187,6 +197,8 @@ impl ThreadList {
 
                     self.head = Some(slot);
                 }
+
+                self.len -= 1;
                 Some(head)
             }
         }
@@ -201,6 +213,7 @@ impl ThreadList {
                 .as_mut()
                 .expect("push back should make head some")
                 .next_slot_ptr = other_head.next_slot_ptr;
+            self.len += other.len - 1;
         }
     }
 }
@@ -236,7 +249,6 @@ impl ArcThread {
         let Some(scheduler) = (unsafe { &*self.scheduler.get() }) else {
             panic!("Attempted to remove a thread that isn't associated with a scheduler")
         };
-
         let scheduler = unsafe { scheduler.as_ref() };
 
         let is_current = thread::is_current(self);
@@ -244,7 +256,9 @@ impl ArcThread {
             self.block_dead();
         }
 
-        unsafe { eve::schedule_thread_cleanup(self.clone()) };
+        unsafe {
+            scheduler.schedule_thread(self.clone(), ThreadScheduleReason::Cleanup);
+        };
         if is_current {
             self.set_status(ContextStatus::Blocking(BlockedReason::Dead));
         }
@@ -255,7 +269,7 @@ impl ArcThread {
         //     unsafe { self.cleanup() };
         // };
 
-        scheduler.sub_thread_count();
+        // scheduler.sub_thread_count();
     }
 
     #[must_use]
@@ -512,11 +526,14 @@ pub struct Thread {
     context: UnsafeCell<Context>,
 
     is_dying: AtomicBool,
-    timeouted: UnsafeCell<bool>,
+    pub timeouted: UnsafeCell<bool>,
     should_terminate: UnsafeCell<bool>,
     is_dead: AtomicBool,
     parent_process: Arc<Process>,
-    owned_resources: Mutex<Vec<Ri>>,
+    /// Kernel stack memory mapping, so that it can be freed when the thread is killed.
+    kernel_stack: UnsafeCell<ManuallyDrop<TrackedMemoryMapping>>,
+    /// User stack and TLS memory mapping, so that it can be freed when the thread is killed.
+    thread_mem: UnsafeCell<ManuallyDrop<TrackedMemoryMapping>>,
 
     /// The scheduler that this thread belongs to.
     /// null until scheduled
@@ -532,21 +549,17 @@ impl Thread {
     pub unsafe fn set_scheduler(&self, schd: &Scheduler) {
         unsafe { *self.scheduler.get() = Some(NonNull::from_ref(schd)) }
     }
-    /// Takes ownership of a given resource list
-    pub fn take_resources(&self, ri: &[Ri]) {
-        let mut owned_resources = self.owned_resources.lock();
-        owned_resources.extend_from_slice(ri);
-    }
 
     pub fn new(
         cid: Tid,
         cpu_status: CPUStatus,
         parent_process: &Arc<Process>,
         priority: ContextPriority,
+        kernel_stack: TrackedMemoryMapping,
+        thread_mem: TrackedMemoryMapping,
     ) -> Self {
         Self {
             schedule_priority: UnsafeCell::new(SchedulePriority::new()),
-            owned_resources: Mutex::new(Vec::new()),
             timeouted: UnsafeCell::new(false),
             id: cid,
             priority,
@@ -558,6 +571,8 @@ impl Thread {
             scheduler: UnsafeCell::new(None),
             next: UnsafeCell::new(None),
             should_terminate: UnsafeCell::new(false),
+            kernel_stack: UnsafeCell::new(ManuallyDrop::new(kernel_stack)),
+            thread_mem: UnsafeCell::new(ManuallyDrop::new(thread_mem)),
         }
     }
 
@@ -600,18 +615,11 @@ impl Thread {
     /// # Safety
     /// This function is unsafe because it can be called from any thread, and it will
     /// modify the thread's Context. It is the caller's responsibility to ensure that
-    /// the thread is not currently running.
+    /// the thread is not currently running, and that the thread wasn't already cleaned up.
     pub unsafe fn try_cleanup(&self) -> bool {
         if let Some(mut manager) = self.parent_process.try_threads_manager() {
-            {
-                let mut resource_manager = self.parent_process.resources_mut();
-                let owned_resources = self.owned_resources.try_lock().expect("Thread is active");
-
-                for resource in &*owned_resources {
-                    resource_manager.remove_resource(*resource);
-                }
-            }
-
+            unsafe { ManuallyDrop::drop(&mut *self.kernel_stack.get()) };
+            unsafe { ManuallyDrop::drop(&mut *self.thread_mem.get()) };
             manager.remove(self.tid());
             true
         } else {
@@ -677,26 +685,57 @@ impl Context {
 }
 
 /// Executes [`f`] on the current thread returning the results.
-pub fn with_current<F, R>(f: F) -> R
+///
+/// A faster version is [`with_current_ref`].
+pub fn with_current_arc<F, R>(f: F) -> R
 where
-    F: FnOnce(&ArcThread) -> R,
+    F: FnOnce(ArcThread) -> R,
 {
-    // Safety:
-    // The reference would always point to the current thread as long as it's really is the current thread,
-    // and The lifetime of this reference is local to this function which is running within this thread.
-    f(unsafe {
+    f(without_interrupts(|| unsafe {
         Scheduler::get()
             .expect("Attempted to get the current thread, while scheduler wasn't initialized")
             .current_thread_ref()
-    })
+            .clone()
+    }))
+}
+
+/// Executes [`f`] on the current thread returning the results.
+///
+/// May be faster than [`with_current_arc`] as it doesn't do Arc cloning.
+/// fastest version is [`with_current_unsafe`].
+pub fn with_current_ref<F, R>(f: F) -> R
+where
+    F: FnOnce(&Thread) -> R,
+{
+    // Safety:
+    // converts the ArcThread into a reference to the Thread struct, with no interrupts so the scheduler won't change.
+    f(without_interrupts(|| unsafe {
+        &**Scheduler::get()
+            .expect("Attempted to get the current thread, while scheduler wasn't initialized")
+            .current_thread_ref()
+    }))
+}
+
+/// Safety: Must be executed with interrupts disabled, and no thread switches shall occur while accessing the given pointer.
+///
+/// Theoretically faster than [`with_current_ref`] and [`with_current_arc`].
+pub unsafe fn with_current_unsafe<F, R>(f: F) -> R
+where
+    F: FnOnce(*const ArcThread) -> R,
+{
+    unsafe {
+        f(Scheduler::get()
+            .expect("Attempted to get the current thread, while scheduler wasn't initialized")
+            .current_thread_ref())
+    }
 }
 
 /// Returns true if [`other`] is the current thread.
 pub fn is_current(other: &ArcThread) -> bool {
-    with_current(|curr| Arc::ptr_eq(curr, other))
+    unsafe { without_interrupts(|| with_current_unsafe(|curr| Arc::ptr_eq(&**curr, other))) }
 }
 
 /// Returns the current process ID, that is the ID of the process executing this code right now.
 pub fn current_pid() -> Pid {
-    with_current(|curr| curr.process().pid())
+    with_current_ref(|curr| curr.process().pid())
 }

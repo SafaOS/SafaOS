@@ -19,7 +19,7 @@ use crate::{
 pub fn exit(code: isize) -> ! {
     without_interrupts(|| {
         // current thread should be dropped at the end of this
-        unsafe { thread::with_current(|curr| curr.kill(code)) }
+        unsafe { thread::with_current_unsafe(|curr| (*curr).clone().kill(code)) }
         self::yield_now();
         unreachable!("thread didn't exit")
     })
@@ -31,20 +31,19 @@ pub fn sleep_for_ms(ms: u64) -> Result<(), WaitError> {
         return Ok(());
     };
 
-    without_interrupts(|| {
-        thread::with_current(|current| {
-            if unsafe { current.prepare_sleep_for_ms(ms) } {
+    without_interrupts(|| unsafe {
+        thread::with_current_unsafe(|current| {
+            // Do the cloning here instead of calling [`thread::with_current`], to avoid double disabling interrupts.
+            let current = (&*current).clone();
+
+            if current.prepare_sleep_for_ms(ms) {
                 yield_now();
             }
 
             if current.should_terminate() {
                 Err(WaitError::ForceTerminated)
             } else {
-                assert!(
-                    unsafe { current.operation_timeout() },
-                    "thread didn't sleep, status: {:#x?}",
-                    &*current.status_mut()
-                );
+                assert!(current.operation_timeout(), "thread didn't sleep",);
                 Ok(())
             }
         })
@@ -106,7 +105,7 @@ pub fn wait_for_process(pid: Pid) -> Result<Option<isize>, WaitError> {
 //
 // returns true if the thread was awaited false if it wasn't
 pub fn wait_for_thread(tid: Tid) -> Result<bool, WaitError> {
-    thread::with_current(|this_thread| {
+    thread::with_current_ref(|this_thread| {
         let this_process = this_thread.process();
         let try_remove = this_process
             .threads_manager()

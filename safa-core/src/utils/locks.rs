@@ -18,10 +18,10 @@ unsafe impl RawMutex for LockRawTrackedSpinLock {
     }
 
     fn lock(&self) {
-        without_interrupts(|| {
-            thread::with_current(|t| {
-                let tid = t.tid();
-                let pid = t.process().pid();
+        without_interrupts(|| unsafe {
+            thread::with_current_unsafe(|t| {
+                let tid = (*t).tid();
+                let pid = (*t).process().pid();
 
                 let id = (pid as u64) << 32 | tid as u64;
                 if id == self.0.load(Ordering::Relaxed) {
@@ -43,15 +43,17 @@ unsafe impl RawMutex for LockRawTrackedSpinLock {
 
     #[inline(always)]
     fn try_lock(&self) -> bool {
-        thread::with_current(|t| {
-            let tid = t.tid();
-            let pid = t.process().pid();
+        unsafe {
+            thread::with_current_unsafe(|t| {
+                let tid = (*t).tid();
+                let pid = (*t).process().pid();
 
-            let id = (pid as u64) << 32 | tid as u64;
-            self.0
-                .compare_exchange(u64::MAX, id, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-        })
+                let id = (pid as u64) << 32 | tid as u64;
+                self.0
+                    .compare_exchange(u64::MAX, id, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+            })
+        }
     }
 
     unsafe fn unlock(&self) {
