@@ -596,7 +596,7 @@ fn allocate_contiguous_test() {
 // makes sure all the previous tests didn't mess up something with the linked list
 #[test_case]
 fn frame_count_verification_test() {
-    let mut allocator = REGION_ALLOCATOR.lock();
+    let  allocator = REGION_ALLOCATOR.lock();
     let actual_frame_count = allocator.count_frames_expensive();
     assert_eq!(
         allocator.usable_frames() - allocator.mapped_frames(),

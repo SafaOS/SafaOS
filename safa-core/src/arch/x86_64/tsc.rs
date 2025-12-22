@@ -1,10 +1,6 @@
 use core::{cell::SyncUnsafeCell, num::NonZero};
 
-use crate::{
-    arch::x86_64::{interrupts, pit},
-    debug, serial,
-    utils::locks::SpinLock,
-};
+use crate::{arch::x86_64::pit, serial, utils::locks::SpinLock};
 
 pub static TSC_FREQ_MHZ: SyncUnsafeCell<NonZero<u64>> = SyncUnsafeCell::new(NonZero::<u64>::MAX);
 
