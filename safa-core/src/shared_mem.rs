@@ -167,9 +167,8 @@ impl Resource for TrackedShmKey {
 
     fn try_clone_into_node(
         &self,
-        is_global: bool,
     ) -> Result<crate::process::resources::ResourceNodeRef, safa_abi::errors::ErrorStatus> {
-        crate::process::resources::generic_clone_impl(self, is_global)
+        crate::process::resources::generic_clone_impl(self)
     }
 
     fn address_space_generic(&self) -> bool {

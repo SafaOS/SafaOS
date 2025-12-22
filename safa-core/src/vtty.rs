@@ -393,9 +393,8 @@ impl Resource for MotherVTTY {
 
     fn try_clone_into_node(
         &self,
-        is_global: bool,
     ) -> Result<crate::process::resources::ResourceNodeRef, ErrorStatus> {
-        resources::generic_clone_impl(self, is_global)
+        resources::generic_clone_impl(self)
     }
 
     fn sync(&self) -> Result<(), ErrorStatus> {
@@ -430,9 +429,8 @@ impl Resource for ChildVTTY {
 
     fn try_clone_into_node(
         &self,
-        is_global: bool,
     ) -> Result<crate::process::resources::ResourceNodeRef, ErrorStatus> {
-        resources::generic_clone_impl(self, is_global)
+        resources::generic_clone_impl(self)
     }
 
     fn sync(&self) -> Result<(), ErrorStatus> {

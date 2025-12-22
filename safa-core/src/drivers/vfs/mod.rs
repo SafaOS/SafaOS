@@ -224,11 +224,8 @@ impl Resource for FSObjectDescriptor {
         let result = self.open_mmap_interface(offset, page_count)?;
         Ok(result)
     }
-    fn try_clone_into_node(
-        &self,
-        is_global: bool,
-    ) -> Result<process::resources::ResourceNodeRef, ErrorStatus> {
-        process::resources::generic_clone_impl(self, is_global)
+    fn try_clone_into_node(&self) -> Result<process::resources::ResourceNodeRef, ErrorStatus> {
+        process::resources::generic_clone_impl(self)
     }
     fn address_space_generic(&self) -> bool {
         true
@@ -317,13 +314,11 @@ impl CollectionIterDescriptor {
 impl Resource for Mutex<CollectionIterDescriptor> {
     fn try_clone_into_node(
         &self,
-        is_global: bool,
     ) -> Result<process::resources::ResourceNodeRef, ErrorStatus> {
         let guard = self.lock();
         let descriptor = guard.clone();
         Ok(process::resources::ResourceNode::create(
             Mutex::new(descriptor),
-            is_global,
         ))
     }
 

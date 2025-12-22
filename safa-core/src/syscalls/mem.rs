@@ -104,20 +104,15 @@ impl SyscallFFI for ShmFlags {
 #[syscall_handler]
 fn sysshm_create(
     pages_count: usize,
-    flags: ShmFlags,
+    _flags: ShmFlags,
     out_shm_key: &mut ShmKey,
 ) -> Result<Ri, MapToError> {
-    let local = flags.contains(ShmFlags::LOCAL);
-
     let tracked_key =
         shared_mem::create_shm(pages_count).map_err(|()| MapToError::FrameAllocationFailed)?;
     let key = *tracked_key.key();
 
     let resource = tracked_key;
-    let ri = match local {
-        false => resources::add_global_resource(resource),
-        true => resources::add_local_resource(resource),
-    };
+    let ri = resources::add_global_resource(resource);
 
     *out_shm_key = key;
 
@@ -131,16 +126,11 @@ impl SyscallFFI for ShmKey {
     }
 }
 #[syscall_handler]
-fn sysshm_open(key: ShmKey, flags: ShmFlags) -> Result<Ri, ErrorStatus> {
+fn sysshm_open(key: ShmKey, _flags: ShmFlags) -> Result<Ri, ErrorStatus> {
     let tracked_key = shared_mem::track_shm(key).ok_or(ErrorStatus::UnknownResource)?;
 
-    let local = flags.contains(ShmFlags::LOCAL);
-
     let resource = tracked_key;
-    let ri = match local {
-        false => resources::add_global_resource(resource),
-        true => resources::add_local_resource(resource),
-    };
+    let ri = resources::add_global_resource(resource);
 
     Ok(ri)
 }
