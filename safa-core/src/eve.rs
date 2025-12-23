@@ -21,7 +21,7 @@ pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
 });
 
 pub fn main() -> ! {
-    *logging::SERIAL_LOG.write() = Some(PageString::with_capacity(&"Journal", PAGE_SIZE * 4));
+    *logging::SERIAL_LOG.write() = Some(PageString::with_capacity(&"Journal", PAGE_SIZE * 6));
     crate::info!("eve has been awaken ...");
 
     crate::drivers::pci::init();
@@ -72,7 +72,6 @@ pub fn main() -> ! {
 
     thread::current::exit(0)
 }
-
 pub fn idle_function() -> ! {
     crate::serial!("entered idle\n");
     let scheduler = Scheduler::get().expect("IDLE Started without scheduler");

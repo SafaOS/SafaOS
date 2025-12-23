@@ -239,7 +239,6 @@ impl<'s> XHCIResponseQueue<'s> {
 
     /// Enqieue a TRB command in the XHCI command ring, and rings the command doorbell, then returns the response TRB
     pub fn send_command(&self, trb: trbs::TRB) -> Result<CmdResponseTRB, XHCIError> {
-        crate::serial!("Command\n");
         let mut doorbell = self.doorbell_manager.lock();
         let cmds_len_before = self.command_events_count.load(Ordering::Relaxed);
 
@@ -264,7 +263,6 @@ impl<'s> XHCIResponseQueue<'s> {
         let mut doorbell = self.doorbell_manager.lock();
         let transfer_events_before = self.transfer_events_count.load(Ordering::Acquire);
 
-        crate::serial!("ringing doorbell...\n");
         doorbell.ring_control_endpoint_doorbell(transfer_ring.doorbell_id());
 
         if !sleep_until!(400 ms, self.transfer_events_count.load(Ordering::Acquire) != transfer_events_before)
