@@ -59,9 +59,6 @@ unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAlloc
         if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
             let (flags, name) = if entry.entry_type == EntryType::FRAMEBUFFER {
                 (flags | VMMMFlags::FRAMEBUFFER_CACHED, &"FRAMEBUFFER")
-            } else if entry.entry_type == EntryType::USABLE {
-                // Normal memory == normal caching
-                (flags, &"HHDM")
             } else {
                 (flags | VMMMFlags::UNCACHABLE, &"HHDM")
             };
