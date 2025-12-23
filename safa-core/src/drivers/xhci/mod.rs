@@ -1,4 +1,7 @@
-use core::cell::UnsafeCell;
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use super::{
     interrupts::IRQInfo,
@@ -9,10 +12,9 @@ use regs::{CapsReg, XHCIDoorbellManager};
 use rings::{command::XHCICommandRing, event::XHCIEventRing};
 
 use crate::{
-    arch::{paging::current_higher_root_table, without_interrupts},
+    arch::{paging::current_higher_root_table, with_interrupts, without_interrupts},
     debug,
     drivers::{
-        driver_poll::{self, PolledDriver},
         interrupts::{self, IntTrigger, InterruptReceiver},
         keyboard::usb_kbd::USBKeyboard,
         pci::{Bar, PCICommandReg},
@@ -20,7 +22,7 @@ use crate::{
         xhci::{
             devices::XHCIDevice,
             extended_caps::XHCIUSBSupportedProtocolCap,
-            regs::{OperationalRegs, XHCIRegisters},
+            regs::XHCIRegisters,
             rings::{
                 transfer::XHCITransferRing,
                 trbs::{
@@ -41,8 +43,11 @@ use crate::{
         frame_allocator::{self},
         paging::{EntryFlags, PAGE_SIZE},
     },
+    process::current::kernel_thread_spawn,
+    scheduler::wait_queue::WaitQueue,
     sleep_until,
-    utils::locks::{Mutex, RwLock, RwLockReadGuard},
+    thread::Tid,
+    utils::locks::{Mutex, RwLock, RwLockReadGuard, SpinLock},
     warn,
 };
 
@@ -62,10 +67,44 @@ mod utils;
 /// The maximum number of TRBs a CommandRing can hold
 const MAX_TRB_COUNT: usize = 256;
 
-impl<'s> InterruptReceiver for XHCI<'s> {
-    fn handle_interrupt(&self) {
-        let regs = unsafe { self.regs.as_mut_unchecked() };
-        self.event_ring.lock().dequeue_events(|event| {
+fn handle_port_conn(xhci: &XHCI, port_index: u8, disconnected: bool) {
+    let op_regs = unsafe { xhci.regs.as_mut_unchecked().operational_regs() };
+
+    debug!(XHCI, "port {} resetting...", port_index);
+    let reset_successful =
+        unsafe { op_regs.reset_port(xhci.usb3_ports.contains(&port_index), port_index) };
+
+    if reset_successful && !disconnected {
+        if let Err(e) = xhci.setup_device(port_index) {
+            error!(XHCI, "failed to connect port {}, err: {e}...", port_index);
+        } else {
+            debug!(XHCI, "port {} connected...", port_index);
+        }
+    }
+
+    if disconnected {
+        debug!(XHCI, "port {} disconnected...", port_index);
+    }
+}
+
+fn handle_port_status_change(xhci: &XHCI, event: PortStatusChangeTRB) {
+    let op_regs = unsafe { xhci.regs.as_mut_unchecked().operational_regs() };
+    let port_index = event.parameter.port_index();
+    let port_regs = unsafe { op_regs.port_registers(port_index) };
+    let port_sc = read_ref!(port_regs.port_sc);
+
+    let is_connected = port_sc.ccs();
+    if port_sc.csc() {
+        handle_port_conn(xhci, port_index, !is_connected);
+    }
+}
+
+fn on_interrupt_thread(_: Tid, xhci: &XHCI) -> ! {
+    loop {
+        let event_ring = unsafe { &mut *xhci.event_ring.get() };
+        let mut events_pool = xhci.responses_manager.events.lock();
+
+        event_ring.dequeue_events(|event| {
             if let Some(response_event) = event.into_event_trb() {
                 match response_event {
                     EventResponseTRB::CommandCompletion(res) => {
@@ -76,11 +115,12 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                             res.status.code() as u8,
                             res.cmd.slot_id(),
                         );
-                        self.manager_queue.add_command_response(res)
+                        xhci.responses_manager
+                            .add_command_response(&mut events_pool, res);
                     }
                     EventResponseTRB::TransferResponse(res) => {
                         let slot_id = res.cmd.slot_id();
-                        if let Some(mut connected_devices) = self.connected_devices.try_write() {
+                        if let Some(mut connected_devices) = xhci.connected_devices.try_write() {
                             let target_device = connected_devices
                                 .iter_mut()
                                 .find(|device| device.slot_id() == slot_id);
@@ -88,11 +128,12 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                             if let Some(target_device) = target_device {
                                 // pass on the transfer event to the device
                                 return target_device
-                                    .on_event(&self.manager_queue, res.cmd.endpoint_id());
+                                    .on_event(&xhci.responses_manager, res.cmd.endpoint_id());
                             }
                         }
 
-                        self.manager_queue.add_transfer_response(res)
+                        xhci.responses_manager
+                            .add_transfer_response(&mut events_pool, res)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
                         let code = event.status.completion_code();
@@ -105,15 +146,33 @@ impl<'s> InterruptReceiver for XHCI<'s> {
                             code,
                             code as u8,
                         );
-                        self.manager_queue.add_port_status_change_event(
-                            unsafe { self.regs.as_mut_unchecked().operational_regs() },
-                            event,
-                        );
+
+                        handle_port_status_change(xhci, event);
                     }
                 }
             }
         });
+        drop(events_pool);
 
+        without_interrupts(|| unsafe {
+            let pending_wait = xhci.wait_queue.prepare_wait();
+            if !(*xhci.event_ring.get()).is_empty() {
+                return;
+            }
+            pending_wait
+                .enter_wait(XHCIWaitReason::Interrupt, None)
+                .expect("Failed to wait for XHCI")
+        })
+    }
+}
+
+impl<'s> InterruptReceiver for XHCI<'s> {
+    fn handle_interrupt(&self) {
+        let regs = unsafe { self.regs.as_mut_unchecked() };
+        // Defer work to another thread.
+        self.wait_queue
+            .lock()
+            .wake_n_on_condition(|r| *r == XHCIWaitReason::Interrupt, 1);
         unsafe {
             // We only use interrupter 0 for now
             regs.acknowledge_irq(0);
@@ -121,61 +180,18 @@ impl<'s> InterruptReceiver for XHCI<'s> {
     }
 }
 
-impl<'s> PolledDriver for XHCI<'s> {
-    fn thread_name(&self) -> &'static str {
-        "XHCI_POLL"
-    }
-
-    fn poll(&self) {
-        let regs = unsafe { self.regs.as_mut_unchecked() };
-
-        while let Some(event) = self.manager_queue.try_pop_port_connection_event() {
-            let op_regs = unsafe { regs.operational_regs() };
-            debug!(XHCI, "port {} resetting...", event.port_index);
-            let reset_successful = unsafe {
-                op_regs.reset_port(
-                    self.usb3_ports.contains(&event.port_index),
-                    event.port_index,
-                )
-            };
-
-            if reset_successful && !event.disconnected {
-                if let Err(e) = self.setup_device(event.port_index) {
-                    error!(
-                        XHCI,
-                        "failed to connect port {}, err: {e}...", event.port_index
-                    );
-                } else {
-                    debug!(XHCI, "port {} connected...", event.port_index);
-                }
-            }
-
-            if event.disconnected {
-                debug!(XHCI, "port {} disconnected...", event.port_index);
-            }
-        }
-    }
-}
-
-/// A port connection or disconnection event
-pub struct XHCIPortConnectionEvent {
-    pub port_index: u8,
-    pub disconnected: bool,
+#[derive(Debug)]
+struct XHCIResponsesPool {
+    transfers: Vec<TransferResponseTRB>,
+    commands: Vec<CmdResponseTRB>,
 }
 
 /// A safe communicator with XHCI Interrupts that can safely send requests and receive responses without deadlocking
 #[derive(Debug)]
 pub struct XHCIResponseQueue<'s> {
-    // Only 1 interrupter may hold the lock
-    // and Only 1 Reader may hold the lock (requester)
-    // the idea is we might have a reader and writer at the same time but not 2
-    // the reader has previously requested the writer to write so it is aware of it, and the writer will never remove
-    interrupter_lock: Mutex<()>,
-    requester_lock: Mutex<()>,
-
-    commands: UnsafeCell<Vec<CmdResponseTRB>>,
-    transfer_events: UnsafeCell<Vec<TransferResponseTRB>>,
-    port_connection_queue: UnsafeCell<Vec<XHCIPortConnectionEvent>>,
+    events: Mutex<XHCIResponsesPool>,
+    transfer_events_count: AtomicUsize,
+    command_events_count: AtomicUsize,
 
     doorbell_manager: Mutex<XHCIDoorbellManager<'s>>,
     commands_ring: Mutex<XHCICommandRing<'s>>,
@@ -187,92 +203,50 @@ impl<'s> XHCIResponseQueue<'s> {
         commands_ring: XHCICommandRing<'s>,
     ) -> Self {
         Self {
-            interrupter_lock: Mutex::new(()),
-            requester_lock: Mutex::new(()),
             commands_ring: Mutex::new(commands_ring),
             doorbell_manager: Mutex::new(doorbell_manager),
-            commands: UnsafeCell::new(Vec::new()),
-            transfer_events: UnsafeCell::new(Vec::new()),
-            port_connection_queue: UnsafeCell::new(Vec::new()),
+            events: Mutex::new(XHCIResponsesPool {
+                transfers: Vec::new(),
+                commands: Vec::new(),
+            }),
+            transfer_events_count: AtomicUsize::new(0),
+            command_events_count: AtomicUsize::new(0),
         }
     }
 
-    pub fn add_command_response(&self, response: CmdResponseTRB) {
-        let interrupter = self.interrupter_lock.lock();
-        unsafe {
-            self.commands.as_mut_unchecked().push(response);
-        }
-        drop(interrupter);
+    fn add_command_response(&self, pool: &mut XHCIResponsesPool, response: CmdResponseTRB) {
+        pool.commands.push(response);
+        self.command_events_count.fetch_add(1, Ordering::Release);
     }
 
-    pub fn add_transfer_response(&self, response: TransferResponseTRB) {
-        let interrupter = self.interrupter_lock.lock();
-        unsafe {
-            self.transfer_events.as_mut_unchecked().push(response);
-        }
-        drop(interrupter);
-    }
-
-    pub fn add_port_status_change_event(
-        &self,
-        op_regs: &mut OperationalRegs,
-        event: PortStatusChangeTRB,
-    ) {
-        let port_index = event.parameter.port_index();
-        let port_regs = unsafe { op_regs.port_registers(port_index) };
-        let port_sc = read_ref!(port_regs.port_sc);
-        if port_sc.csc() {
-            self.add_port_connection_event(port_index, !port_sc.ccs());
-        }
-    }
-
-    pub fn add_port_connection_event(&self, port_index: u8, is_disconnected: bool) {
-        let interrupter = self.interrupter_lock.lock();
-        unsafe {
-            self.port_connection_queue
-                .as_mut_unchecked()
-                .push(XHCIPortConnectionEvent {
-                    port_index,
-                    disconnected: is_disconnected,
-                });
-        }
-        drop(interrupter);
-    }
-
-    pub fn try_pop_port_connection_event(&self) -> Option<XHCIPortConnectionEvent> {
-        let lock = self.requester_lock.try_lock();
-        let results = unsafe { self.port_connection_queue.as_mut_unchecked().pop() };
-        drop(lock);
-        results
+    fn add_transfer_response(&self, pool: &mut XHCIResponsesPool, response: TransferResponseTRB) {
+        pool.transfers.push(response);
+        self.transfer_events_count.fetch_add(1, Ordering::Relaxed);
     }
 
     unsafe fn wait_for_command_response(
         &self,
         cmds_len_before: usize,
     ) -> Result<CmdResponseTRB, XHCIError> {
-        let commands = unsafe { self.commands.as_mut_unchecked() };
-
-        // FIXME: could this be optimized away, maybe i should use atomics?
-        // FIXME: handle timeout instead of panicking
-        if !sleep_until!(200 ms, commands.len() != cmds_len_before) {
+        if !sleep_until!(200 ms, self.command_events_count.load(Ordering::Acquire) != cmds_len_before)
+        {
             return Err(XHCIError::NoCommandResponse);
         }
-
-        let response = commands.pop().unwrap();
+        let response = self.events.lock().commands.drain(..).last().unwrap();
 
         Ok(response)
     }
 
     /// Enqieue a TRB command in the XHCI command ring, and rings the command doorbell, then returns the response TRB
     pub fn send_command(&self, trb: trbs::TRB) -> Result<CmdResponseTRB, XHCIError> {
-        let requester = self.requester_lock.lock();
-        let cmds_len_before = unsafe { self.commands.as_ref_unchecked().len() };
+        crate::serial!("Command\n");
+        let mut doorbell = self.doorbell_manager.lock();
+        let cmds_len_before = self.command_events_count.load(Ordering::Relaxed);
 
         self.commands_ring.lock().enqueue(trb);
-        self.doorbell_manager.lock().ring_command_doorbell();
+        doorbell.ring_command_doorbell();
 
         let response = unsafe { self.wait_for_command_response(cmds_len_before) }?;
-        drop(requester);
 
         let code = response.status.code();
         if code != CompletionStatusCode::Success {
@@ -286,24 +260,22 @@ impl<'s> XHCIResponseQueue<'s> {
         &self,
         transfer_ring: &XHCITransferRing,
     ) -> Result<TransferResponseTRB, XHCIError> {
-        let requester = self.requester_lock.lock();
-        let transfer_events = unsafe { self.transfer_events.as_mut_unchecked() };
-        let transfers_len_before = transfer_events.len();
+        crate::serial!("Transfer\n");
+        let mut doorbell = self.doorbell_manager.lock();
+        let transfer_events_before = self.transfer_events_count.load(Ordering::Acquire);
 
-        self.doorbell_manager
-            .lock()
-            .ring_control_endpoint_doorbell(transfer_ring.doorbell_id());
+        crate::serial!("ringing doorbell...\n");
+        doorbell.ring_control_endpoint_doorbell(transfer_ring.doorbell_id());
 
-        // FIXME: could this be optimized away, maybe i should use atomics?
-        // FIXME: handle timeout instead of panicking
-        if !sleep_until!(400 ms, transfer_events.len() != transfers_len_before) {
+        if !sleep_until!(400 ms, self.transfer_events_count.load(Ordering::Acquire) != transfer_events_before)
+        {
             return Err(XHCIError::NoTransferResponse);
         }
 
-        let response = transfer_events.pop().unwrap();
-        drop(requester);
-        let code = response.status.completion_code();
+        let response = self.events.lock().transfers.drain(..).last().unwrap();
+        self.transfer_events_count.fetch_sub(1, Ordering::Release);
 
+        let code = response.status.completion_code();
         if code != CompletionStatusCode::Success {
             return Err(XHCIError::TransferNotSuccessful(code));
         }
@@ -422,6 +394,11 @@ impl<'s> XHCIResponseQueue<'s> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XHCIWaitReason {
+    Interrupt,
+}
+
 // TODO: maybe stack interrupt stuff together in one struct behind a Mutex?
 /// The main XHCI driver Instance
 #[derive(Debug)]
@@ -429,13 +406,18 @@ pub struct XHCI<'s> {
     /// be careful using the registers everything there is unsafe
     regs: UnsafeCell<XHCIRegisters<'s>>,
     /// Only accessed by interrupts
-    event_ring: Mutex<XHCIEventRing<'s>>,
-    manager_queue: XHCIResponseQueue<'s>,
+    ///
+    /// UnsafeCell because it is modified by hardware outside of the driver.
+    event_ring: UnsafeCell<XHCIEventRing<'s>>,
+    responses_manager: XHCIResponseQueue<'s>,
     /// A list of USB3 ports, all other ports are USB2
     usb3_ports: Vec<u8>,
     connected_devices: RwLock<Vec<USBDevice>>,
 
     irq_info: IRQInfo,
+
+    /// XHCI's thread's wait queues,
+    wait_queue: SpinLock<WaitQueue<2, XHCIWaitReason>>,
 }
 
 unsafe impl<'s> Send for XHCI<'s> {}
@@ -454,7 +436,7 @@ impl<'s> XHCI<'s> {
             0,
         );
 
-        let response = self.manager_queue.send_command(trb)?;
+        let response = self.responses_manager.send_command(trb)?;
         Ok(response.cmd.slot_id())
     }
 
@@ -463,7 +445,7 @@ impl<'s> XHCI<'s> {
         let input_ctx_base_addr = device.input_ctx_base_addr();
 
         let trb = AddressDeviceCommandTRB::new(input_ctx_base_addr, bsr, slot_id, 0);
-        self.manager_queue.send_command(trb.into_trb())?;
+        self.responses_manager.send_command(trb.into_trb())?;
         Ok(())
     }
 
@@ -471,7 +453,7 @@ impl<'s> XHCI<'s> {
         let slot_id = device.slot_id();
         let input_ctx_base_addr = device.input_ctx_base_addr();
         let trb = EvaluateContextCMDTRB::new(input_ctx_base_addr, slot_id);
-        self.manager_queue.send_command(trb.into_trb())?;
+        self.responses_manager.send_command(trb.into_trb())?;
         Ok(())
     }
 
@@ -479,11 +461,11 @@ impl<'s> XHCI<'s> {
         let slot_id = device.slot_id();
         let input_ctx_base_addr = device.input_ctx_base_addr();
         let trb = ConfigureEndpointCommandTRB::new(input_ctx_base_addr, slot_id);
-        self.manager_queue.send_command(trb.into_trb())?;
+        self.responses_manager.send_command(trb.into_trb())?;
         Ok(())
     }
 
-    /// Checks all root hub ports for connected ports and adds them to the port connection queue
+    /// Checks all root hub ports for connected ports and handles them.
     pub fn prob(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
         let caps = unsafe { regs.captabilities() };
@@ -495,8 +477,7 @@ impl<'s> XHCI<'s> {
             let port_sc = read_ref!(port_regs.port_sc);
 
             if port_sc.ccs() && port_sc.csc() {
-                self.manager_queue
-                    .add_port_connection_event(i, !port_sc.ccs());
+                handle_port_conn(self, i, !port_sc.ccs());
             }
         }
     }
@@ -539,7 +520,7 @@ impl<'s> XHCI<'s> {
 
         let mut usb_descriptor: UsbDeviceDescriptor = unsafe { core::mem::zeroed() };
         // get the actual max packet size
-        device.fill_usb_descriptor(&self.manager_queue, &mut usb_descriptor, 8)?;
+        device.fill_usb_descriptor(&self.responses_manager, &mut usb_descriptor, 8)?;
         debug!(
             XHCI,
             "filled the first 8 bytes of a usb descriptor: {:#x?}", usb_descriptor
@@ -570,14 +551,14 @@ impl<'s> XHCI<'s> {
         // read the full descriptor
         let usb_desc_header_len = usb_descriptor.header.b_length as usize;
         device.fill_usb_descriptor(
-            &self.manager_queue,
+            &self.responses_manager,
             &mut usb_descriptor,
             usb_desc_header_len,
         )?;
 
         debug!(XHCI, "filled the usb descriptor: {:#x?}", usb_descriptor);
         let usb_configuration_desc =
-            device.get_usb_configuration_descriptor(&self.manager_queue)?;
+            device.get_usb_configuration_descriptor(&self.responses_manager)?;
 
         let configuration_value = usb_configuration_desc.b_configuration_value as u16;
         debug!(
@@ -586,16 +567,16 @@ impl<'s> XHCI<'s> {
         );
 
         sync_inp_ctx!();
-        device.set_configuration(&self.manager_queue, configuration_value)?;
+        device.set_configuration(&self.responses_manager, configuration_value)?;
 
         let manufacturer = device
-            .get_string_descriptor(usb_descriptor.i_manufacturer, 0, &self.manager_queue)?
+            .get_string_descriptor(usb_descriptor.i_manufacturer, 0, &self.responses_manager)?
             .into_string();
         let product = device
-            .get_string_descriptor(usb_descriptor.i_product, 0, &self.manager_queue)?
+            .get_string_descriptor(usb_descriptor.i_product, 0, &self.responses_manager)?
             .into_string();
         let serial_number = device
-            .get_string_descriptor(usb_descriptor.i_serial_number, 0, &self.manager_queue)?
+            .get_string_descriptor(usb_descriptor.i_serial_number, 0, &self.responses_manager)?
             .into_string();
 
         debug!(
@@ -646,12 +627,12 @@ impl<'s> XHCI<'s> {
                 match interface_desc.b_interface_protocol {
                     1 => {
                         // sets the boot protocol
-                        device.set_protocol(&self.manager_queue, false)?;
+                        device.set_protocol(&self.responses_manager, false)?;
                         interface.attach_driver::<USBKeyboard>();
                     }
                     2 => {
                         // sets the boot protocol
-                        device.set_protocol(&self.manager_queue, false)?;
+                        device.set_protocol(&self.responses_manager, false)?;
                         interface.attach_driver::<USBMouseDriver>();
                     }
                     _ => {}
@@ -665,7 +646,7 @@ impl<'s> XHCI<'s> {
         self.configure_endpoint(&device)?;
 
         for interface in &mut connected_interfaces {
-            interface.start(&self.manager_queue);
+            interface.start(&self.responses_manager);
         }
 
         let mut connected_devices = self.connected_devices.write();
@@ -756,10 +737,11 @@ impl<'s> PCIDevice for XHCI<'s> {
             .unwrap();
 
         let this = XHCI {
-            event_ring: Mutex::new(event_ring),
-            manager_queue: xhci_queue_manager,
+            event_ring: UnsafeCell::new(event_ring),
+            responses_manager: xhci_queue_manager,
             regs: UnsafeCell::new(xhci_registers),
             connected_devices: RwLock::new(Vec::new()),
+            wait_queue: SpinLock::new(WaitQueue::new()),
             usb3_ports,
             irq_info,
         };
@@ -780,7 +762,13 @@ impl<'s> PCIDevice for XHCI<'s> {
             let irq_info = self.irq_info.clone();
 
             interrupts::register_irq(irq_info, IntTrigger::Edge, self);
-            driver_poll::add_to_poll(self);
+            let tid = kernel_thread_spawn(
+                on_interrupt_thread,
+                self,
+                Some(crate::thread::ContextPriority::High),
+                None,
+            )
+            .expect("Failed to create XHCI Interrupt thread");
 
             let regs = unsafe { self.regs.as_mut_unchecked() };
             let op_regs = unsafe { regs.operational_regs() };
@@ -788,20 +776,21 @@ impl<'s> PCIDevice for XHCI<'s> {
             let usbcmd_before = read_ref!(op_regs.usbcmd);
             unsafe {
                 regs.start();
-                self.prob();
             }
             let usbsts_after = read_ref!(op_regs.usbstatus);
             let usbcmd_after = read_ref!(op_regs.usbcmd);
             debug!(
                 XHCI,
-                "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}",
+                "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}, interrupt thread: {}",
                 usbsts_before,
                 usbsts_after,
                 usbcmd_before,
-                usbcmd_after
+                usbcmd_after,
+                tid
             );
         });
 
+        with_interrupts(|| self.prob());
         true
     }
 }

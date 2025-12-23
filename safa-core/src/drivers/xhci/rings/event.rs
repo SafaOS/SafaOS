@@ -96,7 +96,7 @@ impl<'a> XHCIEventRing<'a> {
         );
     }
 
-    pub fn dequeue_events(&mut self, on_dequeue: impl Fn(TRB)) {
+    pub fn dequeue_events(&mut self, mut on_dequeue: impl FnMut(TRB)) {
         while let Some(next) = self.dequeue_trb() {
             on_dequeue(next.clone());
         }
@@ -122,5 +122,11 @@ impl<'a> XHCIEventRing<'a> {
         }
 
         Some(curr_trb)
+    }
+
+    /// Returns whether the event ring is empty
+    pub const fn is_empty(&self) -> bool {
+        let curr_trb = &self.trbs[self.dequeue_ptr];
+        curr_trb.cmd.cycle_bit() != self.curr_ring_cycle_bit
     }
 }
