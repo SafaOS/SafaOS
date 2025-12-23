@@ -259,7 +259,6 @@ impl<'s> XHCIResponseQueue<'s> {
         &self,
         transfer_ring: &XHCITransferRing,
     ) -> Result<TransferResponseTRB, XHCIError> {
-        crate::serial!("Transfer\n");
         let mut doorbell = self.doorbell_manager.lock();
         let transfer_events_before = self.transfer_events_count.load(Ordering::Acquire);
 
