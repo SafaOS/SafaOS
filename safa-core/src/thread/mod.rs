@@ -686,21 +686,6 @@ impl Context {
 
 /// Executes [`f`] on the current thread returning the results.
 ///
-/// A faster version is [`with_current_ref`].
-pub fn with_current_arc<F, R>(f: F) -> R
-where
-    F: FnOnce(ArcThread) -> R,
-{
-    f(without_interrupts(|| unsafe {
-        Scheduler::get()
-            .expect("Attempted to get the current thread, while scheduler wasn't initialized")
-            .current_thread_ref()
-            .clone()
-    }))
-}
-
-/// Executes [`f`] on the current thread returning the results.
-///
 /// May be faster than [`with_current_arc`] as it doesn't do Arc cloning.
 /// fastest version is [`with_current_unsafe`].
 pub fn with_current_ref<F, R>(f: F) -> R
