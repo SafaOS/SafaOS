@@ -138,8 +138,8 @@ fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
     let mut stdout_pipe = child.stdout.take().expect("stdout handle not present");
     let mut buffer: Vec<u8> = Vec::new();
 
+    let mut read = [0u8; 4096];
     loop {
-        let mut read = [0u8; 20];
         let amount = stdout_pipe.read(&mut read)?;
         let read = &read[..amount];
 
