@@ -1,6 +1,6 @@
 use core::str;
 use std::{
-    io::{Read, Write, stdout},
+    io::{BufRead, BufReader, Read, Write, stdout},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     time::{Duration, Instant},
@@ -135,15 +135,15 @@ pub fn build(opts: BuildOpts) -> PathBuf {
 }
 
 fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
-    let mut stdout_pipe = child.stdout.take().expect("stdout handle not present");
+    let stdout_pipe = child.stdout.take().expect("stdout handle not present");
+    let mut reader = BufReader::new(stdout_pipe);
     let mut buffer: Vec<u8> = Vec::new();
 
-    let mut read = [0u8; 4096];
     loop {
-        let amount = stdout_pipe.read(&mut read)?;
-        let read = &read[..amount];
+        let old_len = buffer.len();
+        reader.read_until(b'\n', &mut buffer)?;
+        let read = &buffer[old_len..];
 
-        buffer.extend(&*read);
         stdout().write_all(&read)?;
 
         let failure_message = b"kernel panic";
@@ -163,7 +163,7 @@ fn wait_for_tests(child: &mut Child) -> std::io::Result<ExitStatus> {
                 if start.elapsed() >= duration || child.try_wait().is_ok_and(|s| s.is_some()) {
                     child.kill()?;
                     let mut read = Vec::new();
-                    stdout_pipe.read_to_end(&mut read)?;
+                    reader.read_to_end(&mut read)?;
                     stdout().write_all(&read)?;
 
                     println!("-------------- END QEMU OUTPUT --------------");
