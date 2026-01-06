@@ -1,24 +1,23 @@
 use core::{
     num::NonZero,
     ptr::NonNull,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{self, AtomicUsize, Ordering},
 };
 
 use crate::{
     VirtAddr,
     arch::{
         paging::PageTable,
-        smp::CPULocal,
-        x86_64::{
-            interrupts::{
-                InterruptFrame,
-                apic::{self, send_eoi},
-                handlers::TLBI_ID,
-            },
-            threading::without_yielding,
+        with_interrupts,
+        x86_64::interrupts::{
+            InterruptFrame,
+            apic::{self, send_eoi},
+            handlers::TLBI_ID,
         },
     },
     memory::paging::PAGE_SIZE,
+    percpu::{self, CpuLocal},
+    scheduler::without_preemption,
     utils::locks::SpinLock,
 };
 
@@ -29,33 +28,48 @@ use crate::{
 const MAX_INVLPG_FLUSHES: usize = 33;
 
 pub(super) fn handle_tlbi_request() {
-    let request = unsafe { super::smp::CPULocal::get_current().tlbi_request_read() };
+    let request_borrow = &DESCRIPTOR.request;
 
+    let request = unsafe { &*request_borrow.data_ptr() };
     request.process();
-    send_eoi();
+
+    assert!(request_borrow.is_locked(), "Got TLBI request without lock");
+    unsafe { request_borrow.force_unlock() };
 }
 
 pub(super) extern "x86-interrupt" fn tlbi_flush_handler(_: InterruptFrame) {
-    handle_tlbi_request()
+    handle_tlbi_request();
+    send_eoi();
+}
+
+struct TLBIDescriptor {
+    request: SpinLock<TLBIRequest>,
+    responses: AtomicUsize,
+}
+
+percpu::define! {
+    static DESCRIPTOR: TLBIDescriptor = const {
+        TLBIDescriptor {
+            request: SpinLock::new(TLBIRequest::new()),
+            responses: AtomicUsize::new(0),
+        }
+    };
 }
 
 #[derive(Debug)]
 pub(super) struct TLBIRequest {
-    pub shootdown_lock: SpinLock<()>,
     page_table: Option<NonNull<PageTable>>,
     range: Option<(VirtAddr, NonZero<usize>)>,
     processed: &'static AtomicUsize,
 }
 
 impl TLBIRequest {
-    pub fn new() -> Self {
-        static DUMMY_PROCESSED: AtomicUsize = AtomicUsize::new(0);
-
+    pub const fn new() -> Self {
+        static DUMMY: AtomicUsize = AtomicUsize::new(0);
         Self {
-            shootdown_lock: SpinLock::new(()),
             page_table: None,
             range: None,
-            processed: &DUMMY_PROCESSED,
+            processed: &DUMMY,
         }
     }
 
@@ -66,14 +80,7 @@ impl TLBIRequest {
             reload_cr3();
         }
 
-        debug_assert!(
-            self.shootdown_lock.is_locked(),
-            "Shootdown lock wasn't picked"
-        );
-        self.processed.fetch_add(1, Ordering::Relaxed);
-        unsafe {
-            self.shootdown_lock.force_unlock();
-        }
+        self.processed.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -135,40 +142,58 @@ pub unsafe fn flush_cache_range(page_table: &PageTable, start: VirtAddr, mut end
     }
 
     let mut expected_waiting = 0;
+    let cpus = CpuLocal::get_all();
+    if cpus.len_hint() <= 1 {
+        return;
+    }
 
-    without_yielding(|current_cpu| {
-        let cpus = CPULocal::get_all();
+    without_preemption(|| {
+        // Receive IPIs from other CPUs.
+        with_interrupts(|| {
+            let current_cpu = CpuLocal::get();
 
-        if cpus.len() > 1 {
-            current_cpu.responses_count.store(0, Ordering::Relaxed);
+            let curr_descriptor = DESCRIPTOR.borrow_for(current_cpu);
+            let responses = &curr_descriptor.responses;
+            responses.store(0, Ordering::Relaxed);
 
-            for cpu in cpus {
-                if core::ptr::eq(*cpu, current_cpu) {
-                    continue;
-                }
+            for cpu in cpus.filter(|cpu| cpu.cpu_id != current_cpu.cpu_id) {
+                // TODO: Get cpu's page-table?
+                // Removed for simplicity and safety
 
-                let other_pag = cpu.current_pagetable();
-                // If we have got a target we check for it, otherwise we are targeting everyone.
-                if let Some(pag) = page_table
-                    && other_pag.is_none_or(|o| !core::ptr::eq(pag.as_ptr(), o.as_ptr()))
-                {
-                    continue;
-                }
+                // let other_pag = cpu.current_pagetable();
+                // // If we have got a target we check for it, otherwise we are targeting everyone.
+                // if let Some(pag) = page_table
+                //     && other_pag.is_none_or(|o| !core::ptr::eq(pag.as_ptr(), o.as_ptr()))
+                // {
+                //     continue;
+                // }
 
-                unsafe {
-                    let tlb = cpu.tlbi_request_lock();
-                    tlb.range = range;
-                    tlb.page_table = page_table;
-                    tlb.processed = &current_cpu.responses_count;
-                }
+                let next_descriptor = DESCRIPTOR.borrow_for(cpu);
 
+                let mut request = loop {
+                    if let Some(request) = next_descriptor.request.try_lock() {
+                        break request;
+                    }
+
+                    core::hint::spin_loop();
+                };
+
+                request.range = range;
+                request.page_table = page_table;
+                request.processed = responses;
+
+                // Lock will be released when the request is processed.
+                core::mem::forget(request);
+
+                atomic::fence(Ordering::Release);
                 expected_waiting += 1;
-                apic::send_ipi_to(TLBI_ID, cpu.cpuid());
+
+                apic::send_ipi_to(TLBI_ID, cpu.cpu_arch_id);
             }
 
-            while current_cpu.responses_count.load(Ordering::Relaxed) < expected_waiting {
+            while responses.load(Ordering::Acquire) < expected_waiting {
                 core::hint::spin_loop()
             }
-        }
+        })
     });
 }

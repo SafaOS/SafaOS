@@ -45,7 +45,7 @@ impl RFLAGS {
         unsafe {
             asm!(
                 "pushfq; pop {}",
-                out(reg) result,
+                out(reg) result, options(nomem, preserves_flags)
             );
             Self::from_bits_retain(result)
         }
@@ -57,15 +57,17 @@ impl RFLAGS {
 /// in x86_64(current) that is the LAPIC ID
 /// while in aarch64 that is the whole affinity clustures as indicated by MPIDR_EL1
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CPUID(u8);
+pub struct ArchCpuID(u8);
 
-impl CPUID {
-    pub unsafe fn new(id: u8) -> Self {
-        Self(id)
-    }
+impl ArchCpuID {
     pub fn get() -> Self {
         // If there is no APIC it means there is no CPUs yet except for the boot cpu
         Self(APIC.get().map(|a| a.lapic_id()).unwrap_or(0))
+    }
+
+    /// Create a new CPUID from a limine CPU
+    pub fn from_cpu(cpu: &limine::mp::Cpu) -> Self {
+        Self(cpu.lapic_id as u8)
     }
 
     pub(super) const fn lapic_id(self) -> u8 {
@@ -73,7 +75,7 @@ impl CPUID {
     }
 }
 
-impl Display for CPUID {
+impl Display for ArchCpuID {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }

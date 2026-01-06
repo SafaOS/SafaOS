@@ -168,7 +168,7 @@ macro_rules! info {
         let _ = core::marker::PhantomData::<$mod>;
         $crate::loglnboot_ext!("info", 92, as stringify!($mod), $($arg)*)
     }};
-    ($($arg:tt)*) => ($crate::logln_ext!("info", 92, $($arg)*));
+    ($($arg:tt)*) => ($crate::loglnboot_ext!("info", 92, $($arg)*));
 }
 
 #[macro_export]

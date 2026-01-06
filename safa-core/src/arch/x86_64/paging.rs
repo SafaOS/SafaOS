@@ -375,9 +375,8 @@ pub unsafe fn map_devices(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAlloc
     let table = unsafe { vmm.table_mut() };
     for entry in &mut table.entries[heap_p4_index..heap_end_p4_index] {
         entry.map()?;
-        crate::serial!("entry: {entry:#x?}\n");
     }
 
-    crate::serial!("mapped from {heap_p4_index} to {heap_end_p4_index}...\n");
+    crate::serial!("Mapped entries from {heap_p4_index} to {heap_end_p4_index}...\n");
     Ok(())
 }

@@ -7,7 +7,7 @@ use crate::{
         aarch64::{
             cpu,
             gic::gicr::{GICRDesc, lpis::LPIManager},
-            registers::{CPUID, MPIDR},
+            registers::{ArchCpuID, MPIDR},
         },
         paging::current_higher_root_table,
     },
@@ -322,7 +322,7 @@ impl IntID {
         cpu_if::send_sgi(
             is_group0,
             self.id() as u8,
-            CPUID::construct(0, 0, 0, 0),
+            ArchCpuID::construct(0, 0, 0, 0),
             true,
         );
     }

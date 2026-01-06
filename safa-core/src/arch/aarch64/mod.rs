@@ -81,10 +81,6 @@ fn setup_cpu_basics() {
     enable_fp();
 }
 
-fn setup_cpu_mp() {
-    smp::init_cpu_local();
-}
-
 fn setup_cpu_pherphials() {
     gic::gic_init_cpu();
     timer::setup_generic_timer();
@@ -93,7 +89,8 @@ fn setup_cpu_pherphials() {
 #[inline(always)]
 pub fn init_phase1() {
     setup_cpu_basics();
-    setup_cpu_mp();
+    let bsp = crate::percpu::init_bsp_first();
+    smp::setup_cpu_mp(bsp);
     cpu::init();
 }
 

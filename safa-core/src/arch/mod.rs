@@ -1,7 +1,6 @@
 //! Architecture specific code,
 //! this module contains everything that would make a difference between architectures such i   nitilization and handling context switching
 
-pub mod smp_misc;
 use cfg_if::cfg_if;
 
 cfg_if! {
@@ -23,7 +22,7 @@ pub mod threading {
 }
 
 pub mod smp {
-    pub use super::arch::smp::{CPULocal, READY_CPUS, init_cpus};
+    pub use super::arch::smp::{current_local_ptr, init_cpu_with};
 }
 
 #[allow(unused_imports)]
@@ -47,7 +46,7 @@ pub mod utils {
 }
 
 pub mod registers {
-    pub use super::arch::registers::{CPUID, StackFrame};
+    pub use super::arch::registers::{ArchCpuID, StackFrame};
 }
 
 pub mod pci {

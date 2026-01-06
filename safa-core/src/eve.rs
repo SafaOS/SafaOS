@@ -2,7 +2,7 @@
 //! it is responsible for managing a few things related to it's children
 
 use crate::memory::paging::PAGE_SIZE;
-use crate::scheduler::Scheduler;
+use crate::scheduler::SCHEDULER;
 use crate::utils::alloc::PageString;
 use crate::utils::path::make_path;
 use crate::{fs, logging};
@@ -74,6 +74,6 @@ pub fn main() -> ! {
 }
 pub fn idle_function() -> ! {
     crate::serial!("entered idle\n");
-    let scheduler = Scheduler::get().expect("IDLE Started without scheduler");
+    let scheduler = SCHEDULER.borrow();
     scheduler.idle()
 }

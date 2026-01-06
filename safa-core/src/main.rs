@@ -38,9 +38,11 @@ mod limine;
 mod logging;
 mod memory;
 mod net;
+mod percpu;
 mod process;
 mod scheduler;
 mod shared_mem;
+mod smp;
 mod sockets;
 mod syscalls;
 mod terminal;
@@ -163,9 +165,9 @@ use core::panic::PanicInfo;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 
-use crate::arch::registers::CPUID;
-use crate::arch::smp::READY_CPUS;
+use crate::arch::registers::ArchCpuID;
 use crate::arch::without_interrupts;
+use crate::smp::READY_CPUS;
 use crate::utils::locks::SpinLock;
 
 static PANCIKED: AtomicUsize = AtomicUsize::new(0);
@@ -190,8 +192,8 @@ fn panic(info: &PanicInfo) -> ! {
                 SERIAL.force_unlock();
             }
             error!(
-                "\n\x1B[31mkernel panic within a panic:\n{info}, cpu: {}\n\x1B[0mno stack trace",
-                CPUID::get()
+                "\n\x1B[31mkernel :3 panic within a panic:\n{info}, cpu: {}\n\x1B[0mno stack trace",
+                ArchCpuID::get()
             );
             khalt()
         }
@@ -205,10 +207,10 @@ fn panic(info: &PanicInfo) -> ! {
         }
 
         panic_println!(
-            "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
+            "\x1B[31mkernel :3 panic:\n{}, at {}, cpu: {}\x1B[0m",
             info.message(),
             info.location().unwrap(),
-            CPUID::get(),
+            ArchCpuID::get(),
         );
         panic_println!("{}", stack);
 
@@ -226,14 +228,14 @@ fn panic(info: &PanicInfo) -> ! {
 extern "C" fn kstart() -> ! {
     arch::init_phase1();
     memory::init::init_all();
-    info!("terminal initialized");
+    println!("Terminal Initialized");
     logging::BOOTING.store(true, core::sync::atomic::Ordering::Relaxed);
     // initing the arch
     arch::init_phase2();
 
     unsafe {
         logging::BOOTING.store(false, core::sync::atomic::Ordering::Relaxed);
-        scheduler::init(eve::main, eve::idle_function, "Eve");
+        scheduler::init(eve::main, "Eve");
     }
 
     #[allow(unreachable_code)]

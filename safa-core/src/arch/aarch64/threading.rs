@@ -1,7 +1,5 @@
 use core::arch::{asm, global_asm};
 
-use crate::arch::smp::CPULocal;
-
 #[cfg(debug_assertions)]
 use crate::sleep_until;
 use crate::{
@@ -179,9 +177,7 @@ impl CPUStatus {
 
 pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
     let context = unsafe { CPUStatus::from_current(frame) };
-
-    let cpu_local = CPULocal::get_current();
-    let swtch_results = scheduler::swtch(cpu_local, context);
+    let swtch_results = scheduler::swtch(context);
 
     if let Some((new_context_ptr, address_space_changed)) = swtch_results {
         unsafe {

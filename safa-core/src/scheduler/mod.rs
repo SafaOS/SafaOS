@@ -7,7 +7,8 @@ use core::num::NonZero;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use crate::arch::smp::CPULocal;
+use crate::percpu::{CpuID, CpuLocal};
+use crate::smp::{self, INIT_PROCESS};
 use crate::thread::{ArcThread, BlockedReason, ContextPriority, ContextStatus, Thread, ThreadList};
 use crate::timer::time_since_boot_ms;
 use crate::utils::path::make_path;
@@ -15,11 +16,11 @@ use alloc::collections::vec_deque::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::arch::without_interrupts;
+use crate::arch::{with_interrupts, without_interrupts};
 use crate::process::Process;
 use crate::utils::locks::{Mutex, TrackedSpinLock};
 use crate::utils::types::Name;
-use crate::{VirtAddr, arch};
+use crate::{VirtAddr, eve, percpu};
 use alloc::boxed::Box;
 
 pub mod process_list;
@@ -30,6 +31,25 @@ use crate::{
     debug,
     memory::paging::PhysPageTable,
 };
+
+percpu::define! {
+    /// The Scheduler for the current CPU.
+    pub static SCHEDULER: Scheduler = {
+        let process = unsafe {(*INIT_PROCESS.get()).as_ref().expect("Running scheduler's initializer before the init processes has been decided")};
+        let (idle_thread, _) = process
+            .threads_manager()
+            .create_thread(
+                process,
+                VirtAddr::from(eve::idle_function as usize),
+                VirtAddr::null(),
+                Some(ContextPriority::Low),
+                None,
+            )
+            .expect("Failed to create the idle thread for a CPU");
+
+        Scheduler::new(idle_thread)
+    };
+}
 
 const MIN_PRIORITY: u8 = 0;
 const MAX_PRIORITY: u8 = 4;
@@ -126,6 +146,7 @@ pub struct Scheduler {
     is_thread_yielding: UnsafeCell<bool>,
     context_switch_count: AtomicUsize,
     is_idle: UnsafeCell<bool>,
+    preemption_disabled: UnsafeCell<bool>,
 }
 impl Scheduler {
     /// The Scheduler's IDLE loop
@@ -133,41 +154,42 @@ impl Scheduler {
         // My fingers were guided to pick 6 here randomly, it stays that way...
         let mut cleanup_vec = VecDeque::with_capacity(6);
 
-        // Unfortunatlly we need interrupts so that x86 TLB invalidation works
-        // The IDLE thread is guaranteed to run on this scheduler.
-        loop {
-            without_interrupts(|| {
-                let mut waiting_cleanup = self.awaiting_cleanup.lock();
-                while let Some(thread) = waiting_cleanup.pop_front() {
-                    // Avoids anything from the cleanup-routine causing deadlocks because the lock wasn't dropped.
-                    //
-                    // FIXME: This shouldn't be a problem.
-                    cleanup_vec.push_back(thread);
-                }
-                drop(waiting_cleanup);
+        with_interrupts(|| {
+            // Unfortunatlly we need interrupts so that x86 TLB invalidation works
+            // The IDLE thread is guaranteed to run on this scheduler.
+            loop {
+                let should_yield = without_preemption(|| {
+                    let mut waiting_cleanup = self.awaiting_cleanup.lock();
+                    while let Some(thread) = waiting_cleanup.pop_front() {
+                        // Avoids anything from the cleanup-routine causing deadlocks because the lock wasn't dropped.
+                        //
+                        // FIXME: This shouldn't be a problem.
+                        cleanup_vec.push_back(thread);
+                    }
+                    drop(waiting_cleanup);
 
-                let len = cleanup_vec.len();
-                for _ in 0..len {
-                    if let Some(thread) = cleanup_vec.pop_front() {
-                        // FIXME: Some kind of a hidden Drop impl may thread yield here, so I had to come up with this temporarily.
-                        if !unsafe { thread.try_cleanup() } {
-                            // TODO: ??
-                            cleanup_vec.push_back(thread);
+                    let len = cleanup_vec.len();
+                    for _ in 0..len {
+                        if let Some(thread) = cleanup_vec.pop_front() {
+                            // FIXME: Some kind of a hidden Drop impl may thread yield here, so I had to come up with this temporarily.
+                            if !unsafe { thread.try_cleanup() } {
+                                // TODO: ??
+                                cleanup_vec.push_back(thread);
+                            }
                         }
                     }
-                }
 
-                if self.try_pop_waiting_thread() || !self.is_idle() {
+                    !self.is_idle() || self.try_pop_waiting_thread()
+                });
+
+                if should_yield {
                     // Give up the CPU to the next thread
                     crate::thread::current::yield_now();
                 }
-            });
 
-            // Enables interrupts for a split moment
-            //
-            // TODO: We can disable scheduling to save more time.
-            core::hint::spin_loop();
-        }
+                core::hint::spin_loop();
+            }
+        })
     }
 
     #[inline]
@@ -354,10 +376,8 @@ impl Scheduler {
     ///
     /// Returning the thread and its priority.
     fn try_steal_thread(&self) -> Option<(ArcThread, usize)> {
-        let schedulers = CPULocal::get_all()
-            .iter()
-            .map(|c| c.scheduler())
-            .filter_map(|c| c)
+        let schedulers = CpuLocal::get_all()
+            .map(|cpu| SCHEDULER.borrow_for(cpu))
             .filter(|s| !core::ptr::eq(self, *s));
 
         for scheduler in schedulers {
@@ -401,7 +421,7 @@ impl Scheduler {
         self.try_wake_waiting_threads(&mut *schd_queues, time_now, Some(&current_thread));
         self.try_boost_threads(&mut *schd_queues, time_now);
 
-        let is_idle = schd_queues.iter().all(|q| q.is_empty());
+        let mut is_idle = schd_queues.iter().all(|q| q.is_empty());
 
         let current_context = unsafe { current_thread.context_unchecked() };
         current_context.set_cpu_status(current_cpu_status);
@@ -435,6 +455,8 @@ impl Scheduler {
                         push_to as usize,
                         false,
                     );
+
+                    is_idle = false;
                 }
             }
             ContextStatus::Blocked(_) => {
@@ -497,6 +519,7 @@ impl Scheduler {
             is_thread_yielding: UnsafeCell::new(false),
             context_switch_count: AtomicUsize::new(0),
             is_idle: UnsafeCell::new(true),
+            preemption_disabled: UnsafeCell::new(false),
         }
     }
 
@@ -527,17 +550,10 @@ impl Scheduler {
 unsafe impl Send for Scheduler {}
 unsafe impl Sync for Scheduler {}
 
-impl Scheduler {
-    /// Get a reference to the current Scheduler
-    pub fn get() -> Option<&'static Self> {
-        unsafe { CPULocal::get_current_ptr().as_ref().scheduler() }
-    }
-}
-
 #[must_use = "returns whether or not the scheduler was initialized"]
 pub(super) unsafe fn before_thread_yield() -> bool {
     unsafe {
-        if let Some(scheduler) = Scheduler::get() {
+        if let Some(scheduler) = SCHEDULER.maybe_borrow() {
             *scheduler.is_thread_yielding.get() = true;
             true
         } else {
@@ -547,6 +563,32 @@ pub(super) unsafe fn before_thread_yield() -> bool {
     }
 }
 
+#[inline]
+/// Disables preemption for the duration of the closure.
+pub fn without_preemption<F, R>(mut f: F) -> R
+where
+    F: FnMut() -> R,
+{
+    let mut schd = None;
+    let mut preemption_disabled = false;
+
+    without_interrupts(|| {
+        schd = SCHEDULER.maybe_borrow();
+        preemption_disabled = schd
+            .map(|schd| unsafe { schd.preemption_disabled.get().replace(true) })
+            .unwrap_or(false);
+    });
+
+    let result = f();
+
+    if let Some(schd) = schd {
+        unsafe {
+            *schd.preemption_disabled.get() = preemption_disabled;
+        }
+    }
+    result
+}
+
 #[inline(always)]
 /// performs a context switch using the scheduler, switching to the next process context
 /// to be used
@@ -554,9 +596,12 @@ pub(super) unsafe fn before_thread_yield() -> bool {
 /// if the address space has changed, please copy the context to somewhere accessible first
 ///
 /// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
-pub fn swtch(cpu_local: &CPULocal, context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
-    let scheduler = cpu_local.scheduler()?;
+pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
+    let scheduler = SCHEDULER.maybe_borrow()?;
     let is_thread_yielding = unsafe { scheduler.is_thread_yielding.get().replace(false) };
+    if unsafe { *scheduler.preemption_disabled.get() } {
+        return None;
+    }
 
     let (cpu_status, _, address_space_changed) =
         scheduler.try_yield_execution(context, is_thread_yielding)?;
@@ -568,7 +613,7 @@ pub fn swtch(cpu_local: &CPULocal, context: CPUStatus) -> Option<(NonNull<CPUSta
 }
 
 /// inits the scheduler
-pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &str) -> ! {
+pub unsafe fn init(main_function: fn() -> !, name: &str) -> ! {
     debug!(Scheduler, "initing ...");
     without_interrupts(|| {
         let page_table = unsafe { PhysPageTable::from_current() };
@@ -595,8 +640,11 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
         .expect("failed to create Eve");
 
         unsafe {
-            let status = arch::smp::init_cpus(&process, idle_function);
+            smp::init_cpus(process.clone());
+
+            let status = SCHEDULER.idle_thread().context_unchecked().cpu_status();
             let status_ref = status.as_ref();
+
             self::add_process(process, root_thread, None);
 
             debug!(
@@ -616,35 +664,32 @@ pub unsafe fn init(main_function: fn() -> !, idle_function: fn() -> !, name: &st
 /// by default (if `cpu` is None) chooses the least full CPU to append to otherwise if CPU is Some(i) and i is a valid CPU index, chooses that CPU
 /// use Some(0) to append to the boot CPU
 pub fn add_thread(thread: ArcThread, cpu: Option<usize>) {
-    let cpu_locals = CPULocal::get_all();
+    let cpu_id = cpu
+        .filter(|i| *i <= u16::MAX as usize)
+        .map(|i| CpuID::from_u16(i as u16))
+        .flatten();
 
-    let (cpu_index, scheduler) = if let Some(cpu) = cpu
-        && let Some(scheduler) = cpu_locals.get(cpu).map(|c| {
-            c.scheduler()
-                .expect("Attempt to add a thread before schedulers were initialized")
-        }) {
-        (cpu, scheduler)
-    } else {
-        cpu_locals
-            .iter()
-            .map(|c| {
-                c.scheduler()
-                    .expect("Attempt to add a thread before schedulers were initialized")
-            })
-            .enumerate()
-            .min_by_key(|(_, scheduler)| scheduler.threads_count.load(Ordering::Relaxed))
-            .expect("no CPU found")
-    };
+    let chosen_cpu = cpu_id.map(|id| CpuLocal::get_for(id)).unwrap_or_else(|| {
+        let cpus = CpuLocal::get_all();
+        cpus.min_by_key(|cpu| {
+            SCHEDULER
+                .borrow_for(cpu)
+                .threads_count
+                .load(Ordering::Relaxed)
+        })
+        .expect("No CPUs available")
+    });
 
-    let cid = thread.tid();
+    let chosen_schd = SCHEDULER.borrow_for(chosen_cpu);
+
+    let tid = thread.tid();
     let pid = thread.process().pid();
 
-    unsafe { scheduler.schedule_thread(thread, ThreadScheduleReason::NewThread) };
-    scheduler.threads_count.fetch_add(1, Ordering::Relaxed);
+    unsafe { chosen_schd.schedule_thread(thread, ThreadScheduleReason::NewThread) };
 
     debug!(
         Scheduler,
-        "Thread {cid} added for process {pid}, CPU: {cpu_index}"
+        "Thread {tid} added for process {pid}, CPU: {:?}", chosen_cpu.cpu_id
     );
 }
 

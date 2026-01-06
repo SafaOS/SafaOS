@@ -348,14 +348,14 @@ impl Debug for MAIR {
 /// in x86_64 that is the LAPIC ID
 /// while in aarch64(current) that is the whole affinity clustures as indicated by MPIDR_EL1
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CPUID {
+pub struct ArchCpuID {
     aff0: u8,
     aff1: u8,
     aff2: u8,
     aff3: u8,
 }
 
-impl CPUID {
+impl ArchCpuID {
     pub(super) const fn construct(aff0: u8, aff1: u8, aff2: u8, aff3: u8) -> Self {
         Self {
             aff0,
@@ -381,9 +381,14 @@ impl CPUID {
         self.aff3
     }
 
-    /// Gets the current [`CPUID`]
+    /// Gets the current [`ArchCpuID`]
     pub fn get() -> Self {
         MPIDR::read().cpuid()
+    }
+
+    /// Gets the [`ArchCpuID`] from a [`limine::mp::Cpu`].
+    pub fn from_cpu(cpu: &limine::mp::Cpu) -> Self {
+        MPIDR::from_bits(cpu.mpidr).cpuid()
     }
 }
 #[bitfield(u64)]
@@ -445,8 +450,8 @@ pub struct MPIDR {
 }
 
 impl MPIDR {
-    pub const fn cpuid(&self) -> CPUID {
-        CPUID {
+    pub const fn cpuid(&self) -> ArchCpuID {
+        ArchCpuID {
             aff0: self.aff0(),
             aff1: self.aff1(),
             aff2: self.aff2(),
@@ -462,7 +467,7 @@ impl MPIDR {
     }
 }
 
-impl Display for CPUID {
+impl Display for ArchCpuID {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,

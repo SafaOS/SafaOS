@@ -2,14 +2,10 @@ pub const STACK_SIZE: usize = PAGE_SIZE * 8;
 
 use crate::{
     PhysAddr,
-    arch::{
-        smp::CPULocal,
-        with_interrupts,
-        x86_64::{
-            gdt::{get_kernel_tss_stack, set_kernel_tss_stack},
-            interrupts::InterruptFrame,
-            registers::{RFLAGS, rdmsr, wrmsr},
-        },
+    arch::x86_64::{
+        gdt::{get_kernel_tss_stack, set_kernel_tss_stack},
+        interrupts::InterruptFrame,
+        registers::{RFLAGS, rdmsr, wrmsr},
     },
     thread::Tid,
 };
@@ -184,15 +180,6 @@ unsafe extern "x86-interrupt" {
     pub fn context_switch_stub(_: InterruptFrame) -> !;
 }
 
-/// Calls `f` with thread yields disabled, and interrupts enabled.
-pub fn without_yielding<R>(f: impl FnOnce(&'static CPULocal) -> R) -> R {
-    let current_cpu = CPULocal::get_current();
-    let old_value = unsafe { current_cpu.disable_yielding() };
-    let r = with_interrupts(|| f(current_cpu));
-    unsafe { current_cpu.set_yield_enable(old_value) };
-    r
-}
-
 #[repr(C)]
 struct ContextSwitchFrame {
     capture: CPUStatus,
@@ -217,16 +204,12 @@ extern "C" fn context_switch(switch_frame: ContextSwitchFrame) -> ! {
 
 #[inline(always)]
 unsafe fn context_switch_and_return_inner(mut capture: CPUStatus) -> ! {
-    let cpu_local = CPULocal::get_current();
-
-    let swtch_results = if core::hint::likely(cpu_local.can_thread_yield()) {
+    let swtch_results = {
         unsafe {
-            capture.ring0_rsp = get_kernel_tss_stack(&cpu_local);
+            capture.ring0_rsp = get_kernel_tss_stack();
             capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
         }
-        swtch(cpu_local, capture)
-    } else {
-        None
+        swtch(capture)
     };
 
     super::interrupts::apic::send_eoi();
@@ -234,7 +217,7 @@ unsafe fn context_switch_and_return_inner(mut capture: CPUStatus) -> ! {
         unsafe {
             let new_context_ref = new_context_ptr.as_ref();
 
-            set_kernel_tss_stack(cpu_local, new_context_ref.ring0_rsp);
+            set_kernel_tss_stack(new_context_ref.ring0_rsp);
             wrmsr(0xC0000100, new_context_ref.fs_base.into_raw() as u64);
 
             if address_space_changed {
@@ -268,8 +251,7 @@ pub fn invoke_context_switch() {
 /// shouldn't be used
 pub unsafe fn restore_cpu_status(status: &CPUStatus) -> ! {
     unsafe {
-        let cpu_local = CPULocal::get_current();
-        set_kernel_tss_stack(cpu_local, status.ring0_rsp);
+        set_kernel_tss_stack(status.ring0_rsp);
         wrmsr(0xC0000100, status.fs_base.into_raw() as u64);
         restore_cpu_status_full(status);
     }

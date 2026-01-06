@@ -1,7 +1,7 @@
 use crate::{
     PhysAddr, VirtAddr,
     arch::{
-        registers::CPUID,
+        registers::ArchCpuID,
         x86_64::{
             acpi,
             interrupts::handlers::{APIC_ERROR_HANDLER_ID, MOUSE_HANDLER_ID, NMI_REASON},
@@ -264,7 +264,7 @@ impl Apic {
 
     #[inline]
     /// Send an IPI to a target CPU
-    pub fn send_ipi_to(&self, vector: u8, target: CPUID) {
+    pub fn send_ipi_to(&self, vector: u8, target: ArchCpuID) {
         self.write_ic_reg(
             APICICReg::new()
                 .with_destination_shorthand(APICDestShorthand::NoShortHand)
@@ -442,7 +442,7 @@ pub fn send_nmi_all(reason: usize) {
 
 #[inline]
 /// Send an IPI to a target CPU
-pub fn send_ipi_to(vector: u8, target: CPUID) {
+pub fn send_ipi_to(vector: u8, target: ArchCpuID) {
     // If not then the apic isn't initialized and so is other processors
     if let Some(apic) = APIC.get() {
         apic.send_ipi_to(vector, target)

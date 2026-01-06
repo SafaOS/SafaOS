@@ -12,6 +12,7 @@ use crate::{
         AlignToPage, HHDM, frame_allocator,
         vmm::{Location, VMMAllocError, VMMMFlags, VirtualMemoryManager},
     },
+    percpu,
 };
 
 use super::paging::{MapToError, PageTable};
@@ -147,6 +148,7 @@ unsafe fn map_top_2gb(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocErro
             VMMMFlags::WRITEABLE,
         )?;
 
+        percpu::init_memory(vmm);
         debug!(PageTable, "mapped kernel");
         Ok(())
     }
@@ -155,15 +157,11 @@ unsafe fn map_top_2gb(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocErro
 /// Inits the page table and the VMM
 pub fn init_all() {
     debug!(PageTable, "initializing root page table ... ");
-    let _ = unsafe { super::paging::current_higher_root_table() };
     let vmm = create_vmm().expect("Failed to create root VMM");
+    let table = unsafe { vmm.table_ptr() };
+
     unsafe {
-        set_current_higher_page_table(vmm.table_ptr());
+        set_current_higher_page_table(table);
         super::vmm::init(vmm);
     }
-
-    // de-allocating the previous root table
-    // FIXME: could still be used by other cpus so i don't free it for now
-    // let frame = previous_table.frame();
-    // frame_allocator::deallocate_frame(frame)
 }

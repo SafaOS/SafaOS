@@ -5,10 +5,12 @@ use core::{
 };
 
 use crate::{
+    debug,
     memory::AlignToPage,
     utils::locks::{Mutex, MutexGuard},
 };
 use lazy_static::lazy_static;
+use limine::memory_map::EntryType;
 
 use super::{PhysAddr, VirtAddr, paging::PAGE_SIZE};
 
@@ -414,10 +416,23 @@ impl RegionListAllocator {
         let mut unusable_regions = 0;
 
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE {
-                let start_addr = PhysAddr::from(entry.base as usize);
-                let end_addr = start_addr + (entry.length as usize);
+            let start_addr = PhysAddr::from(entry.base as usize);
+            let end_addr = start_addr + (entry.length as usize);
 
+            debug!(
+                RegionListAllocator,
+                "Region at {start_addr:?}..{end_addr:?}: {}",
+                match entry.entry_type {
+                    EntryType::USABLE => "Usable",
+                    EntryType::BAD_MEMORY => "Bad",
+                    EntryType::BOOTLOADER_RECLAIMABLE => "Bootloader Reclaimable",
+                    EntryType::EXECUTABLE_AND_MODULES => "Exe",
+                    EntryType::RESERVED => "Reserved",
+                    EntryType::ACPI_NVS | EntryType::ACPI_RECLAIMABLE => "ACPI",
+                    _ => "Other",
+                }
+            );
+            if entry.entry_type == limine::memory_map::EntryType::USABLE {
                 let frame = Frame::containing_address(start_addr);
                 let end_frame = Frame::containing_address(end_addr);
 
@@ -596,7 +611,7 @@ fn allocate_contiguous_test() {
 // makes sure all the previous tests didn't mess up something with the linked list
 #[test_case]
 fn frame_count_verification_test() {
-    let  allocator = REGION_ALLOCATOR.lock();
+    let allocator = REGION_ALLOCATOR.lock();
     let actual_frame_count = allocator.count_frames_expensive();
     assert_eq!(
         allocator.usable_frames() - allocator.mapped_frames(),

@@ -18,20 +18,23 @@ pub(super) mod threading;
 pub(super) mod tlb;
 pub(super) mod utils;
 
-use core::{arch::asm, ptr::NonNull, sync::atomic::Ordering};
+use core::{arch::asm, sync::atomic::Ordering};
 use interrupts::{apic, init_idt};
 use serial::init_serial;
 
 use crate::{
-    arch::x86_64::{
-        gdt::TaskStateSegment,
-        interrupts::{
-            handlers::{HALT_ALL_NMI, HALTED_CPUS},
-            ps2,
+    arch::{
+        registers::ArchCpuID,
+        smp::current_local_ptr,
+        x86_64::{
+            interrupts::{
+                handlers::{HALT_ALL_NMI, HALTED_CPUS},
+                ps2,
+            },
+            registers::RFLAGS,
         },
-        registers::RFLAGS,
     },
-    info, warn,
+    info, percpu, warn,
 };
 
 use self::gdt::init_gdt;
@@ -82,31 +85,22 @@ fn _enable_avx() {
 #[inline]
 pub fn init_phase1() {
     init_serial();
-    let tss = setup_cpu_generic0();
-    setup_cpu_generic1(tss);
-    tsc::calibrate_tsc();
-}
+    let bsp = percpu::init_bsp_first();
 
-#[must_use = "Returns a pointer to the task state segment of the current CPU"]
-pub(super) fn setup_cpu_generic0() -> NonNull<TaskStateSegment> {
-    let tss = init_gdt();
+    init_gdt(bsp);
     init_idt();
-    tss
-}
-
-/// NOTE: Requires allocations if you are not on the BSP
-pub(super) fn setup_cpu_generic1(tss: NonNull<TaskStateSegment>) {
-    smp::init_cpu_local(tss)
+    tsc::calibrate_tsc();
 }
 
 pub(super) fn setup_cpu_generic2() {
     info!("enabling apic interrupts...");
     apic::enable_apic_interrupts_generic();
+    unsafe {
+        (*current_local_ptr()).cpu_arch_id = ArchCpuID::get();
+    }
     info!("enabling apic timer...");
     apic::setup_timer();
-    unsafe {
-        smp::set_cpu_id();
-    }
+
     info!("enabling sse...");
     enable_sse();
 }
@@ -125,6 +119,7 @@ pub fn init_phase2() {
     };
 }
 
+#[inline(always)]
 /// Executes a function without interrupts enabled
 /// once done the interrupts status are restored (if they were disabled they'd stay disabled, if they were enabled they'd stay enabled)
 /// returns whatever the function returns
@@ -147,6 +142,7 @@ pub fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
+#[inline(always)]
 #[allow(unused)]
 pub fn with_interrupts<R>(f: impl FnOnce() -> R) -> R {
     unsafe {
@@ -180,7 +176,7 @@ pub unsafe fn hlt() {
 }
 
 pub unsafe fn halt_all() {
-    let cpus_count = smp::READY_CPUS.load(Ordering::SeqCst);
+    let cpus_count = crate::smp::READY_CPUS.load(Ordering::SeqCst);
     apic::send_nmi_all(HALT_ALL_NMI);
     HALTED_CPUS.fetch_add(1, Ordering::SeqCst);
     while cpus_count > HALTED_CPUS.load(Ordering::Relaxed) {

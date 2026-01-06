@@ -10,7 +10,7 @@ use alloc::alloc::{AllocError, Allocator};
 use crate::{
     PhysAddr, VirtAddr,
     arch::{paging::PageTable, without_interrupts},
-    error, info,
+    debug, error,
     memory::{
         AlignToPage,
         frame_allocator::{self, Frame, FramePtr},
@@ -30,6 +30,7 @@ bitflags::bitflags! {
         const USER_ACCESSIBLE = 1 << 2;
         const UNCACHABLE = 1 << 3;
         const FRAMEBUFFER_CACHED = 1 << 4;
+        const ZEROED = 1 << 5;
     }
 }
 
@@ -374,7 +375,6 @@ impl Drop for VMMInner {
 pub struct VirtualMemoryManager {
     page_table: SyncPageTable,
     inner: SpinLock<VMMInner>,
-    next_vmm: Option<&'static VirtualMemoryManager>,
 }
 
 impl VirtualMemoryManager {
@@ -403,7 +403,6 @@ impl VirtualMemoryManager {
             }),
 
             page_table: unsafe { SyncPageTable::new(page_table) },
-            next_vmm: None,
         }
     }
 
@@ -585,6 +584,7 @@ impl VirtualMemoryManager {
                 )?;
             },
             (VMMAllocMode::Normal | VMMAllocMode::Lazy, None) => unsafe {
+                // FIXME: alloc_map zeroizes frames by default
                 op.alloc_map(allocated_start_addr, allocated_start_addr + size, map_flags)?;
             },
             _ => unreachable!(),
@@ -757,6 +757,6 @@ where
 pub unsafe fn init(vmm: VirtualMemoryManager) {
     let vmm_guard = unsafe { &mut *VMM.get() };
     let vmm = vmm_guard.write(vmm);
-    info!(VirtualMemoryManager, "Initialized");
+    debug!(VirtualMemoryManager, "Initialized");
     vmm.debug_regions();
 }

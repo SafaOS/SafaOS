@@ -15,7 +15,7 @@ use crate::{
     arch::{threading::CPUStatus, without_interrupts},
     debug,
     process::{Pid, Process, vas::TrackedMemoryMapping},
-    scheduler::{SchedulePriority, Scheduler, ThreadScheduleReason},
+    scheduler::{SCHEDULER, SchedulePriority, Scheduler, ThreadScheduleReason},
     thread,
     timer::time_since_boot_ms,
     utils::locks::{SPIN_AMOUNT, SpinLock, SpinLockGuard},
@@ -695,9 +695,7 @@ where
     // Safety:
     // converts the ArcThread into a reference to the Thread struct, with no interrupts so the scheduler won't change.
     f(without_interrupts(|| unsafe {
-        &**Scheduler::get()
-            .expect("Attempted to get the current thread, while scheduler wasn't initialized")
-            .current_thread_ref()
+        SCHEDULER.current_thread_ref()
     }))
 }
 
@@ -708,11 +706,7 @@ pub unsafe fn with_current_unsafe<F, R>(f: F) -> R
 where
     F: FnOnce(*const ArcThread) -> R,
 {
-    unsafe {
-        f(Scheduler::get()
-            .expect("Attempted to get the current thread, while scheduler wasn't initialized")
-            .current_thread_ref())
-    }
+    unsafe { f(SCHEDULER.current_thread_ref()) }
 }
 
 /// Returns true if [`other`] is the current thread.

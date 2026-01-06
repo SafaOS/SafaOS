@@ -19,7 +19,7 @@ use super::{
     frame_allocator::{self, Frame, FramePtr},
 };
 
-pub use crate::arch::paging::{PageTable, current_higher_root_table, current_lower_root_table};
+pub use crate::arch::paging::{PageTable, current_lower_root_table};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Page {
