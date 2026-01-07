@@ -145,7 +145,6 @@ pub struct Scheduler {
 
     is_thread_yielding: UnsafeCell<bool>,
     context_switch_count: AtomicUsize,
-    is_idle: UnsafeCell<bool>,
     preemption_disabled: UnsafeCell<bool>,
 }
 impl Scheduler {
@@ -158,38 +157,40 @@ impl Scheduler {
             // Unfortunatlly we need interrupts so that x86 TLB invalidation works
             // The IDLE thread is guaranteed to run on this scheduler.
             loop {
-                let should_yield = without_preemption(|| {
-                    let mut waiting_cleanup = self.awaiting_cleanup.lock();
-                    while let Some(thread) = waiting_cleanup.pop_front() {
-                        // Avoids anything from the cleanup-routine causing deadlocks because the lock wasn't dropped.
-                        //
-                        // FIXME: This shouldn't be a problem.
-                        cleanup_vec.push_back(thread);
-                    }
-                    drop(waiting_cleanup);
+                without_preemption(|| {
+                    // Executes while idle, escaped when unidle
+                    loop {
+                        let mut waiting_cleanup = self.awaiting_cleanup.lock();
+                        while let Some(thread) = waiting_cleanup.pop_front() {
+                            // Avoids anything from the cleanup-routine causing deadlocks because the lock wasn't dropped.
+                            //
+                            // FIXME: This shouldn't be a problem.
+                            cleanup_vec.push_back(thread);
+                        }
+                        drop(waiting_cleanup);
 
-                    let len = cleanup_vec.len();
-                    for _ in 0..len {
-                        if let Some(thread) = cleanup_vec.pop_front() {
-                            // FIXME: Some kind of a hidden Drop impl may thread yield here, so I had to come up with this temporarily.
-                            if !unsafe { thread.try_cleanup() } {
-                                // TODO: ??
-                                cleanup_vec.push_back(thread);
+                        let len = cleanup_vec.len();
+                        for _ in 0..len {
+                            if let Some(thread) = cleanup_vec.pop_front() {
+                                // FIXME: Some kind of a hidden Drop impl may thread yield here, so I had to come up with this temporarily.
+                                if !unsafe { thread.try_cleanup() } {
+                                    // TODO: ??
+                                    cleanup_vec.push_back(thread);
+                                }
                             }
                         }
-                    }
 
-                    !self.is_idle()
-                        || self.try_pop_waiting_thread()
-                        || self.try_keep_stolen_thread()
+                        if self.try_pop_waiting_thread() || self.try_escape_idle() {
+                            // Escape idle loop
+                            break;
+                        }
+
+                        core::hint::spin_loop();
+                    }
                 });
 
-                if should_yield {
-                    // Give up the CPU to the next thread
-                    crate::thread::current::yield_now();
-                }
-
-                core::hint::spin_loop();
+                // Give up the CPU to the next thread
+                crate::thread::current::yield_now();
             }
         })
     }
@@ -235,10 +236,6 @@ impl Scheduler {
             unsafe { head.push_front(thread) };
         } else {
             unsafe { head.push_back(thread) };
-        }
-
-        unsafe {
-            *self.is_idle.get() = false;
         }
     }
 
@@ -392,13 +389,16 @@ impl Scheduler {
         None
     }
 
-    fn try_keep_stolen_thread(&self) -> bool {
-        self.ready_queues
-            .try_lock()
-            .map(|q| self.try_steal_thread().map(|t| (q, t)))
-            .flatten()
-            .map(|(mut q, (t, p))| {
-                self.add_single_thread_to(&mut *q, t, p, false);
+    fn try_escape_idle(&self) -> bool {
+        let mut queues = self.ready_queues.lock();
+        if queues.iter().any(|q| !q.is_empty()) {
+            return true;
+        }
+
+        // Queue is empty, try to steal a thread from another scheduler
+        self.try_steal_thread()
+            .map(|(t, p)| {
+                self.add_single_thread_to(&mut *queues, t, p, false);
             })
             .is_some()
     }
@@ -434,8 +434,6 @@ impl Scheduler {
         self.try_wake_waiting_threads(&mut *schd_queues, time_now, Some(&current_thread));
         self.try_boost_threads(&mut *schd_queues, time_now);
 
-        let mut is_idle = schd_queues.iter().all(|q| q.is_empty());
-
         let current_context = unsafe { current_thread.context_unchecked() };
         current_context.set_cpu_status(current_cpu_status);
         let mut current_status = current_thread.status_mut();
@@ -468,8 +466,6 @@ impl Scheduler {
                         push_to as usize,
                         false,
                     );
-
-                    is_idle = false;
                 }
             }
             ContextStatus::Blocked(_) => {
@@ -502,9 +498,6 @@ impl Scheduler {
         );
 
         unsafe {
-            *self.is_idle.get() = is_idle;
-        }
-        unsafe {
             let context = new_thread.context_unchecked();
 
             let cpu_status = context.cpu_status();
@@ -531,7 +524,6 @@ impl Scheduler {
             threads_count: AtomicUsize::new(0),
             is_thread_yielding: UnsafeCell::new(false),
             context_switch_count: AtomicUsize::new(0),
-            is_idle: UnsafeCell::new(true),
             preemption_disabled: UnsafeCell::new(false),
         }
     }
@@ -552,11 +544,6 @@ impl Scheduler {
     /// returns the old thread count
     fn sub_thread_count(&self) -> usize {
         self.threads_count.fetch_sub(1, Ordering::Relaxed)
-    }
-
-    /// Scheduler is IDLE hint
-    pub fn is_idle(&self) -> bool {
-        unsafe { *self.is_idle.get() }
     }
 }
 
