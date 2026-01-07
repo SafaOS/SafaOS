@@ -179,7 +179,9 @@ impl Scheduler {
                         }
                     }
 
-                    !self.is_idle() || self.try_pop_waiting_thread()
+                    !self.is_idle()
+                        || self.try_pop_waiting_thread()
+                        || self.try_keep_stolen_thread()
                 });
 
                 if should_yield {
@@ -388,6 +390,17 @@ impl Scheduler {
             }
         }
         None
+    }
+
+    fn try_keep_stolen_thread(&self) -> bool {
+        self.ready_queues
+            .try_lock()
+            .map(|q| self.try_steal_thread().map(|t| (q, t)))
+            .flatten()
+            .map(|(mut q, (t, p))| {
+                self.add_single_thread_to(&mut *q, t, p, false);
+            })
+            .is_some()
     }
 
     #[inline]
