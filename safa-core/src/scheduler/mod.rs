@@ -153,44 +153,49 @@ impl Scheduler {
         // My fingers were guided to pick 6 here randomly, it stays that way...
         let mut cleanup_vec = VecDeque::with_capacity(6);
 
+        let cycles_per_ns = crate::arch::utils::cpu_timer_freq_mhz()
+            .get()
+            .div_ceil(1000);
+
+        let cycles_per_500ns = cycles_per_ns * 500;
+        crate::serial!("cycles per 500ns are: {cycles_per_500ns}\n");
+
         with_interrupts(|| {
             // Unfortunatlly we need interrupts so that x86 TLB invalidation works
             // The IDLE thread is guaranteed to run on this scheduler.
             loop {
-                without_preemption(|| {
-                    // Executes while idle, escaped when unidle
-                    loop {
-                        let mut waiting_cleanup = self.awaiting_cleanup.lock();
-                        while let Some(thread) = waiting_cleanup.pop_front() {
-                            // Avoids anything from the cleanup-routine causing deadlocks because the lock wasn't dropped.
-                            //
-                            // FIXME: This shouldn't be a problem.
-                            cleanup_vec.push_back(thread);
-                        }
-                        drop(waiting_cleanup);
+                without_interrupts(|| {
+                    let mut waiting_cleanup = self.awaiting_cleanup.lock();
+                    while let Some(thread) = waiting_cleanup.pop_front() {
+                        // Avoids anything from the cleanup-routine causing deadlocks because the lock wasn't dropped.
+                        //
+                        // FIXME: This shouldn't be a problem.
+                        cleanup_vec.push_back(thread);
+                    }
+                    drop(waiting_cleanup);
 
-                        let len = cleanup_vec.len();
-                        for _ in 0..len {
-                            if let Some(thread) = cleanup_vec.pop_front() {
-                                // FIXME: Some kind of a hidden Drop impl may thread yield here, so I had to come up with this temporarily.
-                                if !unsafe { thread.try_cleanup() } {
-                                    // TODO: ??
-                                    cleanup_vec.push_back(thread);
-                                }
+                    let len = cleanup_vec.len();
+                    for _ in 0..len {
+                        if let Some(thread) = cleanup_vec.pop_front() {
+                            // FIXME: Some kind of a hidden Drop impl may thread yield here, so I had to come up with this temporarily.
+                            if !unsafe { thread.try_cleanup() } {
+                                // TODO: ??
+                                cleanup_vec.push_back(thread);
                             }
                         }
+                    }
 
-                        if self.try_pop_waiting_thread() || self.try_escape_idle() {
-                            // Escape idle loop
-                            break;
-                        }
-
-                        core::hint::spin_loop();
+                    if self.try_pop_waiting_thread() || self.try_escape_idle() {
+                        crate::thread::current::yield_now();
                     }
                 });
 
-                // Give up the CPU to the next thread
-                crate::thread::current::yield_now();
+                // nano-sleep for 500ns
+                let now = crate::arch::utils::cpu_cycles();
+                let wait_for = now + cycles_per_500ns;
+                while crate::arch::utils::cpu_cycles() < wait_for {
+                    core::hint::spin_loop();
+                }
             }
         })
     }
@@ -564,6 +569,8 @@ pub(super) unsafe fn before_thread_yield() -> bool {
 }
 
 #[inline]
+// used in x86_64
+#[allow(unused)]
 /// Disables preemption for the duration of the closure.
 pub fn without_preemption<F, R>(mut f: F) -> R
 where
