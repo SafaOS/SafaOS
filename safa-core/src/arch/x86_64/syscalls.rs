@@ -2,8 +2,7 @@
 // for now errors are a big mess
 use super::interrupts::InterruptFrame;
 use crate::syscalls;
-use core::arch::asm;
-use core::arch::naked_asm;
+
 /// used sometimes for debugging syscalls
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -44,7 +43,9 @@ pub extern "x86-interrupt" fn syscall_base(_: InterruptFrame) {
         "push r13",
         "push r14",
         "push r15",
+        "push rax",
         "call syscall_base_mapper",
+        "add rsp, 8",
         "pop r15",
         "pop r14",
         "pop r13",
@@ -73,11 +74,8 @@ pub extern "C" fn syscall_base_mapper(
     d: usize,
     e: usize,
     f: usize,
+    number: usize,
 ) -> isize {
-    let number: usize;
-    unsafe {
-        asm!("mov {}, rax", out(reg) number);
-    }
     let isize: isize = syscalls::syscall(number as u16, a, b, c, d, e, f).into();
     isize
 }
