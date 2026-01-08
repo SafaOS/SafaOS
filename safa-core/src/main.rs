@@ -192,7 +192,7 @@ fn panic(info: &PanicInfo) -> ! {
                 SERIAL.force_unlock();
             }
             error!(
-                "\n\x1B[31mkernel :3 panic within a panic:\n{info}, cpu: {}\n\x1B[0mno stack trace",
+                "\n\x1B[31mkernel panic within a panic:\n{info}, cpu: {}\n\x1B[0mno stack trace",
                 ArchCpuID::get()
             );
             khalt()
@@ -207,7 +207,7 @@ fn panic(info: &PanicInfo) -> ! {
         }
 
         panic_println!(
-            "\x1B[31mkernel :3 panic:\n{}, at {}, cpu: {}\x1B[0m",
+            "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
             info.message(),
             info.location().unwrap(),
             ArchCpuID::get(),
