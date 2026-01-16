@@ -16,7 +16,7 @@ use crate::utils::locks::{Mutex, MutexGuard, SpinLock, SpinLockGuard};
 
 const MIN_WAIT_THREADS: usize = 4;
 
-trait GuardedWaitQueue<'a, const AVERAGE: usize, Reason> {
+pub trait GuardedWaitQueue<'a, const AVERAGE: usize, Reason> {
     type Guard: Deref<Target = WaitQueue<AVERAGE, Reason>> + DerefMut + 'a;
 
     fn no_interrupts() -> bool;
@@ -70,6 +70,16 @@ pub struct PendingWait<'a, const AVERAGE: usize, Reason, L: GuardedWaitQueue<'a,
     L::Guard,
     &'a L,
 );
+
+impl<'a, const AVERAGE: usize, Reason, L: GuardedWaitQueue<'a, AVERAGE, Reason>> Deref
+    for PendingWait<'a, AVERAGE, Reason, L>
+{
+    type Target = L::Guard;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl<const AVERAGE: usize, Reason> Mutex<WaitQueue<AVERAGE, Reason>> {
     /// Returns a [`PendingWait`] instance that holds a lock on self, afterwards call [`PendingWait::enter_wait`].
@@ -268,6 +278,15 @@ impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason> {
             1,
         );
         results
+    }
+
+    /// Checks if the wait queue is empty.
+    pub fn is_empty(&self) -> bool {
+        self.threads.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.threads.len()
     }
 }
 
