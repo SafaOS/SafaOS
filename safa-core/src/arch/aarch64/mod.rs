@@ -1,6 +1,9 @@
-use core::arch::{asm, global_asm};
+use core::{
+    arch::{asm, global_asm},
+    sync::atomic::Ordering,
+};
 
-use crate::arch::aarch64::exceptions::HALT_ALL_SGI;
+use crate::{arch::aarch64::exceptions::HALT_ALL_SGI, percpu::CpuLocal};
 
 mod cpu;
 mod exceptions;
@@ -158,8 +161,12 @@ pub unsafe fn enable_interrupts() {
 /// Halts all CPUs
 #[inline(always)]
 pub unsafe fn halt_all() {
+    let cpus_len = CpuLocal::get_all().len_hint();
     HALT_ALL_SGI.request_sgi_all(true);
-    crate::sleep!(100 ms)
+
+    while exceptions::HALT_RESPONSE.load(Ordering::Relaxed) < cpus_len - 1 {
+        core::hint::spin_loop();
+    }
 }
 
 #[inline(always)]

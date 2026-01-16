@@ -127,7 +127,7 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
         i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
         i if i == HALT_ALL_SGI.id() => {
             HALT_RESPONSE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            crate::serial!("haltingg: {is_fiq}...\n");
+            super::serial::write_str("haltingg...\n");
             khalt()
         }
         // LPIs
