@@ -511,7 +511,7 @@ impl LocalSocket {
                     PollEvents::NONE
                 };
 
-                let events_remove = if pending_wait.len() == max {
+                let events_remove = if pending_wait.len() == max - 1 {
                     PollEvents::CAN_WRITE
                 } else {
                     PollEvents::NONE
