@@ -247,17 +247,19 @@ impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason> {
         n: usize,
     ) -> usize {
         let mut count = 0;
-        if count < n {
-            self.threads.retain(|(thread, reason)| {
-                if condition(reason) {
-                    thread.wake_up(false);
-                    count += 1;
-                    false
-                } else {
-                    true
-                }
-            });
+        let mut i = 0;
+
+        while count < n && i < self.threads.len() {
+            let (thread, reason) = &mut self.threads[i];
+            if condition(reason) {
+                thread.wake_up(false);
+                self.threads.swap_remove(i);
+                count += 1;
+            } else {
+                i += 1;
+            }
         }
+
         count
     }
 
