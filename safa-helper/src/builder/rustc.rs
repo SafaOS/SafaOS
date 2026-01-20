@@ -175,7 +175,7 @@ pub fn install_safaos_toolchain(arch: ArchTarget) -> io::Result<()> {
 
     let toolchain_root = toolchain_root(arch);
     log!("Deleting and reconstructing: {}", toolchain_root.display());
-    std::fs::remove_dir_all(&toolchain_root).expect("Failed to delete toolchain root");
+    _ = std::fs::remove_dir_all(&toolchain_root);
     std::fs::create_dir_all(&toolchain_root).expect("Failed to create toolchain root");
 
     log!(
