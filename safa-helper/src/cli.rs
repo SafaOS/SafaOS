@@ -117,6 +117,8 @@ pub enum SubCommand {
         #[arg(short, long, default_value_t = utils::DEFAULT_ARCH)]
         arch: ArchTarget,
     },
+    /// `cargo clean`s all crates in the userspace directory. (eg. safa-userspace).
+    Reset,
     /// Builds a SafaOS iso
     Build(BuildArgs),
     /// Builds and Runs a normal SafaOS iso, requires qemu (default)
