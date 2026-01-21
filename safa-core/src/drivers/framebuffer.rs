@@ -4,7 +4,7 @@ use crate::{
     drivers::vfs::{FSError, FSResult, SeekOffset},
     memory::{
         frame_allocator::Frame,
-        paging::{PAGE_SIZE, Page},
+        paging::{PAGE_SIZE, Page, PageTableOps},
         vmm::VMMAlloc,
     },
     utils::locks::{Mutex, MutexGuard},
@@ -217,14 +217,14 @@ impl FrameBufferDriver {
             let virt_addr = VirtAddr::from_ptr(ptr);
 
             let len = pb.len() * 4;
-            let page_n = len / PAGE_SIZE;
+            let page_n = len.div_ceil(PAGE_SIZE);
 
             let mut frames = Vec::with_capacity(page_n);
             for i in 0..page_n {
                 let page_addr = virt_addr + i * PAGE_SIZE;
                 let page = Page::containing(page_addr);
                 let frame = current_higher_root_table()
-                    .get_frame(page)
+                    .get_frame_of(page)
                     .expect("Failed to get Frame of a page belonging to a created double buffer");
 
                 frames.push(frame);
