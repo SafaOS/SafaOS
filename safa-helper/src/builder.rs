@@ -222,6 +222,7 @@ impl<'a> Builder<'a> {
             .finish()
             .expect("failed to finish building the ramdisk.tar");
         log!("finished building ramdisk");
+        fs::remove_dir_all(ramdisk_build_path).expect("Failed to clean-up ramdisk");
         Ok(())
     }
 
