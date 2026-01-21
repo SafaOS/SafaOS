@@ -1,24 +1,23 @@
+use core::cell::SyncUnsafeCell;
+
 use alloc::boxed::Box;
 use lazy_static::lazy_static;
 
 use crate::{
-    VirtAddr,
-    arch::{
-        aarch64::{
-            cpu,
-            gic::gicr::{GICRDesc, lpis::LPIManager},
-            registers::{ArchCpuID, MPIDR},
-        },
-        paging::current_higher_root_table,
+    PhysAddr, VirtAddr,
+    arch::aarch64::{
+        cpu,
+        gic::gicr::{GICRDesc, lpis::LPIManager},
+        registers::{ArchCpuID, MPIDR},
     },
     debug, info,
     memory::{
+        AlignToPage,
         frame_allocator::SIZE_64K,
-        paging::{EntryFlags, MapToError, PAGE_SIZE},
+        init::heap0_hint,
+        vmm::{self, Location, VMMAllocError, VMMMFlags, VirtualMemoryManager},
     },
 };
-
-use super::paging::PageTable;
 
 pub mod cpu_if;
 mod gicd;
@@ -27,66 +26,82 @@ pub use gicr::lpis::LPI_MANAGER;
 pub mod its;
 
 lazy_static! {
-    static ref GICC: Option<(VirtAddr, usize)> =
-        cpu::GICV3.0.map(|(base, size)| (base.into_virt(), size));
-    static ref GICD: (VirtAddr, usize) = {
+    static ref GICC: Option<(PhysAddr, usize)> = cpu::GICV3.0.map(|(base, size)| (base, size));
+    static ref GICD: (PhysAddr, usize) = {
         let (base, size) = cpu::GICV3.1;
-        (base.into_virt(), size)
+        (base, size)
     };
-    static ref GICR: (VirtAddr, usize) = {
+    static ref GICR: (PhysAddr, usize) = {
         let (base, size) = cpu::GICV3.2;
-        (base.into_virt(), size)
+        (base, size)
     };
-    static ref GICITS: (VirtAddr, usize) = {
+    static ref GICITS: (PhysAddr, usize) = {
         let (base, size) = *cpu::GICITS;
-        (base.into_virt(), size)
+        (base, size)
     };
-    static ref GICD_BASE: VirtAddr = GICD.0;
     static ref GICD_SIZE: usize = GICD.1;
-    static ref GICR_BASE: VirtAddr = GICR.0;
     static ref GICR_SIZE: usize = GICR.1;
-    static ref SGI_BASE: VirtAddr = *GICR_BASE + SIZE_64K;
-    static ref GICITS_BASE: VirtAddr = GICITS.0;
     static ref GICITS_SIZE: usize = GICITS.1;
-    static ref GICITS_TRANSLATION_BASE: VirtAddr = *GICITS_BASE + 0x010000;
+    static ref GICITS_TRANSLATION_BASE: VirtAddr = unsafe { *GICITS_BASE.get() + 0x010000 };
+    static ref GICITS_TRANSLATION_BASE_PHYS: PhysAddr = *GICITS_BASE_PHYS + 0x010000;
+    static ref GICITS_BASE_PHYS: PhysAddr = GICITS.0;
+    static ref SGI_BASE: VirtAddr = unsafe { *GICR_BASE.get() + SIZE_64K };
 }
 
-unsafe fn map_gic(dest: &mut PageTable) -> Result<(), MapToError> {
+static GICC_BASE: SyncUnsafeCell<VirtAddr> = SyncUnsafeCell::new(VirtAddr::null());
+static GICD_BASE: SyncUnsafeCell<VirtAddr> = SyncUnsafeCell::new(VirtAddr::null());
+static GICR_BASE: SyncUnsafeCell<VirtAddr> = SyncUnsafeCell::new(VirtAddr::null());
+static GICITS_BASE: SyncUnsafeCell<VirtAddr> = SyncUnsafeCell::new(VirtAddr::null());
+
+unsafe fn map_gic(vmm: &VirtualMemoryManager) -> Result<(), VMMAllocError> {
     unsafe {
-        let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+        let flags = VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE;
+        let hint = heap0_hint() + (1024 * 1024 * 1024 * 1024);
+
         if let Some((gicc_base, size)) = *GICC {
-            dest.map_contiguous_pages(
+            *GICC_BASE.get() = vmm.map_direct_phys(
+                &"GICC",
+                Some(Location::Hint(hint)),
                 gicc_base,
-                gicc_base.into_phys(),
-                size.div_ceil(PAGE_SIZE),
+                size.to_next_page(),
                 flags,
             )?;
         }
-        dest.map_contiguous_pages(
-            *GICD_BASE,
-            (*GICD_BASE).into_phys(),
-            (*GICD_SIZE).div_ceil(PAGE_SIZE),
+
+        let (gicd_pbase, gicd_size) = *GICD;
+        *GICD_BASE.get() = vmm.map_direct_phys(
+            &"GICD",
+            Some(Location::Hint(hint)),
+            gicd_pbase,
+            gicd_size.to_next_page(),
             flags,
         )?;
-        dest.map_contiguous_pages(
-            *GICR_BASE,
-            (*GICR_BASE).into_phys(),
-            (*GICR_SIZE).div_ceil(PAGE_SIZE),
+
+        let (gicr_pbase, gicr_size) = *GICR;
+        *GICR_BASE.get() = vmm.map_direct_phys(
+            &"GICR",
+            Some(Location::Hint(hint)),
+            gicr_pbase,
+            gicr_size.to_next_page(),
             flags,
         )?;
-        dest.map_contiguous_pages(
-            *GICITS_BASE,
-            (*GICITS_BASE).into_phys(),
-            (*GICITS_SIZE).div_ceil(PAGE_SIZE),
+
+        let (gicits_pbase, gicits_size) = *GICITS;
+        *GICITS_BASE.get() = vmm.map_direct_phys(
+            &"GICITS",
+            Some(Location::Hint(hint)),
+            gicits_pbase,
+            gicits_size.to_next_page(),
             flags,
         )?;
+
         Ok(())
     }
 }
 
 lazy_static! {
     static ref GICR_DESCRIPTORS: Box<[gicr::GICRDesc]> =
-        unsafe { gicr::GICRDesc::get_all_from_base(*GICR_BASE) }.into_boxed_slice();
+        unsafe { gicr::GICRDesc::get_all_from_base(*GICR_BASE.get()) }.into_boxed_slice();
 }
 
 pub fn gic_init_cpu() {
@@ -95,12 +110,18 @@ pub fn gic_init_cpu() {
 
 pub fn init_gic() {
     unsafe {
-        map_gic(&mut *current_higher_root_table()).expect("failed to map gic");
+        vmm::with_root(|vmm| {
+            map_gic(vmm).expect("failed to map gic");
+        });
     }
-    info!(
-        "initializing GIC GICD: {:?}, GICR: {:?}",
-        *GICD_BASE, *GICR_BASE
-    );
+
+    unsafe {
+        info!(
+            "initializing GIC GICD: {:?}, GICR: {:?}",
+            *GICD_BASE.get(),
+            *GICR_BASE.get()
+        );
+    }
 
     gicd::init();
     for gicr in &*GICR_DESCRIPTORS {

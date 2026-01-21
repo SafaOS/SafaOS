@@ -5,14 +5,23 @@ use bitfield_struct::bitfield;
 
 use crate::{
     VirtAddr,
-    arch::aarch64::registers::{ArchCpuID, MPIDR},
+    arch::aarch64::{
+        gic::GICC_BASE,
+        registers::{ArchCpuID, MPIDR},
+    },
     debug,
 };
 
 /// This driver uses the GICC memory mapped registers instead of AArch64 native registers when available
 #[inline(always)]
 fn gicc_mem() -> Option<VirtAddr> {
-    super::GICC.map(|(addr, _)| addr)
+    let addr = unsafe { *GICC_BASE.get() };
+
+    if addr == VirtAddr::null() {
+        None
+    } else {
+        Some(addr)
+    }
 }
 
 #[bitfield(u64)]

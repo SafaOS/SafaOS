@@ -43,7 +43,7 @@ pub struct GICRPropBaser {
 
 impl GICRPropBaser {
     pub fn get_ptr() -> *mut Self {
-        (*GICR_BASE + 0x0070).into_ptr()
+        unsafe { (*GICR_BASE.get() + 0x0070).into_ptr::<Self>() }
     }
 
     pub fn read() -> Self {
@@ -92,7 +92,7 @@ pub struct GICRPendBaser {
 
 impl GICRPendBaser {
     pub fn get_ptr() -> *mut Self {
-        (*GICR_BASE + 0x0078).into_ptr()
+        unsafe { (*GICR_BASE.get() + 0x0078).into_ptr::<Self>() }
     }
 
     pub fn read() -> Self {

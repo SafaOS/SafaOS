@@ -2,9 +2,9 @@ use bitfield_struct::bitfield;
 use lazy_static::lazy_static;
 
 use crate::{
-    arch::aarch64::gic::{its::rdbase, GICITS_BASE},
-    utils::locks::Mutex,
     PhysAddr, VirtAddr,
+    arch::aarch64::gic::{GICITS_BASE, its::rdbase},
+    utils::locks::Mutex,
 };
 
 #[bitfield(u64)]
@@ -27,7 +27,7 @@ pub struct GITSCWriter {
 
 impl GITSCWriter {
     pub fn get_ptr() -> *mut Self {
-        (*GICITS_BASE + 0x0088).into_ptr::<Self>()
+        unsafe { (*GICITS_BASE.get() + 0x0088).into_ptr::<Self>() }
     }
 
     pub fn read() -> Self {
@@ -58,7 +58,7 @@ pub struct GITSCReader {
 
 impl GITSCReader {
     pub fn get_ptr() -> *mut Self {
-        (*GICITS_BASE + 0x0090).into_ptr::<Self>()
+        unsafe { (*GICITS_BASE.get() + 0x0090).into_ptr::<Self>() }
     }
 
     pub fn read() -> Self {

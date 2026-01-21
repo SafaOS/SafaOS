@@ -1,5 +1,5 @@
 use crate::{
-    PhysAddr, VirtAddr,
+    PhysAddr,
     drivers::{interrupts::IntTrigger, pci::PCI},
     info,
     memory::{
@@ -39,5 +39,5 @@ pub fn build_msi_data(vector: u32, trigger: IntTrigger) -> u32 {
     vector
 }
 pub fn build_msi_addr() -> PhysAddr {
-    VirtAddr::from_ptr(super::gic::its::gits_translater()).into_phys()
+    super::gic::its::gits_translater_phys()
 }
