@@ -9,6 +9,7 @@ use crate::{
     drivers::{
         interrupts::IRQInfo, net::e1000::E1000NetCard, pci::extended_caps::CaptabilitiesIter,
     },
+    info,
 };
 pub mod extended_caps;
 pub mod msi;
@@ -436,7 +437,7 @@ impl PCI {
                 match self.enum_device(bus, device, 0, f) {
                     Ok(Some(info)) => return Some(info),
                     Ok(None) => (),
-                    Err(()) => return None,
+                    _ => (),
                 }
             }
         }
@@ -465,9 +466,11 @@ impl PCI {
     }
 
     fn print(&self) {
+        info!(PCI, "PCI Devices");
         self.enum_all(&|info| {
-            crate::serial!(
-                "PCI {}:{}:{} => {:#x?}\n",
+            crate::info!(
+                PCI,
+                "Device {}:{}:{} => {:#x?}",
                 info.bus,
                 info.device,
                 info.function,
@@ -475,7 +478,7 @@ impl PCI {
             );
 
             for cap in info.header.caps_list() {
-                crate::serial!("{:#x?}\n", unsafe { *cap });
+                crate::info!(PCI, "Capability => {:#x?}", unsafe { *cap });
             }
             false
         });
