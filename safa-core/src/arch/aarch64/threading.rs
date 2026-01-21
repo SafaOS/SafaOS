@@ -1,7 +1,5 @@
 use core::arch::{asm, global_asm};
 
-#[cfg(debug_assertions)]
-use crate::sleep_until;
 use crate::{
     PhysAddr, VirtAddr,
     memory::paging::{MapToError, PhysPageTable},
@@ -12,7 +10,6 @@ use crate::{
 use super::{
     exceptions::InterruptFrame,
     registers::{Reg, Spsr},
-    timer,
 };
 
 /// The CPU Status for each thread (registers)
@@ -175,6 +172,30 @@ impl CPUStatus {
     }
 }
 
+unsafe extern "C" {
+    fn context_switch_and_return();
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn context_switch_now(frame: &mut InterruptFrame) -> ! {
+    let context = unsafe { CPUStatus::from_current(frame) };
+    let swtch_results = scheduler::swtch(context);
+
+    if let Some((new_context_ptr, address_space_changed)) = swtch_results {
+        unsafe {
+            if !address_space_changed {
+                restore_cpu_status_partial(new_context_ptr.as_ref());
+            } else {
+                restore_cpu_status(new_context_ptr.as_ref());
+            }
+        }
+    } else {
+        core::hint::cold_path();
+        unsafe { restore_cpu_status_partial(&context) };
+    }
+}
+
+#[inline]
 pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
     let context = unsafe { CPUStatus::from_current(frame) };
     let swtch_results = scheduler::swtch(context);
@@ -194,17 +215,7 @@ pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: i
     }
 }
 
+#[inline]
 pub fn invoke_context_switch() {
-    unsafe {
-        let daif = super::get_daif();
-        super::disable_interrupts();
-
-        timer::TIMER_IRQ.set_pending();
-
-        sleep_until!(10 ms, timer::TIMER_IRQ.is_pending());
-        super::enable_interrupts();
-        sleep_until!(10 ms, !timer::TIMER_IRQ.is_pending());
-
-        super::set_daif(daif);
-    }
+    unsafe { context_switch_and_return() }
 }

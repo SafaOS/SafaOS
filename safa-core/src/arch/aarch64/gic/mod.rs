@@ -267,38 +267,6 @@ impl IntID {
         self.clear_pending_generic::<true>()
     }
 
-    /// Makes the interrupt pending in the current cpu
-    pub fn set_pending(&self) -> &Self {
-        unsafe {
-            self.do_all_generic_set::<false, _>(
-                || gicd::ispendr0(),
-                |gicr| gicr.ispendr0(),
-                |_| unimplemented!("set pending isn't implemented for LPIs"),
-            );
-        }
-        self
-    }
-
-    pub fn is_pending(&self) -> bool {
-        unsafe {
-            let interrupt = self.id;
-            let value = interrupt % 32;
-            let index = (interrupt / 32) as usize;
-            let mut pending = false;
-
-            self.do_all_generic_custom::<false, _>(
-                || gicd::icpendr0(),
-                |gicr| gicr.icpendr0(),
-                |reg| {
-                    let reg = reg.add(index);
-                    let reg = reg.read_volatile();
-                    pending = ((reg >> value) & 1) == 1;
-                },
-                |_| unimplemented!(),
-            );
-            pending
-        }
-    }
     /// Sets the group of the interrupt to `group` in all CPUs
     pub fn set_group_all(&self, group: IntGroup) -> &Self {
         let interrupt = self.id;

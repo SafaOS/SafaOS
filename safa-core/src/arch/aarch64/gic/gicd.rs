@@ -259,9 +259,3 @@ pub fn icpendr0() -> *mut u32 {
 pub fn igroup0() -> *mut u32 {
     unsafe { (*GICD_BASE.get() + 0x0080).into_ptr::<u32>() }
 }
-
-/// Pointer to the GICD_ISPENDR0<0> Register
-#[inline(always)]
-pub fn ispendr0() -> *mut u32 {
-    unsafe { (*GICD_BASE.get() + 0x200).into_ptr::<u32>() }
-}

@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 use crate::{
     PhysAddr, VirtAddr,
     arch::aarch64::gic::{
-        GICITS_BASE, GICITS_TRANSLATION_BASE, GICITS_TRANSLATION_BASE_PHYS, GICR_BASE,
+        GICITS_BASE, GICITS_TRANSLATION_BASE_PHYS, GICR_BASE,
         its::commands::{GITS_COMMAND_QUEUE, ITSCommand},
     },
     debug,
