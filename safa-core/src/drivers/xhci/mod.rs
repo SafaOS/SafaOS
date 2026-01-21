@@ -7,7 +7,7 @@ use super::{
     interrupts::IRQInfo,
     utils::{read_ref, write_ref},
 };
-use alloc::vec::Vec;
+use alloc::{collections::vec_deque::VecDeque, vec::Vec};
 use regs::{CapsReg, XHCIDoorbellManager};
 use rings::{command::XHCICommandRing, event::XHCIEventRing};
 
@@ -101,6 +101,30 @@ fn handle_port_status_change(xhci: &XHCI, event: PortStatusChangeTRB) {
     }
 }
 
+fn handle_status_change_thread(_: Tid, xhci: &XHCI) -> ! {
+    let mut port_changes = VecDeque::new();
+    loop {
+        let mut new_port_changes = xhci.port_changes.lock();
+        while let Some(change) = new_port_changes.pop() {
+            port_changes.push_back(change);
+        }
+        drop(new_port_changes);
+
+        while let Some(event) = port_changes.pop_front() {
+            handle_port_status_change(xhci, event);
+        }
+
+        let new_port_changes = xhci.port_changes.lock();
+        let pending_wait = xhci.other_wait_queue.prepare_wait();
+        if !new_port_changes.is_empty() {
+            continue;
+        }
+        drop(new_port_changes);
+        pending_wait
+            .enter_wait(XHCIWaitReason::PortStatusChange, None)
+            .expect("Failed to wait for port status changes")
+    }
+}
 fn on_interrupt_thread(_: Tid, xhci: &XHCI) -> ! {
     loop {
         let event_ring = unsafe { &mut *xhci.event_ring.get() };
@@ -149,7 +173,12 @@ fn on_interrupt_thread(_: Tid, xhci: &XHCI) -> ! {
                             code as u8,
                         );
 
-                        handle_port_status_change(xhci, event);
+                        let mut curr_port_changes = xhci.port_changes.lock();
+                        curr_port_changes.push(event);
+
+                        let mut wait_queue = xhci.other_wait_queue.lock();
+                        drop(curr_port_changes);
+                        wait_queue.wake_equals(&XHCIWaitReason::PortStatusChange);
                     }
                 }
             }
@@ -157,12 +186,12 @@ fn on_interrupt_thread(_: Tid, xhci: &XHCI) -> ! {
         drop(events_pool);
 
         without_interrupts(|| unsafe {
-            let pending_wait = xhci.wait_queue.prepare_wait();
+            let pending_wait = xhci.interrupters_wait_queue.prepare_wait();
             if !(*xhci.event_ring.get()).is_empty() {
                 return;
             }
             pending_wait
-                .enter_wait(XHCIWaitReason::Interrupt, None)
+                .enter_wait((), None)
                 .expect("Failed to wait for XHCI")
         })
     }
@@ -172,9 +201,9 @@ impl<'s> InterruptReceiver for XHCI<'s> {
     fn handle_interrupt(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
         // Defer work to another thread.
-        self.wait_queue
+        self.interrupters_wait_queue
             .lock()
-            .wake_n_on_condition(|r| *r == XHCIWaitReason::Interrupt, 1);
+            .wake_n_on_condition(|_| true, 1);
         unsafe {
             // We only use interrupter 0 for now
             regs.acknowledge_irq(0);
@@ -395,7 +424,7 @@ impl<'s> XHCIResponseQueue<'s> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XHCIWaitReason {
-    Interrupt,
+    PortStatusChange,
 }
 
 // TODO: maybe stack interrupt stuff together in one struct behind a Mutex?
@@ -415,8 +444,10 @@ pub struct XHCI<'s> {
 
     irq_info: IRQInfo,
 
-    /// XHCI's thread's wait queues,
-    wait_queue: SpinLock<WaitQueue<2, XHCIWaitReason>>,
+    /// XHCI's interrupt treads wait queues,
+    interrupters_wait_queue: SpinLock<WaitQueue<2>>,
+    other_wait_queue: Mutex<WaitQueue<2, XHCIWaitReason>>,
+    port_changes: Mutex<Vec<PortStatusChangeTRB>>,
 }
 
 unsafe impl<'s> Send for XHCI<'s> {}
@@ -765,7 +796,9 @@ impl<'s> PCIDevice for XHCI<'s> {
             responses_manager: xhci_queue_manager,
             regs: UnsafeCell::new(xhci_registers),
             connected_devices: RwLock::new(Vec::new()),
-            wait_queue: SpinLock::new(WaitQueue::new()),
+            interrupters_wait_queue: SpinLock::new(WaitQueue::new()),
+            other_wait_queue: Mutex::new(WaitQueue::new()),
+            port_changes: Mutex::new(Vec::new()),
             usb3_ports,
             irq_info,
         };
@@ -786,8 +819,16 @@ impl<'s> PCIDevice for XHCI<'s> {
             let irq_info = self.irq_info.clone();
 
             interrupts::register_irq(irq_info, IntTrigger::Edge, self);
-            let tid = kernel_thread_spawn(
+            let int_tid = kernel_thread_spawn(
                 on_interrupt_thread,
+                self,
+                Some(crate::thread::ContextPriority::High),
+                None,
+            )
+            .expect("Failed to create XHCI Interrupt thread");
+
+            let hotreload_tid = kernel_thread_spawn(
+                handle_status_change_thread,
                 self,
                 Some(crate::thread::ContextPriority::High),
                 None,
@@ -805,12 +846,13 @@ impl<'s> PCIDevice for XHCI<'s> {
             let usbcmd_after = read_ref!(op_regs.usbcmd);
             debug!(
                 XHCI,
-                "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}, interrupt thread: {}",
+                "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}, interrupt thread: {}, hot-reload thread: {}",
                 usbsts_before,
                 usbsts_after,
                 usbcmd_before,
                 usbcmd_after,
-                tid
+                int_tid,
+                hotreload_tid,
             );
         });
 
