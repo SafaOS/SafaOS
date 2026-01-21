@@ -21,7 +21,7 @@ pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
 });
 
 pub fn main() -> ! {
-    *logging::SERIAL_LOG.write() = Some(PageString::with_capacity(&"Journal", PAGE_SIZE * 6));
+    *logging::SERIAL_LOG.write() = Some(PageString::with_capacity(&"Journal", PAGE_SIZE * 10));
     crate::info!("eve has been awaken ...");
 
     crate::drivers::pci::init();
