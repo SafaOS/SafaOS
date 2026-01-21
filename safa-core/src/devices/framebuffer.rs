@@ -4,7 +4,7 @@ use crate::{
         framebuffer::FrameBufferDriver,
         vfs::{FSError, SeekOffset},
     },
-    process::vas::MemMappedInterface,
+    process::mem::MemMappedInterface,
     syscalls::ffi::SyscallFFI,
 };
 use alloc::boxed::Box;
@@ -108,7 +108,7 @@ impl Device for FrameBufferDriver {
         &self,
         offset: SeekOffset,
         page_count: usize,
-    ) -> crate::drivers::vfs::FSResult<alloc::boxed::Box<dyn crate::process::vas::MemMappedInterface>>
+    ) -> crate::drivers::vfs::FSResult<alloc::boxed::Box<dyn crate::process::mem::MemMappedInterface>>
     {
         // FIXME: offset and page counts are ignored for now
         _ = offset;

@@ -12,12 +12,12 @@ use regs::{CapsReg, XHCIDoorbellManager};
 use rings::{command::XHCICommandRing, event::XHCIEventRing};
 
 use crate::{
-    arch::{paging::current_higher_root_table, with_interrupts, without_interrupts},
+    arch::{with_interrupts, without_interrupts},
     debug,
     drivers::{
         interrupts::{self, IntTrigger, InterruptReceiver},
         keyboard::usb_kbd::USBKeyboard,
-        pci::{Bar, PCICommandReg},
+        pci::{AllocatedBar, Bar, PCICommandReg},
         usb_mouse::USBMouseDriver,
         xhci::{
             devices::XHCIDevice,
@@ -40,8 +40,10 @@ use crate::{
     },
     error,
     memory::{
-        frame_allocator::{self},
-        paging::{EntryFlags, PAGE_SIZE},
+        AlignToPage,
+        frame_allocator::{self, Frame},
+        paging::PAGE_SIZE,
+        vmm::{self, VMMMFlags},
     },
     process::current::kernel_thread_spawn,
     scheduler::wait_queue::WaitQueue,
@@ -687,24 +689,49 @@ impl<'s> PCIDevice for XHCI<'s> {
         );
 
         let bars = info.get_bars();
-        let Bar::Memory(base_addr, _) = bars[0] else {
+        let Bar::Memory(_, _) = bars[0] else {
             unreachable!("XHCI Base bar should always be a memory bar")
         };
 
-        let virt_base_addr = base_addr.into_virt();
+        let mem_bars = bars.iter().filter_map(|b| {
+            if let Bar::Memory(base, size) = b {
+                Some((base, size))
+            } else {
+                None
+            }
+        });
 
-        unsafe {
-            for bar in bars {
-                if let Bar::Memory(bar_base_addr, bar_size) = bar {
-                    let page_num = bar_size.div_ceil(PAGE_SIZE);
-                    current_higher_root_table()
-                        .map_contiguous_pages(
-                            bar_base_addr.into_virt(),
-                            bar_base_addr,
-                            page_num,
-                            EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
-                        )
-                        .expect("failed to map the XHCI");
+        let total_size = mem_bars.clone().map(|(_, size)| size).sum::<usize>();
+
+        let virt_base_addr = vmm::with_root(|vmm| {
+            vmm.map_direct(
+                &"XHCI",
+                None,
+                total_size.to_next_page(),
+                VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE,
+                mem_bars
+                    .map(|(base, size)| {
+                        (0..size.div_ceil(PAGE_SIZE))
+                            .map(|i| Frame::containing_address(*base + (i * PAGE_SIZE)))
+                    })
+                    .flatten(),
+            )
+            .expect("Failed to map XHCI memory")
+        });
+
+        let mut allocated_bars: heapless::Vec<_, 6> = heapless::Vec::new();
+        let mut curr_offset = 0;
+
+        for bar in bars {
+            match bar {
+                Bar::IO(base, port) => allocated_bars
+                    .push(AllocatedBar::IO(base, port))
+                    .expect("Too much BARs"),
+                Bar::Memory(_, size) => {
+                    allocated_bars
+                        .push(AllocatedBar::Memory(virt_base_addr + curr_offset, size))
+                        .expect("Too much BARs");
+                    curr_offset += size.to_next_page();
                 }
             }
         }
@@ -729,7 +756,7 @@ impl<'s> PCIDevice for XHCI<'s> {
         let xhci_queue_manager = XHCIResponseQueue::new(doorbell_manager, command_ring);
         // FIXME: switch to MSI if not available
         let irq_info = info
-            .get_msix_cap()
+            .get_msix_cap(&*allocated_bars)
             .map(|msix| msix.into_irq_info())
             .unwrap();
 

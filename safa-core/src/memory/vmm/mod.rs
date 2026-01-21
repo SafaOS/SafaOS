@@ -6,17 +6,19 @@ mod objects;
 use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::alloc::{AllocError, Allocator};
+use safa_abi::errors::IntoErr;
 
 use crate::{
     PhysAddr, VirtAddr,
-    arch::{paging::PageTable, without_interrupts},
+    arch::without_interrupts,
     debug, error,
     memory::{
         AlignToPage,
         frame_allocator::{self, Frame, FramePtr},
-        paging::{EntryFlags, MapToError, PAGE_SIZE, Page, SyncPageTable},
+        paging::{MapToError, PAGE_SIZE, Page, PageEntryFlags, PageTable, SyncPageTable},
         vmm::objects::{ObjectState, VMMObject, VMMObjectsPage},
     },
+    thread,
     utils::locks::SpinLock,
 };
 
@@ -35,27 +37,27 @@ bitflags::bitflags! {
 }
 
 impl VMMMFlags {
-    pub fn to_entry_flags(self) -> EntryFlags {
-        let mut map_flags = EntryFlags::empty();
+    pub fn to_entry_flags(self) -> PageEntryFlags {
+        let mut map_flags = PageEntryFlags::empty();
 
         if self.contains(VMMMFlags::WRITEABLE) {
-            map_flags.insert(EntryFlags::WRITE);
+            map_flags.insert(PageEntryFlags::WRITE);
         }
 
         if !self.contains(VMMMFlags::EXECUTABLE) {
-            map_flags.insert(EntryFlags::DISABLE_EXEC);
+            map_flags.insert(PageEntryFlags::DISABLE_EXEC);
         }
 
         if self.contains(VMMMFlags::UNCACHABLE) {
-            map_flags.insert(EntryFlags::DEVICE_UNCACHEABLE);
+            map_flags.insert(PageEntryFlags::DEVICE_UNCACHEABLE);
         }
 
         if self.contains(VMMMFlags::FRAMEBUFFER_CACHED) {
-            map_flags.insert(EntryFlags::FRAMEBUFFER_CACHED);
+            map_flags.insert(PageEntryFlags::FRAMEBUFFER_CACHED);
         }
 
         if self.contains(VMMMFlags::USER_ACCESSIBLE) {
-            map_flags.insert(EntryFlags::USER_ACCESSIBLE);
+            map_flags.insert(PageEntryFlags::USER_ACCESSIBLE);
         }
 
         map_flags
@@ -98,6 +100,18 @@ impl From<MapToError> for VMMAllocError {
             MapToError::AlreadyMapped => {
                 unreachable!("VMM shouldn't try to map an already mapped region")
             }
+            MapToError::NotMapped => unreachable!("VMM Shouldn't try to unmap an unmapped region"),
+        }
+    }
+}
+
+impl IntoErr for VMMAllocError {
+    fn into_err(self) -> safa_abi::errors::ErrorStatus {
+        match self {
+            Self::Used => safa_abi::errors::ErrorStatus::AddressAlreadyInUse,
+            Self::InvalidSize => safa_abi::errors::ErrorStatus::InvalidSize,
+            Self::OutOfMemory => safa_abi::errors::ErrorStatus::OutOfMemory,
+            Self::OutOfRange => safa_abi::errors::ErrorStatus::InvalidOffset,
         }
     }
 }
@@ -127,6 +141,7 @@ impl VMMInner {
         unsafe { self.head.as_ref() }
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub const fn len(&self) -> usize {
         self.len
@@ -308,6 +323,23 @@ impl VMMInner {
         Err(VMMAllocError::OutOfMemory)
     }
 
+    fn debug_regions(&self) {
+        crate::debug!(VirtualMemoryManager, "Memory Regions: ");
+        let mut current = Some(self.head());
+
+        while let Some(obj) = current {
+            crate::debug!(
+                VirtualMemoryManager,
+                "{} at {:#x}: size = {:#x}, state = {:?}",
+                obj.name,
+                obj.addr(),
+                obj.size(),
+                obj.state
+            );
+            current = obj.next();
+        }
+    }
+
     fn deallocate_at(&mut self, addr: VirtAddr) -> Option<(ObjectState, usize)> {
         if self.start_addr > addr || self.start_addr + self.size <= addr {
             return None;
@@ -348,7 +380,11 @@ impl VMMInner {
 
             assert!(
                 !(obj.addr() > addr && obj.region_end() > addr),
-                "Attempt to free memory inside of the object's range and not at the start"
+                "Attempt to free memory inside of the object's range and not at the start, addr: {:#x}, obj: {:#x}-{:#x}, {:?}",
+                addr,
+                obj.addr(),
+                obj.region_end(),
+                { self.debug_regions() }
             );
 
             current = obj.next_mut();
@@ -386,6 +422,10 @@ impl VirtualMemoryManager {
         unsafe { *self.page_table.inner_ptr() }
     }
 
+    pub fn new_user(page_table: FramePtr<PageTable>) -> Self {
+        Self::new(VirtAddr::null(), usize::MAX / 2, page_table)
+    }
+
     pub fn new(start_addr: VirtAddr, size: usize, page_table: FramePtr<PageTable>) -> Self {
         let mut objects =
             VMMObjectsPage::allocate().expect("Failed to allocate memory for storing VMM objects");
@@ -414,15 +454,13 @@ impl VirtualMemoryManager {
         let unmapped_size = needed;
         match state {
             ObjectState::Allocated(s) => {
-                unsafe {
-                    let mut op = self.page_table.begin();
-                    drop(inner);
-                    op.alloc_map(
-                        unmapped_addr,
-                        unmapped_addr + unmapped_size,
-                        s.to_entry_flags(),
-                    )?;
-                };
+                let mut op = self.page_table.begin();
+                drop(inner);
+                op.alloc_map(
+                    unmapped_addr,
+                    unmapped_addr + unmapped_size,
+                    s.to_entry_flags(),
+                )?;
             }
             ObjectState::LazyAllocated(_) => {}
 
@@ -459,16 +497,19 @@ impl VirtualMemoryManager {
             return false;
         };
 
-        let end_addr = start_addr + del_size;
         match deallocated {
             ObjectState::Free => unreachable!("Attempt to deallocate an unallocated object."),
             ObjectState::Allocated(_) | ObjectState::LazyAllocated(_) /* TODO: Proper Lazy Allocation implementation */ => unsafe {
                 let mut op = self.page_table.begin();
                 drop(inner);
-                op.free_unmap(start_addr, end_addr);
+                op.unmap_dealloc(start_addr, del_size.div_ceil(PAGE_SIZE)).expect("Failed to unmap VMM Allocated memory");
             },
             /* DMA is responsible for itself */
-            ObjectState::DMAAllocated(_) => {},
+            ObjectState::DMAAllocated(_) => {
+                let mut op = self.page_table.begin();
+                drop(inner);
+                unsafe { op.unmap(start_addr, del_size.div_ceil(PAGE_SIZE)).expect("Failed to unmap VMM Allocated memory") };
+            },
         }
 
         true
@@ -492,7 +533,7 @@ impl VirtualMemoryManager {
     /// like [`Self::map_new`] but you provide the physical addresses that this region is mapped to.
     ///
     /// The provided frames total size must be equal to or more than the requested allocation size or it will return an error [`VMMAllocError::InvalidSize`].
-    pub fn map_direct<I: Iterator<Item = Frame> + ExactSizeIterator>(
+    pub fn map_direct<I: Iterator<Item = Frame> + Clone>(
         &self,
         name: &'static &'static str,
         starting_addr: Option<Location>,
@@ -531,7 +572,7 @@ impl VirtualMemoryManager {
         self.map_direct(name, start_addr, size, flags, frames)
     }
 
-    fn map_inner<I: Iterator<Item = Frame> + ExactSizeIterator>(
+    fn map_inner<I: Iterator<Item = Frame> + Clone>(
         &self,
         name: &'static &'static str,
         starting_addr: Option<Location>,
@@ -541,7 +582,7 @@ impl VirtualMemoryManager {
         frames: Option<I>,
     ) -> Result<VirtAddr, VMMAllocError> {
         let given_size = match frames {
-            Some(ref i) => Some(i.len() * PAGE_SIZE),
+            Some(ref i) => Some(i.clone().count() * PAGE_SIZE),
             _ => None,
         };
 
@@ -583,10 +624,10 @@ impl VirtualMemoryManager {
                     map_flags,
                 )?;
             },
-            (VMMAllocMode::Normal | VMMAllocMode::Lazy, None) => unsafe {
+            (VMMAllocMode::Normal | VMMAllocMode::Lazy, None) => {
                 // FIXME: alloc_map zeroizes frames by default
                 op.alloc_map(allocated_start_addr, allocated_start_addr + size, map_flags)?;
-            },
+            }
             _ => unreachable!(),
         }
 
@@ -750,6 +791,16 @@ where
     without_interrupts(|| {
         let vmm_guard = unsafe { &mut *VMM.get() };
         f(unsafe { vmm_guard.assume_init_ref() })
+    })
+}
+
+#[inline(always)]
+pub fn with_user_vmm<F, R>(f: F) -> R
+where
+    F: FnOnce(&VirtualMemoryManager) -> R,
+{
+    without_interrupts(|| unsafe {
+        thread::with_current_unsafe(|thread| f(&(*thread).process().vmm))
     })
 }
 

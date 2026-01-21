@@ -26,6 +26,15 @@ pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Debug)]
 pub struct FramePtr<T: ?Sized>(NonNull<T>);
+
+impl<T: Sized> FramePtr<T> {
+    /// Casts the pointer to a pointer of a different type with the same size.
+    pub unsafe fn cast_sized<U: Sized>(self) -> FramePtr<U> {
+        assert!(size_of::<U>() == size_of::<T>());
+        FramePtr(self.0.cast())
+    }
+}
+
 impl<T: ?Sized> FramePtr<T> {
     pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
         Self(ptr)
@@ -109,6 +118,7 @@ impl Frame {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameIter {
     start: Frame,
     end: Frame,

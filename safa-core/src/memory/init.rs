@@ -9,13 +9,14 @@ use crate::{
     debug,
     limine::{self, executable_phys_address, executable_virt_address},
     memory::{
-        AlignToPage, HHDM, frame_allocator,
+        AlignToPage, HHDM,
+        paging::{PageTableOps, PhysPageTable},
         vmm::{Location, VMMAllocError, VMMMFlags, VirtualMemoryManager},
     },
     percpu,
 };
 
-use super::paging::{MapToError, PageTable};
+use super::paging::PageTable;
 
 static HEAP0_HINT: SyncUnsafeCell<VirtAddr> =
     SyncUnsafeCell::new(VirtAddr::from(0xffffe00000000000));
@@ -26,16 +27,17 @@ pub fn heap0_hint() -> VirtAddr {
 }
 
 fn create_vmm() -> Result<VirtualMemoryManager, VMMAllocError> {
-    let frame = frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+    let mut table = PhysPageTable::create()?;
+    unsafe { table.inner_mut().zeroize() };
 
-    let mut table = unsafe { frame.into_ptr::<PageTable>() };
-    table.zeroize();
-    let mut vmm = VirtualMemoryManager::new(HHDM, VirtAddr::from(usize::MAX) - HHDM, table);
+    let mut vmm =
+        VirtualMemoryManager::new(HHDM, VirtAddr::from(usize::MAX) - HHDM, table.frame_ptr());
+    core::mem::forget(table);
 
     unsafe {
         let hhdm_end = map_hhdm(&mut vmm)?;
         // 1TiB after HHDM end.
-        *HEAP0_HINT.get() = hhdm_end + (1024 * 1024 * 1024 * 1024);
+        *HEAP0_HINT.get() = hhdm_end + (1024 * 1024 * 2);
         map_top_2gb(&mut vmm)?;
 
         arch::paging::map_devices(&mut vmm)?;
@@ -52,6 +54,8 @@ unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAlloc
     );
 
     let flags = VMMMFlags::WRITEABLE;
+
+    let mut largest_addr = VirtAddr::null();
     for entry in limine::mmap_request().entries() {
         let phys_addr = PhysAddr::from(entry.base as usize);
         let size_bytes = entry.length as usize;
@@ -61,7 +65,7 @@ unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAlloc
             let (flags, name) = if entry.entry_type == EntryType::FRAMEBUFFER {
                 (flags | VMMMFlags::FRAMEBUFFER_CACHED, &"FRAMEBUFFER")
             } else {
-                (flags | VMMMFlags::UNCACHABLE, &"HHDM")
+                (flags, &"HHDM")
             };
 
             let virt_addr = phys_addr.into_virt();
@@ -74,18 +78,16 @@ unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAlloc
                 page_num,
                 flags,
             )?;
+
+            largest_addr = largest_addr.max(virt_addr + size);
         }
     }
 
-    // last possible virtual HHDM address
-    // FIXME: hardcoded because if I rely on the memory map there are still some stuff out of the range of the last entry
-
-    let largest_addr_virt = PhysAddr::from(0x10000000000).into_virt();
     debug!(
         PageTable,
-        "mapped HHDM from {:#x} to {:?}", HHDM, largest_addr_virt
+        "mapped HHDM from {:#x} to {:?}", HHDM, largest_addr
     );
-    Ok(largest_addr_virt + PAGE_SIZE)
+    Ok(largest_addr + PAGE_SIZE)
 }
 
 unsafe extern "C" {
@@ -161,7 +163,7 @@ pub fn init_all() {
     let table = unsafe { vmm.table_ptr() };
 
     unsafe {
-        set_current_higher_page_table(table);
+        set_current_higher_page_table(table.cast_sized());
         super::vmm::init(vmm);
     }
 }

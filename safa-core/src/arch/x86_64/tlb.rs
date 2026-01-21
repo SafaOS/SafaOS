@@ -7,7 +7,7 @@ use core::{
 use crate::{
     VirtAddr,
     arch::{
-        paging::PageTable,
+        paging::ArchPageTable,
         with_interrupts,
         x86_64::interrupts::{
             InterruptFrame,
@@ -58,7 +58,7 @@ percpu::define! {
 
 #[derive(Debug)]
 pub(super) struct TLBIRequest {
-    page_table: Option<NonNull<PageTable>>,
+    page_table: Option<NonNull<ArchPageTable>>,
     range: Option<(VirtAddr, NonZero<usize>)>,
     processed: &'static AtomicUsize,
 }
@@ -123,7 +123,7 @@ fn reload_cr3() {
 ///
 /// # Safety
 /// Current implementations for all current architectures are safe however, you must make sure `start` and `end` are a multiple of [`PAGE_SIZE`], and end > start.
-pub unsafe fn flush_cache_range(page_table: &PageTable, start: VirtAddr, mut end: VirtAddr) {
+pub unsafe fn flush_cache_range(page_table: &ArchPageTable, start: VirtAddr, mut end: VirtAddr) {
     let page_table = start
         .is_in_lower_half()
         .then(|| NonNull::from_ref(page_table));

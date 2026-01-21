@@ -1,6 +1,7 @@
 use crate::drivers::vfs::SeekOffset;
-use crate::memory::paging::EntryFlags;
 use crate::memory::paging::MapToError;
+use crate::memory::vmm::Location;
+use crate::memory::vmm::VMMMFlags;
 use crate::process;
 use crate::process::resources;
 use crate::shared_mem;
@@ -33,7 +34,8 @@ pub fn sysmem_map(
     }
 
     let page_count = mmap_config.page_count;
-    let guard_pages_count = mmap_config.guard_pages_count;
+    // TODO: Implement guard pages
+    // let guard_pages_count = mmap_config.guard_pages_count;
     let addr_hint = if mmap_config.addr_hint.is_null() {
         None
     } else {
@@ -64,25 +66,23 @@ pub fn sysmem_map(
         None => None,
     };
 
-    let mut mem_flags = EntryFlags::USER_ACCESSIBLE;
+    let mut mem_flags = VMMMFlags::empty();
     if flags.contains(MemMapFlags::WRITE) {
-        mem_flags |= EntryFlags::WRITE;
+        mem_flags |= VMMMFlags::WRITEABLE;
     }
 
-    if flags.contains(MemMapFlags::DISABLE_EXEC) {
-        mem_flags |= EntryFlags::DISABLE_EXEC;
+    if !flags.contains(MemMapFlags::DISABLE_EXEC) {
+        mem_flags |= VMMMFlags::EXECUTABLE;
     }
 
-    let curr_proc = process::current();
-    let mut vasa = curr_proc.vasa();
-    let tracker = vasa.map_n_pages_tracked_interface(
-        addr_hint,
-        page_count,
-        guard_pages_count,
-        mem_flags,
-        interface,
-    )?;
-
+    let location = addr_hint.map(|s| {
+        if flags.contains(MemMapFlags::FIXED) {
+            Location::Fixed(s)
+        } else {
+            Location::Hint(s)
+        }
+    });
+    let tracker = process::mem::mem_map(location, page_count, mem_flags, interface)?;
     let start_addr = tracker.start();
     // TODO: Implement local option
     let ri = resources::add_global_resource(tracker);

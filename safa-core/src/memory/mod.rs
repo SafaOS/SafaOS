@@ -292,7 +292,7 @@ impl_align_common!(u16);
 
 /// Copies from an address in a given page table to another address in the same page table
 #[inline(always)]
-pub fn userspace_copy_within(
+pub fn pagetable_copy_within(
     page_table: &mut PageTable,
     src_addr: VirtAddr,
     dest_addr: VirtAddr,
@@ -314,10 +314,10 @@ pub fn userspace_copy_within(
     let pages_iter = src_iter.zip(dest_iter);
     let phys_addr_iter = pages_iter.map(|(curr_src_page, curr_dest_page)| {
         let src_frame = page_table
-            .get_frame(curr_src_page)
+            .get_frame_of(curr_src_page)
             .expect("attempt to copy from an unmapped page");
         let dest_frame = page_table
-            .get_frame(curr_dest_page)
+            .get_frame_of(curr_dest_page)
             .expect("attempt to copy to an unmapped page");
 
         let calc_within = |curr_page: VirtAddr, start_addr: VirtAddr, end_addr: VirtAddr| {
@@ -363,7 +363,7 @@ pub fn userspace_copy_within(
 }
 
 #[inline(always)]
-pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8]) {
+pub fn copy_to_pagetable(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8]) {
     let pages_required = obj.len().div_ceil(PAGE_SIZE) + 1;
     let mut copied = 0;
     let mut to_copy = obj.len();
@@ -381,7 +381,7 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
             return;
         }
 
-        let Some(frame) = page_table.get_frame(page) else {
+        let Some(frame) = page_table.get_frame_of(page) else {
             panic!("attempt to copy to an unmapped page: {page:?}");
         };
 

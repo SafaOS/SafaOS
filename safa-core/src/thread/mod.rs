@@ -14,7 +14,7 @@ use core::{
 use crate::{
     arch::{threading::CPUStatus, without_interrupts},
     debug,
-    process::{Pid, Process, vas::TrackedMemoryMapping},
+    process::{Pid, Process, mem::TrackedMemoryAllocation},
     scheduler::{SCHEDULER, SchedulePriority, Scheduler, ThreadScheduleReason},
     thread,
     timer::time_since_boot_ms,
@@ -123,6 +123,10 @@ impl ThreadList {
             }),
             len: 1,
         }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
     }
 
     /// Returns whether the list is empty
@@ -531,9 +535,10 @@ pub struct Thread {
     is_dead: AtomicBool,
     parent_process: Arc<Process>,
     /// Kernel stack memory mapping, so that it can be freed when the thread is killed.
-    kernel_stack: UnsafeCell<ManuallyDrop<TrackedMemoryMapping>>,
+    kernel_stack: UnsafeCell<ManuallyDrop<TrackedMemoryAllocation>>,
     /// User stack and TLS memory mapping, so that it can be freed when the thread is killed.
-    thread_mem: UnsafeCell<ManuallyDrop<TrackedMemoryMapping>>,
+    thread_mem: UnsafeCell<ManuallyDrop<TrackedMemoryAllocation>>,
+    thread_tls: UnsafeCell<ManuallyDrop<Option<TrackedMemoryAllocation>>>,
 
     /// The scheduler that this thread belongs to.
     /// null until scheduled
@@ -555,8 +560,9 @@ impl Thread {
         cpu_status: CPUStatus,
         parent_process: &Arc<Process>,
         priority: ContextPriority,
-        kernel_stack: TrackedMemoryMapping,
-        thread_mem: TrackedMemoryMapping,
+        kernel_stack: TrackedMemoryAllocation,
+        thread_mem: TrackedMemoryAllocation,
+        thread_tls: Option<TrackedMemoryAllocation>,
     ) -> Self {
         Self {
             schedule_priority: UnsafeCell::new(SchedulePriority::new()),
@@ -572,6 +578,7 @@ impl Thread {
             next: UnsafeCell::new(None),
             should_terminate: UnsafeCell::new(false),
             kernel_stack: UnsafeCell::new(ManuallyDrop::new(kernel_stack)),
+            thread_tls: UnsafeCell::new(ManuallyDrop::new(thread_tls)),
             thread_mem: UnsafeCell::new(ManuallyDrop::new(thread_mem)),
         }
     }
@@ -620,6 +627,7 @@ impl Thread {
         if let Some(mut manager) = self.parent_process.try_threads_manager() {
             unsafe { ManuallyDrop::drop(&mut *self.kernel_stack.get()) };
             unsafe { ManuallyDrop::drop(&mut *self.thread_mem.get()) };
+            unsafe { ManuallyDrop::drop(&mut *self.thread_tls.get()) };
             manager.remove(self.tid());
             true
         } else {

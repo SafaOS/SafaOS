@@ -7,12 +7,12 @@ use core::num::NonZero;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use crate::memory::vmm::VirtualMemoryManager;
 use crate::percpu::{CpuID, CpuLocal};
 use crate::smp::{self, INIT_PROCESS};
 use crate::thread::{ArcThread, BlockedReason, ContextPriority, ContextStatus, Thread, ThreadList};
 use crate::timer::time_since_boot_ms;
 use crate::utils::path::make_path;
-use alloc::collections::vec_deque::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -150,8 +150,7 @@ pub struct Scheduler {
 impl Scheduler {
     /// The Scheduler's IDLE loop
     pub fn idle(&self) -> ! {
-        // My fingers were guided to pick 6 here randomly, it stays that way...
-        let mut cleanup_vec = VecDeque::with_capacity(6);
+        let mut cleanup_vec = ThreadList::new_empty();
 
         let cycles_per_ns = crate::arch::utils::cpu_timer_freq_mhz()
             .get()
@@ -170,7 +169,7 @@ impl Scheduler {
                         // Avoids anything from the cleanup-routine causing deadlocks because the lock wasn't dropped.
                         //
                         // FIXME: This shouldn't be a problem.
-                        cleanup_vec.push_back(thread);
+                        unsafe { cleanup_vec.push_back(thread) };
                     }
                     drop(waiting_cleanup);
 
@@ -180,7 +179,7 @@ impl Scheduler {
                             // FIXME: Some kind of a hidden Drop impl may thread yield here, so I had to come up with this temporarily.
                             if !unsafe { thread.try_cleanup() } {
                                 // TODO: ??
-                                cleanup_vec.push_back(thread);
+                                unsafe { cleanup_vec.push_back(thread) };
                             }
                         }
                     }
@@ -636,8 +635,8 @@ pub unsafe fn init(main_function: fn() -> !, name: &str) -> ! {
             &[],
             &[],
             unsafe { core::mem::zeroed() },
+            Arc::new(VirtualMemoryManager::new_user(page_table.frame_ptr())),
             page_table,
-            VirtAddr::null(),
             None,
             ContextPriority::Medium,
             false,

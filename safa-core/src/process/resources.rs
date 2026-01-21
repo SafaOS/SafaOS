@@ -2,7 +2,7 @@ use core::{any::Any, fmt::Debug};
 
 use crate::{
     drivers::vfs::SeekOffset,
-    process::{self, poll::PollID, vas::MemMappedInterface},
+    process::{self, mem::MemMappedInterface, poll::PollID},
     warn,
 };
 use alloc::{boxed::Box, sync::Arc};

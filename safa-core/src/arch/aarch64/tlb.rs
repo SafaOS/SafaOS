@@ -1,5 +1,4 @@
 use crate::memory::VirtAddr;
-use crate::memory::paging::PageTable;
 use core::arch::global_asm;
 
 global_asm!(
@@ -35,7 +34,6 @@ unsafe extern "C" {
 ///
 /// # Safety
 /// Current implementations for all current architectures are safe however, you must make sure `start` and `end` are a multiple of [`PAGE_SIZE`], and end > start.
-pub unsafe fn flush_cache_range(page_table: &PageTable, start: VirtAddr, end: VirtAddr) {
-    _ = page_table;
+pub fn flush_cache_range(start: VirtAddr, end: VirtAddr) {
     super::without_interrupts(|| unsafe { flush_cache_range_inner(start, end) })
 }

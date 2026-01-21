@@ -5,10 +5,7 @@ use safa_abi::net::NicAddrInfoV4;
 
 use crate::{
     PhysAddr, VirtAddr,
-    arch::{
-        io::{inl, outl},
-        paging::current_higher_root_table,
-    },
+    arch::io::{inl, outl},
     debug,
     drivers::{
         interrupts::{self, IRQInfo, IntTrigger, InterruptReceiver},
@@ -17,7 +14,8 @@ use crate::{
     error, info,
     memory::{
         frame_allocator::{self, FramePtr},
-        paging::{EntryFlags, MapToError, PAGE_SIZE},
+        paging::{MapToError, PAGE_SIZE},
+        vmm::{self, VMMMFlags},
     },
     net::{
         MacAddress,
@@ -1266,7 +1264,7 @@ impl InterruptReceiver for E1000NetCard {
     fn handle_interrupt(&'static self) {
         // Before we read any registers our anything,
         // We have to lock the polling thread from reading registers, before polling any registers the polling thread must also lock the wait queue.
-        // TODO: This could be represented better by putting requiring a combined lock on write_comand, read_command
+        // TODO: This could be represented better by putting requiring a combined lock on write_command, read_command
         let mut wait_queue = self.wait_queue.lock();
 
         let icr = self.read_command(REG_ICR);
@@ -1301,26 +1299,24 @@ impl PCIDevice for E1000NetCard {
     {
         let bars = info.get_bars();
         let irq_info = info
-            .get_best_irq_info()
+            .get_best_irq_info(&[] /* We currently only allocate the base BAR */)
             .expect("E1000 must support interrupts");
         let general_header = info.unwrap_general();
 
         let base_bar = bars[0];
         let base = match base_bar {
             Bar::Memory(base_bar_phys, base_bar_size) => {
-                let base_virt = base_bar_phys.into_virt();
+                let base_virt = vmm::with_root(|vmm| {
+                    vmm.map_direct_phys(
+                        &"E1000",
+                        None,
+                        base_bar_phys,
+                        base_bar_size.div_ceil(PAGE_SIZE),
+                        VMMMFlags::UNCACHABLE | VMMMFlags::WRITEABLE,
+                    )
+                })
+                .expect("Failed to map E1000 card's memio space");
 
-                // TODO: Implement an actual VMM
-                unsafe {
-                    current_higher_root_table()
-                        .map_contiguous_pages(
-                            base_virt,
-                            base_bar_phys,
-                            base_bar_size.div_ceil(PAGE_SIZE),
-                            EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE,
-                        )
-                        .expect("Failed to map E1000 card's memio space");
-                }
                 info!(
                     E1000NetCard,
                     "Mapped starting at {base_virt:?} to {base_bar_phys:?}"

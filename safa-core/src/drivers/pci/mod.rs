@@ -50,6 +50,15 @@ pub enum Bar {
     IO(u32, usize),
 }
 
+/// Bar that was memory mapped to a virtual address or allocated in any way.
+/// A raw `[Bar]`, cannot be used to access memory.
+#[derive(Debug, Clone, Copy)]
+pub enum AllocatedBar {
+    Memory(VirtAddr, usize),
+    #[allow(unused)]
+    IO(u32, usize),
+}
+
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct PCICommandReg: u16 {
@@ -261,17 +270,22 @@ impl<'a> PCIHeader<'a> {
         (header_type & 0x80) != 0
     }
 
-    fn get_msix_cap(&mut self, bus: u8, slot: u8, function: u8) -> Option<MSIXInfo> {
+    fn get_msix_cap(
+        &mut self,
+        bus: u8,
+        slot: u8,
+        function: u8,
+        bars: &[AllocatedBar],
+    ) -> Option<MSIXInfo> {
         let msix_cap_ptr = self.caps_list().find_cast::<MSIXCap>();
         msix_cap_ptr.map(|ptr| {
             let common = self.common();
-            let bars = self.get_bars();
             MSIXInfo::new(
                 ptr as *mut _,
                 common.device_id,
                 common.vendor_id,
                 (bus as u32 * 256) + (slot as u32 * 8) + function as u32,
-                &bars,
+                bars,
             )
         })
     }
@@ -298,9 +312,9 @@ impl<'a> PCIDeviceInfo<'a> {
         self.header.caps_list()
     }
 
-    pub fn get_msix_cap(&mut self) -> Option<MSIXInfo> {
+    pub fn get_msix_cap(&mut self, bars: &[AllocatedBar]) -> Option<MSIXInfo> {
         self.header
-            .get_msix_cap(self.bus, self.device, self.function)
+            .get_msix_cap(self.bus, self.device, self.function, bars)
     }
 
     pub fn get_pci_irq_info(&mut self) -> Option<IRQInfo> {
@@ -315,8 +329,8 @@ impl<'a> PCIDeviceInfo<'a> {
     }
 
     /// Gets the best IRQ Info available
-    pub fn get_best_irq_info(&mut self) -> Option<IRQInfo> {
-        if let Some(msix) = self.get_msix_cap() {
+    pub fn get_best_irq_info(&mut self, bars: &[AllocatedBar]) -> Option<IRQInfo> {
+        if let Some(msix) = self.get_msix_cap(bars) {
             Some(msix.into_irq_info())
         } else {
             self.get_pci_irq_info()

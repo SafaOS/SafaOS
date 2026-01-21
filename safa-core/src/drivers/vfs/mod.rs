@@ -8,7 +8,7 @@ use crate::{
         frame_allocator::{self},
         paging::PAGE_SIZE,
     },
-    process::{self, resources::Resource, vas::MemMappedInterface},
+    process::{self, mem::MemMappedInterface, resources::Resource},
     timer::{DurationFmt, SystemInstant},
     utils::{
         locks::Mutex,
@@ -312,14 +312,12 @@ impl CollectionIterDescriptor {
 }
 
 impl Resource for Mutex<CollectionIterDescriptor> {
-    fn try_clone_into_node(
-        &self,
-    ) -> Result<process::resources::ResourceNodeRef, ErrorStatus> {
+    fn try_clone_into_node(&self) -> Result<process::resources::ResourceNodeRef, ErrorStatus> {
         let guard = self.lock();
         let descriptor = guard.clone();
-        Ok(process::resources::ResourceNode::create(
-            Mutex::new(descriptor),
-        ))
+        Ok(process::resources::ResourceNode::create(Mutex::new(
+            descriptor,
+        )))
     }
 
     fn address_space_generic(&self) -> bool {

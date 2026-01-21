@@ -14,7 +14,7 @@ use crate::{
         framebuffer::FRAMEBUFFER_DRIVER,
         vfs::{self, FSError, FSResult, SeekOffset, VFS},
     },
-    process::vas::MemMappedInterface,
+    process::mem::MemMappedInterface,
     terminal::FRAMEBUFFER_TERMINAL,
     timer::{DurationFmt, SystemInstant},
     utils::path::{Path, PathParts},

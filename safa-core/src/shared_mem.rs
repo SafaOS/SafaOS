@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use crate::{
     error,
     memory::frame_allocator::{self, Frame},
-    process::{resources::Resource, vas::MemMappedInterface},
+    process::{mem::MemMappedInterface, resources::Resource},
     utils::locks::Mutex,
 };
 
