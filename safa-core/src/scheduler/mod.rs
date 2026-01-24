@@ -261,6 +261,10 @@ impl Scheduler {
     pub fn try_pop_waiting_thread(&self) -> bool {
         let mut popped = false;
         let mut waiting_threads = self.waiting_threads.lock();
+        if waiting_threads.is_empty() {
+            return false;
+        }
+
         let time_now = time_since_boot_ms();
 
         let mut next_add_time: NonZero<u64> = NonZero::<u64>::MAX;
