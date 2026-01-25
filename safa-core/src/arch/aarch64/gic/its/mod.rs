@@ -443,7 +443,7 @@ pub fn allocate_itt() -> (VirtAddr, usize, u8) {
     * An ITT must be assigned a contiguous physical address space starting at ITT Address. The size is 2^(DTE.ITT
     Range + 1)* GITS_TYPER.ITT_entry_size
     */
-    let size = itt_entry_size as usize * event_id_bits as usize;
+    let size = itt_entry_size as usize * (1 << ((event_id_bits - 1) as usize));
     let pages = size.to_next_page() / PAGE_SIZE;
 
     let (start_frame, _) =
