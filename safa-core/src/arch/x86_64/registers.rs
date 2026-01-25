@@ -98,7 +98,7 @@ pub unsafe fn wrmsr(msr: u32, value: u64) {
     unsafe {
         asm!(
             "wrmsr",
-            in("ecx") msr, in("eax") low, in("edx") high
+            in("ecx") msr, in("eax") low, in("edx") high, options(nostack, preserves_flags)
         );
     }
 }

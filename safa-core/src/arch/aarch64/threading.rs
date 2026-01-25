@@ -179,40 +179,22 @@ unsafe extern "C" {
 #[unsafe(no_mangle)]
 extern "C" fn context_switch_now(frame: &mut InterruptFrame) -> ! {
     let context = unsafe { CPUStatus::from_current(frame) };
-    let swtch_results = scheduler::swtch(context);
-
-    if let Some((new_context_ptr, address_space_changed)) = swtch_results {
-        unsafe {
-            if !address_space_changed {
-                restore_cpu_status_partial(new_context_ptr.as_ref());
-            } else {
-                restore_cpu_status(new_context_ptr.as_ref());
-            }
+    match scheduler::swtch(context, || {}) {
+        Ok(a) => a,
+        Err(_) => {
+            core::hint::cold_path();
+            unsafe { restore_cpu_status_partial(&context) }
         }
-    } else {
-        core::hint::cold_path();
-        unsafe { restore_cpu_status_partial(&context) };
     }
 }
 
 #[inline]
 pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
     let context = unsafe { CPUStatus::from_current(frame) };
-    let swtch_results = scheduler::swtch(context);
+    let Err(before_switch) = scheduler::swtch(context, before_switch);
 
-    if let Some((new_context_ptr, address_space_changed)) = swtch_results {
-        unsafe {
-            before_switch();
-            if !address_space_changed {
-                restore_cpu_status_partial(new_context_ptr.as_ref());
-            } else {
-                restore_cpu_status(new_context_ptr.as_ref());
-            }
-        }
-    } else {
-        core::hint::cold_path();
-        before_switch();
-    }
+    core::hint::cold_path();
+    before_switch();
 }
 
 #[inline]

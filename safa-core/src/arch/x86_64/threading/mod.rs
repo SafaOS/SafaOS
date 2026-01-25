@@ -204,32 +204,17 @@ extern "C" fn context_switch(switch_frame: ContextSwitchFrame) -> ! {
 
 #[inline(always)]
 unsafe fn context_switch_and_return_inner(mut capture: CPUStatus) -> ! {
-    let swtch_results = {
+    let Err(_) = {
         unsafe {
             capture.ring0_rsp = get_kernel_tss_stack();
             capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
         }
-        swtch(capture)
+        swtch(capture, || super::interrupts::apic::send_eoi())
     };
 
     super::interrupts::apic::send_eoi();
-    if let Some((new_context_ptr, address_space_changed)) = swtch_results {
-        unsafe {
-            let new_context_ref = new_context_ptr.as_ref();
-
-            set_kernel_tss_stack(new_context_ref.ring0_rsp);
-            wrmsr(0xC0000100, new_context_ref.fs_base.into_raw() as u64);
-
-            if address_space_changed {
-                restore_cpu_status_full(new_context_ref);
-            } else {
-                restore_cpu_status_partial(new_context_ref);
-            }
-        }
-    } else {
-        core::hint::cold_path();
-        unsafe { restore_cpu_status_partial(&capture) }
-    }
+    core::hint::cold_path();
+    unsafe { restore_cpu_status_partial(&capture) }
 }
 
 #[unsafe(no_mangle)]
@@ -250,9 +235,23 @@ pub fn invoke_context_switch() {
 /// Fully restores the CPU status from the given [`CPUStatus`] structure.
 /// shouldn't be used
 pub unsafe fn restore_cpu_status(status: &CPUStatus) -> ! {
+    unsafe { restore_cpu_status_full_all(status) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn restore_cpu_status_partial_all(status: &CPUStatus) -> ! {
     unsafe {
         set_kernel_tss_stack(status.ring0_rsp);
         wrmsr(0xC0000100, status.fs_base.into_raw() as u64);
-        restore_cpu_status_full(status);
+        restore_cpu_status_partial(status)
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn restore_cpu_status_full_all(status: &CPUStatus) -> ! {
+    unsafe {
+        set_kernel_tss_stack(status.ring0_rsp);
+        wrmsr(0xC0000100, status.fs_base.into_raw() as u64);
+        restore_cpu_status_full(status)
     }
 }

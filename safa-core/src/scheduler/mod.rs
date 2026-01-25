@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 
 use crate::arch::{with_interrupts, without_interrupts};
 use crate::process::Process;
-use crate::utils::locks::{Mutex, TrackedSpinLock};
+use crate::utils::locks::{Mutex, TrackedSpinLock, TrackedSpinLockGuard};
 use crate::utils::types::Name;
 use crate::{VirtAddr, eve, percpu};
 use alloc::boxed::Box;
@@ -146,8 +146,14 @@ pub struct Scheduler {
     is_thread_yielding: UnsafeCell<bool>,
     context_switch_count: AtomicUsize,
     preemption_disabled: UnsafeCell<bool>,
+    stack: UnsafeCell<[u8; 1024]>,
 }
 impl Scheduler {
+    /// Returns the trampoline's stack end for this scheduler.
+    fn stack_end(&self) -> VirtAddr {
+        VirtAddr::from_ptr(self.stack.get()) + 1024
+    }
+
     /// The Scheduler's IDLE loop
     pub fn idle(&self) -> ! {
         let mut cleanup_vec = ThreadList::new_empty();
@@ -411,12 +417,25 @@ impl Scheduler {
             .is_some()
     }
 
+    /// Try to swap the given CPU context with the next thread's context effectively doing a context switch / thread yield.
+    ///
+    /// # Arguments
+    /// * `current_cpu_status` - The current CPU status.
+    /// * `swap_if_has_time` - Whether to swap contexts if the current thread has time left.
+    ///
+    /// # Returns
+    /// * `Some((NonNull<CPUStatus>, bool, TrackedSpinLockGuard<[ThreadList; PRIORITIES_COUNT]>))` - The new CPU status, whether the swap was successful, and the locked schedule queues, the schedule queues shall be dropped once the kernel thread stack is swapped.
+    /// * `None` - If no swap was performed.
     #[inline]
-    fn try_yield_execution(
-        &self,
+    fn try_swap_contexts<'a>(
+        &'a self,
         current_cpu_status: CPUStatus,
-        yield_if_has_time: bool,
-    ) -> Option<(NonNull<CPUStatus>, ContextPriority, bool)> {
+        swap_if_has_time: bool,
+    ) -> Option<(
+        NonNull<CPUStatus>,
+        bool,
+        TrackedSpinLockGuard<'a, [ThreadList; PRIORITIES_COUNT]>,
+    )> {
         let current_thread = unsafe { &mut *self.current_thread.get() };
         let curr_pid = current_thread.process().pid();
 
@@ -429,7 +448,7 @@ impl Scheduler {
         let push_to = if !was_idle_thread {
             let curr_schd = unsafe { &mut *current_thread.schedule_priority.get() };
             curr_schd.update_time(time_now);
-            if !yield_if_has_time && curr_schd.has_time() {
+            if !swap_if_has_time && curr_schd.has_time() {
                 return None;
             }
             Some(curr_schd.get_next_priority_queue())
@@ -495,7 +514,6 @@ impl Scheduler {
         schd.queue_index = queue_index as u32;
         schd.last_scheduled = NonZero::new(time_since_boot_ms());
 
-        let context_priority = new_thread.priority();
         let process_pid = new_thread.process().pid();
         let address_space_changed = curr_pid != process_pid;
 
@@ -510,7 +528,7 @@ impl Scheduler {
 
             let cpu_status = context.cpu_status();
             *self.current_thread.get() = new_thread;
-            Some((cpu_status, context_priority, address_space_changed))
+            Some((cpu_status, address_space_changed, schd_queues))
         }
     }
 
@@ -533,6 +551,7 @@ impl Scheduler {
             is_thread_yielding: UnsafeCell::new(false),
             context_switch_count: AtomicUsize::new(0),
             preemption_disabled: UnsafeCell::new(false),
+            stack: UnsafeCell::new([0; 1024]),
         }
     }
 
@@ -599,6 +618,12 @@ where
     result
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn post_swtch_cleanup(schd: &'static Scheduler) {
+    debug_assert!(schd.ready_queues.is_locked());
+    unsafe { schd.ready_queues.force_unlock() };
+}
+
 #[inline(always)]
 /// performs a context switch using the scheduler, switching to the next process context
 /// to be used
@@ -606,20 +631,85 @@ where
 /// if the address space has changed, please copy the context to somewhere accessible first
 ///
 /// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
-pub fn swtch(context: CPUStatus) -> Option<(NonNull<CPUStatus>, bool)> {
-    let scheduler = SCHEDULER.maybe_borrow()?;
+pub fn swtch(context: CPUStatus, before_switch: impl FnOnce()) -> Result<!, impl FnOnce()> {
+    let Some(scheduler) = SCHEDULER.maybe_borrow() else {
+        return Err(before_switch);
+    };
     let is_thread_yielding = unsafe { scheduler.is_thread_yielding.get().replace(false) };
     if unsafe { *scheduler.preemption_disabled.get() } {
-        return None;
+        return Err(before_switch);
     }
-
-    let (cpu_status, _, address_space_changed) =
-        scheduler.try_yield_execution(context, is_thread_yielding)?;
 
     scheduler
         .context_switch_count
         .fetch_add(1, Ordering::Release);
-    Some((cpu_status, address_space_changed))
+
+    let Some((new_context, address_space_changed, guard)) =
+        scheduler.try_swap_contexts(context, is_thread_yielding)
+    else {
+        return Err(before_switch);
+    };
+
+    core::mem::forget(guard);
+
+    let kernel_stack = scheduler.stack_end();
+    before_switch();
+    unsafe {
+        #[cfg(target_arch = "aarch64")]
+        core::arch::asm!(
+            "
+            mov fp, 0
+            sub x22, x22, #16
+            and sp, x22, #-16
+
+            // Uses [0] as an argument to the function
+            bl post_swtch_cleanup
+
+            // Set new context as the first argument
+            mov x0, x20
+            tbz x21, #0, 2f
+            b restore_cpu_status
+            2:
+                b restore_cpu_status_partial
+            udf 0xC000
+            "
+            ,
+           in("x0") scheduler,
+           in("x20") new_context.as_ptr(),
+           in("x21") address_space_changed as usize,
+           in("x22") kernel_stack.into_raw(),
+           options(noreturn)
+        );
+
+        #[cfg(target_arch = "x86_64")]
+        core::arch::asm!(
+            "
+            mov rsp, r12
+            mov rbp, rsp
+            sub rsp, 64
+            and rsp, -16
+
+            // Uses [0] as an argument to the function
+            call post_swtch_cleanup
+
+            // Set new context as the first argument
+            mov rdi, r14
+            test r15, r15
+            jz restore_cpu_status_partial_all
+            jmp restore_cpu_status_full_all
+            ud2
+            "
+            ,
+           in("rdi") scheduler,
+           in("r14") new_context.as_ptr(),
+           in("r15") address_space_changed as usize,
+           in("r12") kernel_stack.into_raw(),
+           options(noreturn)
+        );
+
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        compile_error!("Please implement the scheduler for this architecture")
+    }
 }
 
 /// inits the scheduler
