@@ -167,6 +167,7 @@ use core::sync::atomic::Ordering;
 
 use crate::arch::registers::ArchCpuID;
 use crate::arch::without_interrupts;
+use crate::scheduler::SCHEDULER;
 use crate::smp::READY_CPUS;
 use crate::utils::locks::SpinLock;
 
@@ -206,12 +207,22 @@ fn panic(info: &PanicInfo) -> ! {
             }
         }
 
+        let scheduler = SCHEDULER.maybe_borrow();
         panic_println!(
             "\x1B[31mkernel panic:\n{}, at {}, cpu: {}\x1B[0m",
             info.message(),
             info.location().unwrap(),
             ArchCpuID::get(),
         );
+
+        if let Some(scheduler) = scheduler {
+            let current_thread = unsafe { scheduler.current_thread_ref() };
+            panic_println!(
+                "Current thread: {}:{}",
+                current_thread.process().pid(),
+                current_thread.tid()
+            );
+        }
         panic_println!("{}", stack);
 
         drop(_guard);
