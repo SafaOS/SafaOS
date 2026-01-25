@@ -3,6 +3,7 @@
 
 use crate::memory::paging::PAGE_SIZE;
 use crate::scheduler::SCHEDULER;
+use crate::thread::Tid;
 use crate::utils::alloc::PageString;
 use crate::utils::path::make_path;
 use crate::{fs, logging};
@@ -21,7 +22,7 @@ pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
 });
 
 pub fn main() -> ! {
-    *logging::SERIAL_LOG.write() = Some(PageString::with_capacity(&"Journal", PAGE_SIZE * 10));
+    *logging::SERIAL_LOG.write() = Some(PageString::with_capacity(&"Journal", PAGE_SIZE * 16));
     crate::info!("eve has been awaken ...");
 
     crate::drivers::pci::init();
@@ -72,8 +73,8 @@ pub fn main() -> ! {
 
     thread::current::exit(0)
 }
-pub fn idle_function() -> ! {
-    crate::serial!("entered idle\n");
+pub fn idle_function(tid: Tid) -> ! {
+    crate::serial!("entered idle, tid: {}\n", tid);
     let scheduler = SCHEDULER.borrow();
     scheduler.idle()
 }

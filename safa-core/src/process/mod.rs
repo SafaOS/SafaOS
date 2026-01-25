@@ -6,7 +6,7 @@ use core::{
 };
 
 use crate::{
-    memory::vmm::VirtualMemoryManager,
+    memory::{frame_allocator::SIZE_64K, vmm::VirtualMemoryManager},
     process::threads::ThreadsManager,
     scheduler::{
         self,
@@ -24,7 +24,7 @@ use thread::ContextPriority;
 
 use crate::{
     VirtAddr, debug,
-    memory::paging::{PAGE_SIZE, PhysPageTable},
+    memory::paging::PhysPageTable,
     utils::{
         elf::{Elf, ElfError},
         io::Readable,
@@ -54,7 +54,7 @@ pub struct ExitInfo {
 
 pub const PROCESS_AREA_END_ADDR: VirtAddr = VirtAddr::from(0x00007F0000000000);
 
-const DEFAULT_STACK_SIZE: usize = 8 * PAGE_SIZE;
+const DEFAULT_STACK_SIZE: usize = SIZE_64K;
 
 /// Reason for waiting inside a process's wait queue.
 #[derive(Debug, Clone)]
