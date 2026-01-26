@@ -456,7 +456,7 @@ impl PendingFlushesPage {
                     let frame_of_next = frame_allocator::allocate_frame()
                         .ok_or(MapToError::FrameAllocationFailed)?;
                     let mut ptr = unsafe { frame_of_next.into_ptr::<PendingFlushesPage>() };
-                    *ptr = Self::new();
+                    unsafe { core::ptr::write(ptr.as_ptr(), Self::new()) };
                     self.next = Some(ptr);
                     Ok(ptr.push(frame)?.or(Some(ptr)))
                 }
