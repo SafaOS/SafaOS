@@ -1,37 +1,15 @@
-use core::{
-    arch::{asm, global_asm},
-    cell::SyncUnsafeCell,
-    mem::MaybeUninit,
-    ptr::NonNull,
-    sync::atomic::AtomicUsize,
-};
+use core::arch::{asm, global_asm};
 
-use crate::thread::ContextPriority;
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use limine::mp::Cpu;
-
-#[cfg(debug_assertions)]
-use crate::sleep_until;
 use crate::{
     PhysAddr, VirtAddr,
-    arch::{
-        aarch64::registers::MPIDR,
-        paging::{CURRENT_HIGHER_HALF_TABLE, set_current_higher_page_table_phys},
-        without_interrupts,
-    },
-    debug,
-    limine::MP_RESPONSE,
     memory::paging::{MapToError, PhysPageTable},
-    process::Process,
-    scheduler::{self, SCHEDULER_INITED, Scheduler},
+    scheduler::{self},
     thread::Tid,
-    utils::locks::Mutex,
 };
 
 use super::{
     exceptions::InterruptFrame,
     registers::{Reg, Spsr},
-    timer,
 };
 
 /// The CPU Status for each thread (registers)
@@ -83,10 +61,14 @@ restore_cpu_status:
     # x0 has to be a higher half address or everything breaks....
     # loads the translation table and the stack pointer
     msr ttbr0_el1, x1
+    # Ensure writes are visible before reloading address space
+    dsb ish
+    isb
+
     # reload address space
     tlbi VMALLE1
-    dsb ISH
-    isb
+    dsb ish
+    ISB
 
     msr sp_el0, x2
 
@@ -190,159 +172,31 @@ impl CPUStatus {
     }
 }
 
+unsafe extern "C" {
+    fn context_switch_and_return();
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn context_switch_now(context: &CPUStatus) -> ! {
+    match scheduler::swtch(context, || {}, true) {
+        Ok(a) => a,
+        Err(_) => {
+            core::hint::cold_path();
+            unsafe { restore_cpu_status_partial(context) }
+        }
+    }
+}
+
+#[inline]
 pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
     let context = unsafe { CPUStatus::from_current(frame) };
-    let swtch_results = scheduler::swtch(context);
-    if let Some((new_context_ptr, address_space_changed)) = swtch_results {
-        unsafe {
-            before_switch();
-            if !address_space_changed {
-                restore_cpu_status_partial(new_context_ptr.as_ref());
-            } else {
-                restore_cpu_status(new_context_ptr.as_ref());
-            }
-        }
-    } else {
-        core::hint::cold_path();
-        before_switch();
-    }
+    let Err(before_switch) = scheduler::swtch(&context, before_switch, false);
+
+    core::hint::cold_path();
+    before_switch();
 }
 
+#[inline]
 pub fn invoke_context_switch() {
-    if unsafe { *SCHEDULER_INITED.get() } {
-        unsafe {
-            let daif = super::get_daif();
-            super::disable_interrupts();
-
-            timer::TIMER_IRQ.set_pending();
-
-            sleep_until!(10 ms, timer::TIMER_IRQ.is_pending());
-            super::enable_interrupts();
-            sleep_until!(10 ms, !timer::TIMER_IRQ.is_pending());
-
-            super::set_daif(daif);
-        }
-    }
-}
-
-static SCHEDULERS: Mutex<Vec<&Scheduler>> = Mutex::new(Vec::new());
-
-unsafe fn set_tpidr(value: VirtAddr) {
-    crate::serial!("tpidr_el1 set to: {value:#x}\n");
-    unsafe {
-        asm!("msr tpidr_el1, {}", in(reg) value.into_raw(), options(nomem, nostack));
-    }
-}
-
-/// Creates a cpu local storage from a given process and an idle function
-/// creates and adds a thread to the given process that is the idle thread for the caller CPU
-///
-/// unsafe because the caller is responsible for the memory which was allocated using a Box
-unsafe fn create_cpu_local(
-    process: &Arc<Process>,
-    idle_function: fn() -> !,
-) -> Result<(&'static Scheduler, NonNull<CPUStatus>), MapToError> {
-    let (thread, _) = process.threads_manager().create_thread(
-        process,
-        VirtAddr::from(idle_function as usize),
-        VirtAddr::null(),
-        Some(ContextPriority::Low),
-        None,
-    )?;
-
-    let status = unsafe { thread.context_unchecked().cpu_status() };
-
-    let cpu_local_boxed = Box::new(Scheduler::new(thread));
-
-    unsafe {
-        let cpu_local_ref = Box::into_non_null(cpu_local_boxed).as_ref();
-        Ok((cpu_local_ref, status))
-    }
-}
-
-unsafe fn add_new_cpu_local(
-    process: &Arc<Process>,
-    idle_function: fn() -> !,
-) -> NonNull<CPUStatus> {
-    let (cpu_local, status) = unsafe {
-        create_cpu_local(process, idle_function).expect("failed to create a CPU local for a CPU")
-    };
-    unsafe {
-        set_tpidr(VirtAddr::from_ptr(cpu_local));
-    }
-    SCHEDULERS.lock().push(cpu_local);
-    status
-}
-
-fn boot_core_inner(process: &Arc<Process>, idle_function: fn() -> !) -> ! {
-    let cpuid = MPIDR::read().cpuid();
-    unsafe {
-        debug!("setting up CPU: {}", cpuid);
-
-        let status = add_new_cpu_local(process, idle_function);
-        let status = status.as_ref();
-
-        debug!(
-            "CPU {}: jumping to {:#x}, with stack at {:#x}",
-            cpuid,
-            status.at(),
-            status.stack_at()
-        );
-        READY_CPUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        restore_cpu_status(status)
-    }
-}
-
-extern "C" fn boot_cpu(_: &Cpu) -> ! {
-    without_interrupts(|| {
-        super::setup_cpu_generic0();
-
-        unsafe {
-            let ttbr1_el1 = *CURRENT_HIGHER_HALF_TABLE.get();
-            set_current_higher_page_table_phys(ttbr1_el1);
-            super::setup_cpu_generic1();
-
-            let (process, idle_function) = (*BOOT_CORE_ARGS.get()).assume_init_ref();
-            boot_core_inner(process, *idle_function)
-        }
-    })
-}
-
-static BOOT_CORE_ARGS: SyncUnsafeCell<MaybeUninit<(Arc<Process>, fn() -> !)>> =
-    SyncUnsafeCell::new(MaybeUninit::uninit());
-pub(super) static READY_CPUS: AtomicUsize = AtomicUsize::new(1);
-
-pub unsafe fn init_cpus(process: &Arc<Process>, idle_function: fn() -> !) -> NonNull<CPUStatus> {
-    let jmp_to = unsafe {
-        // the current CPU should take local 0
-        *BOOT_CORE_ARGS.get() = MaybeUninit::new((process.clone(), idle_function));
-        add_new_cpu_local(process, idle_function)
-    };
-
-    let cpus = (*MP_RESPONSE).cpus();
-
-    for cpu in cpus {
-        if MPIDR::from_bits(cpu.mpidr).cpuid() != MPIDR::read().cpuid() {
-            cpu.goto_address.write(boot_cpu);
-        }
-    }
-
-    while READY_CPUS.load(core::sync::atomic::Ordering::Relaxed) != cpus.len() {
-        core::hint::spin_loop();
-    }
-
-    jmp_to
-}
-
-/// Retrieves a pointer local to each CPU to a CPU Local Storage
-pub fn cpu_local_storage_ptr() -> *mut Scheduler {
-    let ptr: *mut Scheduler;
-    unsafe { asm!("mrs {}, tpidr_el1", out(reg) ptr, options(nostack, nomem)) }
-    ptr
-}
-
-/// Returns a list of pointers of CPU local storage to each cpu, can then be used by the scheduler to manage distrubting threads across CPUs
-pub unsafe fn cpu_local_storages() -> &'static [&'static Scheduler] {
-    // only is called after the CPUs are initialized so should be safe
-    unsafe { &*SCHEDULERS.data_ptr() }
+    unsafe { context_switch_and_return() }
 }

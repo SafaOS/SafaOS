@@ -399,14 +399,19 @@ pub fn setup_controller() -> Result<(bool, bool), ()> {
     info!("Setting up PS/2 Controller");
 
     disable_controller();
+    debug!("Disabled PS/2 Controller");
 
     let conf_byte = read_conf_byte()?
         .with_port0_interrupt_enabled(false)
         .with_port1_interrupt_enabled(false)
         .with_port0_translation(false);
+    debug!("Read conf byte");
 
     write_conf_byte(conf_byte)?;
+    debug!("Wrote conf byte");
+
     self_test()?;
+    debug!("PS/2 Self test passed");
 
     let is_dual_channel = match is_dual_channel() {
         Ok(b) => b,

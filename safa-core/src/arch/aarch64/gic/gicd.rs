@@ -190,7 +190,7 @@ pub struct GICDTyper {
 
 impl GICDTyper {
     fn get() -> Self {
-        unsafe { Self::from_bits(*(*GICD_BASE + 0x4).into_ptr::<u32>()) }
+        unsafe { Self::from_bits(*(*GICD_BASE.get() + 0x4).into_ptr::<u32>()) }
     }
 }
 
@@ -238,30 +238,24 @@ pub struct GICDCtlr {
 impl GICDCtlr {
     #[inline(always)]
     pub fn get_ptr() -> *mut Self {
-        GICD_BASE.into_ptr::<_>()
+        unsafe { (*GICD_BASE.get()).into_ptr::<_>() }
     }
 }
 
 /// Pointer to the GICD_ISENABLER<0> Register
 #[inline(always)]
 pub fn isenabler() -> *mut u32 {
-    (*GICD_BASE + 0x100).into_ptr::<u32>()
+    unsafe { (*GICD_BASE.get() + 0x100).into_ptr::<u32>() }
 }
 
 /// Pointer to the GICD_ICPENDR<0> Register
 #[inline(always)]
 pub fn icpendr0() -> *mut u32 {
-    (*GICD_BASE + 0x0280).into_ptr::<u32>()
+    unsafe { (*GICD_BASE.get() + 0x0280).into_ptr::<u32>() }
 }
 
 /// Pointer to the GICD_IGROUP<0> Register
 #[inline(always)]
 pub fn igroup0() -> *mut u32 {
-    (*GICD_BASE + 0x0080).into_ptr::<u32>()
-}
-
-/// Pointer to the GICD_ISPENDR0<0> Register
-#[inline(always)]
-pub fn ispendr0() -> *mut u32 {
-    (*GICD_BASE + 0x200).into_ptr::<u32>()
+    unsafe { (*GICD_BASE.get() + 0x0080).into_ptr::<u32>() }
 }

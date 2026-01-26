@@ -1,4 +1,4 @@
-use core::arch::asm;
+use core::{arch::asm, num::NonZero};
 
 use super::registers::MIDR;
 use core::fmt::Write;
@@ -39,37 +39,31 @@ impl CpuInfo {
 
 pub static CPU_INFO: Lazy<CpuInfo> = Lazy::new(CpuInfo::fetch);
 
-#[inline(always)]
-/// Returns the number of milliseconds since the CPU was started
-pub fn time_ms() -> u64 {
-    let count: u64;
+#[inline]
+/// Returns the frequency of the CPU
+pub fn cpu_timer_freq_mhz() -> NonZero<u64> {
     let freq: u64;
     unsafe {
         core::arch::asm!(
-            "isb",
-            "mrs {cnt}, cntpct_el0",
             "mrs {frq}, cntfrq_el0",
-            cnt = out(reg) count,
             frq = out(reg) freq,
         );
     }
-    count / (freq / 1000)
+
+    unsafe { NonZero::new_unchecked(freq / 1_000_000) }
 }
 
-#[allow(unused)]
 #[inline(always)]
-/// Returns the number of microseconds since the CPU was started
-pub fn time_us() -> u64 {
+#[allow(unused)]
+/// Returns the number of CPU cycles since the CPU was started
+pub fn cpu_cycles() -> u64 {
     let count: u64;
-    let freq: u64;
     unsafe {
         core::arch::asm!(
             "isb",
             "mrs {cnt}, cntpct_el0",
-            "mrs {frq}, cntfrq_el0",
             cnt = out(reg) count,
-            frq = out(reg) freq,
         );
     }
-    count / (freq / 1000 / 1000)
+    count
 }

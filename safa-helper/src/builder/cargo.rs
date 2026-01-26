@@ -26,15 +26,28 @@ impl RustcTarget {
     }
 }
 
-fn cargo_raw<I>(arch: ArchTarget, target: RustcTarget, args: I) -> Vec<Message>
+pub fn cargo_raw<I>(
+    target: Option<(ArchTarget, RustcTarget)>,
+    args: I,
+    work_dir: impl AsRef<Path>,
+    parse_diagnostics: bool,
+) -> impl Iterator<Item = Message>
 where
     I: Iterator<Item = &'static str>,
 {
-    let output = Command::new("cargo")
-        .args(args)
-        .arg("--target")
-        .arg(target.into_cargo_target(arch))
-        .arg("--message-format=json-render-diagnostics")
+    let mut command = Command::new("cargo");
+    command.args(args);
+
+    if let Some((arch, target)) = target {
+        command.arg("--target").arg(target.into_cargo_target(arch));
+    }
+
+    if parse_diagnostics {
+        command.arg("--message-format=json-render-diagnostics");
+    }
+
+    let output = command
+        .current_dir(work_dir)
         .stderr(Stdio::inherit())
         .output()
         .expect("failed to execute cargo");
@@ -47,7 +60,7 @@ where
     let reader = std::io::Cursor::new(output.stdout);
     let results = Message::parse_stream(reader);
     let results = results.filter_map(|s| s.ok());
-    results.collect()
+    results
 }
 
 /// Builds a crate and returns the path to the full path of the executable and the executable name.
@@ -71,9 +84,10 @@ where
     let cwd = std::env::current_dir().expect("failed to get current directory");
     // because cargo doesn't have a stable -C flag
     std::env::set_current_dir(crate_path).expect("failed to set current directory");
-    let results = cargo_raw(arch, target, args);
 
+    let results: Vec<Message> = cargo_raw(Some((arch, target)), args, &crate_path, true).collect();
     let results = results.into_iter();
+
     let results = results.filter(|message| match message {
         Message::CompilerArtifact(_) => true,
         Message::BuildFinished(_) => true,

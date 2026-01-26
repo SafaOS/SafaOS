@@ -80,6 +80,22 @@ macro_rules! log {
     };
 }
 
+/// Returns the path to the userspace crates directory from the given root.
+pub fn userspace_crates_path(root_repo_path: &Path) -> PathBuf {
+    let userspace_crates_path = root_repo_path.join(USERSPACE_CRATES_PATH);
+    userspace_crates_path
+}
+
+/// Returns an iterator over the crates in the given path.
+pub fn path_crates(path: &Path) -> impl Iterator<Item = PathBuf> {
+    let crates_dir = fs::read_dir(path).expect("failed to read the crates-user dir");
+
+    crates_dir
+        .filter_map(|i| i.ok())
+        .filter(|i| i.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|i| i.path())
+}
+
 impl<'a> Builder<'a> {
     /// Constructs a new builder with the default settings
     pub fn create_advanced(root_repo_path: &'a Path, iso_name: &str, arch: ArchTarget) -> Self {
@@ -142,16 +158,8 @@ impl<'a> Builder<'a> {
             return Vec::new();
         }
 
-        let userspace_crates_path = self.root_repo_path.join(USERSPACE_CRATES_PATH);
-        let userspace_crates_dir =
-            fs::read_dir(userspace_crates_path).expect("failed to read the crates-user dir");
-
-        let crates: Vec<PathBuf> = userspace_crates_dir
-            .filter_map(|i| i.ok())
-            .filter(|i| i.file_type().is_ok_and(|t| t.is_dir()))
-            .map(|i| i.path())
-            .collect();
-
+        let userspace_crates_path = userspace_crates_path(&self.root_repo_path);
+        let crates: Vec<PathBuf> = path_crates(&userspace_crates_path).collect();
         let mut results = Vec::with_capacity(crates.len());
         for cr in crates {
             let binaries = cargo::build_safaos(&cr, self.arch, &["--release"]);
@@ -214,6 +222,7 @@ impl<'a> Builder<'a> {
             .finish()
             .expect("failed to finish building the ramdisk.tar");
         log!("finished building ramdisk");
+        fs::remove_dir_all(ramdisk_build_path).expect("Failed to clean-up ramdisk");
         Ok(())
     }
 
@@ -234,7 +243,8 @@ impl<'a> Builder<'a> {
         assert_eq!(
             kernel_elf.len(),
             1,
-            "failed building the kernel: no kernel elf built or multiple kernel elfs built"
+            "failed building the kernel: no kernel elf built or multiple kernel elfs built, repo path: {}",
+            kernel_crate_path.display()
         );
 
         let (kernel_elf, _) = kernel_elf.next().unwrap();

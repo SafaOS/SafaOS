@@ -4,11 +4,12 @@ use core::num::NonZero;
 use core::sync::atomic::AtomicU32;
 
 use crate::process::{self, Pid, WaitOnProcReason};
+use crate::scheduler::SCHEDULER;
 use crate::scheduler::wait_queue::WaitError;
 use crate::thread::Tid;
 use crate::{
     arch::without_interrupts,
-    scheduler::{self, SCHEDULER_INITED},
+    scheduler::{self},
     thread, warn,
 };
 
@@ -19,7 +20,7 @@ use crate::{
 pub fn exit(code: isize) -> ! {
     without_interrupts(|| {
         // current thread should be dropped at the end of this
-        unsafe { thread::with_current(|curr| curr.kill(code)) }
+        unsafe { thread::with_current_unsafe(|curr| (*curr).clone().kill(code)) }
         self::yield_now();
         unreachable!("thread didn't exit")
     })
@@ -31,18 +32,19 @@ pub fn sleep_for_ms(ms: u64) -> Result<(), WaitError> {
         return Ok(());
     };
 
-    without_interrupts(|| {
-        thread::with_current(|current| {
-            current.prepare_sleep_for_ms(ms);
-            yield_now();
+    without_interrupts(|| unsafe {
+        thread::with_current_unsafe(|current| {
+            // Do the cloning here instead of calling [`thread::with_current`], to avoid double disabling interrupts.
+            let current = (&*current).clone();
+
+            if current.prepare_sleep_for_ms(ms) {
+                yield_now();
+            }
 
             if current.should_terminate() {
                 Err(WaitError::ForceTerminated)
             } else {
-                assert!(
-                    unsafe { current.operation_timeout() },
-                    "thread didn't sleep"
-                );
+                assert!(current.operation_timeout(), "thread didn't sleep",);
                 Ok(())
             }
         })
@@ -52,15 +54,12 @@ pub fn sleep_for_ms(ms: u64) -> Result<(), WaitError> {
 /// Yields execution to the next thread that is ready to run, in the thread queue for the current CPU.
 pub fn yield_now() {
     without_interrupts(|| {
-        if !unsafe { *SCHEDULER_INITED.get() } {
+        if SCHEDULER.maybe_borrow().is_none() {
             return;
         }
 
-        unsafe {
-            crate::scheduler::before_thread_yield();
-        }
         crate::arch::threading::invoke_context_switch()
-    });
+    })
 }
 
 /// Sleeps the current thread until the process with `pid` exits.
@@ -107,7 +106,7 @@ pub fn wait_for_process(pid: Pid) -> Result<Option<isize>, WaitError> {
 //
 // returns true if the thread was awaited false if it wasn't
 pub fn wait_for_thread(tid: Tid) -> Result<bool, WaitError> {
-    thread::with_current(|this_thread| {
+    thread::with_current_ref(|this_thread| {
         let this_process = this_thread.process();
         let try_remove = this_process
             .threads_manager()

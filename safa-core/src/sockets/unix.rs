@@ -10,7 +10,7 @@ use rustc_hash::FxBuildHasher;
 use safa_abi::{errors::ErrorStatus, poll::PollEvents, sockets::SockMsgFlags};
 
 use crate::{
-    memory::{page_allocator::PageAlloc, paging::PAGE_SIZE},
+    memory::{paging::PAGE_SIZE, vmm::VMMAlloc},
     process::poll::{self, PollID},
     scheduler::wait_queue::WaitQueue,
     sockets::{Socket, SocketAddrRef, SocketError},
@@ -25,13 +25,16 @@ const STREAM_SIZE: usize = (PAGE_SIZE * 2) - size_of::<heapless::Vec<u8, 0>>();
 /// One side of a stream connection.
 #[derive(Debug)]
 pub(super) struct Stream {
-    data: Box<heapless::Vec<u8, STREAM_SIZE>, PageAlloc>,
+    data: Box<heapless::Vec<u8, STREAM_SIZE>, VMMAlloc>,
 }
 
 impl Stream {
     pub fn new() -> Self {
         Self {
-            data: Box::new_in(heapless::Vec::new(), PageAlloc),
+            data: Box::new_in(
+                heapless::Vec::new(),
+                VMMAlloc::new(&"sockets::unix::Stream"),
+            ),
         }
     }
 
@@ -145,8 +148,6 @@ pub enum LocalSocketKind {
 enum Status {
     Disconnected,
     Listening {
-        /// # Safety: Modifications MUST BE guarded by a lock on accept_queue
-        current: UnsafeCell<usize>,
         max: usize,
         accept_queue: Mutex<WaitQueue<1, Arc<LocalSocket>>>,
     },
@@ -207,7 +208,6 @@ impl Drop for LocalSocket {
     fn drop(&mut self) {
         self.unbind_mut();
         poll::stop_tracking_id(self.poll_id());
-        crate::serial!("IT SHOULD BE DROPPED NOW\n");
     }
 }
 
@@ -237,7 +237,6 @@ impl LocalSocket {
         match &mut *status_guard {
             Status::Disconnected => {
                 *status_guard = Status::Listening {
-                    current: UnsafeCell::new(0),
                     max: backlog,
                     accept_queue: Mutex::new(WaitQueue::new()),
                 };
@@ -248,7 +247,7 @@ impl LocalSocket {
         }
     }
 
-    fn create_connected(connect_with: Arc<LocalSocket>, can_block: bool) -> Arc<Self> {
+    fn create_connected(connect_with: &Arc<LocalSocket>, can_block: bool) -> Arc<Self> {
         let mut status_guard = connect_with.status.write();
         let kind = connect_with.kind;
 
@@ -271,15 +270,26 @@ impl LocalSocket {
 
     fn try_accept_connection(&self) -> Result<Arc<LocalSocket>, SocketError> {
         match &*self.status.read() {
-            Status::Listening { accept_queue, .. } => {
+            Status::Listening { accept_queue, max } => {
                 let can_block = self.timeout_info.read().can_block;
                 loop {
                     let mut queue_guard = accept_queue.lock();
 
-                    if let Some(connection) = queue_guard.try_pop_one(|reason| Some(reason.clone()))
+                    if let Some(new) = queue_guard
+                        .try_pop_one(|reason| Some(Self::create_connected(reason, can_block)))
                     {
-                        unsafe { *connection.conn_accepted.get() = true };
-                        let new = Self::create_connected(connection, can_block);
+                        let mut add = PollEvents::NONE;
+                        let mut remove = PollEvents::NONE;
+
+                        if queue_guard.is_empty() {
+                            remove = PollEvents::DATA_AVAILABLE;
+                        }
+
+                        if queue_guard.len() == *max - 1 {
+                            add = PollEvents::CAN_WRITE;
+                        }
+
+                        poll::broadcast_events(self.poll_id(), add, remove);
                         break Ok(new);
                     } else if !can_block {
                         break Err(SocketError::WouldBlockNoConnectionRequests);
@@ -482,11 +492,7 @@ impl LocalSocket {
 
     pub fn try_connect_with(&self, other: Arc<LocalSocket>) -> Result<(), SocketError> {
         match &*other.status.read() {
-            Status::Listening {
-                current,
-                max,
-                accept_queue,
-            } => {
+            Status::Listening { max, accept_queue } => {
                 if other.kind != self.kind {
                     return Err(SocketError::TypeMismatch);
                 }
@@ -494,21 +500,18 @@ impl LocalSocket {
                 let max = *max;
                 let pending_wait = accept_queue.prepare_wait();
 
-                let curr = unsafe { &mut *current.get() };
-                assert!(*curr <= max);
-                if *curr == max {
+                assert!(pending_wait.len() <= max);
+                if pending_wait.len() == max {
                     return Err(SocketError::ConnectionRefused);
                 }
 
-                let events_add = if *curr == 0 {
+                let events_add = if pending_wait.is_empty() {
                     PollEvents::DATA_AVAILABLE
                 } else {
                     PollEvents::NONE
                 };
 
-                *curr += 1;
-
-                let events_remove = if *curr == max {
+                let events_remove = if pending_wait.len() == max - 1 {
                     PollEvents::CAN_WRITE
                 } else {
                     PollEvents::NONE

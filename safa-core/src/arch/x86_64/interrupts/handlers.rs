@@ -1,5 +1,4 @@
 use super::super::syscalls::syscall_base;
-use super::pit;
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -8,14 +7,15 @@ use lazy_static::lazy_static;
 use super::idt::{GateDescriptor, IDTT};
 use super::{InterruptFrame, TrapFrame};
 
-use crate::arch::without_interrupts;
 use crate::arch::x86_64::interrupts::apic::send_eoi;
 use crate::arch::x86_64::interrupts::ps2::{self};
-use crate::arch::x86_64::{flush_cache_inner, threading};
+use crate::arch::x86_64::{threading, tlb};
 use crate::{khalt, serial};
 
-pub const HALT_ALL_HANDLER_ID: u8 = 0x23;
-pub const FLUSH_CACHE_ALL_ID: u8 = 0x24;
+pub static NMI_REASON: AtomicUsize = AtomicUsize::new(0);
+
+pub const HALT_ALL_NMI: usize = 0x23;
+pub const TLBI_ID: u8 = 0x24;
 pub const APIC_ERROR_HANDLER_ID: u8 = 0x25;
 pub const MOUSE_HANDLER_ID: u8 = 0x26;
 
@@ -50,6 +50,7 @@ macro_rules! create_idt {
 lazy_static! {
     pub static ref IDT: SyncUnsafeCell<IDTT> = create_idt!(
         (0, divide_by_zero_handler, ATTR_INT),
+        (2, nmi_handler, ATTR_INT),
         (3, breakpoint_handler, ATTR_INT | ATTR_RING3),
         (6, invalid_opcode, ATTR_INT),
         (8, double_fault_handler, ATTR_TRAP, 0),
@@ -59,34 +60,30 @@ lazy_static! {
         (0x13, simd_exception_handler, ATTR_TRAP),
         (0x20, threading::context_switch_stub, ATTR_INT, 1),
         (0x21, keyboard_interrupt_handler, ATTR_INT),
-        (0x22, pit::pit_handler, ATTR_INT),
-        (HALT_ALL_HANDLER_ID, halt_handler, ATTR_INT),
-        (FLUSH_CACHE_ALL_ID, flush_cache_handler, ATTR_INT),
+        (TLBI_ID, tlb::tlbi_flush_handler, ATTR_INT),
         (APIC_ERROR_HANDLER_ID, apic_err, ATTR_INT),
         (MOUSE_HANDLER_ID, mice_handler, ATTR_INT),
         (0x80, syscall_base, ATTR_INT | ATTR_RING3),
         (0x81, do_nothing, ATTR_INT)
     );
 }
+
+extern "x86-interrupt" fn nmi_handler(_: InterruptFrame) {
+    match NMI_REASON.load(Ordering::Relaxed) {
+        HALT_ALL_NMI => halt_handler(),
+        r => panic!("Unknown NMI {r}"),
+    }
+}
 extern "x86-interrupt" fn apic_err(_: InterruptFrame) {
     panic!("APIC error encountured")
 }
 
 pub static HALTED_CPUS: AtomicUsize = AtomicUsize::new(0);
-extern "x86-interrupt" fn halt_handler(_: InterruptFrame) {
-    without_interrupts(|| {
-        HALTED_CPUS.fetch_add(1, Ordering::SeqCst);
-        crate::serial!("halting...\n");
-        send_eoi();
-        khalt()
-    });
-}
-
-extern "x86-interrupt" fn flush_cache_handler(_: InterruptFrame) {
-    unsafe {
-        flush_cache_inner();
-        send_eoi();
-    }
+fn halt_handler() -> ! {
+    HALTED_CPUS.fetch_add(1, Ordering::SeqCst);
+    crate::serial!("halting...\n");
+    send_eoi();
+    khalt()
 }
 
 extern "x86-interrupt" fn divide_by_zero_handler(frame: InterruptFrame) {

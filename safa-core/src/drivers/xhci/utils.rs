@@ -65,7 +65,9 @@ impl From<MapToError> for XHCIError {
     fn from(value: MapToError) -> Self {
         match value {
             MapToError::FrameAllocationFailed => Self::OutOfMemory,
-            MapToError::AlreadyMapped => Self::Other,
+            MapToError::AlreadyMapped | MapToError::NotMapped => {
+                unreachable!("XHCI Attempted to map/unmap already owned memory")
+            }
         }
     }
 }

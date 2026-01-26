@@ -14,9 +14,9 @@ use crate::{
         framebuffer::FRAMEBUFFER_DRIVER,
         vfs::{self, FSError, FSResult, SeekOffset, VFS},
     },
-    process::vas::MemMappedInterface,
+    process::mem::MemMappedInterface,
     terminal::FRAMEBUFFER_TERMINAL,
-    time,
+    timer::{DurationFmt, SystemInstant},
     utils::path::{Path, PathParts},
 };
 
@@ -45,7 +45,7 @@ pub fn add_device_at(vfs: &VFS, device: &'static dyn Device, subpath: &str) {
 /// Mounts devices to the `dev:/` file system in the VFS
 pub fn init(vfs: &mut VFS) {
     debug!(VFS, "Initializing devices ...");
-    let now = time!(ms);
+    let now = SystemInstant::now();
     vfs.mount(
         DriveName::new_const("dev"),
         RwLock::new(vfs::ramfs::RamFS::create()),
@@ -57,8 +57,8 @@ pub fn init(vfs: &mut VFS) {
     add_device(vfs, &KEYBOARD_EVENT_QUEUE);
     add_device(vfs, &MICE_EVENT_QUEUE);
 
-    let elapsed = time!(ms) - now;
-    debug!(VFS, "Initialized devices in ({}ms) ...", elapsed);
+    let elapsed = DurationFmt::new(now.elapsed());
+    debug!(VFS, "Initialized devices in {} ...", elapsed);
 }
 
 /// A generic Device, can be a static Device where any interaction would apply to all open descriptors or a different interface for each descriptor

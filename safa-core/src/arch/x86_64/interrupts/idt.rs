@@ -52,6 +52,6 @@ impl GateDescriptor {
 lazy_static! {
     pub static ref IDTDesc: IDTDescriptor = IDTDescriptor {
         limit: (size_of::<IDTT>() - 1) as u16,
-        base: IDT.get() as usize
+        base: IDT.get() as usize,
     };
 }

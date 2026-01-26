@@ -11,7 +11,9 @@ use flate2::bufread::GzDecoder;
 use tempfile::NamedTempFile;
 
 use crate::{
-    ROOT_REPO_PATH, log,
+    ROOT_REPO_PATH,
+    cargo::cargo_raw,
+    log, path_crates, userspace_crates_path,
     utils::{self, ArchTarget},
 };
 
@@ -95,6 +97,25 @@ fn toolchain_root(arch: ArchTarget) -> PathBuf {
     TOOLCHAIN_SYSROOT.join(format!("{}-unknown-safaos", arch.as_str()))
 }
 
+/// `cargo clean`s all userspace crates.
+pub fn reset_userspace() {
+    let path = userspace_crates_path(&*ROOT_REPO_PATH);
+    log!("Cleaning crates at: {}", path.display());
+    let crates = path_crates(&path);
+    let mut count = 0;
+    for manifest_path in crates.map(|p| p.join("Cargo.toml")).filter(|p| p.exists()) {
+        _ = cargo_raw(
+            None,
+            ["clean"].into_iter(),
+            manifest_path.parent().unwrap(),
+            false,
+        );
+        count += 1;
+    }
+
+    log!("Cleaned {} crates", count);
+}
+
 pub fn install_safaos_toolchain(arch: ArchTarget) -> io::Result<()> {
     log!("installing the SafaOS toolchain");
     let api_url = "https://api.github.com/repos/SafaOS/rust/releases";
@@ -153,6 +174,10 @@ pub fn install_safaos_toolchain(arch: ArchTarget) -> io::Result<()> {
     file.seek(io::SeekFrom::Start(0))?;
 
     let toolchain_root = toolchain_root(arch);
+    log!("Deleting and reconstructing: {}", toolchain_root.display());
+    _ = std::fs::remove_dir_all(&toolchain_root);
+    std::fs::create_dir_all(&toolchain_root).expect("Failed to create toolchain root");
+
     log!(
         "extracting downloaded file from {} to {}",
         file.path().display(),

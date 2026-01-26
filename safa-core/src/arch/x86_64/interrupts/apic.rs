@@ -1,35 +1,47 @@
-use super::pit;
 use crate::{
     PhysAddr, VirtAddr,
     arch::{
-        paging::PageTable,
+        registers::ArchCpuID,
         x86_64::{
             acpi,
-            interrupts::handlers::{APIC_ERROR_HANDLER_ID, MOUSE_HANDLER_ID},
+            interrupts::handlers::{APIC_ERROR_HANDLER_ID, MOUSE_HANDLER_ID, NMI_REASON},
             io::outb,
             registers::{rdmsr, wrmsr},
-            utils::APIC_TIMER_TICKS_PER_MS,
+            tsc,
         },
     },
     info,
-    memory::paging::{EntryFlags, MapToError},
+    memory::vmm::{VMMAllocError, VMMMFlags, VirtualMemoryManager},
     serial,
     utils::locks::{LazyLock, SpinLock},
 };
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
-use core::arch::asm;
+use core::{cell::UnsafeCell, num::NonZero};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum APICDeliveryMode {
+    /// Delivers the interrupt specified in the vector field to the target processor or processors.
     Fixed = 0,
+    /// Same as fixed mode, except that the interrupt is delivered to the processor executing at the lowest priority among the set of processors specified in the destination field. The ability for a processor to send a lowest priority IPI is model specific and should be avoided by BIOS and operating system software.
     LowestPiriority = 1,
+    /// Delivers an SMI interrupt to the target processor or processors. The vector field must be programmed to 00H for future compatibility.
     SMI = 0b010,
     Reserved = 0b011,
+    /// Delivers an NMI interrupt to the target processor or processors. The vector information is ignored.
     NMI = 0b100,
+    /// Delivers an INIT request to the target processor or processors, which causes them to perform an INIT.
     INIT = 0b101,
+    /// Sends a special start-up IPI (called a SIPI) to the target processor or processors.
+    ///
+    /// The vector typically points to a start-up routine that is part of the BIOS boot-strap code
+    /// (see Section 8.4, Multiple-Processor (MP) Initialization).
+    ///
+    /// IPIs sent with this delivery mode are not automatically retried if the source APIC is unable to deliver it.
+    ///
+    /// It is up to the software to deter- mine if the SIPI was not successfully delivered and to reissue the SIPI if necessary.
     StartUp = 0b110,
     Reserved2 = 0b111,
 }
@@ -49,9 +61,13 @@ impl APICDeliveryMode {
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum APICDestShorthand {
+    /// No short hand. the destination is controlled by the other interrupt register.
     NoShortHand = 0,
+    /// Send to only Self
     SelfOnly = 1,
+    /// Send to all CPUs
     All = 2,
+    /// Send to all CPUs excluding Self
     ExcludingSelf = 3,
 }
 
@@ -83,18 +99,15 @@ pub struct APICICReg {
     delivery_send_pending: bool,
     #[bits(1)]
     __: (),
+    /// Clear for INIT level de-assert, otherwise set.
     /// Level
     ///
     /// 0 == De-assert
     ///
     /// 1 == Assert
-    assert: bool,
-    /// Trigger Mode
-    ///
-    /// 0 == Edge Triggered
-    ///
-    /// 1 == Level TRiggered
-    level_triggered: bool,
+    no_init_level_deassert: bool,
+    /// Set for INIT level de-assert, otherwise clear
+    init_level_deassert: bool,
     #[bits(2)]
     __: (),
     #[bits(2)]
@@ -107,9 +120,9 @@ pub struct APICICReg {
 /// The APIC driver
 pub struct Apic {
     lapic_phys_addr: PhysAddr,
-    lapic_virt_addr: VirtAddr,
+    lapic_virt_addr: UnsafeCell<VirtAddr>,
     ioapic_phys_addr: PhysAddr,
-    ioapic_virt_addr: VirtAddr,
+    ioapic_virt_addr: UnsafeCell<VirtAddr>,
 }
 
 impl Apic {
@@ -117,7 +130,6 @@ impl Apic {
     pub fn get() -> Option<Self> {
         let lapic_phys = rdmsr(0x1B) & 0xFFFFF000;
         let lapic_phys_addr = PhysAddr::from(lapic_phys);
-        let lapic_virt_addr = lapic_phys_addr.into_virt();
 
         let ioapic_phys_addr = unsafe {
             let madt = (*acpi::MADT_DESC)?;
@@ -126,28 +138,35 @@ impl Apic {
             let addr = PhysAddr::from((*record).ioapic_address as usize);
             addr
         };
-        let ioapic_virt_addr = ioapic_phys_addr.into_virt();
         Some(Self {
             ioapic_phys_addr,
-            ioapic_virt_addr,
-            lapic_virt_addr,
+            ioapic_virt_addr: UnsafeCell::new(VirtAddr::null()),
+            lapic_virt_addr: UnsafeCell::new(VirtAddr::null()),
             lapic_phys_addr,
         })
     }
-    /// Maps the IOAPIC and the Local APIC to the `dest` page table
-    pub fn map(&self, dest: &mut PageTable) -> Result<(), MapToError> {
-        let flags = EntryFlags::WRITE | EntryFlags::DEVICE_UNCACHEABLE;
+    /// Maps the IOAPIC and the Local APIC to the `dest` VMM
+    ///
+    /// # Safety:
+    /// Must be called only once per APIC Driver
+    pub fn map(&self, dest: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
+        let flags = VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE;
+
+        let lapic_addr =
+            dest.map_direct_phys(&"LOCAL APIC", None, self.lapic_phys_addr, 1, flags)?;
+        let io_apic_addr =
+            dest.map_direct_phys(&"IO APIC", None, self.ioapic_phys_addr, 1, flags)?;
 
         unsafe {
-            dest.map_contiguous_pages(self.lapic_virt_addr, self.lapic_phys_addr, 1, flags)?;
-            dest.map_contiguous_pages(self.ioapic_virt_addr, self.ioapic_phys_addr, 1, flags)?;
+            *self.lapic_virt_addr.get() = lapic_addr;
+            *self.ioapic_virt_addr.get() = io_apic_addr;
         }
         Ok(())
     }
 
     #[inline(always)]
     const fn get_lapic_reg_addr(&self, lapic_reg: u16) -> VirtAddr {
-        self.lapic_virt_addr + lapic_reg as usize
+        unsafe { *self.lapic_virt_addr.get() + lapic_reg as usize }
     }
 
     #[inline(always)]
@@ -171,8 +190,8 @@ impl Apic {
 
     pub unsafe fn write_ioapic_val_to_reg(&self, reg: u8, val: u32) {
         unsafe {
-            let ioregsel_addr = self.ioapic_virt_addr.into_ptr::<u32>();
-            let iowin_addr = (self.ioapic_virt_addr + 0x10).into_ptr::<u32>();
+            let ioregsel_addr = (*self.ioapic_virt_addr.get()).into_ptr::<u32>();
+            let iowin_addr = (*self.ioapic_virt_addr.get() + 0x10).into_ptr::<u32>();
 
             core::ptr::write_volatile(ioregsel_addr, reg as u32);
             core::ptr::write_volatile(iowin_addr, val);
@@ -181,8 +200,8 @@ impl Apic {
 
     pub fn read_ioapic_reg(&self, reg: u8) -> u32 {
         unsafe {
-            let ioregsel_addr = self.ioapic_virt_addr.into_ptr::<u32>();
-            let iowin_addr = (self.ioapic_virt_addr + 0x10).into_ptr::<u32>();
+            let ioregsel_addr = (*self.ioapic_virt_addr.get()).into_ptr::<u32>();
+            let iowin_addr = (*self.ioapic_virt_addr.get() + 0x10).into_ptr::<u32>();
 
             core::ptr::write_volatile(ioregsel_addr, reg as u32);
             core::ptr::read_volatile(iowin_addr)
@@ -201,8 +220,8 @@ impl Apic {
         let value_bits = value.into_bits();
         let (value_low, value_high) = (value_bits as u32, (value_bits >> 32) as u32);
         unsafe {
-            low.write_volatile(value_low);
             high.write_volatile(value_high);
+            low.write_volatile(value_low);
         }
     }
 
@@ -227,18 +246,34 @@ impl Apic {
 
     #[inline]
     /// Sends an NMI to all processors
-    pub fn send_nmi_all(&self, vector: u8) {
+    pub fn send_nmi_all(&self, reason: usize) {
         static _NMI_SEND: SpinLock<()> = SpinLock::new(());
         let _guard = _NMI_SEND.lock();
+        NMI_REASON.store(reason, core::sync::atomic::Ordering::Relaxed);
 
         self.write_ic_reg(
             APICICReg::new()
-                .with_destination_shorthand(APICDestShorthand::ExcludingSelf)
-                .with_vector(vector),
+                .with_delivery_mode(APICDeliveryMode::NMI)
+                .with_destination_shorthand(APICDestShorthand::ExcludingSelf),
         );
 
         while self.read_ic_reg().delivery_send_pending() {
             core::hint::spin_loop();
+        }
+    }
+
+    #[inline]
+    /// Send an IPI to a target CPU
+    pub fn send_ipi_to(&self, vector: u8, target: ArchCpuID) {
+        self.write_ic_reg(
+            APICICReg::new()
+                .with_destination_shorthand(APICDestShorthand::NoShortHand)
+                .with_vector(vector)
+                .with_destination_field(target.lapic_id()),
+        );
+
+        while self.read_ic_reg().delivery_send_pending() {
+            core::hint::spin_loop()
         }
     }
 
@@ -286,46 +321,42 @@ impl Apic {
         }
     }
 
-    pub fn enable_apic_timer(&self) {
+    pub fn enable_apic_timer(&self, tsc_frequency: NonZero<u64>) {
         let lapic_id = self.lapic_id();
-        static _CALIBRATE_LOCK: SpinLock<()> = SpinLock::new(());
-        let _guard = _CALIBRATE_LOCK.lock();
 
         info!("enabling apic timer for lapic: {lapic_id}...");
-        fn apic_timer_ms_to_ticks(ms: u64) -> u32 {
-            let ticks_per_ms = unsafe { core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) };
-            (ms * ticks_per_ms) as u32
-        }
 
         let addr = self.get_lapic_reg(0x320);
         let init = self.get_lapic_reg(0x380);
         let divide = self.get_lapic_reg(0x3E0).cast::<u8>();
         let current_counter = self.get_lapic_reg(0x390);
 
+        let ticks_per_us;
         // calibrate the timer
         unsafe {
+            const SLEEP_MS: u32 = 10;
             serial!("calibrating the apic timer\n");
-            let timer = LVTEntry::new(0x81, LVTEntryFlags::empty());
 
+            let timer = LVTEntry::new(0x81, LVTEntryFlags::empty());
             core::ptr::write_volatile(addr, timer.encode_u32());
             core::ptr::write_volatile(divide, 0x3);
-            pit::prepare_sleep(100);
 
             core::ptr::write_volatile(init, u32::MAX);
 
-            asm!("sti");
-            let diff_tick = pit::calibrate_sleep(
-                lapic_id,
-                || (),
-                |()| u32::MAX - current_counter.read_volatile(),
-            );
-            asm!("cli");
+            let read_apic_count = || u32::MAX - current_counter.read_volatile();
+            let read_tsc_ticks = || crate::arch::utils::cpu_cycles();
 
-            core::ptr::write_volatile(APIC_TIMER_TICKS_PER_MS.get(), diff_tick as u64 / 100);
-            info!(
-                "APIC Timer calibrated with {} ticks in 100ms",
-                core::ptr::read(APIC_TIMER_TICKS_PER_MS.get()) * 100
-            );
+            // Calibration
+            let beginning_tsc = read_tsc_ticks();
+            let beginning_apic = read_apic_count();
+
+            let end_tsc = beginning_tsc + (tsc_frequency.get() * (SLEEP_MS * 1000) as u64);
+            // Loop until TSC reaches the count and [SLEEP_MS] has passed.
+            while read_tsc_ticks() < end_tsc {}
+            let end_apic = read_apic_count();
+
+            ticks_per_us = ((end_apic - beginning_apic) as u64 / SLEEP_MS as u64) / 1000;
+            info!("APIC Timer calibrated with {} ticks in 1us", ticks_per_us);
         }
 
         // enable the timer
@@ -334,7 +365,10 @@ impl Apic {
             core::ptr::write_volatile(addr, timer.encode_u32());
             core::ptr::write_volatile(divide, 0x3);
 
-            core::ptr::write_volatile(init, apic_timer_ms_to_ticks(5));
+            core::ptr::write_volatile(
+                init,
+                (crate::scheduler::TIME_PER_QUANTUM * 1000) * ticks_per_us as u32,
+            );
         }
     }
 
@@ -359,8 +393,16 @@ impl Apic {
         }
     }
 
+    /// Setups the APIC timer.
+    ///
+    /// Requires the TSC to be calibrated first.
+    fn setup_timer(&self) {
+        let freq = tsc::tsc_freq_mhz();
+        self.enable_apic_timer(freq);
+    }
+
     /// Setups the APIC and related devices for the current CPU
-    fn setup_local(&self, tsc_ticks_per_ms_output: &mut u64) {
+    fn setup_local(&self) {
         self.enable_apic();
         let sivr = self.get_lapic_reg(0xF0);
 
@@ -372,14 +414,11 @@ impl Apic {
 
             info!(
                 "enabled APIC, lapic_id is {lapic_id}, ioapic_id is {ioapic_id}, IO APIC is at {:#x}, local APIC is at {:#x}",
-                self.ioapic_virt_addr, self.lapic_virt_addr
+                *self.ioapic_virt_addr.get(),
+                *self.lapic_virt_addr.get(),
             );
-            static _ENABLE_LOCK: SpinLock<()> = SpinLock::new(());
-            let _guard = _ENABLE_LOCK.lock();
 
             self.configure_error();
-            calibrate_tsc(lapic_id, tsc_ticks_per_ms_output);
-            self.enable_apic_timer();
         }
     }
 
@@ -389,13 +428,24 @@ impl Apic {
     }
 }
 
+unsafe impl Sync for Apic {}
+
 pub static APIC: LazyLock<Apic> = LazyLock::new(|| Apic::get().expect("Apic not supported"));
 
 /// Sends an NMI to all processors
-pub fn send_nmi_all(vector: u8) {
+pub fn send_nmi_all(reason: usize) {
     // If not then the apic isn't initialized and so is other processors
     if let Some(apic) = APIC.get() {
-        apic.send_nmi_all(vector)
+        apic.send_nmi_all(reason)
+    }
+}
+
+#[inline]
+/// Send an IPI to a target CPU
+pub fn send_ipi_to(vector: u8, target: ArchCpuID) {
+    // If not then the apic isn't initialized and so is other processors
+    if let Some(apic) = APIC.get() {
+        apic.send_ipi_to(vector, target)
     }
 }
 
@@ -452,7 +502,7 @@ pub struct IOREDTBL {
     level_triggered: bool,
     pub(super) masked: bool,
 
-    timer_perodic: bool,
+    timer_periodic: bool,
     tsc_deadline: bool,
     #[bits(37)]
     __: (),
@@ -476,32 +526,17 @@ pub fn enable_apic_mouse() {
     APIC.enable_apic_mouse()
 }
 
-pub fn calibrate_tsc(lapic_id: u8, ticks_per_ms: &mut u64) {
-    static _CALIBRATE_LOCK: SpinLock<()> = SpinLock::new(());
-    let _guard = _CALIBRATE_LOCK.lock();
-    serial!("calbrating tsc\n");
-    unsafe {
-        pit::prepare_sleep(100);
-
-        asm!("sti");
-        let diff_tick = pit::calibrate_sleep(
-            lapic_id,
-            || core::arch::x86_64::_rdtsc(),
-            |x| core::arch::x86_64::_rdtsc() - x,
-        );
-        asm!("cli");
-
-        *ticks_per_ms = diff_tick / 100;
-        info!("calibrated TSC with {} ticks in 100ms", *ticks_per_ms);
-    }
+/// Genericly enables APIC interrupts for the current CPU
+pub fn enable_apic_interrupts_generic() {
+    APIC.setup_local()
 }
 
-/// Genericly enables APIC interrupts and the APIC timer for the current CPU, fills `tsc_ticks_per_ms_output` with the amount of ticks per a ms in the TSC
-pub fn enable_apic_interrupts_generic(tsc_ticks_per_ms_output: &mut u64) {
-    APIC.setup_local(tsc_ticks_per_ms_output)
+/// Setups the APIC timer, requires the TSC to be calibrated first.
+pub fn setup_timer() {
+    APIC.setup_timer()
 }
 
-/// Maps the IOAPIC and the Local APIC to the `dest` page table
-pub fn map_apic(dest: &mut PageTable) -> Result<(), MapToError> {
+/// Maps the IOAPIC and the Local APIC to the `dest` VMM
+pub fn map_apic(dest: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
     APIC.map(dest)
 }

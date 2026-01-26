@@ -1,4 +1,3 @@
-pub mod driver_poll;
 pub mod framebuffer;
 pub mod interrupts;
 pub mod keyboard;

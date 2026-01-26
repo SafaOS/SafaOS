@@ -117,9 +117,8 @@ use safa_abi::errors::ErrorStatus;
 /// returns the new program break ptr
 /// on fail returns null
 pub fn extend_data_break(amount: isize) -> Result<*mut u8, ErrorStatus> {
-    let current_process = process::current();
-    let mut vasa = current_process.vasa();
-    Ok(vasa.extend_data_by(amount)?)
+    warn!("sbrk called with {amount}, returning -1 as it was deprecated");
+    Err(ErrorStatus::Generic)
 }
 
 use crate::drivers::vfs::{FSResult, VFS_STRUCT};

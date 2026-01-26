@@ -1,13 +1,9 @@
-use core::{
-    any::Any,
-    fmt::Debug,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::{any::Any, fmt::Debug};
 
 use crate::{
     drivers::vfs::SeekOffset,
-    process::{self, poll::PollID, vas::MemMappedInterface},
-    thread, warn,
+    process::{self, mem::MemMappedInterface, poll::PollID},
+    warn,
 };
 use alloc::{boxed::Box, sync::Arc};
 use hashbrown::HashMap;
@@ -56,8 +52,7 @@ pub trait Resource: Any {
         Err(ErrorStatus::UnsupportedResource)
     }
     /// Attempts to create a new resource from the current one.
-    fn try_clone_into_node(&self, is_global: bool) -> Result<ResourceNodeRef, ErrorStatus> {
-        _ = is_global;
+    fn try_clone_into_node(&self) -> Result<ResourceNodeRef, ErrorStatus> {
         Err(ErrorStatus::UnsupportedResource)
     }
 
@@ -87,15 +82,11 @@ impl dyn Resource {
 /// [`Resource::try_clone_into_node`]
 pub fn generic_clone_impl<T: Resource + Clone>(
     resource: &T,
-    is_global: bool,
 ) -> Result<ResourceNodeRef, ErrorStatus> {
-    Ok(ResourceNode::create(resource.clone(), is_global))
+    Ok(ResourceNode::create(resource.clone()))
 }
 
 pub struct ResourceNodeInner<T: Resource + 'static + ?Sized> {
-    /// Whether or not the Resource is tracked by a single thread or the entire process
-    /// likely true
-    global: AtomicBool,
     data: T,
 }
 
@@ -105,19 +96,8 @@ pub type ResourceNode = ResourceNodeInner<dyn Resource>;
 pub type ResourceNodeRef = Arc<ResourceNode>;
 
 impl ResourceNode {
-    pub fn create<T: Resource + 'static>(data: T, is_global: bool) -> ResourceNodeRef {
-        Arc::new(ResourceNodeInner {
-            data: data,
-            global: AtomicBool::new(is_global),
-        })
-    }
-
-    pub fn create_global<T: Resource + 'static>(data: T) -> ResourceNodeRef {
-        Self::create(data, true)
-    }
-
-    pub fn create_local<T: Resource + 'static>(data: T) -> ResourceNodeRef {
-        Self::create(data, false)
+    pub fn create<T: Resource + 'static>(data: T) -> ResourceNodeRef {
+        Arc::new(ResourceNodeInner { data: data })
     }
 
     pub fn data(&self) -> &dyn Resource {
@@ -125,7 +105,7 @@ impl ResourceNode {
     }
 
     pub fn cloneable_to_different_address_space(&self) -> bool {
-        self.data.address_space_generic() && self.global.load(core::sync::atomic::Ordering::Acquire)
+        self.data.address_space_generic()
     }
 }
 
@@ -158,11 +138,7 @@ impl ResourceManager {
     }
 
     pub fn add_global_resource<R: Resource + 'static>(&mut self, data: R) -> Ri {
-        self.add_resource_node(ResourceNode::create_global(data))
-    }
-
-    pub fn add_local_resource<R: Resource + 'static>(&mut self, data: R) -> Ri {
-        self.add_resource_node(ResourceNode::create_local(data))
+        self.add_resource_node(ResourceNode::create(data))
     }
 
     #[inline]
@@ -176,20 +152,14 @@ impl ResourceManager {
 
     pub fn clone_resource(&mut self, ri: Ri) -> Option<Result<ResourceNodeRef, ErrorStatus>> {
         let resource = self.get_mut(ri)?;
-        // Only clones global resources
-        if !resource.global.load(core::sync::atomic::Ordering::Acquire) {
-            return None;
-        }
-
-        Some(resource.data().try_clone_into_node(true))
+        Some(resource.data().try_clone_into_node())
     }
 
     pub fn clone(&self) -> Self {
         let mut resources = HashMap::with_capacity(self.resources.capacity());
         for (res_id, res) in self.resources.iter() {
             if res.cloneable_to_different_address_space()
-                && res.global.load(Ordering::Acquire)
-                && let Ok(res) = res.data().try_clone_into_node(true)
+                && let Ok(res) = res.data().try_clone_into_node()
             {
                 resources.insert(*res_id, res);
             }
@@ -241,8 +211,7 @@ impl ResourceManager {
     }
 
     pub fn drop_all(&mut self) {
-        let mut toke = core::mem::replace(self, ResourceManager::new());
-        for (ri, res) in toke.resources.drain() {
+        for (ri, res) in self.resources.drain() {
             if Arc::strong_count(&res) != 1 {
                 warn!(
                     ResourceManager,
@@ -251,6 +220,12 @@ impl ResourceManager {
                 );
             }
         }
+    }
+}
+
+impl Drop for ResourceManager {
+    fn drop(&mut self) {
+        self.drop_all();
     }
 }
 
@@ -280,18 +255,6 @@ where
 pub fn add_global_resource<R: Resource + 'static>(resource_data: R) -> Ri {
     let this = process::current();
     this.resources_mut().add_global_resource(resource_data)
-}
-
-/// Adds a resource that lives as long as the current thread not the process, to the current process
-pub fn add_local_resource<R: Resource + 'static>(resource_data: R) -> Ri {
-    thread::with_current(|curr_thread| {
-        let curr_process = curr_thread.process();
-        let ri = curr_process
-            .resources_mut()
-            .add_local_resource(resource_data);
-        curr_thread.take_resources(&[ri]);
-        ri
-    })
 }
 
 /// Duplicates a resource return the new duplicate resource's ID or None if that resource doesn't exist

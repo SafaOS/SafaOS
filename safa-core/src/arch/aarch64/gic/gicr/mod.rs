@@ -5,7 +5,7 @@ use crate::{
     VirtAddr,
     arch::aarch64::{
         gic::gicr::lpis::LPI_MANAGER,
-        registers::{CPUID, MPIDR},
+        registers::{ArchCpuID, MPIDR},
     },
     info,
     memory::frame_allocator::SIZE_64K,
@@ -15,7 +15,7 @@ pub mod lpis;
 
 pub struct GICRDesc {
     base_addr: VirtAddr,
-    cpu_id: CPUID,
+    cpu_id: ArchCpuID,
     is_root: bool,
 }
 
@@ -24,7 +24,7 @@ impl GICRDesc {
         self.is_root
     }
 
-    pub const fn cpu_id(&self) -> CPUID {
+    pub const fn cpu_id(&self) -> ArchCpuID {
         self.cpu_id
     }
 
@@ -274,14 +274,14 @@ pub struct GICRTyper {
 impl GICRTyper {
     const OFFSET: usize = 0x8;
     /// Gets the cpu ID (affinity value) of the parent GICR
-    pub const fn cpu_id(&self) -> CPUID {
+    pub const fn cpu_id(&self) -> ArchCpuID {
         let af_value = self.af_value();
         let aff0 = (af_value >> 0) as u8;
         let aff1 = (af_value >> 8) as u8;
         let aff2 = (af_value >> 16) as u8;
         let aff3 = (af_value >> 24) as u8;
 
-        CPUID::construct(aff0, aff1, aff2, aff3)
+        ArchCpuID::construct(aff0, aff1, aff2, aff3)
     }
 }
 

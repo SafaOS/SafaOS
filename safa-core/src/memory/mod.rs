@@ -1,8 +1,8 @@
 pub mod buddy_allocator;
 pub mod frame_allocator;
-pub mod page_allocator;
+pub mod init;
 pub mod paging;
-pub mod sorcery;
+pub mod vmm;
 
 // FIXME: relays on unstable limine behaviour by assuming limine maps the HHDM at 0xffff800000000000 for x86_64
 // The reason why I cannot do my own HHDM offset is because of the framebuffer which limine returns a virtual pointer to, so I don't know how I should map to a different address,
@@ -208,8 +208,8 @@ impl VirtAddr {
 
 impl PhysAddr {
     #[inline(always)]
-    pub fn into_virt(self) -> VirtAddr {
-        VirtAddr(self.0 | *HHDM)
+    pub const fn into_virt(self) -> VirtAddr {
+        VirtAddr(self.0 | HHDM.0)
     }
 }
 impl<T> From<*const T> for VirtAddr {
@@ -292,7 +292,7 @@ impl_align_common!(u16);
 
 /// Copies from an address in a given page table to another address in the same page table
 #[inline(always)]
-pub fn userspace_copy_within(
+pub fn pagetable_copy_within(
     page_table: &mut PageTable,
     src_addr: VirtAddr,
     dest_addr: VirtAddr,
@@ -302,22 +302,22 @@ pub fn userspace_copy_within(
     let end_dest_addr = dest_addr + size;
 
     let src_iter = Page::iter_pages(
-        Page::containing_address(src_addr),
-        Page::containing_address(end_src_addr + PAGE_SIZE),
+        Page::containing(src_addr),
+        Page::containing(end_src_addr + PAGE_SIZE),
     );
 
     let dest_iter = Page::iter_pages(
-        Page::containing_address(dest_addr),
-        Page::containing_address(end_dest_addr + PAGE_SIZE),
+        Page::containing(dest_addr),
+        Page::containing(end_dest_addr + PAGE_SIZE),
     );
 
     let pages_iter = src_iter.zip(dest_iter);
     let phys_addr_iter = pages_iter.map(|(curr_src_page, curr_dest_page)| {
         let src_frame = page_table
-            .get_frame(curr_src_page)
+            .get_frame_of(curr_src_page)
             .expect("attempt to copy from an unmapped page");
         let dest_frame = page_table
-            .get_frame(curr_dest_page)
+            .get_frame_of(curr_dest_page)
             .expect("attempt to copy to an unmapped page");
 
         let calc_within = |curr_page: VirtAddr, start_addr: VirtAddr, end_addr: VirtAddr| {
@@ -338,10 +338,9 @@ pub fn userspace_copy_within(
             }
         };
 
-        let (curr_src_diff, to_copy) =
-            calc_within(curr_src_page.virt_addr(), src_addr, end_src_addr);
+        let (curr_src_diff, to_copy) = calc_within(curr_src_page.addr(), src_addr, end_src_addr);
 
-        let (curr_dest_diff, _) = calc_within(curr_dest_page.virt_addr(), dest_addr, end_dest_addr);
+        let (curr_dest_diff, _) = calc_within(curr_dest_page.addr(), dest_addr, end_dest_addr);
 
         let src_phys_addr = src_frame.phys_addr() + curr_src_diff;
         let dest_phys_addr = dest_frame.phys_addr() + curr_dest_diff;
@@ -364,14 +363,14 @@ pub fn userspace_copy_within(
 }
 
 #[inline(always)]
-pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8]) {
+pub fn copy_to_pagetable(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8]) {
     let pages_required = obj.len().div_ceil(PAGE_SIZE) + 1;
     let mut copied = 0;
     let mut to_copy = obj.len();
 
     for i in 0..pages_required {
-        let page = Page::containing_address(addr + copied);
-        let diff = if i == 0 { addr - page.virt_addr() } else { 0 };
+        let page = Page::containing(addr + copied);
+        let diff = if i == 0 { addr - page.addr() } else { 0 };
         let will_copy = if (to_copy + diff) >= PAGE_SIZE {
             PAGE_SIZE - diff
         } else {
@@ -382,7 +381,7 @@ pub fn copy_to_userspace(page_table: &mut PageTable, addr: VirtAddr, obj: &[u8])
             return;
         }
 
-        let Some(frame) = page_table.get_frame(page) else {
+        let Some(frame) = page_table.get_frame_of(page) else {
             panic!("attempt to copy to an unmapped page: {page:?}");
         };
 

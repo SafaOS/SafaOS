@@ -232,12 +232,6 @@ pub fn init() {
     }
 }
 
-/// Returns whether or not the serial device is ready and populated, used for debug puropses (write to qemu's serial if not ready yet)
-pub fn serial_ready() -> bool {
-    let r = unsafe { &*PL011RAW.get() };
-    r.populated
-}
-
 pub static MODEL: SyncUnsafeCell<heapless::String<48>> =
     SyncUnsafeCell::new(heapless::String::new());
 
@@ -256,6 +250,7 @@ lazy_static! {
         }
         r.base
     };
+
     /// The GICv3 registers
     /// Optional (GICC base, GICC size), (GICD base, GICD size), (GICR base, GICR size)
     pub static ref GICV3: (

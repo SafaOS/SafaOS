@@ -1,6 +1,7 @@
 use crate::drivers::vfs::SeekOffset;
-use crate::memory::paging::EntryFlags;
 use crate::memory::paging::MapToError;
+use crate::memory::vmm::Location;
+use crate::memory::vmm::VMMMFlags;
 use crate::process;
 use crate::process::resources;
 use crate::shared_mem;
@@ -33,7 +34,8 @@ pub fn sysmem_map(
     }
 
     let page_count = mmap_config.page_count;
-    let guard_pages_count = mmap_config.guard_pages_count;
+    // TODO: Implement guard pages
+    // let guard_pages_count = mmap_config.guard_pages_count;
     let addr_hint = if mmap_config.addr_hint.is_null() {
         None
     } else {
@@ -64,25 +66,23 @@ pub fn sysmem_map(
         None => None,
     };
 
-    let mut mem_flags = EntryFlags::USER_ACCESSIBLE;
+    let mut mem_flags = VMMMFlags::empty();
     if flags.contains(MemMapFlags::WRITE) {
-        mem_flags |= EntryFlags::WRITE;
+        mem_flags |= VMMMFlags::WRITEABLE;
     }
 
-    if flags.contains(MemMapFlags::DISABLE_EXEC) {
-        mem_flags |= EntryFlags::DISABLE_EXEC;
+    if !flags.contains(MemMapFlags::DISABLE_EXEC) {
+        mem_flags |= VMMMFlags::EXECUTABLE;
     }
 
-    let curr_proc = process::current();
-    let mut vasa = curr_proc.vasa();
-    let tracker = vasa.map_n_pages_tracked_interface(
-        addr_hint,
-        page_count,
-        guard_pages_count,
-        mem_flags,
-        interface,
-    )?;
-
+    let location = addr_hint.map(|s| {
+        if flags.contains(MemMapFlags::FIXED) {
+            Location::Fixed(s)
+        } else {
+            Location::Hint(s)
+        }
+    });
+    let tracker = process::mem::mem_map(location, page_count, mem_flags, interface)?;
     let start_addr = tracker.start();
     // TODO: Implement local option
     let ri = resources::add_global_resource(tracker);
@@ -104,20 +104,15 @@ impl SyscallFFI for ShmFlags {
 #[syscall_handler]
 fn sysshm_create(
     pages_count: usize,
-    flags: ShmFlags,
+    _flags: ShmFlags,
     out_shm_key: &mut ShmKey,
 ) -> Result<Ri, MapToError> {
-    let local = flags.contains(ShmFlags::LOCAL);
-
     let tracked_key =
         shared_mem::create_shm(pages_count).map_err(|()| MapToError::FrameAllocationFailed)?;
     let key = *tracked_key.key();
 
     let resource = tracked_key;
-    let ri = match local {
-        false => resources::add_global_resource(resource),
-        true => resources::add_local_resource(resource),
-    };
+    let ri = resources::add_global_resource(resource);
 
     *out_shm_key = key;
 
@@ -131,16 +126,11 @@ impl SyscallFFI for ShmKey {
     }
 }
 #[syscall_handler]
-fn sysshm_open(key: ShmKey, flags: ShmFlags) -> Result<Ri, ErrorStatus> {
+fn sysshm_open(key: ShmKey, _flags: ShmFlags) -> Result<Ri, ErrorStatus> {
     let tracked_key = shared_mem::track_shm(key).ok_or(ErrorStatus::UnknownResource)?;
 
-    let local = flags.contains(ShmFlags::LOCAL);
-
     let resource = tracked_key;
-    let ri = match local {
-        false => resources::add_global_resource(resource),
-        true => resources::add_local_resource(resource),
-    };
+    let ri = resources::add_global_resource(resource);
 
     Ok(ri)
 }

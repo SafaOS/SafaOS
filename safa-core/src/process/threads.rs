@@ -9,8 +9,11 @@ use slab::Slab;
 use crate::{
     VirtAddr,
     arch::threading::CPUStatus,
-    memory::paging::MapToError,
-    process::Process,
+    memory::{AlignToPage, paging::MapToError},
+    process::{
+        DEFAULT_STACK_SIZE, Process,
+        mem::{allocate_kernel_stack, allocate_tls, allocate_user_stack},
+    },
     thread::{ArcThread, ContextPriority, Thread, Tid},
 };
 
@@ -84,26 +87,29 @@ impl ThreadsManager {
 
         let process_mut = Arc::get_mut(process)
             .expect("More than one reference while trying to create a ThreadsManager");
-        let vasa = process_mut.vasa.get_mut();
-        let resources = process_mut.resources.get_mut();
+        let vmm = &mut process_mut.vmm;
+        let page_table = process_mut.page_table.get_mut();
 
         let (
-            thread_mem_tracker,
-            stack_end,
-            tp_addr,
-            envv_pointers_start,
-            argv_pointers_start,
-            abi_structers_start,
-            ke_stack_tracker,
-            ke_stack_end,
-        ) = Process::allocate_root_thread_memory_inner(
-            vasa,
-            custom_stack_size,
-            this.master_tls,
-            args,
+            user_stack_tracker,
+            (stack_end, envv_pointers_start, argv_pointers_start, abi_structures_start),
+        ) = super::mem::allocate_root_user_env(
+            vmm.clone(),
+            custom_stack_size
+                .map(|s| s.get())
+                .unwrap_or(DEFAULT_STACK_SIZE),
             env,
+            args,
             abi_structures,
         )?;
+
+        let (ke_stack_tracker, ke_stack_end) = allocate_kernel_stack(DEFAULT_STACK_SIZE)?;
+        let tls_allocation = this
+            .master_tls
+            .map(|(addr_within, size_in_mem, file_size, align)| {
+                allocate_tls(vmm.clone(), addr_within, align, size_in_mem, file_size)
+            })
+            .transpose()?;
 
         assert!(stack_end.is_multiple_of(16));
         assert!(ke_stack_end.is_multiple_of(16));
@@ -113,25 +119,23 @@ impl ThreadsManager {
             argv_pointers_start.into_raw(),
             env.len(),
             envv_pointers_start.into_raw(),
-            abi_structers_start.into_raw(),
+            abi_structures_start.into_raw(),
         ];
 
         let context = unsafe {
-            let root_page_table = &mut vasa.page_table;
-
             CPUStatus::create_root(
-                root_page_table,
+                page_table,
                 entry_point,
                 entry_args,
-                tp_addr.unwrap_or(VirtAddr::null()),
+                tls_allocation
+                    .as_ref()
+                    .map(|(_, addr)| *addr)
+                    .unwrap_or(VirtAddr::null()),
                 stack_end,
                 ke_stack_end,
                 this.userspace_process,
             )?
         };
-
-        resources.add_global_resource(thread_mem_tracker);
-        resources.add_global_resource(ke_stack_tracker);
 
         let next_tid = this.new_tid();
         assert_eq!(next_tid, 0);
@@ -142,6 +146,9 @@ impl ThreadsManager {
             context,
             process,
             process.default_priority,
+            ke_stack_tracker,
+            user_stack_tracker,
+            tls_allocation.map(|(a, _)| a),
         ));
         this.threads.insert(next_tid, root_thread.clone());
         Ok((this, root_thread))
@@ -163,22 +170,33 @@ impl ThreadsManager {
         priority: Option<ContextPriority>,
         custom_stack_size: Option<NonZero<usize>>,
     ) -> Result<(ArcThread, Tid), MapToError> {
+        let stack_size = custom_stack_size
+            .map(|stack| stack.get().to_next_page())
+            .unwrap_or(DEFAULT_STACK_SIZE);
         let tid = self.next_tid();
-        let mut vasa = parent.vasa();
 
-        let (th_mem_tracker, stack_end, tp_addr, ke_stack_tracker, ke_stack_end) =
-            Process::allocate_thread_memory_inner(
-                &mut vasa,
-                custom_stack_size,
-                self.master_tls,
-                0,
-            )?;
+        let (th_stack_tracker, stack_end) = allocate_user_stack(parent.vmm.clone(), stack_size)?;
+        let tls_allocation = self
+            .master_tls
+            .map(|(addr_within, size_in_mem, file_size, align)| {
+                allocate_tls(
+                    parent.vmm.clone(),
+                    addr_within,
+                    align,
+                    size_in_mem,
+                    file_size,
+                )
+            })
+            .transpose()?;
+        let (ke_stack_tracker, ke_stack_end) = allocate_kernel_stack(DEFAULT_STACK_SIZE)?;
 
-        let page_table = &mut vasa.page_table;
-
+        let page_table = unsafe { &mut *parent.page_table.get() };
         let cpu_status = unsafe {
             CPUStatus::create_child(
-                tp_addr.unwrap_or(VirtAddr::null()),
+                tls_allocation
+                    .as_ref()
+                    .map(|(_, a)| *a)
+                    .unwrap_or(VirtAddr::null()),
                 stack_end,
                 ke_stack_end,
                 page_table,
@@ -194,14 +212,11 @@ impl ThreadsManager {
             cpu_status,
             parent,
             priority.unwrap_or(parent.default_priority),
+            ke_stack_tracker,
+            th_stack_tracker,
+            tls_allocation.map(|(th, _)| th),
         );
         let thread = ArcThread::new(thread);
-
-        let mut resources = parent.resources_mut();
-        let th_mem_ri = resources.add_local_resource(th_mem_tracker);
-        let ke_stack_ri = resources.add_local_resource(ke_stack_tracker);
-
-        thread.take_resources(&[th_mem_ri, ke_stack_ri]);
 
         let new_tid = self.new_tid();
         self.threads.insert(new_tid, thread.clone());
@@ -212,7 +227,15 @@ impl ThreadsManager {
     }
 
     pub fn remove(&mut self, tid: Tid) -> bool {
-        self.threads.remove(&tid).is_some()
+        if let Some(thread) = self.threads.remove(&tid) {
+            // Last thread in process, cleanup process.
+            if self.is_empty() {
+                unsafe { thread.process().cleanup() }
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Attempts to remove an unoccupied thread ID, returning `true` if the ID was removed,

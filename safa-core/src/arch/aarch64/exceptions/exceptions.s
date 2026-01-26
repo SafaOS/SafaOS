@@ -1,4 +1,61 @@
 .equ CONTEXT_SIZE, 16 * 50 + 8
+.global context_switch_and_return
+context_switch_and_return:
+    sub sp, sp, #CONTEXT_SIZE + 16
+
+    mrs x0, ttbr0_el1
+    mrs x1, sp_el0
+    stp x0, x1, [sp]
+
+    # store general purpose registers
+    str x19, [sp, #16 * 10 + 8]
+    stp x20, x21, [sp, #16 * 11]
+    stp x22, x23, [sp, #16 * 12]
+    stp x24, x25, [sp, #16 * 13]
+    stp x26, x27, [sp, #16 * 14]
+    stp x28, x29, [sp, #16 * 15]
+
+    mov x0, lr
+
+    # Safe PSTATE
+    # TODO: This is kinda broken
+    # consider using `svc` for context switches instead
+    mrs x1, currentEl
+
+    mrs x2, DAIF
+    orr x1, x1, x2
+
+    mrs x2, NZCV
+    orr x1, x1, x2
+
+    mrs x2, SPSel
+    orr x1, x1, x2
+
+
+    stp x0, x1, [sp, #16 * 16]
+
+    mrs x0, esr_el1
+    mrs x1, far_el1
+    stp x0, x1, [sp, #16 * 17]
+
+    mov x0, sp
+    mov x1, #CONTEXT_SIZE + 16
+    add x1, x1, x0
+    # store link register which is x30 and the stack
+    stp x30, x1, [sp, #16 * 18]
+
+    # store FPU registers
+    stp q8, q9, [sp, #16 * 27]
+    stp q10, q11, [sp, #16 * 29]
+    stp q12, q13, [sp, #16 * 31]
+    stp q14, q15, [sp, #16 * 33]
+
+    mrs x1, tpidr_el0
+    str x1, [sp, #16 * 51]
+
+    mov x0, sp
+    b context_switch_now
+
 .macro EXCEPTION_VECTOR handler, save_eregs=0
 
     sub sp, sp, #CONTEXT_SIZE

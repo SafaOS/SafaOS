@@ -2,6 +2,7 @@
 .global restore_cpu_status_full
 .global restore_cpu_status_partial
 .global context_switch_stub
+.global thread_yield_wrapper
 
 
 
@@ -66,9 +67,8 @@
    push [rdi + RDI_OFFSET] // rdi
    push [rdi + RAX_OFFSET] // rax
 
-   lea rax, [rdi + FLOATING_OFFSET]
    // TODO: implement lazy FPU initialization
-   fxrstor [rax]
+   fxrstor [rdi + FLOATING_OFFSET]
 .endm
 
 restore_cpu_status_full:
@@ -128,6 +128,56 @@ context_switch_stub:
     push 0
     // fs
     push 0
-    call context_switch
-    // UNREACHABLE!!!
+    call context_switch_on_int
     ud2
+
+
+thread_yield_wrapper:
+  # Return address
+  pop rcx
+  mov rdx, rsp
+
+  sub rsp, 0x2C0
+  # Align stack to 16 bytes because for some reason, otherwise it doesn't work (isn't aligned)
+  and rsp, -16
+
+  // RIP
+  mov [rsp + RIP_OFFSET], rcx
+
+  mov [rsp + RBX_OFFSET], rbx
+  mov [rsp + RBP_OFFSET], rbp
+  mov [rsp + R12_OFFSET], r12
+  mov [rsp + R13_OFFSET], r13
+  mov [rsp + R14_OFFSET], r14
+  mov [rsp + R15_OFFSET], r15
+
+  mov rax, cr3
+  mov [rsp + CR3_OFFSET], rax
+
+  // RSP before the call
+  mov [rsp + RSP_OFFSET], rdx
+
+  mov rax, cs
+  mov [rsp + CS_OFFSET], rax
+  mov rax, ss
+  mov [rsp + SS_OFFSET], rax
+
+  pushfq
+  pop rax
+  mov [rsp + RFLAGS_OFFSET], rax
+
+  # Has to be done because fxrstor would GPF otherwise
+  # TODO: Lazy FPU
+  fxsave [rsp + FLOATING_OFFSET]
+  mov rdi, rsp
+  jmp context_switch_and_return
+  ud2
+  # Restore saved registers
+  # mov r12, [rsp + R12_OFFSET]
+  # mov r13, [rsp + R13_OFFSET]
+  # mov r14, [rsp + R14_OFFSET]
+  # mov r15, [rsp + R15_OFFSET]
+  # mov rbx, [rsp + RBX_OFFSET]
+
+  # add rsp, 0x2C0
+  # ret

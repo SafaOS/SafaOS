@@ -9,7 +9,7 @@ impl CpuInfoFile {
     }
 
     pub fn fetch(_: &mut GenericRodFSFile) -> Option<PageString> {
-        let mut page_string = PageString::with_capacity(1024);
+        let mut page_string = PageString::with_capacity(&"cpuinfo", 1024);
         let cpu_info = &*CPU_INFO;
 
         serde_json::to_writer_pretty(&mut page_string, cpu_info)

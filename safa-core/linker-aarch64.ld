@@ -16,6 +16,7 @@ PHDRS
     text PT_LOAD;
     rodata PT_LOAD;
     data PT_LOAD;
+    percpu  PT_LOAD;
 }
 
 SECTIONS
@@ -38,6 +39,11 @@ SECTIONS
     section_rodata_begin = .;
     .rodata : {
         *(.rodata .rodata.*)
+        section_per_cpu_init_begin = .;
+        *(.percpu.initializers.base)
+        *(.percpu.initializers)
+        section_per_cpu_init_end = .;
+        *(.got .got.*)
     } :rodata
     section_rodata_end = .;
 
@@ -54,15 +60,22 @@ SECTIONS
         KEEP(*(.requests_end_marker))
     } :data
 
-    /* NOTE: .bss needs to be the last thing mapped to :data, otherwise lots of */
-    /* unnecessary zeros will be written to the binary. */
-    /* If you need, for example, .init_array and .fini_array, those should be placed */
-    /* above this. */
     .bss : {
         *(.bss .bss.*)
         *(COMMON)
     } :data
-    section_data_end = .;
+
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+    /* Must come last, because it'd be copied over depending on the cpu counts at runtime */
+    .percpu : {
+        section_per_cpu_begin = .;
+        *(.percpu.base)
+        *(.percpu)
+        . = ALIGN(0x1000);
+        section_per_cpu_end = .;
+        section_data_end = .;
+    } :percpu
+
 
     /* Discard .note.* and .eh_frame* since they may cause issues on some hosts. */
     /DISCARD/ : {

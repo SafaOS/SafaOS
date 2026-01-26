@@ -41,6 +41,11 @@ fn main() {
                 .expect("failed to wait for get");
             safa_builder::rustc::install_safaos_toolchain(arch)
                 .expect("failed to install the SafaOS toolchain");
+            safa_builder::rustc::reset_userspace();
+            std::process::exit(0);
+        }
+        Some(SubCommand::Reset) => {
+            safa_builder::rustc::reset_userspace();
             std::process::exit(0);
         }
     };

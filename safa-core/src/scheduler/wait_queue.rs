@@ -2,18 +2,63 @@
 #![allow(private_bounds)]
 
 use core::num::NonZero;
+use core::ops::{Deref, DerefMut};
 
 use alloc::sync::Arc;
 use safa_abi::errors::IntoErr;
 use smallvec::SmallVec;
 use thiserror::Error;
 
-use crate::arch::with_interrupts;
+use crate::arch::without_interrupts;
 use crate::thread;
 use crate::thread::ArcThread;
-use crate::utils::locks::{Mutex, MutexGuard};
+use crate::utils::locks::{Mutex, MutexGuard, SpinLock, SpinLockGuard};
 
 const MIN_WAIT_THREADS: usize = 4;
+
+pub trait GuardedWaitQueue<'a, const AVERAGE: usize, Reason> {
+    type Guard: Deref<Target = WaitQueue<AVERAGE, Reason>> + DerefMut + 'a;
+
+    fn no_interrupts() -> bool;
+    fn acquire_lock(&'a self) -> Self::Guard;
+    fn drop_lock(guard: Self::Guard);
+}
+
+impl<'a, const AVERAGE: usize, Reason: 'a> GuardedWaitQueue<'a, AVERAGE, Reason>
+    for Mutex<WaitQueue<AVERAGE, Reason>>
+{
+    type Guard = MutexGuard<'a, WaitQueue<AVERAGE, Reason>>;
+
+    fn no_interrupts() -> bool {
+        false
+    }
+
+    fn acquire_lock(&'a self) -> Self::Guard {
+        self.lock()
+    }
+
+    fn drop_lock(guard: Self::Guard) {
+        drop(guard);
+    }
+}
+
+impl<'a, const AVERAGE: usize, Reason: 'a> GuardedWaitQueue<'a, AVERAGE, Reason>
+    for SpinLock<WaitQueue<AVERAGE, Reason>>
+{
+    type Guard = SpinLockGuard<'a, WaitQueue<AVERAGE, Reason>>;
+
+    fn no_interrupts() -> bool {
+        true
+    }
+
+    fn acquire_lock(&'a self) -> Self::Guard {
+        self.lock()
+    }
+
+    fn drop_lock(guard: Self::Guard) {
+        drop(guard);
+    }
+}
 
 /// Represents a lock on a [`WaitQueue`] thats held before beginning a wait operation,
 /// call enter_wait on this to sleep the current thread in the queue,
@@ -21,45 +66,85 @@ const MIN_WAIT_THREADS: usize = 4;
 /// This lock helps guarantee nobody will wake threads before this thread is sleeping for a given condition,
 /// Ensure to make sure the condition applies after holding this lock, before actually beginning sleeping otherwise dropping this is perfectly safe.
 #[derive(Debug)]
-pub struct PendingWait<'a, const AVERAGE: usize, Reason>(
-    MutexGuard<'a, WaitQueue<AVERAGE, Reason>>,
-    &'a Mutex<WaitQueue<AVERAGE, Reason>>,
+pub struct PendingWait<'a, const AVERAGE: usize, Reason, L: GuardedWaitQueue<'a, AVERAGE, Reason>>(
+    L::Guard,
+    &'a L,
 );
+
+impl<'a, const AVERAGE: usize, Reason, L: GuardedWaitQueue<'a, AVERAGE, Reason>> Deref
+    for PendingWait<'a, AVERAGE, Reason, L>
+{
+    type Target = L::Guard;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl<const AVERAGE: usize, Reason> Mutex<WaitQueue<AVERAGE, Reason>> {
     /// Returns a [`PendingWait`] instance that holds a lock on self, afterwards call [`PendingWait::enter_wait`].
-    pub fn prepare_wait<'s>(&'s self) -> PendingWait<'s, AVERAGE, Reason> {
+    pub fn prepare_wait<'s>(&'s self) -> PendingWait<'s, AVERAGE, Reason, Self> {
         PendingWait(self.lock(), self)
     }
 }
 
-impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason> {
-    fn enter_wait_inner(
+impl<const AVERAGE: usize, Reason> SpinLock<WaitQueue<AVERAGE, Reason>> {
+    /// Returns a [`PendingWait`] instance that holds a lock on self, afterwards call [`PendingWait::enter_wait`].
+    ///
+    /// Safety: The caller must ensure interrupts are disabled.
+    pub unsafe fn prepare_wait<'s>(&'s self) -> PendingWait<'s, AVERAGE, Reason, Self> {
+        PendingWait(self.lock(), self)
+    }
+}
+
+impl<'a, const AVERAGE: usize, Reason, L: GuardedWaitQueue<'a, AVERAGE, Reason>>
+    PendingWait<'a, AVERAGE, Reason, L>
+{
+    /// Applies the [`PendingWait`], causing the current thread to sleep for at most `timeout_after` ms if Some, until a wake operation on the [`WaitQueue`] happens.
+    pub fn enter_wait(
         self,
         reason: Reason,
         timeout: Option<NonZero<u64>>,
     ) -> Result<(), WaitError> {
-        thread::with_current(|thread| {
+        let begin_sleep = |thread: &ArcThread, guard: L::Guard| {
+            let not_done = if let Some(timeout) = timeout {
+                // Returns true if we should yield
+                unsafe { thread.prepare_sleep_for_ms(timeout) }
+            } else {
+                unsafe { thread.block_waiting() };
+                // Not done yet
+                true
+            };
+
+            L::drop_lock(guard);
+            if not_done {
+                thread::current::yield_now();
+            }
+        };
+
+        let f = |thread: &ArcThread| {
             if thread.should_terminate() {
                 return Err(WaitError::ForceTerminated);
             }
 
             let (mut wait_queue_guard, wait_queue) = (self.0, self.1);
 
-            // Ensures that the allocator won't context switch
+            if L::no_interrupts() {
+                // Ensure we won't thread yield
+                // because if we do, a dead-lock may occur because of the allocator.
+                // FIXME: SpinLock the allocator?
+
+                assert!(
+                    wait_queue_guard.threads.capacity() >= 1,
+                    "WaitQueue cannot hold one more thread"
+                );
+            }
+
             wait_queue_guard.threads.push((thread.clone(), reason));
-            with_interrupts(|| {
-                if let Some(timeout) = timeout {
-                    thread.prepare_sleep_for_ms(timeout)
-                } else {
-                    thread.block_waiting();
-                }
-                drop(wait_queue_guard);
-                thread::current::yield_now();
-            });
+            begin_sleep(thread, wait_queue_guard);
 
             let remove_self = || {
-                let mut wait_queue = wait_queue.lock();
+                let mut wait_queue = wait_queue.acquire_lock();
                 let index = wait_queue
                     .threads
                     .iter()
@@ -82,18 +167,13 @@ impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason> {
             }
 
             Ok(())
-        })
-    }
-}
+        };
 
-impl<const AVERAGE: usize, Reason> PendingWait<'_, AVERAGE, Reason> {
-    /// Applies the [`PendingWait`], causing the current thread to sleep for at most `timeout_after` ms if Some, until a wake operation on the [`WaitQueue`] happens.
-    pub fn enter_wait(
-        self,
-        reason: Reason,
-        timeout_after: Option<NonZero<u64>>,
-    ) -> Result<(), WaitError> {
-        self.enter_wait_inner(reason, timeout_after)
+        if L::no_interrupts() {
+            unsafe { thread::with_current_unsafe(|t| f(&*t)) }
+        } else {
+            without_interrupts(|| unsafe { thread::with_current_unsafe(|t| f(&(*t).clone())) })
+        }
     }
 }
 
@@ -142,7 +222,7 @@ impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason> {
     /// Wakes all threads in the wait queue.
     pub fn wake_all(&mut self) {
         for (thread, _) in self.threads.drain(..) {
-            thread.wake_up();
+            thread.wake_up(false);
         }
     }
 
@@ -150,7 +230,7 @@ impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason> {
     pub fn wake_on_condition(&mut self, mut condition: impl FnMut(&mut Reason) -> bool) {
         self.threads.retain(|(thread, reason)| {
             if condition(reason) {
-                thread.wake_up();
+                thread.wake_up(false);
                 false
             } else {
                 true
@@ -167,17 +247,19 @@ impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason> {
         n: usize,
     ) -> usize {
         let mut count = 0;
-        if count < n {
-            self.threads.retain(|(thread, reason)| {
-                if condition(reason) {
-                    thread.wake_up();
-                    count += 1;
-                    false
-                } else {
-                    true
-                }
-            });
+        let mut i = 0;
+
+        while count < n && i < self.threads.len() {
+            let (thread, reason) = &mut self.threads[i];
+            if condition(reason) {
+                thread.wake_up(false);
+                self.threads.swap_remove(i);
+                count += 1;
+            } else {
+                i += 1;
+            }
         }
+
         count
     }
 
@@ -198,6 +280,15 @@ impl<const AVERAGE: usize, Reason> WaitQueue<AVERAGE, Reason> {
             1,
         );
         results
+    }
+
+    /// Checks if the wait queue is empty.
+    pub fn is_empty(&self) -> bool {
+        self.threads.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.threads.len()
     }
 }
 

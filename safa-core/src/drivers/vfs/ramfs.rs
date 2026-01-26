@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::drivers::vfs::{FSObjectID, FSObjectType, SeekOffset};
-use crate::memory::page_allocator::PageAlloc;
+use crate::memory::vmm::VMMAlloc;
 use crate::utils::alloc::PageVec;
 use crate::utils::locks::RwLock;
 use crate::utils::path::PathParts;
@@ -17,7 +17,7 @@ use super::{FSError, FSResult, FileSystem};
 
 pub enum RamFSObjectState {
     Data(PageVec<u8>),
-    Collection(HashMap<FileName, FSObjectID, DefaultHashBuilder, PageAlloc>),
+    Collection(HashMap<FileName, FSObjectID, DefaultHashBuilder, VMMAlloc>),
     StaticDevice(&'static dyn Device),
 }
 
@@ -131,7 +131,7 @@ impl RamFSObject {
         &self,
         offset: SeekOffset,
         page_count: usize,
-    ) -> FSResult<Box<dyn crate::process::vas::MemMappedInterface>> {
+    ) -> FSResult<Box<dyn crate::process::mem::MemMappedInterface>> {
         match self.state {
             RamFSObjectState::StaticDevice(d) => d.mmap(offset, page_count),
             _ => Err(FSError::OperationNotSupported),
@@ -254,8 +254,10 @@ impl RamFS {
     fn add_file(&mut self) -> FSResult<FSObjectID> {
         let id = self.next_id;
         self.next_id += 1;
-        self.objects
-            .insert(id, RamFSObject::new(RamFSObjectState::Data(PageVec::new())));
+        self.objects.insert(
+            id,
+            RamFSObject::new(RamFSObjectState::Data(PageVec::new(&"RamFsObject::Data"))),
+        );
         Ok(id)
     }
 
@@ -264,7 +266,7 @@ impl RamFS {
         let id = self.next_id;
         self.next_id += 1;
 
-        let mut collection = HashMap::new_in(PageAlloc);
+        let mut collection = HashMap::new_in(VMMAlloc::new(&"RamFSObject::Collection"));
         // don't increase the reference count because these are going to be deleted when the directory is deleted, and the directory will be treated as empty
         let previous_dir_name = FileName::new_const("..");
         let current_dir_name = FileName::new_const(".");
@@ -301,7 +303,7 @@ impl RamFS {
 
 impl RamFS {
     pub fn create() -> Self {
-        let root_collection = HashMap::new_in(PageAlloc);
+        let root_collection = HashMap::new_in(VMMAlloc::new(&"RamFSObject::Collection"));
         let root_obj = RamFSObject::new(RamFSObjectState::Collection(root_collection));
         let mut objects = HashMap::new();
         objects.insert(0, root_obj);
@@ -535,7 +537,7 @@ impl FileSystem for RwLock<RamFS> {
         id: FSObjectID,
         offset: SeekOffset,
         page_count: usize,
-    ) -> FSResult<Box<dyn crate::process::vas::MemMappedInterface>> {
+    ) -> FSResult<Box<dyn crate::process::mem::MemMappedInterface>> {
         let read_guard = self.read();
         let obj = read_guard.fget(id).expect("Object not found in the ramfs");
         obj.open_mmap_interface(offset, page_count)

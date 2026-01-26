@@ -71,9 +71,9 @@ pub struct VirtualTTY {
 impl VirtualTTY {
     const fn new_inner() -> Self {
         Self {
-            stdout: Mutex::new(PageVec::new()),
+            stdout: Mutex::new(PageVec::new(&"VirtualTTY::Stdout")),
             stdin: Mutex::new(Stdin {
-                inner: PageVec::new(),
+                inner: PageVec::new(&"VirtualTTY::Stdin"),
                 newlines_count: 0,
             }),
             flags: RwLock::new(TTYFlags::CANONICAL.union(TTYFlags::ECHO)),
@@ -393,9 +393,8 @@ impl Resource for MotherVTTY {
 
     fn try_clone_into_node(
         &self,
-        is_global: bool,
     ) -> Result<crate::process::resources::ResourceNodeRef, ErrorStatus> {
-        resources::generic_clone_impl(self, is_global)
+        resources::generic_clone_impl(self)
     }
 
     fn sync(&self) -> Result<(), ErrorStatus> {
@@ -430,9 +429,8 @@ impl Resource for ChildVTTY {
 
     fn try_clone_into_node(
         &self,
-        is_global: bool,
     ) -> Result<crate::process::resources::ResourceNodeRef, ErrorStatus> {
-        resources::generic_clone_impl(self, is_global)
+        resources::generic_clone_impl(self)
     }
 
     fn sync(&self) -> Result<(), ErrorStatus> {

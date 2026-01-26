@@ -2,9 +2,9 @@ use bitfield_struct::bitfield;
 use lazy_static::lazy_static;
 
 use crate::{
-    VirtAddr,
+    PhysAddr, VirtAddr,
     arch::aarch64::gic::{
-        GICITS_BASE, GICITS_TRANSLATION_BASE, GICR_BASE,
+        GICITS_BASE, GICITS_TRANSLATION_BASE_PHYS, GICR_BASE,
         its::commands::{GITS_COMMAND_QUEUE, ITSCommand},
     },
     debug,
@@ -175,7 +175,7 @@ pub struct GITSTyper {
 
 impl GITSTyper {
     pub fn get_ptr() -> *mut Self {
-        (*GICITS_BASE + 0x008).into_ptr()
+        unsafe { (*GICITS_BASE.get() + 0x008).into_ptr() }
     }
 
     pub fn read() -> Self {
@@ -192,7 +192,7 @@ lazy_static! {
 /// if GITS_TYPER.pta == 0b0 returns the GICR processor number
 pub fn rdbase() -> usize {
     if GITS_TYPER.pta_base_addr() {
-        GICR_BASE.into_raw()
+        unsafe { (*GICR_BASE.get()).into_raw() }
     } else {
         0
     }
@@ -310,7 +310,7 @@ pub struct GITSBaser {
 
 impl GITSBaser {
     fn get_ptr(n: usize) -> *mut Self {
-        (*GICITS_BASE + (0x0100) + (8 * n)).into_ptr::<Self>()
+        unsafe { (*GICITS_BASE.get() + (0x0100) + (8 * n)).into_ptr::<Self>() }
     }
 
     fn read(n: usize) -> Self {
@@ -420,7 +420,7 @@ pub struct GITSCBaser {
 
 impl GITSCBaser {
     fn get_ptr() -> *mut Self {
-        (*GICITS_BASE + 0x0080).into_ptr::<Self>()
+        unsafe { (*GICITS_BASE.get() + 0x0080).into_ptr::<Self>() }
     }
 
     fn read() -> Self {
@@ -443,7 +443,7 @@ pub fn allocate_itt() -> (VirtAddr, usize, u8) {
     * An ITT must be assigned a contiguous physical address space starting at ITT Address. The size is 2^(DTE.ITT
     Range + 1)* GITS_TYPER.ITT_entry_size
     */
-    let size = itt_entry_size as usize * event_id_bits as usize;
+    let size = itt_entry_size as usize * (1 << ((event_id_bits - 1) as usize));
     let pages = size.to_next_page() / PAGE_SIZE;
 
     let (start_frame, _) =
@@ -484,7 +484,9 @@ fn map_devices_table() -> (VirtAddr, usize) {
         }
     }
 
-    unreachable!("no device's table found for GITS at {:?}", *GICITS_BASE)
+    unreachable!("no device's table found for GITS at {:?}", unsafe {
+        *GICITS_BASE.get()
+    })
 }
 
 fn map_collections_table() -> (VirtAddr, usize) {
@@ -498,7 +500,7 @@ fn map_collections_table() -> (VirtAddr, usize) {
 
     unreachable!(
         "no interrupt's collection table found for GITS at {:?}",
-        *GICITS_BASE
+        unsafe { *GICITS_BASE.get() }
     )
 }
 
@@ -539,7 +541,7 @@ pub struct GITSCtlr {
 
 impl GITSCtlr {
     fn get_ptr() -> *mut Self {
-        GICITS_BASE.into_ptr::<Self>()
+        unsafe { (*GICITS_BASE.get()).into_ptr::<Self>() }
     }
 
     unsafe fn write(self) {
@@ -547,8 +549,9 @@ impl GITSCtlr {
     }
 }
 
-pub fn gits_translater() -> *mut u32 {
-    (*GICITS_TRANSLATION_BASE + 0x0040).into_ptr()
+/// Returns the physical address of the ITS translater
+pub fn gits_translater_phys() -> PhysAddr {
+    *GICITS_TRANSLATION_BASE_PHYS + 0x0040
 }
 
 pub fn init() {

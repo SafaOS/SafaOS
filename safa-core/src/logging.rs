@@ -46,7 +46,7 @@ pub(crate) fn log_time_from_ms(ms: u64) -> (u32, u8, u8, u16) {
 #[macro_export]
 macro_rules! generic_log {
     ($write_macro:ident, $($arg:tt)*) => {{
-        let log_time = $crate::time!(ms);
+        let log_time = $crate::timer::BOOT_INSTANT.elapsed().as_millis() as u64;
         let (hours, minutes, seconds, ms) = $crate::logging::log_time_from_ms(log_time);
         $crate::$write_macro!("[{hours:02}:{minutes:02}:{seconds:02}.{ms:03}] {}\n", format_args!($($arg)*));
     }};
@@ -168,7 +168,7 @@ macro_rules! info {
         let _ = core::marker::PhantomData::<$mod>;
         $crate::loglnboot_ext!("info", 92, as stringify!($mod), $($arg)*)
     }};
-    ($($arg:tt)*) => ($crate::logln_ext!("info", 92, $($arg)*));
+    ($($arg:tt)*) => ($crate::loglnboot_ext!("info", 92, $($arg)*));
 }
 
 #[macro_export]
@@ -205,9 +205,11 @@ impl<'a> StackTrace<'a> {
 impl<'a> Display for StackTrace<'a> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         unsafe {
+            const MAX_TRACES: usize = 16;
+
             let mut fp = self.0;
             writeln!(f, "\x1B[34mStack trace:")?;
-            loop {
+            for _ in 0..MAX_TRACES {
                 let return_address = fp.return_ptr();
 
                 let name = {

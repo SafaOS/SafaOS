@@ -2,6 +2,7 @@ use core::any::type_name;
 
 use crate::process::spawn::{SpawnFlags, pspawn};
 use crate::thread::ContextPriority;
+use crate::timer::{DurationFmt, SystemInstant};
 use crate::utils::{path::make_path, types::Name};
 use crate::{
     arch::{power::shutdown, without_interrupts},
@@ -19,14 +20,11 @@ macro_rules! test_log {
 }
 
 macro_rules! ok {
-    ($last_time_us: expr_2021) => {{
-        let end_time_us = $crate::time!(us);
-        let delta_time_us = end_time_us - $last_time_us;
-        let delta_time_ms = delta_time_us / 1000;
+    ($instant: expr_2021) => {{
+        let elapsed = $instant.elapsed();
         $crate::logln!(
-            "[ \x1B[92m OK   \x1B[0m  ]\x1b[90m:\x1B[0m delta {}ms ({}us)",
-            delta_time_ms,
-            delta_time_us
+            "[ \x1B[92m OK   \x1B[0m  ]\x1b[90m:\x1B[0m delta {}",
+            $crate::timer::DurationFmt::new(elapsed)
         );
     }};
 }
@@ -97,20 +95,19 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     );
 
     test_log!("running {} tests", tests.len());
-    let first_log_ms = crate::time!(ms);
+    let first_log_instant = SystemInstant::now();
 
     for test in tests_iter {
         without_interrupts(|| {
             test_log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
-            let last_log = crate::time!(us);
+            let instant = SystemInstant::now();
             test.run();
-            ok!(last_log);
+            ok!(instant);
         })
     }
-    info!(
-        "finished running tests in {}ms",
-        crate::time!(ms) - first_log_ms
-    );
+
+    let elapsed = first_log_instant.elapsed();
+    info!("finished running tests in {}", DurationFmt::new(elapsed));
 
     // printing 'PLEASE EXIT' to the serial makes `safa-helper test` know that the kernel tests were successful
     info!("PLEASE EXIT, automatically attempting exiting after 1000ms, PLEASE EXIT");

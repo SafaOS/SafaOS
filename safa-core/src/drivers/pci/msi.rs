@@ -1,10 +1,10 @@
 use crate::{
-    PhysAddr,
+    PhysAddr, VirtAddr,
     arch::pci::{build_msi_addr, build_msi_data},
     debug,
     drivers::{
         interrupts::{IRQInfo, IntTrigger},
-        pci::{Bar, extended_caps::ExtendedCaptability},
+        pci::{AllocatedBar, extended_caps::ExtendedCaptability},
     },
     write_ref,
 };
@@ -61,8 +61,8 @@ struct MSIXTableEntry {
 #[derive(Debug, Clone, Copy)]
 pub struct MSIXInfo {
     cap_ptr: *mut MSIXCap,
-    table_base_addr: PhysAddr,
-    pab_base_addr: PhysAddr,
+    table_base_addr: VirtAddr,
+    pab_base_addr: VirtAddr,
     table_size: usize,
     next_vector: u8,
     device_id: u16,
@@ -81,28 +81,30 @@ impl MSIXInfo {
         device_id: u16,
         vendor_id: u16,
         requester_id: u32,
-        bars: &[Bar],
+        bars: &[AllocatedBar],
     ) -> Self {
         let msix_cap = unsafe { &mut *cap_ptr };
-        let table_bar = msix_cap.table.bir();
+        let table_bar_index = msix_cap.table.bir();
         let table_off = msix_cap.table.off() << 3;
 
-        let pending_bit_bar = msix_cap.pending_bit.bir();
+        let pending_bit_bar_index = msix_cap.pending_bit.bir();
         let pending_bit_off = msix_cap.pending_bit.off() << 3;
         assert!(
-            table_bar < bars.len(),
-            "table bar index is {table_bar}, while bars.len() is {}, bars: {bars:?}",
+            table_bar_index < bars.len(),
+            "table bar index is {table_bar_index}, while bars.len() is {}, bars: {bars:?}",
             bars.len()
         );
 
-        let table_bar = bars[table_bar];
-        let pending_table_bar = bars[pending_bit_bar];
+        let table_bar = bars[table_bar_index];
+        let pending_table_bar = bars[pending_bit_bar_index];
 
-        let Bar::Memory(table_bar_base, table_bar_size) = table_bar else {
+        let AllocatedBar::Memory(table_bar_base, table_bar_size) = table_bar else {
             unreachable!("MSI Table bar isn't a memory bar")
         };
 
-        let Bar::Memory(pending_table_bar_base, pending_table_bar_size) = pending_table_bar else {
+        let AllocatedBar::Memory(pending_table_bar_base, pending_table_bar_size) =
+            pending_table_bar
+        else {
             unreachable!("MSI Pending Table bar isn't a memory bar")
         };
 
@@ -127,9 +129,7 @@ impl MSIXInfo {
     }
 
     fn table_ptr(&self) -> *mut MSIXTableEntry {
-        self.table_base_addr
-            .into_virt()
-            .into_ptr::<MSIXTableEntry>()
+        self.table_base_addr.into_ptr::<MSIXTableEntry>()
     }
 
     fn table_entry_ptrs(&mut self, vector: u8) -> (*mut PhysAddr, *mut u32, *mut u32) {
@@ -155,7 +155,7 @@ impl MSIXInfo {
     }
 
     fn clear_pending_interrupts(&mut self, vector: u8) {
-        let pba_ptr = self.pab_base_addr.into_virt().into_ptr::<u32>();
+        let pba_ptr = self.pab_base_addr.into_ptr::<u32>();
         let vector = vector as u8;
         let byte_off = vector / 32;
         let bit_off = vector % 32;

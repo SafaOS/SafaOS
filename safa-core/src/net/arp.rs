@@ -54,7 +54,6 @@ pub struct ARPOp([u8; 2]);
 
 impl ARPOp {
     pub const REQUEST: Self = Self([0x00, 0x01]);
-    pub const REPLY: Self = Self([0x00, 0x02]);
 }
 
 impl Display for ARPOp {

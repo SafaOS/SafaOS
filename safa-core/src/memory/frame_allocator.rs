@@ -5,10 +5,12 @@ use core::{
 };
 
 use crate::{
+    debug,
     memory::AlignToPage,
     utils::locks::{Mutex, MutexGuard},
 };
 use lazy_static::lazy_static;
+use limine::memory_map::EntryType;
 
 use super::{PhysAddr, VirtAddr, paging::PAGE_SIZE};
 
@@ -22,8 +24,17 @@ pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
 
 /// A pointer to some data in a physical frame that is mapped to a virtual address in the hddm
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct FramePtr<T: ?Sized>(NonNull<T>);
+
+impl<T: Sized> FramePtr<T> {
+    /// Casts the pointer to a pointer of a different type with the same size.
+    pub unsafe fn cast_sized<U: Sized>(self) -> FramePtr<U> {
+        assert!(size_of::<U>() == size_of::<T>());
+        FramePtr(self.0.cast())
+    }
+}
+
 impl<T: ?Sized> FramePtr<T> {
     pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
         Self(ptr)
@@ -42,6 +53,14 @@ impl<T: ?Sized> FramePtr<T> {
         self.0.as_ptr()
     }
 }
+
+impl<T: ?Sized> Clone for FramePtr<T> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+
+impl<T: ?Sized> Copy for FramePtr<T> {}
 
 impl<T: ?Sized> Deref for FramePtr<T> {
     type Target = T;
@@ -99,6 +118,7 @@ impl Frame {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameIter {
     start: Frame,
     end: Frame,
@@ -115,6 +135,12 @@ impl Iterator for FrameIter {
         } else {
             None
         }
+    }
+}
+
+impl ExactSizeIterator for FrameIter {
+    fn len(&self) -> usize {
+        (self.end.start_address() - self.start.start_address()) / PAGE_SIZE
     }
 }
 
@@ -400,10 +426,23 @@ impl RegionListAllocator {
         let mut unusable_regions = 0;
 
         for entry in mmap.entries() {
-            if entry.entry_type == limine::memory_map::EntryType::USABLE {
-                let start_addr = PhysAddr::from(entry.base as usize);
-                let end_addr = start_addr + (entry.length as usize);
+            let start_addr = PhysAddr::from(entry.base as usize);
+            let end_addr = start_addr + (entry.length as usize);
 
+            debug!(
+                RegionListAllocator,
+                "Region at {start_addr:?}..{end_addr:?}: {}",
+                match entry.entry_type {
+                    EntryType::USABLE => "Usable",
+                    EntryType::BAD_MEMORY => "Bad",
+                    EntryType::BOOTLOADER_RECLAIMABLE => "Bootloader Reclaimable",
+                    EntryType::EXECUTABLE_AND_MODULES => "Exe",
+                    EntryType::RESERVED => "Reserved",
+                    EntryType::ACPI_NVS | EntryType::ACPI_RECLAIMABLE => "ACPI",
+                    _ => "Other",
+                }
+            );
+            if entry.entry_type == limine::memory_map::EntryType::USABLE {
                 let frame = Frame::containing_address(start_addr);
                 let end_frame = Frame::containing_address(end_addr);
 
@@ -469,9 +508,10 @@ pub fn usable_frames() -> usize {
 
 #[test_case]
 fn allocate_many_test() {
+    let mut allocator = REGION_ALLOCATOR.lock();
     let mut frames = heapless::Vec::<_, 1024>::new();
     for _ in 0..frames.capacity() {
-        frames.push(allocate_frame().unwrap()).unwrap();
+        frames.push(allocator.allocate_frame().unwrap()).unwrap();
     }
 
     for i in 1..frames.capacity() {
@@ -480,59 +520,71 @@ fn allocate_many_test() {
 
     let last_frame = frames[frames.len() - 1];
     for frame in frames.iter() {
-        deallocate_frame(*frame);
+        allocator.deallocate_frame(*frame);
     }
-    let allocated = allocate_frame().unwrap();
+    let allocated = allocator.allocate_frame().unwrap();
     assert_eq!(allocated, last_frame);
 
-    deallocate_frame(allocated);
+    allocator.deallocate_frame(allocated);
 }
 
 #[test_case]
 fn allocate_aligned_test() {
-    let frame = allocate_aligned(SIZE_64K_PAGES).unwrap_or_else(|| {
-        panic!(
-            "failed to find a Frame with alignment {:#x}",
-            SIZE_64K_PAGES * PAGE_SIZE
-        )
-    });
+    let mut allocator = REGION_ALLOCATOR.lock();
+    let frame = allocator
+        .allocate_aligned(SIZE_64K_PAGES)
+        .unwrap_or_else(|| {
+            panic!(
+                "failed to find a Frame with alignment {:#x}",
+                SIZE_64K_PAGES * PAGE_SIZE
+            )
+        });
 
     assert!(frame.start_address().is_multiple_of(SIZE_64K));
-    deallocate_frame(frame);
+    allocator.deallocate_frame(frame);
 
-    let other_frame = allocate_aligned(SIZE_64K_PAGES).unwrap_or_else(|| {
-        panic!(
-            "failed to reallocate a Frame with alignment {:#x}",
-            SIZE_64K_PAGES * PAGE_SIZE
-        )
-    });
+    let other_frame = allocator
+        .allocate_aligned(SIZE_64K_PAGES)
+        .unwrap_or_else(|| {
+            panic!(
+                "failed to reallocate a Frame with alignment {:#x}",
+                SIZE_64K_PAGES * PAGE_SIZE
+            )
+        });
 
     assert_eq!(other_frame, frame);
-    deallocate_frame(other_frame);
+    allocator.deallocate_frame(other_frame);
     // 3 allocations to be extra sure nothing gets messed up
-    let other_frame = allocate_aligned(SIZE_64K_PAGES).unwrap_or_else(|| {
-        panic!(
-            "failed to reallocate a Frame with alignment {:#x}",
-            SIZE_64K_PAGES * PAGE_SIZE
-        )
-    });
+    let other_frame = allocator
+        .allocate_aligned(SIZE_64K_PAGES)
+        .unwrap_or_else(|| {
+            panic!(
+                "failed to reallocate a Frame with alignment {:#x}",
+                SIZE_64K_PAGES * PAGE_SIZE
+            )
+        });
 
     assert_eq!(other_frame, frame);
-    deallocate_frame(other_frame);
+    allocator.deallocate_frame(other_frame);
 }
 
 #[allow(unused)]
-fn allocate_contiguous_test_inner<const N: usize>(align_pages: usize) -> heapless::Vec<Frame, N> {
-    let used_before = mapped_frames();
+fn allocate_contiguous_test_inner<const N: usize>(
+    allocator: &mut RegionListAllocator,
+    align_pages: usize,
+) -> heapless::Vec<Frame, N> {
+    let used_before = allocator.mapped_frames();
     let mut results = heapless::Vec::new();
-    let (start, end) = allocate_contiguous(align_pages, N).expect("Failed to allocate contiguous");
+    let (start, end) = allocator
+        .allocate_contiguous(align_pages, N)
+        .expect("Failed to allocate contiguous");
 
     assert!(
         start
             .start_address()
             .is_multiple_of(align_pages * PAGE_SIZE)
     );
-    assert_eq!(used_before + N, mapped_frames());
+    assert_eq!(used_before + N, allocator.mapped_frames());
 
     let iter = Frame::iter_frames(
         start,
@@ -540,34 +592,39 @@ fn allocate_contiguous_test_inner<const N: usize>(align_pages: usize) -> heaples
     );
 
     for frame in iter {
-        deallocate_frame(frame);
+        allocator.deallocate_frame(frame);
         results.push(frame).unwrap();
     }
 
-    assert_eq!(used_before, mapped_frames());
+    assert_eq!(used_before, allocator.mapped_frames());
     assert_eq!(results.len(), N);
     results
 }
 
 #[test_case]
 fn allocate_contiguous_test() {
-    let used_before = mapped_frames();
+    let mut allocator = REGION_ALLOCATOR.lock();
+    let used_before = allocator.mapped_frames();
 
-    let results = allocate_contiguous_test_inner::<0x10>(SIZE_64K_PAGES);
+    let results = allocate_contiguous_test_inner::<0x10>(&mut allocator, SIZE_64K_PAGES);
 
-    let other_results = allocate_contiguous_test_inner::<0x30>(SIZE_64K_PAGES);
+    let other_results = allocate_contiguous_test_inner::<0x30>(&mut allocator, SIZE_64K_PAGES);
     for res in results {
         // as they were freed, they should be pushed to the top of the list. and allocate_contiguous starts from the tail of the list
         assert!(!other_results.contains(&res));
     }
 
-    assert_eq!(used_before, mapped_frames());
+    assert_eq!(used_before, allocator.mapped_frames());
 }
 
 // Thanks to the fact tests are executed alphabetically this test is executed last, maybe this shouldn't be relied upon....
 // makes sure all the previous tests didn't mess up something with the linked list
 #[test_case]
 fn frame_count_verification_test() {
-    let actual_frame_count = REGION_ALLOCATOR.lock().count_frames_expensive();
-    assert_eq!(usable_frames() - mapped_frames(), actual_frame_count);
+    let allocator = REGION_ALLOCATOR.lock();
+    let actual_frame_count = allocator.count_frames_expensive();
+    assert_eq!(
+        allocator.usable_frames() - allocator.mapped_frames(),
+        actual_frame_count
+    );
 }

@@ -6,9 +6,9 @@ use core::{arch::asm, ops::Index};
 
 use crate::VirtAddr;
 use crate::arch::x86_64::interrupts::apic;
-use crate::arch::x86_64::pci;
-use crate::memory::paging::{EntryFlags, Page};
-use crate::memory::sorcery::{HEAP, LARGE_HEAP};
+use crate::arch::x86_64::tlb;
+use crate::memory::paging::{Page, PageEntryFlags, PageTableOps};
+use crate::memory::vmm::{VMMAllocError, VirtualMemoryManager};
 use crate::{
     PhysAddr,
     memory::{
@@ -56,13 +56,20 @@ impl Debug for Entry {
 }
 
 impl Entry {
+    /// Returns the physical address associated with this entry, even if it is not mapped.
+    fn phys_addr(&self) -> PhysAddr {
+        PhysAddr::from(self.0 & 0x000F_FFFF_FFFF_F000)
+    }
+
+    #[inline(always)]
+    fn zeroize(&mut self) {
+        self.0 = 0;
+    }
+
+    /// Returns the frame associated with this entry, if it is mapped.
     fn frame(&self) -> Option<Frame> {
         if self.flags().contains(ArchEntryFlags::PRESENT) {
-            // FIXME: real hardware problem here
-            // TODO: figure out more info about the max physical address width
-            return Some(Frame::containing_address(PhysAddr::from(
-                self.0 & 0x000F_FFFF_FFFF_F000,
-            )));
+            return Some(Frame::containing_address(self.phys_addr()));
         }
         None
     }
@@ -75,7 +82,8 @@ impl Entry {
         Self(addr.into_raw() | flags.bits() as usize)
     }
 
-    const fn set(&mut self, flags: ArchEntryFlags, addr: PhysAddr) {
+    #[inline(always)]
+    fn set(&mut self, flags: ArchEntryFlags, addr: PhysAddr) {
         *self = Self::new(flags, addr)
     }
 
@@ -88,7 +96,7 @@ impl Entry {
             let frame = self.frame().unwrap();
 
             if level != 0 {
-                let table = &mut *(frame.virt_addr().into_ptr::<PageTable>());
+                let table = &mut *(frame.virt_addr().into_ptr::<ArchPageTable>());
                 table.free(level);
             }
             self.deallocate();
@@ -109,7 +117,7 @@ impl Entry {
     /// changes the entry flags to `flags`
     /// if the entry is not present it allocates a new frame and uses it's address as entry's
     /// then returns the entry address as a pagetable
-    fn map(&mut self) -> Result<&'static mut PageTable, MapToError> {
+    fn map(&mut self) -> Result<&'static mut ArchPageTable, MapToError> {
         let flags =
             ArchEntryFlags::PRESENT | ArchEntryFlags::WRITABLE | ArchEntryFlags::USER_ACCESSIBLE;
 
@@ -118,7 +126,7 @@ impl Entry {
 
             self.set(flags, addr);
             let virt_addr = frame.virt_addr();
-            let entry_ptr = virt_addr.into_ptr::<PageTable>();
+            let entry_ptr = virt_addr.into_ptr::<ArchPageTable>();
 
             Ok(unsafe { &mut *(entry_ptr) })
         } else {
@@ -129,7 +137,7 @@ impl Entry {
             self.set(flags, addr);
 
             let virt_addr = frame.virt_addr();
-            let table_ptr = virt_addr.into_ptr::<PageTable>();
+            let table_ptr = virt_addr.into_ptr::<ArchPageTable>();
 
             Ok(unsafe {
                 (*table_ptr).zeroize();
@@ -139,10 +147,10 @@ impl Entry {
     }
 
     /// if an entry is mapped returns the PageTable or the Frame(as a PageTable) it is mapped to
-    fn mapped_to(&self) -> Option<&'static mut PageTable> {
+    fn mapped_to(&self) -> Option<&'static mut ArchPageTable> {
         if let Some(frame) = self.frame() {
             let virt_addr = frame.virt_addr();
-            let entry_ptr = virt_addr.into_ptr::<PageTable>();
+            let entry_ptr = virt_addr.into_ptr::<ArchPageTable>();
 
             return Some(unsafe { &mut *entry_ptr });
         }
@@ -170,21 +178,21 @@ bitflags! {
 }
 
 impl ArchEntryFlags {
-    pub const fn from_flags_outer_levels(value: EntryFlags) -> Self {
+    pub const fn from_flags_outer_levels(value: PageEntryFlags) -> Self {
         let mut this = ArchEntryFlags::PRESENT;
-        if value.contains(EntryFlags::WRITE) {
+        if value.contains(PageEntryFlags::WRITE) {
             this = this.union(ArchEntryFlags::WRITABLE);
         }
 
-        if value.contains(EntryFlags::DEVICE_UNCACHEABLE) {
+        if value.contains(PageEntryFlags::DEVICE_UNCACHEABLE) {
             this = this.union(ArchEntryFlags::PCD);
         }
 
-        if value.contains(EntryFlags::USER_ACCESSIBLE) {
+        if value.contains(PageEntryFlags::USER_ACCESSIBLE) {
             this = this.union(ArchEntryFlags::USER_ACCESSIBLE);
         }
 
-        if value.contains(EntryFlags::DISABLE_EXEC) {
+        if value.contains(PageEntryFlags::DISABLE_EXEC) {
             this = this.union(ArchEntryFlags::NO_EXECUTE);
         }
 
@@ -192,11 +200,11 @@ impl ArchEntryFlags {
     }
 }
 
-impl From<EntryFlags> for ArchEntryFlags {
-    fn from(value: EntryFlags) -> Self {
+impl From<PageEntryFlags> for ArchEntryFlags {
+    fn from(value: PageEntryFlags) -> Self {
         let mut this = Self::from_flags_outer_levels(value);
 
-        if value.contains(EntryFlags::FRAMEBUFFER_CACHED) {
+        if value.contains(PageEntryFlags::FRAMEBUFFER_CACHED) {
             this |= ArchEntryFlags::PAT | ArchEntryFlags::PWT;
         }
         this
@@ -205,17 +213,67 @@ impl From<EntryFlags> for ArchEntryFlags {
 
 #[derive(Debug, Clone)]
 #[repr(C)]
-pub struct PageTable {
+pub struct ArchPageTable {
     entries: [Entry; ENTRY_COUNT],
 }
 
-impl PageTable {
-    pub fn zeroize(&mut self) {
+impl PageTableOps for ArchPageTable {
+    unsafe fn sync_higher_half(&mut self) {
+        self.copy_higher_half();
+    }
+
+    unsafe fn zeroize(&mut self) {
+        self.zeroize();
+    }
+
+    fn get_frame_of(&self, page: Page) -> Option<Frame> {
+        self.get_frame(page)
+    }
+
+    unsafe fn deallocate(&mut self) {
+        unsafe { self.free(4) };
+    }
+
+    fn finish_unmap_ops(&mut self, pages: crate::memory::paging::IterPage) {
+        unsafe { tlb::flush_cache_range(self, pages.current_addr(), pages.end_addr()) };
+    }
+
+    fn map_range(
+        &mut self,
+        pages: crate::memory::paging::IterPage,
+        frames: frame_allocator::FrameIter,
+        flags: PageEntryFlags,
+    ) -> Result<(), MapToError> {
+        for (page, frame) in pages.zip(frames) {
+            unsafe { self.map_to(page, frame, flags)? };
+        }
+
+        Ok(())
+    }
+
+    unsafe fn unmap_range<F>(
+        &mut self,
+        pages: crate::memory::paging::IterPage,
+        mut with_each: F,
+    ) -> Result<(), MapToError>
+    where
+        F: FnMut(Page, Frame),
+    {
+        for page in pages {
+            let frame = unsafe { self.unmap(page)? };
+            with_each(page, frame);
+        }
+        Ok(())
+    }
+}
+
+impl ArchPageTable {
+    fn zeroize(&mut self) {
         self.entries.fill(const { unsafe { core::mem::zeroed() } });
     }
 
     /// copies the higher half entries of the current pml4 to this page table
-    pub fn copy_higher_half(&mut self) {
+    fn copy_higher_half(&mut self) {
         unsafe {
             self.entries[HIGHER_HALF_ENTRY..ENTRY_COUNT].clone_from_slice(
                 &current_higher_root_table().entries[HIGHER_HALF_ENTRY..ENTRY_COUNT],
@@ -223,7 +281,7 @@ impl PageTable {
         }
     }
     /// deallocates a page table including it's entries, doesn't deallocate the higher half!
-    pub unsafe fn free(&mut self, level: u8) {
+    unsafe fn free(&mut self, level: u8) {
         unsafe {
             // if the table is the pml4 we need not to free the higher half
             // because it is shared with other tables
@@ -241,15 +299,15 @@ impl PageTable {
         }
     }
 
-    /// maps a virtual `Page` to physical `Frame`, without flushing the cache
-    pub unsafe fn map_to_uncached(
+    #[inline]
+    /// Maps a virtual `Page` to physical `Frame`.
+    unsafe fn map_to(
         &mut self,
         page: Page,
         frame: Frame,
-        flags: EntryFlags,
+        flags: PageEntryFlags,
     ) -> Result<(), MapToError> {
-        let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.virt_addr());
+        let (level_1_index, level_2_index, level_3_index, level_4_index) = translate(page.addr());
 
         let final_flags: ArchEntryFlags = flags.into();
 
@@ -268,10 +326,10 @@ impl PageTable {
         Ok(())
     }
 
-    /// gets the frame page points to
-    pub fn get_frame(&self, page: Page) -> Option<Frame> {
-        let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.virt_addr());
+    #[inline]
+    /// Gets the frame page points to.
+    fn get_frame(&self, page: Page) -> Option<Frame> {
+        let (level_1_index, level_2_index, level_3_index, level_4_index) = translate(page.addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
         let level_1_table = level_2_table[level_2_index].mapped_to()?;
@@ -281,10 +339,10 @@ impl PageTable {
         entry.frame()
     }
 
+    #[inline]
     /// get a mutable reference to the entry for a given page
     fn get_entry(&self, page: Page) -> Option<&mut Entry> {
-        let (level_1_index, level_2_index, level_3_index, level_4_index) =
-            translate(page.virt_addr());
+        let (level_1_index, level_2_index, level_3_index, level_4_index) = translate(page.addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
         let level_1_table = level_2_table[level_2_index].mapped_to()?;
@@ -292,40 +350,35 @@ impl PageTable {
         Some(&mut level_1_table[level_1_index])
     }
 
-    /// Unmaps & frees a page without flushing the cache
-    pub unsafe fn free_unmap_uncached(&mut self, page: Page) {
+    #[inline]
+    /// Unmaps a page without flushing the cache or freeing the frame.
+    unsafe fn unmap(&mut self, page: Page) -> Result<Frame, MapToError> {
         let entry = self.get_entry(page);
-        debug_assert!(entry.is_some());
         if let Some(entry) = entry {
-            unsafe { entry.deallocate() };
-        }
-    }
-
-    /// Unmaps a page without flushing the cache or freeing the frame
-    pub unsafe fn unmap_uncached(&mut self, page: Page) {
-        let entry = self.get_entry(page);
-        debug_assert!(entry.is_some());
-        if let Some(entry) = entry {
-            entry.set(ArchEntryFlags::empty(), PhysAddr::null());
+            let frame = entry.frame().ok_or(MapToError::NotMapped)?;
+            entry.zeroize();
+            Ok(frame)
+        } else {
+            Err(MapToError::NotMapped)
         }
     }
 }
 
-impl Index<usize> for PageTable {
+impl Index<usize> for ArchPageTable {
     type Output = Entry;
     fn index(&self, index: usize) -> &Self::Output {
         &self.entries[index]
     }
 }
 
-impl IndexMut<usize> for PageTable {
+impl IndexMut<usize> for ArchPageTable {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.entries[index]
     }
 }
 
 /// returns the current pml4 from cr3
-pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
+pub unsafe fn current_higher_root_table() -> FramePtr<ArchPageTable> {
     let phys_addr: usize;
     unsafe {
         asm!("mov {}, cr3", out(reg) phys_addr);
@@ -339,7 +392,7 @@ pub unsafe fn current_higher_root_table() -> FramePtr<PageTable> {
 
 /// returns the current pml4 from cr3
 /// equalivent to [`current_higher_root_table`] in x86_64
-pub unsafe fn current_lower_root_table() -> FramePtr<PageTable> {
+pub unsafe fn current_lower_root_table() -> FramePtr<ArchPageTable> {
     unsafe { current_higher_root_table() }
 }
 
@@ -352,7 +405,7 @@ pub(super) unsafe fn set_current_page_table_phys(phys_addr: PhysAddr) {
     }
 }
 /// sets the current higher half Page Table to `page_table`
-pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
+pub unsafe fn set_current_higher_page_table(page_table: FramePtr<ArchPageTable>) {
     let phys_addr = page_table.phys_addr();
     unsafe {
         set_current_page_table_phys(phys_addr);
@@ -361,32 +414,21 @@ pub unsafe fn set_current_higher_page_table(page_table: FramePtr<PageTable>) {
 }
 
 /// Maps architecture specific devices such as the UART serial in aarch64
-pub unsafe fn map_devices(table: &mut PageTable) -> Result<(), MapToError> {
-    unsafe {
-        pci::map_pcie(table)?;
-        apic::map_apic(table)?;
-    }
+pub unsafe fn map_devices(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
+    use crate::memory::HHDM;
+
+    apic::map_apic(vmm)?;
     // a hack to handle sharing the higher half in x86_64
-    let (heap_start, heap_end) = HEAP;
-    let (large_heap_start, large_heap_end) = LARGE_HEAP;
+    let (hhdm_start, end) = (HHDM, HHDM + 0x400000000000);
 
-    let (_, _, _, heap_p4_index) = translate(heap_start);
-    let (_, _, _, heap_end_p4_index) = translate(heap_end);
+    let (_, _, _, heap_p4_index) = translate(hhdm_start);
+    let (_, _, _, heap_end_p4_index) = translate(end);
 
-    for entry in &mut table.entries[heap_p4_index..heap_end_p4_index] {
-        entry.map()?;
-        crate::serial!("entry: {entry:#x?}\n");
-    }
-
-    let (_, _, _, lheap_p4_index) = translate(large_heap_start);
-    let (_, _, _, lheap_end_p4_index) = translate(large_heap_end);
-
-    for entry in &mut table.entries[lheap_p4_index..lheap_end_p4_index] {
+    let table = unsafe { vmm.table_mut() };
+    for entry in &mut table.inner_mut().entries[heap_p4_index..heap_end_p4_index] {
         entry.map()?;
     }
 
-    crate::serial!(
-        "mapped from {heap_p4_index} to {heap_end_p4_index} and from: {lheap_p4_index} to {lheap_end_p4_index}...\n"
-    );
+    crate::serial!("Mapped entries from {heap_p4_index} to {heap_end_p4_index}...\n");
     Ok(())
 }

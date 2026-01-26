@@ -1,5 +1,6 @@
 //! Architecture specific code,
 //! this module contains everything that would make a difference between architectures such i   nitilization and handling context switching
+
 use cfg_if::cfg_if;
 
 cfg_if! {
@@ -17,15 +18,16 @@ cfg_if! {
 
 /// Contains everything related to threading, such as code for context switching
 pub mod threading {
-    pub use super::arch::threading::{
-        CPUStatus, cpu_local_storage_ptr, cpu_local_storages, init_cpus, invoke_context_switch,
-        restore_cpu_status,
-    };
+    pub use super::arch::threading::{CPUStatus, invoke_context_switch, restore_cpu_status};
 }
 
-pub use arch::{
-    flush_cache, halt_all, hlt, init_phase1, init_phase2, with_interrupts, without_interrupts,
-};
+pub mod smp {
+    pub use super::arch::smp::{current_local_ptr, init_cpu_with};
+}
+
+#[allow(unused_imports)]
+pub use arch::with_interrupts;
+pub use arch::{halt_all, hlt, init_phase1, init_phase2, without_interrupts};
 
 pub mod power {
     pub use super::arch::power::{reboot, shutdown};
@@ -37,11 +39,11 @@ pub mod serial {
 
 pub mod utils {
     #[allow(unused_imports)]
-    pub use super::arch::utils::{CPU_INFO, time_ms, time_us};
+    pub use super::arch::utils::{CPU_INFO, cpu_cycles, cpu_timer_freq_mhz};
 }
 
 pub mod registers {
-    pub use super::arch::registers::{CPUID, StackFrame};
+    pub use super::arch::registers::{ArchCpuID, StackFrame};
 }
 
 pub mod pci {

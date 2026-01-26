@@ -1,12 +1,66 @@
 use core::{
     ops::{Deref, DerefMut},
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
 use lock_api::{GuardSend, RawMutex, RawRwLock};
 use spin::Lazy;
 
 use crate::{arch::without_interrupts, thread};
+
+pub struct LockRawTrackedSpinLock(AtomicU64);
+unsafe impl RawMutex for LockRawTrackedSpinLock {
+    const INIT: Self = Self(AtomicU64::new(u64::MAX));
+    type GuardMarker = GuardSend;
+
+    fn is_locked(&self) -> bool {
+        self.0.load(Ordering::Relaxed) != u64::MAX
+    }
+
+    fn lock(&self) {
+        without_interrupts(|| unsafe {
+            thread::with_current_unsafe(|t| {
+                let tid = (*t).tid();
+                let pid = (*t).process().pid();
+
+                let id = (pid as u64) << 32 | tid as u64;
+                if id == self.0.load(Ordering::Relaxed) {
+                    panic!(
+                        "Attempted to lock a spinlock that is already held by the current thread, thread ID: {}, thread pid: {}, spinlock address: {:p}",
+                        tid, pid, self
+                    );
+                }
+                while self
+                    .0
+                    .compare_exchange(u64::MAX, id, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+            })
+        });
+    }
+
+    #[inline(always)]
+    fn try_lock(&self) -> bool {
+        unsafe {
+            thread::with_current_unsafe(|t| {
+                let tid = (*t).tid();
+                let pid = (*t).process().pid();
+
+                let id = (pid as u64) << 32 | tid as u64;
+                self.0
+                    .compare_exchange(u64::MAX, id, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+            })
+        }
+    }
+
+    unsafe fn unlock(&self) {
+        self.0.store(u64::MAX, Ordering::Release);
+    }
+}
+
 pub struct LockRawSpinLock(AtomicBool);
 unsafe impl RawMutex for LockRawSpinLock {
     const INIT: Self = Self(AtomicBool::new(false));
@@ -135,10 +189,12 @@ unsafe impl RawRwLock for LockRawRwLock {
     }
 }
 type SpinLockExt<T> = lock_api::Mutex<LockRawSpinLock, T>;
+type TrackedSpinLockExt<T> = lock_api::Mutex<LockRawTrackedSpinLock, T>;
 type MutexExt<T> = lock_api::Mutex<LockRawMutex, T>;
 
 pub type MutexGuard<'a, T> = lock_api::MutexGuard<'a, LockRawMutex, T>;
 pub type SpinLockGuard<'a, T> = lock_api::MutexGuard<'a, LockRawSpinLock, T>;
+pub type TrackedSpinLockGuard<'a, T> = lock_api::MutexGuard<'a, LockRawTrackedSpinLock, T>;
 
 type RwLockExt<T> = lock_api::RwLock<LockRawRwLock, T>;
 pub type RwLockReadGuard<'a, T> = lock_api::RwLockReadGuard<'a, LockRawRwLock, T>;
@@ -147,6 +203,10 @@ pub type RwLockWriteGuard<'a, T> = lock_api::RwLockWriteGuard<'a, LockRawRwLock,
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct SpinLock<T>(SpinLockExt<T>);
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct TrackedSpinLock<T>(TrackedSpinLockExt<T>);
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -202,6 +262,7 @@ macro_rules! impl_common {
 impl_common!(Mutex);
 impl_common!(RwLock);
 impl_common!(SpinLock);
+impl_common!(TrackedSpinLock);
 
 impl<T> Mutex<T> {
     pub fn lock(&self) -> MutexGuard<'_, T> {
@@ -211,6 +272,12 @@ impl<T> Mutex<T> {
 
 impl<T> SpinLock<T> {
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
+        self.0.lock()
+    }
+}
+
+impl<T> TrackedSpinLock<T> {
+    pub fn lock(&self) -> TrackedSpinLockGuard<'_, T> {
         self.0.lock()
     }
 }

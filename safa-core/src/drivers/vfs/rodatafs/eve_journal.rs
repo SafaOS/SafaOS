@@ -13,7 +13,7 @@ impl EVEJournal {
             crate::logging::SERIAL_LOG
                 .read()
                 .clone()
-                .unwrap_or(PageString::new()),
+                .unwrap_or(PageString::new(&"Journal")),
         )
     }
 }

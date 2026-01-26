@@ -4,14 +4,15 @@ use crate::{
     drivers::vfs::{FSError, FSResult, SeekOffset},
     memory::{
         frame_allocator::Frame,
-        paging::{PAGE_SIZE, Page},
+        paging::{PAGE_SIZE, Page, PageTableOps},
+        vmm::VMMAlloc,
     },
     utils::locks::{Mutex, MutexGuard},
 };
 use alloc::{boxed::Box, vec::Vec};
 use lazy_static::lazy_static;
 
-use crate::{debug, limine, memory::page_allocator::PageAlloc, utils::display::RGB};
+use crate::{debug, limine, utils::display::RGB};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -33,7 +34,7 @@ pub struct FrameBufferInfo {
 pub struct FrameBuffer<'a> {
     info: FrameBufferInfo,
     buffer_display_index: usize,
-    pixel_buffer: Box<[u32], PageAlloc>,
+    pixel_buffer: Box<[u32], VMMAlloc>,
     video_buffer: &'a mut [u8],
 }
 
@@ -43,8 +44,10 @@ impl<'a> FrameBuffer<'a> {
         pixels_buffers_count: usize,
         info: FrameBufferInfo,
     ) -> Self {
-        let mut pixel_buffer =
-            Vec::with_capacity_in((info.width * info.height) * pixels_buffers_count, PageAlloc);
+        let mut pixel_buffer = Vec::with_capacity_in(
+            (info.width * info.height) * pixels_buffers_count,
+            VMMAlloc::new(&"FRAMEBUFFER_DRIVER"),
+        );
         unsafe {
             pixel_buffer.set_len(pixel_buffer.capacity());
         }
@@ -214,14 +217,14 @@ impl FrameBufferDriver {
             let virt_addr = VirtAddr::from_ptr(ptr);
 
             let len = pb.len() * 4;
-            let page_n = len / PAGE_SIZE;
+            let page_n = len.div_ceil(PAGE_SIZE);
 
             let mut frames = Vec::with_capacity(page_n);
             for i in 0..page_n {
                 let page_addr = virt_addr + i * PAGE_SIZE;
-                let page = Page::containing_address(page_addr);
+                let page = Page::containing(page_addr);
                 let frame = current_higher_root_table()
-                    .get_frame(page)
+                    .get_frame_of(page)
                     .expect("Failed to get Frame of a page belonging to a created double buffer");
 
                 frames.push(frame);

@@ -1,8 +1,8 @@
 use serde::Serialize;
 
 use crate::{
-    drivers::vfs::rodatafs::GenericRodFSFile, utils::alloc::PageString, KERNEL_CODE_NAME,
-    KERNEL_CODE_VERSION,
+    KERNEL_CODE_NAME, KERNEL_CODE_VERSION, drivers::vfs::rodatafs::GenericRodFSFile,
+    utils::alloc::PageString,
 };
 
 const COMPILE_TIME: &str = compile_time::time_str!();
@@ -26,7 +26,7 @@ impl KernelInfo {
             version: KERNEL_CODE_VERSION,
             compile_date: COMPILE_DATE,
             compile_time: COMPILE_TIME,
-            uptime: crate::time!(ms),
+            uptime: crate::timer::time_since_boot_ms(),
         }
     }
 }
@@ -38,7 +38,7 @@ impl KernelInfoFile {
     }
 
     fn fetch(_: &mut GenericRodFSFile) -> Option<PageString> {
-        let mut page_string = PageString::with_capacity(1024);
+        let mut page_string = PageString::with_capacity(&"kernelinfo", 1024);
         let kernel_info = KernelInfo::fetch();
         serde_json::to_writer_pretty(&mut page_string, &kernel_info)
             .ok()

@@ -41,7 +41,7 @@ impl MemInfoFile {
     }
 
     pub fn fetch(_: &mut ProcFSFile) -> Option<PageString> {
-        let mut page_string = PageString::with_capacity(1024);
+        let mut page_string = PageString::with_capacity(&"meminfo", 1024);
         let mem_info = MemInfo::fetch();
 
         serde_json::to_writer_pretty(&mut page_string, &mem_info)
