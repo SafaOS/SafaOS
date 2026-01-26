@@ -128,28 +128,24 @@ context_switch_stub:
     push 0
     // fs
     push 0
-    call context_switch
+    call context_switch_on_int
     ud2
 
 
 thread_yield_wrapper:
-  // the extra 8 bytes for alignment
-  sub rsp, 0x2C0
+  # Return address
+  pop rcx
+  mov rdx, rsp
 
-  mov [rsp + RAX_OFFSET], rax
+  sub rsp, 0x2C0
+  # Align stack to 16 bytes because for some reason, otherwise it doesn't work (isn't aligned)
+  and rsp, -16
+
+  // RIP
+  mov [rsp + RIP_OFFSET], rcx
 
   mov [rsp + RBX_OFFSET], rbx
-  mov [rsp + RCX_OFFSET], rcx
-  mov [rsp + RDX_OFFSET], rdx
-
-  mov [rsp + RSI_OFFSET], rsi
-  mov [rsp + RDI_OFFSET], rdi
   mov [rsp + RBP_OFFSET], rbp
-
-  mov [rsp + R8_OFFSET], r8
-  mov [rsp + R9_OFFSET], r9
-  mov [rsp + R10_OFFSET], r10
-  mov [rsp + R11_OFFSET], r11
   mov [rsp + R12_OFFSET], r12
   mov [rsp + R13_OFFSET], r13
   mov [rsp + R14_OFFSET], r14
@@ -158,28 +154,30 @@ thread_yield_wrapper:
   mov rax, cr3
   mov [rsp + CR3_OFFSET], rax
 
-  // RSP before the SUB
-  lea rax, [rsp + 0x2C0]
-
-  // RIP
-  mov rbx, [rax]
-  mov [rsp + RIP_OFFSET], rbx
-
   // RSP before the call
-  lea rax, [rax + 8]
-  mov [rsp + RSP_OFFSET], rax
+  mov [rsp + RSP_OFFSET], rdx
 
   mov rax, cs
   mov [rsp + CS_OFFSET], rax
-
   mov rax, ss
   mov [rsp + SS_OFFSET], rax
 
   pushfq
   pop rax
-
   mov [rsp + RFLAGS_OFFSET], rax
 
+  # Has to be done because fxrstor would GPF otherwise
+  # TODO: Lazy FPU
   fxsave [rsp + FLOATING_OFFSET]
-  call context_switch_and_return
+  mov rdi, rsp
+  jmp context_switch_and_return
   ud2
+  # Restore saved registers
+  # mov r12, [rsp + R12_OFFSET]
+  # mov r13, [rsp + R13_OFFSET]
+  # mov r14, [rsp + R14_OFFSET]
+  # mov r15, [rsp + R15_OFFSET]
+  # mov rbx, [rsp + RBX_OFFSET]
+
+  # add rsp, 0x2C0
+  # ret

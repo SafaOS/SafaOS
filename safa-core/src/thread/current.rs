@@ -4,6 +4,7 @@ use core::num::NonZero;
 use core::sync::atomic::AtomicU32;
 
 use crate::process::{self, Pid, WaitOnProcReason};
+use crate::scheduler::SCHEDULER;
 use crate::scheduler::wait_queue::WaitError;
 use crate::thread::Tid;
 use crate::{
@@ -52,11 +53,11 @@ pub fn sleep_for_ms(ms: u64) -> Result<(), WaitError> {
 
 /// Yields execution to the next thread that is ready to run, in the thread queue for the current CPU.
 pub fn yield_now() {
-    without_interrupts(|| unsafe {
-        let procced = crate::scheduler::before_thread_yield();
-        if !procced {
+    without_interrupts(|| {
+        if SCHEDULER.maybe_borrow().is_none() {
             return;
         }
+
         crate::arch::threading::invoke_context_switch()
     })
 }

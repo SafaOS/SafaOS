@@ -143,7 +143,6 @@ pub struct Scheduler {
     // pub head_thread: SpinLock<ArcThread>,
     threads_count: AtomicUsize,
 
-    is_thread_yielding: UnsafeCell<bool>,
     context_switch_count: AtomicUsize,
     preemption_disabled: UnsafeCell<bool>,
     stack: UnsafeCell<[u8; 1024]>,
@@ -429,7 +428,7 @@ impl Scheduler {
     #[inline]
     fn try_swap_contexts<'a>(
         &'a self,
-        current_cpu_status: CPUStatus,
+        current_cpu_status: &CPUStatus,
         swap_if_has_time: bool,
     ) -> Option<(
         NonNull<CPUStatus>,
@@ -462,7 +461,7 @@ impl Scheduler {
         self.try_boost_threads(&mut *schd_queues, time_now);
 
         let current_context = unsafe { current_thread.context_unchecked() };
-        current_context.set_cpu_status(current_cpu_status);
+        current_context.set_cpu_status(*current_cpu_status);
         let mut current_status = current_thread.status_mut();
 
         // We want to schedule the IDLE thread if the current thread is terminating so that it can be cleaned up.
@@ -548,7 +547,6 @@ impl Scheduler {
             ready_queues: TrackedSpinLock::new(core::array::from_fn(|_| ThreadList::new_empty())),
             current_thread: UnsafeCell::new(idle_thread.clone()),
             threads_count: AtomicUsize::new(0),
-            is_thread_yielding: UnsafeCell::new(false),
             context_switch_count: AtomicUsize::new(0),
             preemption_disabled: UnsafeCell::new(false),
             stack: UnsafeCell::new([0; 1024]),
@@ -576,19 +574,6 @@ impl Scheduler {
 
 unsafe impl Send for Scheduler {}
 unsafe impl Sync for Scheduler {}
-
-#[must_use = "returns whether or not the scheduler was initialized"]
-pub(super) unsafe fn before_thread_yield() -> bool {
-    unsafe {
-        if let Some(scheduler) = SCHEDULER.maybe_borrow() {
-            *scheduler.is_thread_yielding.get() = true;
-            true
-        } else {
-            core::hint::cold_path();
-            false
-        }
-    }
-}
 
 #[inline]
 // used in x86_64
@@ -631,11 +616,14 @@ extern "C" fn post_swtch_cleanup(schd: &'static Scheduler) {
 /// if the address space has changed, please copy the context to somewhere accessible first
 ///
 /// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
-pub fn swtch(context: CPUStatus, before_switch: impl FnOnce()) -> Result<!, impl FnOnce()> {
+pub fn swtch(
+    context: &CPUStatus,
+    before_switch: impl FnOnce(),
+    is_thread_yielding: bool,
+) -> Result<!, impl FnOnce()> {
     let Some(scheduler) = SCHEDULER.maybe_borrow() else {
         return Err(before_switch);
     };
-    let is_thread_yielding = unsafe { scheduler.is_thread_yielding.get().replace(false) };
     if unsafe { *scheduler.preemption_disabled.get() } {
         return Err(before_switch);
     }

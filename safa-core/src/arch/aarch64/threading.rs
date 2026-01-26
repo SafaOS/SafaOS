@@ -177,13 +177,12 @@ unsafe extern "C" {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn context_switch_now(frame: &mut InterruptFrame) -> ! {
-    let context = unsafe { CPUStatus::from_current(frame) };
-    match scheduler::swtch(context, || {}) {
+extern "C" fn context_switch_now(context: &CPUStatus) -> ! {
+    match scheduler::swtch(context, || {}, true) {
         Ok(a) => a,
         Err(_) => {
             core::hint::cold_path();
-            unsafe { restore_cpu_status_partial(&context) }
+            unsafe { restore_cpu_status_partial(context) }
         }
     }
 }
@@ -191,7 +190,7 @@ extern "C" fn context_switch_now(frame: &mut InterruptFrame) -> ! {
 #[inline]
 pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
     let context = unsafe { CPUStatus::from_current(frame) };
-    let Err(before_switch) = scheduler::swtch(context, before_switch);
+    let Err(before_switch) = scheduler::swtch(&context, before_switch, false);
 
     core::hint::cold_path();
     before_switch();

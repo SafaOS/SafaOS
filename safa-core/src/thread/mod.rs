@@ -679,6 +679,7 @@ pub struct Context {
 }
 
 impl Context {
+    #[inline(always)]
     pub const fn set_cpu_status(&mut self, status: CPUStatus) {
         self.cpu_status = status;
     }

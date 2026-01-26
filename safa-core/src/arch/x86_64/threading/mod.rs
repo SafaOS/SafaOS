@@ -9,7 +9,7 @@ use crate::{
     },
     thread::Tid,
 };
-use core::arch::{asm, global_asm};
+use core::arch::global_asm;
 
 use crate::{
     VirtAddr,
@@ -188,7 +188,7 @@ struct ContextSwitchFrame {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn context_switch(switch_frame: ContextSwitchFrame) -> ! {
+extern "C" fn context_switch_on_int(switch_frame: ContextSwitchFrame) -> ! {
     let mut capture = switch_frame.capture;
     let frame = switch_frame.int;
 
@@ -199,27 +199,39 @@ extern "C" fn context_switch(switch_frame: ContextSwitchFrame) -> ! {
     capture.ss = frame.stack_segment;
     capture.rflags = frame.flags;
 
-    unsafe { context_switch_and_return_inner(capture) }
+    unsafe {
+        context_switch_and_return_inner(
+            &mut capture,
+            || {
+                super::interrupts::apic::send_eoi();
+            },
+            false,
+        )
+    }
 }
 
 #[inline(always)]
-unsafe fn context_switch_and_return_inner(mut capture: CPUStatus) -> ! {
-    let Err(_) = {
+unsafe fn context_switch_and_return_inner(
+    capture: &mut CPUStatus,
+    before_switch: impl FnOnce(),
+    is_thread_yielding: bool,
+) -> ! {
+    let Err(before_switch) = {
         unsafe {
             capture.ring0_rsp = get_kernel_tss_stack();
             capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
         }
-        swtch(capture, || super::interrupts::apic::send_eoi())
+        swtch(capture, before_switch, is_thread_yielding)
     };
 
-    super::interrupts::apic::send_eoi();
+    before_switch();
     core::hint::cold_path();
-    unsafe { restore_cpu_status_partial(&capture) }
+    unsafe { restore_cpu_status_partial(capture) }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn context_switch_and_return(capture: CPUStatus) {
-    unsafe { context_switch_and_return_inner(capture) }
+extern "C" fn context_switch_and_return(capture: &mut CPUStatus) {
+    unsafe { context_switch_and_return_inner(capture, || {}, true) }
 }
 
 unsafe extern "C" {
@@ -229,7 +241,7 @@ unsafe extern "C" {
 
 #[inline(never)]
 pub fn invoke_context_switch() {
-    unsafe { asm!("int 0x20") }
+    unsafe { thread_yield_wrapper() }
 }
 
 /// Fully restores the CPU status from the given [`CPUStatus`] structure.
