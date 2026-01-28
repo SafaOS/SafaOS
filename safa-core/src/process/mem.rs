@@ -306,7 +306,7 @@ pub fn allocate_tls(
     size: usize,
     tls_file_size: usize,
 ) -> Result<(TrackedMemoryAllocation, VirtAddr), MapToError> {
-    assert!(tls_alignment >= align_of::<UThreadLocalInfo>());
+    let alloc_alignment = tls_alignment.max(align_of::<UThreadLocalInfo>());
 
     #[cfg(target_arch = "x86_64")]
     #[repr(C)]
@@ -323,13 +323,14 @@ pub fn allocate_tls(
         thread_local_storage_size: usize,
     }
 
-    let tls_total_size = (size_of::<UThreadLocalInfo>() + size).to_next_multiple_of(tls_alignment);
+    let tls_aligned_size = size.to_next_multiple_of(alloc_alignment);
+    let tls_total_size = size_of::<UThreadLocalInfo>() + tls_aligned_size;
     let tls_alloc_addr = allocate_user_stuff(&"thread.tls", &vmm, tls_total_size)?;
 
     let (uthread_addr, tls_addr) = {
         cfg_if! {
             if #[cfg(target_arch = "x86_64")] {
-                (tls_alloc_addr + size, tls_alloc_addr)
+                (tls_alloc_addr + tls_aligned_size, tls_alloc_addr)
             } else if #[cfg(target_arch = "aarch64")] {
                 (tls_alloc_addr, tls_alloc_addr + size_of::<UThreadLocalInfo>())
             } else {
@@ -360,10 +361,14 @@ pub fn allocate_tls(
     let uthread_bytes: [u8; size_of::<UThreadLocalInfo>()] =
         unsafe { core::mem::transmute(uthread_info) };
 
-    let page_table = unsafe { &mut *vmm.table_ptr() };
+    let sync_page_table = vmm.table_inner();
+    let mut op = sync_page_table.begin();
+    let page_table = unsafe { op.page_table_mut() };
     memory::copy_to_pagetable(page_table, uthread_addr, &uthread_bytes);
     // only copy file size
     memory::pagetable_copy_within(page_table, master_tls_addr_within, tls_addr, tls_file_size);
+    drop(op);
+
     Ok((
         TrackedMemoryAllocation::new(Some(vmm), tls_alloc_addr, None),
         uthread_addr,
