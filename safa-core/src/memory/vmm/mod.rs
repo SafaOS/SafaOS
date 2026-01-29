@@ -414,6 +414,10 @@ pub struct VirtualMemoryManager {
 }
 
 impl VirtualMemoryManager {
+    pub fn table_inner(&self) -> &SyncPageTable {
+        &self.page_table
+    }
+
     pub unsafe fn table_mut(&mut self) -> &mut PageTable {
         unsafe { &mut *self.page_table.inner_ptr_mut() }
     }

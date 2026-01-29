@@ -567,6 +567,13 @@ pub struct PendingOp<'a> {
 }
 
 impl<'a> PendingOp<'a> {
+    /// Returns a reference to the page table.
+    ///
+    /// Safety: Map and Unmap operations must be done with [`PendingOp`] methods.
+    pub unsafe fn page_table_mut(&mut self) -> &mut PageTable {
+        &mut self.guard
+    }
+
     #[inline]
     /// Maps a virtual `Page` to physical `Frame`.
     pub fn map_to(
