@@ -115,9 +115,9 @@ where
         .expect("failed to get the build status from cargo diagnostics");
 
     let Message::BuildFinished(build_status) = build_status else {
-        panic!("multiple executables in diagnostics")
+        panic!("Unexpected: multiple executables in cargo diagnostics")
     };
-    assert!(build_status.success, "build failed");
+    assert!(build_status.success, "Build Failed");
 
     let compiler_artifacts = results.filter_map(|r| match r {
         Message::CompilerArtifact(compiler_artifact) => Some((
@@ -147,7 +147,7 @@ pub fn build_safaos(
     let specifier = &*rustc::SAFAOS_RUSTC_SPECIFIER;
 
     log!(
-        "compiling crate at {} (SafaOS) with rust `{}`",
+        "Compiling crate at {} (SafaOS) with rust `{}`",
         crate_path.display(),
         specifier
     );
@@ -159,7 +159,7 @@ pub fn build_safaos(
     let args = args.filter(|x| !x.is_empty());
 
     let results = cargo_build_and_get_exe(crate_path, arch, RustcTarget::SafaOS, args);
-    log!("successful got {} executables", results.len());
+    log!("Successful, got {} executables", results.len());
     results
 }
 
@@ -172,14 +172,14 @@ pub fn build_freestanding(
     args: &[&'static str],
 ) -> Vec<(PathBuf, String)> {
     log!(
-        "compiling crate at {} (freestanding)...",
+        "Compiling crate at {} (freestanding)...",
         crate_path.display()
     );
     let args = args.iter();
     let args = args.map(|s| *s);
     let args = ["build"].into_iter().chain(args);
     let results = cargo_build_and_get_exe(crate_path, arch, RustcTarget::None, args);
-    log!("successful got {} executables", results.len());
+    log!("Successful, got {} executables", results.len());
     results
 }
 
@@ -199,6 +199,6 @@ pub fn build_tests_freestanding(
     let args = args.map(|s| *s);
     let args = ["test", "--no-run"].into_iter().chain(args);
     let results = cargo_build_and_get_exe(crate_path, arch, RustcTarget::None, args);
-    log!("successful got {} executables", results.len());
+    log!("Successful, got {} executables", results.len());
     results
 }
