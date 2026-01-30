@@ -38,13 +38,21 @@ pub fn main() -> ! {
         use crate::thread::ContextPriority;
         use crate::utils::types::Name;
 
-        // start the shell
+        let use_threads_var = alloc::format!(
+            "OPAL_USE_THREADS={}",
+            crate::percpu::CpuLocal::get_all().len_hint()
+        );
+        // Start the UI
         pspawn(
-            Name::try_from("Shell").unwrap(),
+            Name::try_from("OpalWM").unwrap(),
             // Maybe we can make a const function or a macro for this
-            make_path!("sys", "bin/safa"),
-            &["sys:/bin/safa", "-i"],
-            &[b"PATH=sys:/bin", b"SHELL=sys:/bin/safa"],
+            make_path!("sys", "bin/opal-wm"),
+            &["sys:/bin/opal-wm", "-i"],
+            &[
+                b"PATH=sys:/bin",
+                b"SHELL=sys:/bin/safa",
+                use_threads_var.as_bytes(),
+            ],
             SpawnFlags::empty(),
             ContextPriority::Medium,
             *KERNEL_STDIO,
