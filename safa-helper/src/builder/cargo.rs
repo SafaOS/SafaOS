@@ -115,7 +115,7 @@ where
         .expect("failed to get the build status from cargo diagnostics");
 
     let Message::BuildFinished(build_status) = build_status else {
-        panic!("multiple executable in diagnostics")
+        panic!("multiple executables in diagnostics")
     };
     assert!(build_status.success, "build failed");
 
