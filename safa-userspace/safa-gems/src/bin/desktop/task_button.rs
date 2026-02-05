@@ -4,7 +4,7 @@ use libgem::{
     element::{Element, is_inside_rect},
     image::{PixelImage, ScaleType, display::ARGB},
 };
-use libopal::event::HeldMouseButtons;
+use libopal::defs::HeldMouseButtons;
 
 const BTN_SIZE: u32 = 32;
 const BTN_HEIGHT: u32 = 48;
@@ -129,20 +129,20 @@ impl<G: Gem, Canvas: DrawingCanvas> Element<Canvas, G> for TaskButton {
         )
     }
 
-    fn handle_event(&mut self, gem: &mut G, event: libopal::Event, ele_x: u32, ele_y: u32) {
+    fn handle_event(&mut self, gem: &mut G, event: libopal::WindowEvent, ele_x: u32, ele_y: u32) {
         _ = gem;
         let width = self.width();
         let height = self.height();
 
         let (pos, leave, btn_left) = match event {
-            libopal::Event::MouseChange(m) => (
+            libopal::WindowEvent::MouseChange(m) => (
                 Some((m.x(), m.y())),
                 false,
                 m.buttons_changed()
                     .then_some(m.held_buttons().contains(HeldMouseButtons::LEFT)),
             ),
-            libopal::Event::MouseLeave(_) => (None, true, None),
-            libopal::Event::MouseEnter(m) => (Some((m.x(), m.y())), false, None),
+            libopal::WindowEvent::MouseLeave(_) => (None, true, None),
+            libopal::WindowEvent::MouseEnter(m) => (Some((m.x(), m.y())), false, None),
             _ => (None, false, None),
         };
 

@@ -12,12 +12,12 @@ use libgem::{
     App, Gem, GemConfig,
     image::BMPImage,
     libopal::{
-        Event,
+        WindowEvent,
         event::{KeyCode, KeyEventKind},
         window::Pixel,
     },
 };
-use libopal::event::KeyModifiers;
+use libopal::defs::KeyModifiers;
 use safa_api::abi::poll::{PollEntry, PollEvents};
 
 use crate::term_display::TerminalElement;
@@ -109,11 +109,11 @@ fn main() {
         if let Some(events) = events {
             for event in events
                 .iter()
-                .filter(|w_eve| w_eve.win() == win_id)
+                .filter(|w_eve| w_eve.receiver() == win_id)
                 .map(|w_eve| w_eve.event())
             {
                 match event {
-                    Event::Key(k_eve) => {
+                    WindowEvent::Key(k_eve) => {
                         if k_eve.kind == KeyEventKind::Press {
                             if let Some((normi_c, shifted_c, capslock_c)) =
                                 keycode_to_char(k_eve.code)

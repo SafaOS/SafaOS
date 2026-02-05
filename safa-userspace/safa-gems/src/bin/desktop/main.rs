@@ -7,7 +7,7 @@ use libgem::{
     image::QOIImage,
 };
 use libopal::{
-    Event,
+    WindowEvent,
     window::{Window, WindowFlags},
 };
 
@@ -115,13 +115,17 @@ fn main() {
             println!("taskbar events: {events:?}");
         }
 
-        for win_even in (&*events).iter().filter(|win_eve| win_eve.win() == win_id) {
+        for win_even in (&*events)
+            .iter()
+            .filter(|win_eve| win_eve.receiver() == win_id)
+        {
             let event = win_even.event();
             match event {
-                Event::GlobalWindowAttached(win) => main_dock.attached(win.win_id()),
-                Event::GlobalWindowDeatached(win) => main_dock.deatached(win.win_id()),
-                Event::GlobalWindowFocused(eve) => main_dock.focus_changed(eve.win_id(), true),
-                Event::GlobalWindowUnfocused(eve) => main_dock.focus_changed(eve.win_id(), false),
+                WindowEvent::GlobalWindowAttached(win) => main_dock.attached(win.win_id()),
+                WindowEvent::GlobalWindowDeatached(win) => main_dock.deatached(win.win_id()),
+                WindowEvent::GlobalWindowFocusChanged(change, window) => {
+                    main_dock.focus_changed(window, change.is_focused())
+                }
                 _ => {}
             }
         }

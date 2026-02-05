@@ -4,6 +4,7 @@ use libgem::{
     element::Element,
     image::{BMPImage, PixelImage},
 };
+use libopal::shm::SharedObject;
 
 use crate::task_button::TaskButton;
 
@@ -28,6 +29,7 @@ pub struct MainDock {
     /// Last draw info, used to erase the previous drawings because this isn't really static.
     last_draw: Option<((u32, u32), (u32, u32))>,
     elements_changed: bool,
+    icon_cache: SharedObject,
 }
 
 impl MainDock {
@@ -49,6 +51,8 @@ impl MainDock {
             tasks: Vec::new(),
             last_draw: None,
             elements_changed: true,
+            icon_cache: SharedObject::allocate(256 * 256 * 4)
+                .expect("Failed to allocate space to cache icons"),
         }
     }
 
@@ -59,7 +63,7 @@ impl MainDock {
 
         let icon = (|| {
             if let Some(icon) = info.icon_id() {
-                let Ok(raw_data) = libopal::icon::get_icon_data_bmp(icon) else {
+                let Ok(raw_data) = libopal::icon::load_icon(&mut self.icon_cache, icon) else {
                     return fallback_icon();
                 };
                 let bmp = match BMPImage::from_slice(&raw_data) {
@@ -198,7 +202,7 @@ impl<Canvas: DrawingCanvas, G: Gem> Element<Canvas, G> for MainDock {
         (draw_started_at, draw_ended_at)
     }
 
-    fn handle_event(&mut self, gem: &mut G, event: libopal::Event, ele_x: u32, ele_y: u32) {
+    fn handle_event(&mut self, gem: &mut G, event: libopal::WindowEvent, ele_x: u32, ele_y: u32) {
         let mut draw_x = ele_x + PADDING_X;
         let draw_y = ele_y + PADDING_Y;
         for btn in self.tasks.iter_mut() {
