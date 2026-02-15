@@ -56,9 +56,10 @@ fn init_wallpaper() -> Option<Window> {
 
             let mut wall_window =
                 Window::create("", WindowFlags::BG_WINDOW, width, height, None, None);
-            wall_window
-                .pixels_mut()
-                .copy_from_slice(unsafe { std::mem::transmute(scaled.get_pixels()) });
+
+            let pixels = scaled.get_pixels();
+            wall_window.pixels_mut()[..pixels.len()]
+                .copy_from_slice(unsafe { core::mem::transmute(pixels) });
             wall_window.redraw(0, 0, width, height);
             Some(wall_window)
         }
