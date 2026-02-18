@@ -61,7 +61,7 @@ unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAlloc
         let size_bytes = entry.length as usize;
         let size = size_bytes.to_next_page();
 
-        if entry.entry_type != EntryType::BAD_MEMORY && entry.entry_type != EntryType::RESERVED {
+        if entry.entry_type != EntryType::BAD_MEMORY {
             let (flags, name) = if entry.entry_type == EntryType::FRAMEBUFFER {
                 (flags | VMMMFlags::FRAMEBUFFER_CACHED, &"FRAMEBUFFER")
             } else {
