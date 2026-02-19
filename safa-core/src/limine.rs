@@ -29,7 +29,7 @@ use crate::utils::ustar::TarArchiveIter;
 
 #[used]
 #[unsafe(link_section = ".requests")]
-static BASE_REVISION: BaseRevision = BaseRevision::with_revision(2);
+static BASE_REVISION: BaseRevision = BaseRevision::with_revision(4);
 
 #[used]
 #[unsafe(link_section = ".requests")]

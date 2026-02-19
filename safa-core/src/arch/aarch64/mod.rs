@@ -89,6 +89,7 @@ fn setup_cpu_pherphials() {
 #[inline(always)]
 pub fn init_phase1() {
     setup_cpu_basics();
+    serial::init_serial_qemu();
     let bsp = crate::percpu::init_bsp_first();
     smp::setup_cpu_mp(bsp);
     cpu::init();
