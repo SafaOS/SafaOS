@@ -1,7 +1,6 @@
 .section .text
 .global restore_cpu_status_full
 .global restore_cpu_status_partial
-.global context_switch_stub
 .global thread_yield_wrapper
 
 
@@ -89,48 +88,6 @@ restore_cpu_status_partial:
     pop rdi
 
     iretq
-
-context_switch_stub:
-    sub rsp, 8        // alignment for the interrupt frame
-    sub rsp, 512      // allocate space for fpu registers
-    fxsave [rsp]
-
-    /* alignment */
-    push rax
-
-    push rax
-    mov rax, cr3
-    push rax
-
-    push rbx
-    push rcx
-    push rdx
-
-    push rsi
-    push rdi
-    push rbp
-
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-
-    push 0    // rip
-    push 0x8  // cs
-    push 0x10 // ss
-    pushfq
-    push 0 // rsp
-    // ring0 rsp
-    push 0
-    // fs
-    push 0
-    call context_switch_on_int
-    ud2
-
 
 thread_yield_wrapper:
   # Return address

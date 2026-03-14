@@ -1,12 +1,14 @@
 use super::super::syscalls::syscall_base;
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
+use core::fmt::Display;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 
 use super::idt::{GateDescriptor, IDTT};
 use super::{InterruptFrame, TrapFrame};
 
+use crate::arch::threading::CPUStatus;
 use crate::arch::x86_64::interrupts::apic::send_eoi;
 use crate::arch::x86_64::interrupts::ps2::{self};
 use crate::arch::x86_64::{threading, tlb};
@@ -23,8 +25,87 @@ pub const ATTR_TRAP: u8 = 0xF;
 pub const ATTR_INT: u8 = 0xE;
 const ATTR_RING3: u8 = 3 << 5;
 
-const EMPTY_TABLE: IDTT = [GateDescriptor::default(); 256]; // making sure it is made at compile-time
+#[repr(C)]
+pub struct InterruptCpuFrame {
+    pub capture: CPUStatus,
+    pub error_code: u64,
+}
 
+impl Display for InterruptCpuFrame {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "--------- CPU Frame: ---------\n{}\nerror code: {:#x}",
+            self.capture, self.error_code
+        )
+    }
+}
+
+macro_rules! make_handler {
+    ($name:path) => {{
+        #[unsafe(naked)]
+        extern "C" fn wrapper() -> ! {
+                const _: extern "C" fn (&mut InterruptCpuFrame) = $name;
+
+                core::arch::naked_asm!(
+                    "
+                and rsp, -16        // alignment for the interrupt frame
+                sub rsp, 512      // allocate space for fpu registers
+                fxsave [rsp]
+
+                /* alignment */
+                push rax
+
+                push rax
+                mov rax, cr3
+                push rax
+
+                push rbx
+                push rcx
+                push rdx
+
+                push rsi
+                push rdi
+                push rbp
+
+                push r8
+                push r9
+                push r10
+                push r11
+                push r12
+                push r13
+                push r14
+                push r15
+
+                // iretq frame
+                lea rax, [rsp+(0x2C0-(8*7))]
+                push [rax+0x08]     // rip
+                push [rax+0x10]    // cs
+                push [rax+0x28]   // ss
+                push [rax+0x18]  // rflags
+                push [rax+0x20] // rsp
+                // ring0 rsp
+                push 0
+                // fs
+                push 0
+                cld
+
+                mov rdi, rsp
+                call {0}
+
+                mov rdi, rsp
+                call restore_cpu_status_partial
+                ud2
+                ", sym $name
+                )
+
+        }
+
+        wrapper
+    }};
+}
+
+const EMPTY_TABLE: IDTT = [GateDescriptor::default(); 256]; // making sure it is made at compile-time
 macro_rules! create_idt {
     ($(($indx:expr, $handler:expr_2021, $attributes:expr_2021 $(, $ist:literal)?)),*) => {
         {
@@ -55,10 +136,15 @@ lazy_static! {
         (6, invalid_opcode, ATTR_INT),
         (8, double_fault_handler, ATTR_TRAP, 0),
         (0xC, stack_segment_fault_handler, ATTR_TRAP, 0),
-        (13, general_protection_fault_handler, ATTR_TRAP),
-        (14, page_fault_handler, ATTR_TRAP),
+        (13, make_handler!(general_protection_fault), ATTR_TRAP),
+        (14, make_handler!(page_fault), ATTR_TRAP, 0),
         (0x13, simd_exception_handler, ATTR_TRAP),
-        (0x20, threading::context_switch_stub, ATTR_INT, 1),
+        (
+            0x20,
+            make_handler!(threading::context_switch_on_int),
+            ATTR_INT,
+            1
+        ),
         (0x21, keyboard_interrupt_handler, ATTR_INT),
         (TLBI_ID, tlb::tlbi_flush_handler, ATTR_INT),
         (APIC_ERROR_HANDLER_ID, apic_err, ATTR_INT),
@@ -111,11 +197,11 @@ extern "x86-interrupt" fn stack_segment_fault_handler(frame: TrapFrame) {
     panic!("---- Stack-Segment Fault ----\n{}", frame);
 }
 
-extern "x86-interrupt" fn general_protection_fault_handler(frame: TrapFrame) {
-    panic!("---- General Protection Fault ----\n{}", frame,);
+extern "C" fn general_protection_fault(frame: &mut InterruptCpuFrame) {
+    panic!("---- General Protection Fault ----\n{}", frame);
 }
 
-extern "x86-interrupt" fn page_fault_handler(frame: TrapFrame) {
+extern "C" fn page_fault(frame: &mut InterruptCpuFrame) {
     let cr2: u64;
     unsafe { asm!("mov {}, cr2", out(reg) cr2) }
 

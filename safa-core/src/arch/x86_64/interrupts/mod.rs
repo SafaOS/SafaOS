@@ -13,7 +13,7 @@ use crate::{KERNEL_ELF, VirtAddr};
 
 use crate::drivers::interrupts::IRQInfo;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct InterruptFrame {
     pub insturaction: VirtAddr,
@@ -23,7 +23,7 @@ pub struct InterruptFrame {
     pub stack_segment: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct TrapFrame {
     pub error_code: u64,

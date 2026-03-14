@@ -4,12 +4,13 @@ use crate::{
     PhysAddr,
     arch::x86_64::{
         gdt::{get_kernel_tss_stack, set_kernel_tss_stack},
-        interrupts::InterruptFrame,
+        interrupts::handlers::InterruptCpuFrame,
         registers::{RFLAGS, rdmsr, wrmsr},
     },
+    globals::KERNEL_ELF,
     thread::Tid,
 };
-use core::arch::global_asm;
+use core::{arch::global_asm, fmt::Display};
 
 use crate::{
     VirtAddr,
@@ -82,6 +83,60 @@ const fn make_usermode_regs(is_userspace: bool) -> (u64, u64, RFLAGS) {
             KERNEL_DATA_SEG as u64,
             RFLAGS::from_bits_retain(0x202),
         )
+    }
+}
+
+impl Display for CPUStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Saved general purpose registers:")?;
+        macro_rules! reg {
+            ($name:ident) => {
+                write!(f, "{:<3}: {:#018x}    ", stringify!($name), self.$name)?;
+            };
+        }
+
+        reg!(rax);
+        reg!(rbx);
+        reg!(rcx);
+
+        writeln!(f)?;
+
+        reg!(rdx);
+        reg!(rdi);
+        reg!(rsi);
+
+        writeln!(f)?;
+
+        reg!(r8);
+        reg!(r9);
+        reg!(r10);
+
+        writeln!(f)?;
+        reg!(r11);
+        reg!(r12);
+        reg!(r13);
+
+        writeln!(f)?;
+        reg!(r14);
+        reg!(r15);
+
+        write!(f, "\n\n")?;
+        reg!(rsp);
+        writeln!(f)?;
+        reg!(ring0_rsp);
+        writeln!(f)?;
+        reg!(rbp);
+        writeln!(f)?;
+        reg!(cr3);
+        writeln!(f)?;
+
+        let sym = KERNEL_ELF.sym_from_value_range(self.rip);
+
+        let name = sym.and_then(|sym| KERNEL_ELF.string_table_index(sym.name_index));
+        let name = name.as_deref().unwrap_or("???");
+        writeln!(f, "at {:?} <{}>", self.rip, name)?;
+        writeln!(f, "rflags: {:#?}", self.rflags)?;
+        Ok(())
     }
 }
 
@@ -176,32 +231,13 @@ unsafe extern "C" {
     pub fn restore_cpu_status_partial(status: *const CPUStatus) -> !;
 }
 
-unsafe extern "x86-interrupt" {
-    pub fn context_switch_stub(_: InterruptFrame) -> !;
-}
-
-#[repr(C)]
-struct ContextSwitchFrame {
-    capture: CPUStatus,
-    __: u64,
-    int: super::interrupts::InterruptFrame,
-}
-
 #[unsafe(no_mangle)]
-extern "C" fn context_switch_on_int(switch_frame: ContextSwitchFrame) -> ! {
-    let mut capture = switch_frame.capture;
-    let frame = switch_frame.int;
-
-    capture.rsp = frame.stack_pointer;
-    capture.rip = frame.insturaction;
-
-    capture.cs = frame.code_segment;
-    capture.ss = frame.stack_segment;
-    capture.rflags = frame.flags;
+pub(super) extern "C" fn context_switch_on_int(switch_frame: &mut InterruptCpuFrame) {
+    let capture = &mut switch_frame.capture;
 
     unsafe {
         context_switch_and_return_inner(
-            &mut capture,
+            capture,
             || {
                 super::interrupts::apic::send_eoi();
             },
@@ -215,7 +251,7 @@ unsafe fn context_switch_and_return_inner(
     capture: &mut CPUStatus,
     before_switch: impl FnOnce(),
     is_thread_yielding: bool,
-) -> ! {
+) {
     let Err(before_switch) = {
         unsafe {
             capture.ring0_rsp = get_kernel_tss_stack();
@@ -224,14 +260,14 @@ unsafe fn context_switch_and_return_inner(
         swtch(capture, before_switch, is_thread_yielding)
     };
 
-    before_switch();
     core::hint::cold_path();
-    unsafe { restore_cpu_status_partial(capture) }
+    before_switch();
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn context_switch_and_return(capture: &mut CPUStatus) {
+extern "C" fn context_switch_and_return(capture: &mut CPUStatus) -> ! {
     unsafe { context_switch_and_return_inner(capture, || {}, true) }
+    unsafe { restore_cpu_status_partial(capture) }
 }
 
 unsafe extern "C" {
