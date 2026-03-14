@@ -103,9 +103,9 @@ impl TaskStateSegment {
             reserved_2: 0,
             interrupt_stack_table: core::array::from_fn(|i| {
                 if (i % 2) == 1 {
-                    VirtAddr::from_ptr(stack1)
+                    VirtAddr::from_ptr(stack1) + size_of::<Stack>()
                 } else {
-                    VirtAddr::from_ptr(stack0)
+                    VirtAddr::from_ptr(stack0) + size_of::<Stack>()
                 }
             }),
             reserved_3: 0,
