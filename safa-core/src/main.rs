@@ -218,9 +218,10 @@ fn panic(info: &PanicInfo) -> ! {
         if let Some(scheduler) = scheduler {
             let current_thread = unsafe { scheduler.current_thread_ref() };
             panic_println!(
-                "Current thread: {}:{}",
+                "Current thread: {}:{}\nmore:\n{:#x?}",
                 current_thread.process().pid(),
-                current_thread.tid()
+                current_thread.tid(),
+                current_thread,
             );
         }
         panic_println!("{}", stack);

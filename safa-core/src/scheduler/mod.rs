@@ -148,9 +148,10 @@ pub struct Scheduler {
     stack: UnsafeCell<[u8; 1024]>,
 }
 impl Scheduler {
+    #[inline(always)]
     /// Returns the trampoline's stack end for this scheduler.
     fn stack_end(&self) -> VirtAddr {
-        VirtAddr::from_ptr(self.stack.get()) + 1024
+        VirtAddr::from_ptr(self.stack.get().wrapping_offset(1))
     }
 
     /// The Scheduler's IDLE loop
@@ -553,11 +554,13 @@ impl Scheduler {
         }
     }
 
+    #[inline(always)]
     /// Returns the idle thread in this scheduler
     pub fn idle_thread(&self) -> &Thread {
         &self.idle_thread
     }
 
+    #[inline(always)]
     /// Get a reference to the current thread
     /// # Safety:
     /// this reference shall not be given to other threads.
@@ -565,6 +568,7 @@ impl Scheduler {
         unsafe { &*self.current_thread.get() }
     }
 
+    #[inline(always)]
     /// Subtracts 1 from the thread count
     /// returns the old thread count
     fn sub_thread_count(&self) -> usize {
@@ -640,8 +644,8 @@ pub fn swtch(
 
     core::mem::forget(guard);
 
-    let kernel_stack = scheduler.stack_end();
     before_switch();
+    let kernel_stack = scheduler.stack_end();
     unsafe {
         #[cfg(target_arch = "aarch64")]
         core::arch::asm!(

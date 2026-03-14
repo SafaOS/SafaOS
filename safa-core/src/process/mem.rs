@@ -28,6 +28,15 @@ pub struct TrackedMemoryAllocation {
     interface: Option<Box<dyn MemMappedInterface>>,
 }
 
+impl core::fmt::Debug for TrackedMemoryAllocation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TrackedMemoryAllocation")
+            .field("addr", &self.addr)
+            .field("has_interface", &self.interface.is_some())
+            .finish()
+    }
+}
+
 impl Resource for TrackedMemoryAllocation {
     fn address_space_generic(&self) -> bool {
         false

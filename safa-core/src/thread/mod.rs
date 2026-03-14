@@ -521,7 +521,6 @@ impl Deref for ArcThread {
     }
 }
 
-#[derive(Debug)]
 pub struct Thread {
     id: Tid,
     pub schedule_priority: UnsafeCell<SchedulePriority>,
@@ -547,6 +546,24 @@ pub struct Thread {
     // 1. reads must be performed by the scheduler
     // 2. writes must be performed with the scheduler's lock held
     next: UnsafeCell<Option<ArcThread>>,
+}
+
+impl Debug for Thread {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        unsafe {
+            f.debug_struct("Thread")
+                .field("tid", &self.id)
+                .field("parent_pid", &self.parent_process.pid())
+                .field("parent_ppid", &self.parent_process.ppid())
+                .field("schedule_policy", &*self.schedule_priority.get())
+                .field("status", &self.status.try_lock().as_ref().map(|v| &**v))
+                .field("kstack", &*self.kernel_stack.get())
+                .field("other_mem", &*self.thread_mem.get())
+                .field("tls", &*self.thread_tls.get())
+                .field("has_next", &(*self.next.get()).is_some())
+                .finish()
+        }
+    }
 }
 
 impl Thread {
