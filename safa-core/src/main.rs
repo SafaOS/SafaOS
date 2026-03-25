@@ -27,6 +27,7 @@
 mod test;
 
 mod arch;
+mod audio;
 mod devices;
 mod drivers;
 mod eve;

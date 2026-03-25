@@ -398,7 +398,7 @@ pub trait FileSystem: Send + Sync {
         &self,
         parent_id: FSObjectID,
         name: &str,
-        device: &'static dyn Device,
+        device: Box<dyn Device>,
     ) -> FSResult<FSObjectID> {
         _ = parent_id;
         _ = name;
@@ -734,7 +734,7 @@ impl VFS {
         mountpoint.create_directory(parent_obj_id, name).map(|_| ())
     }
 
-    pub fn mount_device(&self, path: Path, device: &'static dyn Device) -> FSResult<()> {
+    pub fn mount_device(&self, path: Path, device: Box<dyn Device>) -> FSResult<()> {
         let (mountpoint, parent_obj_id, name) = self.resolve_uncreated_path(path)?;
         mountpoint
             .mount_device(parent_obj_id, name, device)

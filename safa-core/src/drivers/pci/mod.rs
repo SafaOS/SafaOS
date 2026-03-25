@@ -7,7 +7,8 @@ use msi::{MSIXCap, MSIXInfo};
 use crate::{
     PhysAddr, VirtAddr,
     drivers::{
-        interrupts::IRQInfo, net::e1000::E1000NetCard, pci::extended_caps::CaptabilitiesIter,
+        audio::ac97::AC97, interrupts::IRQInfo, net::e1000::E1000NetCard,
+        pci::extended_caps::CaptabilitiesIter,
     },
     info,
 };
@@ -292,6 +293,7 @@ impl<'a> PCIHeader<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct PCIDeviceInfo<'a> {
     header: PCIHeader<'a>,
     bus: u8,
@@ -496,6 +498,10 @@ lazy_static! {
         let host_pci = HOST_PCI.as_ref()?;
         host_pci.create_device()
     };
+    pub static ref AC97_DEVICE: Option<AC97> = {
+        let host_pci = HOST_PCI.as_ref()?;
+        host_pci.create_device()
+    };
 }
 
 /// Initializes drivers and devices that uses the PCI
@@ -504,6 +510,7 @@ pub fn init() {
         host_pci.print();
     }
 
+    AC97_DEVICE.as_ref().map(|device| device.start());
     XHCI_DEVICE.as_ref().map(|device| device.start());
     E1000_DEVICE.as_ref().map(|device| device.start());
 }

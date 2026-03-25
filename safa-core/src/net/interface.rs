@@ -3,7 +3,7 @@ use core::net::Ipv4Addr;
 use safa_abi::net::NicAddrInfoV4;
 
 use crate::{
-    devices::{CharDevice, Device},
+    devices::CharDevice,
     drivers::vfs::FSError,
     net::{MacAddress, ethernet::EthernetType},
     syscalls::ffi::SyscallFFI,
@@ -37,9 +37,12 @@ const CMD_GET_NIC_ADDR_INFO: u16 = 0x1001;
 const CMD_SET_NIC_ADDR_INFO: u16 = 0x1002;
 const CMD_GET_NIC_MAC_ADDR: u16 = 0x1003;
 
-impl<T: NetworkInterface> CharDevice for T {
+/// Describes a NetworkDevice
+pub struct NetworkDev<'a>(pub &'a dyn NetworkInterface);
+
+impl<'a> CharDevice for NetworkDev<'a> {
     fn name(&self) -> &'static str {
-        self.name()
+        self.0.name()
     }
 
     fn read(&self, buffer: &mut [u8]) -> crate::drivers::vfs::FSResult<usize> {
@@ -57,27 +60,22 @@ impl<T: NetworkInterface> CharDevice for T {
             CMD_GET_NIC_ADDR_INFO => {
                 let ptr: &mut NicAddrInfoV4 =
                     SyscallFFI::make(arg as *mut NicAddrInfoV4).map_err(|_| FSError::InvalidArg)?;
-                *ptr = self.nic_info();
+                *ptr = self.0.nic_info();
                 Ok(())
             }
             CMD_SET_NIC_ADDR_INFO => {
                 let ptr: &mut NicAddrInfoV4 =
                     SyscallFFI::make(arg as *mut NicAddrInfoV4).map_err(|_| FSError::InvalidArg)?;
-                self.set_nic_info(*ptr);
+                self.0.set_nic_info(*ptr);
                 Ok(())
             }
             CMD_GET_NIC_MAC_ADDR => {
                 let ptr: &mut MacAddress =
                     SyscallFFI::make(arg as *mut _).map_err(|_| FSError::InvalidArg)?;
-                *ptr = self.mac_address();
+                *ptr = self.0.mac_address();
                 Ok(())
             }
             _ => Err(FSError::InvalidCmd),
         }
     }
 }
-
-/// A wrapper trait for NetworkInterface that also implements Device.
-pub trait NetworkInterfaceSuper: NetworkInterface + Device {}
-
-impl<T: NetworkInterface> NetworkInterfaceSuper for T {}

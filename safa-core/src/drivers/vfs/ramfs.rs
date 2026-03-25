@@ -18,7 +18,7 @@ use super::{FSError, FSResult, FileSystem};
 pub enum RamFSObjectState {
     Data(PageVec<u8>),
     Collection(HashMap<FileName, FSObjectID, DefaultHashBuilder, VMMAlloc>),
-    StaticDevice(&'static dyn Device),
+    Device(Box<dyn Device>),
 }
 
 impl core::fmt::Debug for RamFSObjectState {
@@ -26,7 +26,7 @@ impl core::fmt::Debug for RamFSObjectState {
         match self {
             Self::Data(data) => write!(f, "Data({})", data.len()),
             Self::Collection(items) => write!(f, "Collection({items:?})"),
-            Self::StaticDevice(device) => write!(f, "Device({})", device.name()),
+            Self::Device(device) => write!(f, "Device({})", device.name()),
         }
     }
 }
@@ -45,7 +45,7 @@ impl RamFSObject {
         match self.state {
             RamFSObjectState::Data(_) => FSObjectType::File,
             RamFSObjectState::Collection(_) => FSObjectType::Directory,
-            RamFSObjectState::StaticDevice(_) => FSObjectType::Device,
+            RamFSObjectState::Device(_) => FSObjectType::Device,
         }
     }
 
@@ -53,7 +53,7 @@ impl RamFSObject {
         match self.state {
             RamFSObjectState::Data(ref data) => data.len(),
             RamFSObjectState::Collection(ref collection) => collection.len(),
-            RamFSObjectState::StaticDevice(_) => 0,
+            RamFSObjectState::Device(_) => 0,
         }
     }
 
@@ -104,7 +104,7 @@ impl RamFSObject {
 
         match self.state {
             RamFSObjectState::Data(ref mut data) => write_data(data, offset, buf),
-            RamFSObjectState::StaticDevice(device) => device.write(offset, buf),
+            RamFSObjectState::Device(ref mut device) => device.write(offset, buf),
             _ => Err(FSError::NotAFile),
         }
     }
@@ -122,7 +122,7 @@ impl RamFSObject {
     pub fn sync(&self) -> FSResult<()> {
         match self.state {
             RamFSObjectState::Data(_) => Ok(()),
-            RamFSObjectState::StaticDevice(device) => device.sync(),
+            RamFSObjectState::Device(ref device) => device.sync(),
             _ => Err(FSError::NotAFile),
         }
     }
@@ -133,14 +133,14 @@ impl RamFSObject {
         page_count: usize,
     ) -> FSResult<Box<dyn crate::process::mem::MemMappedInterface>> {
         match self.state {
-            RamFSObjectState::StaticDevice(d) => d.mmap(offset, page_count),
+            RamFSObjectState::Device(ref d) => d.mmap(offset, page_count),
             _ => Err(FSError::OperationNotSupported),
         }
     }
 
     fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
         match self.state {
-            RamFSObjectState::StaticDevice(device) => device.send_command(cmd, arg),
+            RamFSObjectState::Device(ref device) => device.send_command(cmd, arg),
             _ => Err(FSError::NotAFile),
         }
     }
@@ -162,7 +162,7 @@ impl RamFSObject {
 
                 Ok(len)
             }
-            RamFSObjectState::StaticDevice(device) => device.read(offset, buf),
+            RamFSObjectState::Device(ref device) => device.read(offset, buf),
             _ => Err(FSError::NotAFile),
         }
     }
@@ -280,11 +280,11 @@ impl RamFS {
     }
 
     /// Create a new device object and returns its ID
-    fn add_device(&mut self, device: &'static dyn Device) -> FSResult<FSObjectID> {
+    fn add_device(&mut self, device: Box<dyn Device>) -> FSResult<FSObjectID> {
         let id = self.next_id;
         self.next_id += 1;
 
-        let object = RamFSObject::new(RamFSObjectState::StaticDevice(device));
+        let object = RamFSObject::new(RamFSObjectState::Device(device));
 
         self.objects.insert(id, object);
         Ok(id)
@@ -384,7 +384,7 @@ impl RamFS {
         &mut self,
         parent_id: FSObjectID,
         name: &str,
-        device: &'static dyn Device,
+        device: Box<dyn Device>,
     ) -> FSResult<FSObjectID> {
         let name = FileName::try_from(name).map_err(|_| FSError::InvalidName)?;
 
@@ -474,7 +474,7 @@ impl FileSystem for RwLock<RamFS> {
         &self,
         parent_id: FSObjectID,
         name: &str,
-        device: &'static dyn Device,
+        device: Box<dyn Device>,
     ) -> FSResult<FSObjectID> {
         self.write().create_device(parent_id, name, device)
     }

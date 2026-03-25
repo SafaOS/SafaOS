@@ -1,5 +1,6 @@
 use core::net::Ipv4Addr;
 
+use alloc::boxed::Box;
 use safa_abi::errors::{ErrorStatus, IntoErr};
 
 use crate::{
@@ -9,7 +10,7 @@ use crate::{
         MacAddress,
         arp::ARP,
         ethernet::{EthernetFrame, EthernetType},
-        interface::{NetIntError, NetworkInterface, NetworkInterfaceSuper},
+        interface::{NetIntError, NetworkDev, NetworkInterface},
         ipv4::{self, IPv4Packet},
     },
     utils::locks::{RwLock, RwLockReadGuard},
@@ -55,13 +56,13 @@ impl NetworkManager {
     }
 
     /// Adds a network interface to the manager.
-    pub fn add_interface(&self, interface: &'static dyn NetworkInterfaceSuper) {
+    pub fn add_interface(&self, interface: &'static dyn NetworkInterface) {
         self.interfaces
             .write()
             .push(interface)
             .map_err(|_| ())
             .expect("Too much network interfaces");
-        crate::devices::add_device_at(&*VFS_STRUCT.read(), interface, "net");
+        crate::devices::add_device_at(&*VFS_STRUCT.read(), Box::new(NetworkDev(interface)), "net");
     }
 
     /// Handles incoming packets.
@@ -131,7 +132,7 @@ pub fn handle_packet(interface: &'static dyn NetworkInterface, packet: &mut [u8]
 }
 
 /// Adds a network interface to the manager.
-pub fn add_interface(interface: &'static dyn NetworkInterfaceSuper) {
+pub fn add_interface(interface: &'static dyn NetworkInterface) {
     MANAGER.add_interface(interface);
 }
 

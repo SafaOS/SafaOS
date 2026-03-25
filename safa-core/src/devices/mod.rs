@@ -23,12 +23,16 @@ use crate::{
 use crate::utils::locks::RwLock;
 use crate::utils::{path::make_path, types::DriveName};
 
-pub fn add_device(vfs: &VFS, device: &'static dyn Device) {
+pub fn add_static_device(vfs: &VFS, device: &'static dyn Device) {
+    add_device(vfs, Box::new(StaticDevice(device)));
+}
+
+pub fn add_device(vfs: &VFS, device: Box<dyn Device>) {
     let path = make_path!("dev", device.name());
     vfs.mount_device(path, device).unwrap();
 }
 
-pub fn add_device_at(vfs: &VFS, device: &'static dyn Device, subpath: &str) {
+pub fn add_device_at(vfs: &VFS, device: Box<dyn Device>, subpath: &str) {
     let dir_path = make_path!("dev", subpath);
     vfs.createdir(dir_path).expect("Failed to create root dir");
 
@@ -51,11 +55,11 @@ pub fn init(vfs: &mut VFS) {
         RwLock::new(vfs::ramfs::RamFS::create()),
     )
     .expect("failed to mount `dev:/`");
-    add_device(vfs, &*FRAMEBUFFER_TERMINAL);
-    add_device(vfs, &SERIAL);
-    add_device(vfs, &*FRAMEBUFFER_DRIVER);
-    add_device(vfs, &KEYBOARD_EVENT_QUEUE);
-    add_device(vfs, &MICE_EVENT_QUEUE);
+    add_static_device(vfs, &*FRAMEBUFFER_TERMINAL);
+    add_static_device(vfs, &SERIAL);
+    add_static_device(vfs, &*FRAMEBUFFER_DRIVER);
+    add_static_device(vfs, &KEYBOARD_EVENT_QUEUE);
+    add_static_device(vfs, &MICE_EVENT_QUEUE);
 
     let elapsed = DurationFmt::new(now.elapsed());
     debug!(VFS, "Initialized devices in {} ...", elapsed);
@@ -103,7 +107,7 @@ pub trait CharDevice: Send + Sync {
 #[allow(unused)]
 pub trait BlockDevice: Device {}
 
-impl<T: CharDevice> Device for T {
+impl<T: CharDevice + ?Sized> Device for T {
     fn name(&self) -> &'static str {
         self.name()
     }
@@ -121,5 +125,30 @@ impl<T: CharDevice> Device for T {
     }
     fn sync(&self) -> FSResult<()> {
         self.sync()
+    }
+}
+
+/// A device that is a wrapper over a static reference to a static device.
+pub struct StaticDevice(pub &'static dyn Device);
+
+impl Device for StaticDevice {
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+
+    fn mmap(&self, offset: SeekOffset, page_count: usize) -> FSResult<Box<dyn MemMappedInterface>> {
+        self.0.mmap(offset, page_count)
+    }
+    fn read(&self, offset: SeekOffset, buffer: &mut [u8]) -> FSResult<usize> {
+        self.0.read(offset, buffer)
+    }
+    fn send_command(&self, cmd: u16, arg: u64) -> FSResult<()> {
+        self.0.send_command(cmd, arg)
+    }
+    fn sync(&self) -> FSResult<()> {
+        self.0.sync()
+    }
+    fn write(&self, offset: SeekOffset, buffer: &[u8]) -> FSResult<usize> {
+        self.0.write(offset, buffer)
     }
 }

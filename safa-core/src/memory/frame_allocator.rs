@@ -116,6 +116,16 @@ impl Frame {
         let addr = self.virt_addr();
         FramePtr(NonNull::new(addr.into_ptr::<T>()).expect("Frame points to null"))
     }
+    /// Converts a frame into a pointer to some data in that frame
+    /// # Safety
+    /// unsafe because the caller must ensure that the frame is valid and points to data containing [`T`]
+    pub unsafe fn into_slice<T>(self, len: usize) -> FramePtr<[T]> {
+        let addr = self.virt_addr();
+        FramePtr(NonNull::slice_from_raw_parts(
+            NonNull::new(addr.into_ptr::<T>()).expect("Frame points to null"),
+            len,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod framebuffer;
 pub mod interrupts;
 pub mod keyboard;
@@ -8,3 +9,4 @@ pub mod usb_mouse;
 mod utils;
 pub mod vfs;
 pub mod xhci;
+
