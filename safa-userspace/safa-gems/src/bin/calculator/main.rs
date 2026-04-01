@@ -8,7 +8,7 @@ use crate::logic::LexerData;
 mod logic;
 
 const WIDTH: u32 = 230;
-const HEIGHT: u32 = 290;
+const HEIGHT: u32 = 320;
 use logic::Operation as Message;
 
 pub struct Calculator {
@@ -38,11 +38,17 @@ fn buttons_area() -> impl Shard<Data<Calculator>> {
         ($num:literal) => {
             (stringify!($num), Message::Number($num), Size::Normal)
         };
+        ($num:literal, $name:literal) => {
+            ($name, Message::Number($num), Size::Normal)
+        };
     }
 
-    const BUTTONS: [(&'static str, Message, Size); 18] = [
+    const BUTTONS: [(&'static str, Message, Size); 21] = [
         btn!(Clear, "AC", Big),
-        btn!(Remove, "⌫"),
+        btn!(Remove, "⌫", Big),
+        btn!(1, "("),
+        btn!(1, ")"),
+        btn!(Div, "%"),
         btn!(Div, "/"),
         btn!(1),
         btn!(2),
@@ -80,7 +86,7 @@ fn buttons_area() -> impl Shard<Data<Calculator>> {
                     Message::Add | Message::Mul | Message::Sub | Message::Div => {
                         Color::hex_rgb(0x8b365c)
                     }
-                    Message::Clear | Message::Results => Color::hex_rgb(0xb33670),
+                    Message::Clear | Message::Results | Message::Remove => Color::hex_rgb(0xb33670),
                     // Message::Results => Color::hex_rgb(0xfe8019),
                     _ => Color::hex_rgb(0x783653),
                 })
@@ -180,7 +186,7 @@ fn main() {
     .window(
         WindowBuilder::new(WIDTH, HEIGHT)
             .title("Calculator")
-            .background(Color::hex_rgb(0x282828))
+            .background(Color::hex_rgb(0x3c3836))
             .build::<_, _>(build_ui()),
     );
 
