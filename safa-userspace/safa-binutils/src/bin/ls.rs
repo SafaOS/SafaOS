@@ -6,17 +6,21 @@ use safa_api::errors::SysResult;
 
 fn main() -> SysResult {
     let args = std::env::args();
+    let mut path = String::from(".");
     let mut raw = false;
 
-    for arg in args {
+    for arg in args.skip(1) {
         match arg.as_str() {
             "--raw" | "-r" => raw = true,
             "--color" | "-c" => raw = false,
-            _ => {}
+            _ => {
+                path = arg.to_string();
+                break; //TODO: multiple paths cuz GNU can do that lul
+            }
         }
     }
 
-    let current_dir = tri_io!(std::fs::read_dir("."));
+    let current_dir = tri_io!(std::fs::read_dir(path));
     let mut directories = Vec::new();
     let mut files = Vec::new();
     let mut other = Vec::new();
