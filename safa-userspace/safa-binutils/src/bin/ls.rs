@@ -14,8 +14,7 @@ fn main() -> SysResult {
             "--raw" | "-r" => raw = true,
             "--color" | "-c" => raw = false,
             _ => {
-                path = arg.to_string();
-                break; //TODO: multiple paths cuz GNU can do that lul
+                path = arg; //TODO: multiple paths cuz GNU can do that lul 
             }
         }
     }
