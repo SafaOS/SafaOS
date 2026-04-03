@@ -8,6 +8,8 @@ use std::{
 
 use utils::ArchTarget;
 
+use crate::initrd::RAMDISK_INCLUDE_DIR;
+
 pub static ROOT_REPO_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -20,6 +22,9 @@ mod cargo;
 
 #[path = "builder/rustc.rs"]
 pub mod rustc;
+
+#[path = "builder/initrd.rs"]
+pub mod initrd;
 
 #[path = "builder/utils.rs"]
 pub mod utils;
@@ -117,7 +122,7 @@ impl<'a> Builder<'a> {
         let root_repo_path = &*ROOT_REPO_PATH;
 
         let ramdisk_include_dir = root_repo_path
-            .join("ramdisk-include")
+            .join(RAMDISK_INCLUDE_DIR)
             .read_dir()
             .expect("failed to open ramdisk include");
 

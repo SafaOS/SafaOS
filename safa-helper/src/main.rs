@@ -42,10 +42,19 @@ fn main() {
             safa_builder::rustc::install_safaos_toolchain(arch)
                 .expect("failed to install the SafaOS toolchain");
             safa_builder::rustc::reset_userspace();
+            safa_builder::initrd::get_fonts().expect("Failed to init fonts");
             std::process::exit(0);
         }
         Some(SubCommand::Reset) => {
             safa_builder::rustc::reset_userspace();
+            std::process::exit(0);
+        }
+        Some(SubCommand::GetFonts) => {
+            safa_builder::initrd::get_fonts().expect("Failed to init fonts");
+            std::process::exit(0);
+        }
+        Some(SubCommand::InitFonts) => {
+            safa_builder::initrd::init_fonts().expect("Failed to init fonts");
             std::process::exit(0);
         }
     };
