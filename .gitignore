@@ -23,7 +23,8 @@ safaos.iso
 safaos-tests.iso
 test.txt
 .vscode
-ramdisk-inculde
+/ramdisk-inculde/fonts/
+/ramdisk-include/bin
 
 # Added by cargo
 
