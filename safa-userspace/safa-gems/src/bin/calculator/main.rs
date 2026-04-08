@@ -1,6 +1,6 @@
-use libgem::cosmic_text::Metrics;
 use libgems::{
     App, AppState, Color, Data, Padding, WindowBuilder,
+    cosmic_text::Metrics,
     shards::{AxisAlign, Button, Justify, Label, Shard, ShardsExt, Stack},
 };
 
