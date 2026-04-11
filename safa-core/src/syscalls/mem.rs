@@ -19,7 +19,7 @@ impl SyscallFFI for MemMapFlags {
     type Args = usize;
     #[inline(always)]
     fn make(args: Self::Args) -> Result<Self, safa_abi::errors::ErrorStatus> {
-        Ok(MemMapFlags::from_bits_retaining(args as u8))
+        Ok(MemMapFlags::from_bits(args as u8))
     }
 }
 
@@ -97,7 +97,7 @@ pub fn sysmem_map(
 impl SyscallFFI for ShmFlags {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        Ok(ShmFlags::from_bits_retaining(args as u32))
+        Ok(ShmFlags::from_bits(args as u32))
     }
 }
 

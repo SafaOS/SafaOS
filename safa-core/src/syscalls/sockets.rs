@@ -15,7 +15,7 @@ use safa_abi::sockets::{InetV4SocketAddr, SockCreateKind, SockMsgFlags, SocketAd
 impl SyscallFFI for SockCreateKind {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        Ok(Self::from_bits_retaining(args as u16))
+        Ok(Self::from_bits(args as u16))
     }
 }
 
@@ -29,7 +29,7 @@ impl SyscallFFI for safa_abi::sockets::SockDomain {
 impl SyscallFFI for safa_abi::sockets::SockMsgFlags {
     type Args = usize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
-        Ok(SockMsgFlags::from_bits_retaining(args as u32))
+        Ok(SockMsgFlags::from_bits(args as u32))
     }
 }
 
