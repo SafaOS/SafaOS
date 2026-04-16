@@ -241,7 +241,7 @@ impl AC97Queue {
             bdl: SpinLock::new(reference),
             queued_samples: SpinLock::new(PageVec::with_capacity(
                 &"AC97_QUEUE",
-                allocated.len() * PAGE_SIZE * 2,
+                allocated.len() * PAGE_SIZE * 4,
             )),
             write_ptr: UnsafeCell::new(0),
         })
@@ -454,7 +454,7 @@ impl AudioCard for AC97 {
 
     fn transfer_buf_size(&self) -> usize {
         // FIXME: feels illegal
-        without_interrupts(|| self.queue.get().unwrap().queued_samples.lock().len())
+        without_interrupts(|| self.queue.get().unwrap().queued_samples.lock().capacity())
     }
 
     fn transfer_data(&self, data: &[u8]) -> Result<usize, ()> {
