@@ -107,7 +107,6 @@ where
     }
 
     let results = results.filter(|r| only_if_artifact!(r).target.is_bin());
-    let results = results.filter(|r| only_if_artifact!(r).manifest_path == manifest_path);
     let mut results = results.filter(|r| only_if_artifact!(r).executable.is_some());
 
     let build_status = results

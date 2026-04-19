@@ -167,7 +167,7 @@ impl<'a> Builder<'a> {
         let crates: Vec<PathBuf> = path_crates(&userspace_crates_path).collect();
         let mut results = Vec::with_capacity(crates.len());
         for cr in crates {
-            let binaries = cargo::build_safaos(&cr, self.arch, &["--release"]);
+            let binaries = cargo::build_safaos(&cr, self.arch, &["--release", "--workspace"]);
             for (path, name) in binaries {
                 results.push((path, format!("bin/{}", name).into()));
             }
