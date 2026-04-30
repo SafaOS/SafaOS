@@ -186,13 +186,13 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "safa-abi"
-version = "0.5.4"
-source = "git+https://github.com/SafaOS/safa-abi#3fbd1db53cd976181ff80fb4f5977aba3399b3a3"
+version = "0.6.0"
+source = "git+https://github.com/SafaOS/safa-abi#8cd5ff0c0f9ecb570f0a2686c763a7402003c20c"
 
 [[package]]
 name = "safa-api"
-version = "0.4.3"
-source = "git+https://github.com/SafaOS/safa-api#5b909aea9b21b89b7373940dd0856dfcc6b43d1a"
+version = "0.6.0"
+source = "git+https://github.com/SafaOS/safa-api#cbf372b3cf2989114ac82a0ff582958fc89fc872"
 dependencies = [
  "safa-abi",
  "simpldns",

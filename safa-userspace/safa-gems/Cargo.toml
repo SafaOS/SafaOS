@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-safa-api = { version = "0.4.3", features = ["std"], git = "https://github.com/SafaOS/safa-api" }
+safa-api = { version = "0.6.0", features = ["std"], git = "https://github.com/SafaOS/safa-api" }
 libgem = { path = "../OpalWM/libgem" }
 libgems = { path = "../OpalWM/libgems" }
 libopal = { path = "../OpalWM/libopal" }
+libartemis = { path = "../OpalWM/libartemis" }
 vte = "0.15.0"
 arrayvec = "0.7.6"
 unicode-segmentation = "1.12.0"
