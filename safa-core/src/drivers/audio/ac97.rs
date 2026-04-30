@@ -301,12 +301,20 @@ impl AC97Queue {
     }
 
     pub fn write_data(&self, data: &[u8]) -> Result<(usize, usize), ()> {
+        if data.len() == 0 {
+            return Ok((0, 0));
+        }
+
         without_interrupts(|| {
             let mut queue = self.queued_samples.lock();
             // Direct transfer if possible else queue.
             if let Some(mut bdl) = self.bdl.try_lock() {
-                let (desc_count, transferred) = self.transfer_direct(data, &mut bdl);
-                // crate::serial!("BDL my love! {desc_count} {transferred}\n");
+                let (desc_count, mut transferred) = self.transfer_direct(data, &mut bdl);
+                let left = data.len() - transferred;
+
+                if left != 0 {
+                    transferred += self.queue(&mut queue, &data[transferred..]).unwrap_or(0);
+                }
                 if desc_count != 0 {
                     core::mem::forget(bdl);
                 }
