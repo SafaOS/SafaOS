@@ -19,6 +19,7 @@ use crate::{
     },
     error,
     memory::{
+        AlignTo,
         frame_allocator::{self, Frame, FramePtr},
         paging::PAGE_SIZE,
     },
@@ -241,7 +242,7 @@ impl AC97Queue {
             bdl: SpinLock::new(reference),
             queued_samples: SpinLock::new(PageVec::with_capacity(
                 &"AC97_QUEUE",
-                allocated.len() * PAGE_SIZE * 4,
+                allocated.len() * PAGE_SIZE,
             )),
             write_ptr: UnsafeCell::new(0),
         })
@@ -269,7 +270,8 @@ impl AC97Queue {
             data = rest;
 
             bd.buf_mut()[..to_copy].copy_from_slice(src);
-            bd.samples = (to_copy / 2) as u16;
+            bd.buf_mut()[to_copy..].fill(0);
+            bd.samples = ((to_copy / 2).to_next_multiple_of(2usize)).min(0xFFFE) as u16;
 
             // Set on bd init:
             // bdl.config = BDLConf::IOC;
@@ -301,8 +303,10 @@ impl AC97Queue {
     pub fn write_data(&self, data: &[u8]) -> Result<(usize, usize), ()> {
         without_interrupts(|| {
             let mut queue = self.queued_samples.lock();
+            // Direct transfer if possible else queue.
             if let Some(mut bdl) = self.bdl.try_lock() {
                 let (desc_count, transferred) = self.transfer_direct(data, &mut bdl);
+                // crate::serial!("BDL my love! {desc_count} {transferred}\n");
                 if desc_count != 0 {
                     core::mem::forget(bdl);
                 }
