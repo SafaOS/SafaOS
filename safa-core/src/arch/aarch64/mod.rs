@@ -92,7 +92,6 @@ pub fn init_phase1() {
     serial::init_serial_qemu();
     let bsp = crate::percpu::init_bsp_first();
     smp::setup_cpu_mp(bsp);
-    cpu::init();
 }
 
 #[inline(never)]

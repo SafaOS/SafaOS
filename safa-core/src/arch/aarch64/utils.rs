@@ -1,5 +1,7 @@
 use core::{arch::asm, num::NonZero};
 
+use crate::arch::aarch64::cpu::cpu_model;
+
 use super::registers::MIDR;
 use core::fmt::Write;
 use serde::Serialize;
@@ -30,7 +32,7 @@ impl CpuInfo {
 
         Self {
             vendor_id,
-            model: unsafe { &*super::cpu::MODEL.get() },
+            model: cpu_model(),
             arch: "aarch64",
             core_count: Self::fetch_core_count(),
         }

@@ -5,8 +5,6 @@ pub mod alloc;
 pub mod ansi;
 pub mod bstr;
 pub mod display;
-#[cfg(target_arch = "aarch64")]
-pub mod dtb;
 pub mod either;
 pub mod elf;
 pub mod ffi;

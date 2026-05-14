@@ -2,281 +2,73 @@
 //! uses device trees only for now
 // FIXME: incomplete and code is bad, i need to rework this in the future
 use core::str::FromStr;
-use core::{cell::SyncUnsafeCell, mem::zeroed};
-use lazy_static::lazy_static;
 
-use crate::{
-    PhysAddr,
-    utils::dtb::{self, DeviceTree, NodeValue},
-};
+use crate::limine::FDT;
+use crate::utils::locks::LazyLock;
+use crate::warn;
 
-struct GICInfo {
-    gicc: Option<(PhysAddr, usize)>,
-    gicd: (PhysAddr, usize),
-    gicr: (PhysAddr, usize),
-    populated: bool,
-}
+use hfdt_rs::{self as dtb};
 
-struct ITSInfo {
-    base: PhysAddr,
-    size: usize,
-    populated: bool,
-}
-
-struct TimerInfo {
-    irq: u32,
-    populated: bool,
-}
-
-struct PL011Serial {
-    base: PhysAddr,
-    populated: bool,
-}
-
-struct PCIe {
-    base: PhysAddr,
-    size: usize,
-    bus_start: u32,
-    bus_end: u32,
-    populated: bool,
-}
-
-trait DeviceInfo {
-    fn populated(&self) -> bool;
-    fn compatible(&self) -> &'static [&'static str];
-    /// Populates the Device's information from a Device Tree Node which is compatible with the device (according to [`Self::compatible`])
-    fn populate<'a>(&mut self, node: &dtb::Node);
-}
-
-impl DeviceInfo for GICInfo {
-    fn populated(&self) -> bool {
-        self.populated
+/// Represents a CPU Device that can be retrieved from a Device Tree.
+pub trait CPUDevice: Sized {
+    /// A list of <compatible> strings that would work with this Device.
+    const COMPATIBLE: &'static [&'static str];
+    /// Constructs a new CPU Device from a compatible Node.
+    fn create(node: dtb::Node<'static>) -> Result<Self, &'static str>;
+    /// Returns true if the Node is compatible with this CPU Device, which would make [`Self::lookup`] use it to create this device.
+    fn node_matches(node: &dtb::Node) -> bool {
+        node.compatible()
+            .is_some_and(|mut c| c.any(|s| Self::COMPATIBLE.contains(&s)))
     }
-
-    fn compatible(&self) -> &'static [&'static str] {
-        &["arm,gic-v3"]
-    }
-
-    fn populate<'a>(&mut self, node: &dtb::Node) {
-        let mut reg = node.get_reg().unwrap();
-        self.gicd = reg.next().unwrap();
-        self.gicr = reg.next().unwrap();
-        self.gicc = reg.next();
-
-        self.populated = true;
-    }
-}
-
-impl DeviceInfo for ITSInfo {
-    fn populated(&self) -> bool {
-        self.populated
-    }
-
-    fn compatible(&self) -> &'static [&'static str] {
-        &["arm,gic-v3-its"]
-    }
-
-    fn populate<'a>(&mut self, node: &dtb::Node) {
-        let mut reg = node.get_reg().unwrap();
-        let (base_addr, size) = reg.next().unwrap();
-
-        self.base = base_addr;
-        self.size = size;
-        self.populated = true;
-    }
-}
-
-impl DeviceInfo for TimerInfo {
-    fn populated(&self) -> bool {
-        self.populated
-    }
-
-    fn populate<'a>(&mut self, node: &dtb::Node) {
-        let interrupts = node
-            .get_prop("interrupts")
-            .expect("failed to get the interrupts property for the timer's device tree node");
-
-        let NodeValue::Other(interrupts_bytes) = interrupts else {
-            unreachable!()
-        };
-        let ([], interrupts_u32s, []) = (unsafe { interrupts_bytes.align_to::<u32>() }) else {
-            unreachable!()
-        };
-
-        let interrupts = interrupts_u32s.into_iter().map(|u| u32::from_be(*u));
-        let mut interrupts = interrupts.array_chunks::<3>();
-
-        let _secure = interrupts.next();
-        // non-secure physical timer interrupt
-        let Some([ty, int_id, _]) = interrupts.next() else {
-            unreachable!()
-        };
-
-        // makes sure it is PPI
-        assert_eq!(ty, 0x1);
-        let irq = int_id + 0x10;
-
-        self.irq = irq;
-        self.populated = true;
-    }
-    fn compatible(&self) -> &'static [&'static str] {
-        &["arm,armv8-timer", "arm,armv7-timer"]
-    }
-}
-
-impl DeviceInfo for PL011Serial {
-    fn compatible(&self) -> &'static [&'static str] {
-        &["arm,pl011"]
-    }
-
-    fn populated(&self) -> bool {
-        self.populated
-    }
-
-    fn populate<'a>(&mut self, node: &dtb::Node) {
-        let mut reg = node.get_reg().unwrap();
-        let (addr, _) = reg.next().unwrap();
-        self.base = addr;
-        self.populated = true;
-    }
-}
-
-impl DeviceInfo for PCIe {
-    fn compatible(&self) -> &'static [&'static str] {
-        &["pci-host-ecam-generic"]
-    }
-    fn populated(&self) -> bool {
-        self.populated
-    }
-    fn populate<'a>(&mut self, node: &dtb::Node) {
-        let mut reg = node.get_reg_no_cells().unwrap();
-        let (start, size) = reg.next().unwrap();
-
-        let Some(NodeValue::Other(bytes)) = node.get_prop("bus-range") else {
-            unreachable!()
-        };
-
-        let bus_start_bytes = bytes[..4].as_array::<4>().unwrap();
-        let bus_end_bytes = bytes[4..8].as_array::<4>().unwrap();
-        let bus_start = u32::from_be_bytes(*bus_start_bytes);
-        let bus_end = u32::from_be_bytes(*bus_end_bytes);
-
-        self.bus_start = bus_start;
-        self.bus_end = bus_end;
-
-        self.base = start;
-        self.size = size;
-        self.populated = true;
-    }
-}
-
-static GICRAW: SyncUnsafeCell<GICInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
-static ITSRAW: SyncUnsafeCell<ITSInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
-static TIMERRAW: SyncUnsafeCell<TimerInfo> = SyncUnsafeCell::new(unsafe { zeroed() });
-static PL011RAW: SyncUnsafeCell<PL011Serial> = SyncUnsafeCell::new(unsafe { zeroed() });
-static PCIERAW: SyncUnsafeCell<PCIe> = SyncUnsafeCell::new(unsafe { zeroed() });
-
-const unsafe fn devices() -> [&'static mut dyn DeviceInfo; 5] {
-    unsafe {
-        let gic = &mut *GICRAW.get();
-        let gic: &'static mut dyn DeviceInfo = gic;
-        [
-            gic,
-            &mut *ITSRAW.get(),
-            &mut *TIMERRAW.get(),
-            &mut *PL011RAW.get(),
-            &mut *PCIERAW.get(),
-        ]
-    }
-}
-
-fn init_from_tree(tree: &DeviceTree) {
-    let root = tree.root_node();
-    let s = root.get_model().unwrap_or("UNKNOWN");
-    unsafe {
-        MODEL
-            .get()
-            .write_volatile(heapless::String::from_str(s).unwrap());
-    }
-
-    // list of devices requirng initialization
-    let mut devices = unsafe { devices() };
-
-    fn handle_node<'a>(node: dtb::Node<'a>, devices: &mut [&mut dyn DeviceInfo]) {
-        for device in &mut *devices {
-            if !device.populated() {
-                if node.is_compatible(device.compatible()) {
-                    device.populate(&node);
-                    break;
+    /// Lookups this Device in the DBT and then attempts to `Self::create`s it.
+    fn lookup() -> Option<Self>
+    where
+        Self: Sized,
+    {
+        cpu_tree_lookup(Self::node_matches)
+            .map(|n| {
+                let r = Self::create(n.clone());
+                if let Err(e) = r {
+                    warn!("CPU Device compatible with: {:?}, node found but device creation failed\n++++++++++++ NODE ++++++++++++\n{n}\n============ NODE ============\nError: {e}", Self::COMPATIBLE);
                 }
-            }
-        }
-
-        for node in node.subnodes() {
-            handle_node(node, devices);
-        }
-    }
-
-    handle_node(root, &mut devices);
-    for device in devices {
-        assert!(device.populated());
+                r.ok()
+            })
+            .flatten()
     }
 }
 
-/// Initializes CPU specific devices such as the serial
-/// NO ALLOCATIONS ALLOWED
-pub fn init() {
-    let tree = DeviceTree::retrieve_from_limine();
-    if let Some(tree) = tree {
-        init_from_tree(&tree);
+/// Lookup a Device tree node that the given function returns true on.
+pub fn cpu_tree_lookup(lookup_fn: impl Fn(&dtb::Node) -> bool) -> Option<dtb::Node<'static>> {
+    FDT.find_node(lookup_fn)
+}
+
+struct CPURoot {
+    model: heapless::String<48>,
+}
+
+impl CPUDevice for CPURoot {
+    const COMPATIBLE: &'static [&'static str] = &[];
+    fn node_matches(node: &dtb::Node) -> bool {
+        // Only matches the root node.
+        node.name() == ""
+    }
+    fn create(node: dtb::Node) -> Result<Self, &'static str> {
+        let model = node
+            .property("model")
+            .and_then(|model| model.as_str())
+            .ok_or("CPU Model missing")?;
+        Ok(Self {
+            model: heapless::String::from_str(&model[..model.len().min(48)]).unwrap(),
+        })
     }
 }
 
-pub static MODEL: SyncUnsafeCell<heapless::String<48>> =
-    SyncUnsafeCell::new(heapless::String::new());
+static CPU_ROOT: LazyLock<Option<CPURoot>> = LazyLock::new(|| CPURoot::lookup());
 
-lazy_static! {
-    pub static ref TIMER_IRQ: u32 = unsafe {
-        let r = &mut *TIMERRAW.get();
-        if !r.populated() {
-            init();
-        }
-        r.irq
-    };
-    pub static ref PL011BASE: PhysAddr = unsafe {
-        let r = &mut *PL011RAW.get();
-        if !r.populated() {
-            init();
-        }
-        r.base
-    };
-
-    /// The GICv3 registers
-    /// Optional (GICC base, GICC size), (GICD base, GICD size), (GICR base, GICR size)
-    pub static ref GICV3: (
-        Option<(PhysAddr, usize)>,
-        (PhysAddr, usize),
-        (PhysAddr, usize)
-    ) = unsafe {
-        let r = &mut *GICRAW.get();
-        if !r.populated() {
-            init();
-        }
-        (r.gicc, r.gicd, r.gicr)
-    };
-    pub static ref GICITS: (PhysAddr, usize) = unsafe {
-        let r = &mut *ITSRAW.get();
-        if !r.populated() {
-            init();
-        }
-        (r.base, r.size)
-    };
-    pub static ref PCIE: Option<(PhysAddr, usize, u32, u32)> = unsafe {
-        let r = &mut *PCIERAW.get();
-        if !r.populated() {
-            init();
-        }
-
-        r.populated().then_some((r.base, r.size, r.bus_start, r.bus_end))
-    };
+/// Returns the name of the CPU's model.
+pub fn cpu_model() -> &'static str {
+    CPU_ROOT
+        .as_ref()
+        .map(|m| m.model.as_str())
+        .unwrap_or("UNKNOWN")
 }

@@ -1,15 +1,33 @@
 use core::cell::SyncUnsafeCell;
 use core::fmt::{self, Write};
 
+use crate::arch::aarch64::cpu::CPUDevice;
 use crate::arch::paging::current_higher_root_table;
 use crate::memory::frame_allocator::Frame;
 use crate::memory::paging::{PAGE_SIZE, Page, PageEntryFlags, PageTableOps};
 use crate::memory::vmm::{VMMMFlags, VirtualMemoryManager};
-use crate::utils::locks::SpinLock;
+use crate::utils::locks::{LazyLock, SpinLock};
 use crate::{PhysAddr, VirtAddr};
+use hfdt_rs as dtb;
 
+struct PL011Serial {
+    base: PhysAddr,
+}
+
+impl CPUDevice for PL011Serial {
+    const COMPATIBLE: &'static [&'static str] = &["arm,pl011"];
+    fn create(node: dtb::Node) -> Result<Self, &'static str> {
+        let mut reg = node.reg_addresses().ok_or("<reg> missing")?;
+        let (base, _) = reg.next().ok_or("<reg> missing base PL011 addr")?;
+        Ok(Self {
+            base: PhysAddr::from(base),
+        })
+    }
+}
+
+static PL011: LazyLock<Option<PL011Serial>> = LazyLock::new(|| PL011Serial::lookup());
 // hack to allow debug prints before the DTB is parsed in QEMU
-pub static PL011: SyncUnsafeCell<Option<VirtAddr>> = SyncUnsafeCell::new(None);
+static PL011_ADDR: SyncUnsafeCell<Option<VirtAddr>> = SyncUnsafeCell::new(None);
 
 /// Maps the PL011 QEMU Serial for debug prints before the DTB is parsed in QEMU.
 pub fn init_serial_qemu() {
@@ -27,17 +45,21 @@ pub fn init_serial_qemu() {
             )
             .is_ok()
         {
-            *PL011.get() = Some(virt);
+            *PL011_ADDR.get() = Some(virt);
         }
     }
 }
 pub unsafe fn map_serial(vmm: &mut VirtualMemoryManager) {
-    let phys_addr = *super::cpu::PL011BASE;
+    let Some(pl011) = &*PL011 else {
+        return;
+    };
+
+    let phys_addr = pl011.base;
     let virt_addr = vmm
         .map_direct_phys(&"PL011", None, phys_addr, 1, VMMMFlags::WRITEABLE)
         .expect("Failed to map Serial");
 
-    unsafe { *PL011.get() = Some(virt_addr) }
+    unsafe { *PL011_ADDR.get() = Some(virt_addr) }
 }
 
 #[inline(always)]
@@ -47,7 +69,7 @@ fn putbyte(c: u8) {
     }
 
     unsafe {
-        if let Some(virt_addr) = *PL011.get() {
+        if let Some(virt_addr) = *PL011_ADDR.get() {
             virt_addr.into_ptr::<u8>().write_volatile(c);
         }
     };

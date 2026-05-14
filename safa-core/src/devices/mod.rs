@@ -14,7 +14,7 @@ use crate::{
         framebuffer::FRAMEBUFFER_DRIVER,
         vfs::{self, FSError, FSResult, SeekOffset, VFS},
     },
-    process::mem::MemMappedInterface,
+    process::{mem::MemMappedInterface, poll::PollID},
     terminal::FRAMEBUFFER_TERMINAL,
     timer::{DurationFmt, SystemInstant},
     utils::path::{Path, PathParts},
@@ -88,6 +88,10 @@ pub trait Device: Send + Sync {
         _ = page_count;
         Err(FSError::OperationNotSupported)
     }
+
+    fn poll_id(&self) -> Option<PollID> {
+        None
+    }
 }
 
 pub trait CharDevice: Send + Sync {
@@ -101,6 +105,10 @@ pub trait CharDevice: Send + Sync {
     }
     fn sync(&self) -> FSResult<()> {
         Ok(())
+    }
+
+    fn poll_id(&self) -> Option<PollID> {
+        None
     }
 }
 
@@ -126,6 +134,9 @@ impl<T: CharDevice + ?Sized> Device for T {
     fn sync(&self) -> FSResult<()> {
         self.sync()
     }
+    fn poll_id(&self) -> Option<PollID> {
+        self.poll_id()
+    }
 }
 
 /// A device that is a wrapper over a static reference to a static device.
@@ -150,5 +161,8 @@ impl Device for StaticDevice {
     }
     fn write(&self, offset: SeekOffset, buffer: &[u8]) -> FSResult<usize> {
         self.0.write(offset, buffer)
+    }
+    fn poll_id(&self) -> Option<PollID> {
+        self.0.poll_id()
     }
 }

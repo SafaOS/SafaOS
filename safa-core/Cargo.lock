@@ -128,6 +128,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89e0de208fa9b99664812350b33072d0d9b3a63caaebb03eeb23316eeedfb8d0"
 
 [[package]]
+name = "hfdt-rs"
+version = "0.1.0"
+source = "git+https://github.com/safiworks/hfdt-rs#75823eeb5732efb009ba3bb3dddf538cc2d529bb"
+
+[[package]]
 name = "int-enum"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,6 +292,7 @@ dependencies = [
  "hashbrown",
  "heapless",
  "hermit-dtb",
+ "hfdt-rs",
  "int-enum",
  "lazy_static",
  "limine",

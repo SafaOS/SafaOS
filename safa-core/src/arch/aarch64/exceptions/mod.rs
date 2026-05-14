@@ -1,10 +1,9 @@
 use super::gic;
 use crate::{
-    arch::aarch64::{gic::IntID, registers::MPIDR, timer::TIMER_IRQ},
+    arch::aarch64::{gic::IntID, registers::MPIDR},
     drivers::interrupts::IRQ_MANAGER,
     khalt,
     syscalls::syscall,
-    warn,
 };
 use core::{
     arch::{asm, global_asm},
@@ -124,27 +123,31 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
     match int_id {
         // TODO: instead of making this a special case just use the interrupt abstraction layer to register the timer
         // but maybe this is faster?
-        i if i == TIMER_IRQ.id() => super::timer::on_interrupt(frame, is_fiq),
+        i if i == super::timer::irq_num() => super::timer::on_interrupt(frame, is_fiq),
         i if i == HALT_ALL_SGI.id() => {
             HALT_RESPONSE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             super::serial::write_str("haltingg...\n");
             khalt()
         }
         // LPIs
-        i if i >= 8192 => {
+        i => {
             let int = IntID::from_int_id(i);
 
             let irq_manager = IRQ_MANAGER.read();
+            let mut handler = None;
             for irq in &*irq_manager.irqs {
                 if irq.irq_num == i {
-                    irq.handler.handle_interrupt();
+                    handler = Some(irq.handler);
                     break;
                 }
             }
 
+            drop(irq_manager);
+            if let Some(handler) = handler {
+                handler.handle_interrupt();
+            }
             int.clear_pending().deactivate(is_fiq);
         }
-        i => warn!("unknown intID {i}, ignoring..."),
     }
 }
 

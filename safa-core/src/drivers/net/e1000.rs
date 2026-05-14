@@ -4,18 +4,15 @@ use bitfield_struct::bitfield;
 use safa_abi::net::NicAddrInfoV4;
 
 use crate::{
-    PhysAddr, VirtAddr,
-    arch::io::{inl, outl},
-    debug,
+    PhysAddr, debug,
     drivers::{
         interrupts::{self, IRQInfo, IntTrigger, InterruptReceiver},
-        pci::{Bar, PCICommandReg, PCIDevice},
+        pci::{AllocatedBar, PCICommandReg, PCIDevice},
     },
     error, info,
     memory::{
         frame_allocator::{self, FramePtr},
         paging::{MapToError, PAGE_SIZE},
-        vmm::{self, VMMMFlags},
     },
     net::{
         MacAddress,
@@ -881,15 +878,9 @@ impl E1000Comm {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum DeviceBase {
-    IO(u16),
-    Mem(VirtAddr),
-}
-
 #[derive(Debug)]
 pub struct E1000NetCard {
-    base: DeviceBase,
+    base: AllocatedBar,
     eeprom_exists: OnceCell<bool>,
     mac: OnceCell<MacAddress>,
     com: OnceCell<Mutex<E1000Comm>>,
@@ -900,25 +891,11 @@ pub struct E1000NetCard {
 
 impl E1000NetCard {
     pub fn write_command(&self, p_addr: u16, p_value: u32) {
-        match self.base {
-            DeviceBase::Mem(addr) => {
-                let reg_addr = addr + p_addr as usize;
-                let reg_ptr = reg_addr.into_ptr::<u32>();
-                unsafe { reg_ptr.write_volatile(p_value) }
-            }
-            DeviceBase::IO(p) => unsafe { outl(p_addr + p, p_value) },
-        }
+        unsafe { self.base.write_u32(p_addr, p_value) }
     }
 
     pub fn read_command(&self, p_addr: u16) -> u32 {
-        match self.base {
-            DeviceBase::Mem(addr) => {
-                let reg_addr = addr + p_addr as usize;
-                let reg_ptr = reg_addr.into_ptr::<u32>();
-                unsafe { reg_ptr.read_volatile() }
-            }
-            DeviceBase::IO(p) => unsafe { inl(p_addr + p) },
-        }
+        unsafe { self.base.read_u32(p_addr) }
     }
 
     pub fn write_reg_ctrl(&self, v: RegCTRL) {
@@ -1303,43 +1280,28 @@ impl PCIDevice for E1000NetCard {
             .expect("E1000 must support interrupts");
         let general_header = info.unwrap_general();
 
-        let base_bar = bars[0];
-        let base = match base_bar {
-            Bar::Memory(base_bar_phys, base_bar_size) => {
-                let base_virt = vmm::with_root(|vmm| {
-                    vmm.map_direct_phys(
-                        &"E1000",
-                        None,
-                        base_bar_phys,
-                        base_bar_size.div_ceil(PAGE_SIZE),
-                        VMMMFlags::UNCACHABLE | VMMMFlags::WRITEABLE,
-                    )
-                })
-                .expect("Failed to map E1000 card's memio space");
-
-                info!(
-                    E1000NetCard,
-                    "Mapped starting at {base_virt:?} to {base_bar_phys:?}"
-                );
+        let (allocated_bars, _, _) = AllocatedBar::allocate_bars::<6>(&"E1000", &*bars);
+        let base_bar = allocated_bars[0];
+        match base_bar {
+            AllocatedBar::Memory(base_virt, _) => {
+                info!(E1000NetCard, "Mapped starting at {base_virt:?} ");
                 crate::write_ref!(
                     general_header.common.command,
                     PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE
                 );
-                DeviceBase::Mem(base_virt)
             }
-            Bar::IO(port, size) => {
+            AllocatedBar::IO(port, size) => {
                 info!(E1000NetCard, "Using IO with base {port} and size {size}");
                 crate::write_ref!(
                     general_header.common.command,
                     PCICommandReg::BUS_MASTER | PCICommandReg::IO_SPACE
                 );
-                DeviceBase::IO(port as u16)
             }
-        };
+        }
 
         E1000NetCard {
             irq_info,
-            base,
+            base: base_bar,
             mac: OnceCell::new(),
             eeprom_exists: OnceCell::new(),
             com: OnceCell::new(),

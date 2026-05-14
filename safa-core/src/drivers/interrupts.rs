@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::{arch::interrupts::IRQS, utils::locks::RwLock};
+use crate::utils::locks::RwLock;
 
 use super::pci::msi::MSIXInfo;
 
@@ -24,6 +24,9 @@ pub enum IntTrigger {
 pub enum IRQInfo {
     MSIX(MSIXInfo),
     PCIInt {
+        bus: u8,
+        device: u8,
+        function: u8,
         interrupt_line: u8,
         interrupt_pin: u8,
     },
@@ -71,8 +74,6 @@ impl IRQ {
 
 /// An abstraction layer over the architecture's IRQ mangament
 pub struct IRQManager {
-    free_irq_nums: heapless::Vec<u32, { IRQS.len() }>,
-    next_irq_num_index: usize,
     pub irqs: Vec<IRQ>,
 }
 
@@ -83,28 +84,17 @@ impl IRQManager {
         triggering: IntTrigger,
         handler: &'static dyn InterruptReceiver,
     ) {
-        let irq_num = self.free_irq_nums[self.next_irq_num_index];
         unsafe {
-            crate::arch::interrupts::register_irq_handler(irq_num, &irq_info);
+            let irq_num = crate::arch::interrupts::register_irq_handler(&irq_info);
             let mut irq = IRQ::new(irq_info, triggering, handler, irq_num);
             irq.setup(irq_num);
 
             self.irqs.push(irq);
         }
-        self.next_irq_num_index += 1;
     }
 
     pub fn new() -> Self {
-        let mut free_irq_nums = heapless::Vec::new();
-        for irq_num in IRQS {
-            free_irq_nums.push(irq_num).unwrap();
-        }
-
-        Self {
-            free_irq_nums,
-            next_irq_num_index: 0,
-            irqs: Vec::new(),
-        }
+        Self { irqs: Vec::new() }
     }
 }
 

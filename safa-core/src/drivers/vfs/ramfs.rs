@@ -2,6 +2,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::drivers::vfs::{FSObjectID, FSObjectType, SeekOffset};
 use crate::memory::vmm::VMMAlloc;
+use crate::process::poll::PollID;
 use crate::utils::alloc::PageVec;
 use crate::utils::locks::RwLock;
 use crate::utils::path::PathParts;
@@ -135,6 +136,13 @@ impl RamFSObject {
         match self.state {
             RamFSObjectState::Device(ref d) => d.mmap(offset, page_count),
             _ => Err(FSError::OperationNotSupported),
+        }
+    }
+
+    fn poll_id(&self) -> Option<PollID> {
+        match self.state {
+            RamFSObjectState::Device(ref device) => device.poll_id(),
+            _ => None,
         }
     }
 
@@ -452,6 +460,13 @@ impl FileSystem for RwLock<RamFS> {
     fn sync(&self, id: FSObjectID) -> FSResult<()> {
         self.read().sync(id)
     }
+
+    fn poll_id(&self, id: FSObjectID) -> Option<crate::process::poll::PollID> {
+        let read_guard = self.read();
+        let obj = read_guard.fget(id).ok()?;
+        obj.poll_id()
+    }
+
     fn send_command(&self, id: FSObjectID, cmd: u16, arg: u64) -> FSResult<()> {
         let read_guard = self.read();
         let obj = read_guard.fget(id)?;

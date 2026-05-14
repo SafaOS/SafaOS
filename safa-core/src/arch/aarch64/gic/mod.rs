@@ -6,8 +6,9 @@ use lazy_static::lazy_static;
 use crate::{
     PhysAddr, VirtAddr,
     arch::aarch64::{
-        cpu,
+        cpu::CPUDevice,
         gic::gicr::{GICRDesc, lpis::LPIManager},
+        interrupts::{CPUInterruptController, IntGroup, register_int_controller},
         registers::{ArchCpuID, MPIDR},
     },
     debug, info,
@@ -19,32 +20,108 @@ use crate::{
     },
 };
 
+use hfdt_rs as dtb;
+
 pub mod cpu_if;
 mod gicd;
 mod gicr;
 pub use gicr::lpis::LPI_MANAGER;
 pub mod its;
 
+pub struct GICv3ITS {
+    base: PhysAddr,
+    size: usize,
+}
+
+impl CPUDevice for GICv3ITS {
+    const COMPATIBLE: &'static [&'static str] = &["arm,gic-v3-its"];
+
+    fn create(node: dtb::Node) -> Result<Self, &'static str> {
+        let mut reg = node
+            .reg_addresses()
+            .ok_or("ITS Node no <reg>")?
+            .map(|(addr, size)| (PhysAddr::from(addr), size));
+        let (base_addr, size) = reg.next().ok_or("ITS no base addr in <reg>")?;
+        Ok(Self {
+            base: base_addr,
+            size,
+        })
+    }
+}
+
+struct GICv3 {
+    gicc: Option<(PhysAddr, usize)>,
+    gicd: (PhysAddr, usize),
+    gicr: (PhysAddr, usize),
+    node: dtb::Node<'static>,
+}
+
+impl CPUInterruptController for GICv3 {
+    fn node(&self) -> &hfdt_rs::Node<'static> {
+        &self.node
+    }
+
+    fn enable_dev_irq(
+        &self,
+        mut specifier: hfdt_rs::Cells,
+        group: IntGroup,
+    ) -> Result<u32, &'static str> {
+        let [int_type, int_num, int_flags] = specifier
+            .next_array()
+            .ok_or("Failed to decode given interrupt specifier")?;
+
+        _ = int_flags;
+        let int_id = IntID::from_int_id(match int_type {
+            0x1 => int_num + 0x10,
+            0x0 => int_num + 0x20,
+            _ => return Err("Unsupported interrupt type"),
+        });
+
+        Ok(int_id.set_group_all(group).enable_all().id)
+    }
+    fn send_eoi(&self, irq: u32, is_fiq: bool) {
+        let int_id = IntID::from_int_id(irq);
+        int_id.clear_pending().deactivate(is_fiq);
+    }
+}
+
+impl CPUDevice for GICv3 {
+    const COMPATIBLE: &'static [&'static str] = &["arm,gic-v3"];
+    fn create(node: dtb::Node<'static>) -> Result<Self, &'static str> {
+        let mut reg = node
+            .reg_addresses()
+            .ok_or("Node missing reg")?
+            .map(|(addr, size)| (PhysAddr::from(addr), size));
+        let gicd = reg.next().ok_or("Expected GICD Address in <reg>")?;
+        let gicr = reg.next().ok_or("Expected GICR Address in <reg>")?;
+        let gicc = reg.next();
+
+        Ok(Self {
+            gicc,
+            gicd,
+            gicr,
+            node,
+        })
+    }
+}
 lazy_static! {
-    static ref GICC: Option<(PhysAddr, usize)> = cpu::GICV3.0.map(|(base, size)| (base, size));
+    static ref GICITS: GICv3ITS = GICv3ITS::lookup().expect("Cannot operate without GICv3 ITS");
+    static ref GICV3: GICv3 = GICv3::lookup().expect("GICv3 not found cannot operate.");
+    static ref GICC: Option<(PhysAddr, usize)> = GICV3.gicc.map(|(base, size)| (base, size));
     static ref GICD: (PhysAddr, usize) = {
-        let (base, size) = cpu::GICV3.1;
+        let (base, size) = GICV3.gicd;
         (base, size)
     };
     static ref GICR: (PhysAddr, usize) = {
-        let (base, size) = cpu::GICV3.2;
-        (base, size)
-    };
-    static ref GICITS: (PhysAddr, usize) = {
-        let (base, size) = *cpu::GICITS;
+        let (base, size) = GICV3.gicr;
         (base, size)
     };
     static ref GICD_SIZE: usize = GICD.1;
     static ref GICR_SIZE: usize = GICR.1;
-    static ref GICITS_SIZE: usize = GICITS.1;
+    static ref GICITS_SIZE: usize = GICITS.size;
     static ref GICITS_TRANSLATION_BASE: VirtAddr = unsafe { *GICITS_BASE.get() + 0x010000 };
     static ref GICITS_TRANSLATION_BASE_PHYS: PhysAddr = *GICITS_BASE_PHYS + 0x010000;
-    static ref GICITS_BASE_PHYS: PhysAddr = GICITS.0;
+    static ref GICITS_BASE_PHYS: PhysAddr = GICITS.base;
     static ref SGI_BASE: VirtAddr = unsafe { *GICR_BASE.get() + SIZE_64K };
 }
 
@@ -86,7 +163,7 @@ unsafe fn map_gic(vmm: &VirtualMemoryManager) -> Result<(), VMMAllocError> {
             flags,
         )?;
 
-        let (gicits_pbase, gicits_size) = *GICITS;
+        let (gicits_pbase, gicits_size) = (GICITS.base, GICITS.size);
         *GICITS_BASE.get() = vmm.map_direct_phys(
             &"GICITS",
             Some(Location::Hint(hint)),
@@ -115,6 +192,7 @@ pub fn init_gic() {
         });
     }
 
+    register_int_controller(&*GICV3);
     unsafe {
         info!(
             "initializing GIC GICD: {:?}, GICR: {:?}",
@@ -156,17 +234,6 @@ impl IntKind {
             1020..=1023 | 1024..=8191 => unreachable!(),
         }
     }
-}
-
-/// The interrupt group
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IntGroup {
-    #[allow(unused)]
-    /// Group 0, Typically used by FIQs
-    Secure = 0,
-    /// Group 1, Typically used by IRQs
-    NonSecure = 1,
 }
 
 /// A Generic Wrapper around a GIC interrupt

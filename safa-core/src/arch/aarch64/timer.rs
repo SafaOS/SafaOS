@@ -1,8 +1,11 @@
-use core::arch::asm;
+use core::{arch::asm, cell::SyncUnsafeCell};
+
+use hfdt_rs::Cells;
 
 use crate::{
     arch::aarch64::{
-        gic::{IntGroup, IntID},
+        cpu::CPUDevice,
+        interrupts::{self, DeviceIrq, IntGroup},
         registers::MPIDR,
     },
     info,
@@ -11,8 +14,39 @@ use crate::{
 use super::exceptions::InterruptFrame;
 
 const TIMER_TICK_PER_MS: usize = crate::scheduler::TIME_PER_QUANTUM as usize;
-// TODO: only works on qemu virt
-pub const TIMER_IRQ: IntID = IntID::from_int_id(30);
+
+struct Timer {
+    _secure_int: Cells<'static>,
+    non_secure_int: Cells<'static>,
+    interrupt_parent: hfdt_rs::Node<'static>,
+}
+
+impl CPUDevice for Timer {
+    const COMPATIBLE: &'static [&'static str] = &["arm,armv8-timer", "arm,armv7-timer"];
+    fn create(node: hfdt_rs::Node<'static>) -> Result<Self, &'static str> {
+        let cont = node
+            .interrupt_parent()
+            .expect("Failed to get interrupt parent");
+        let mut interrupts = node
+            .interrupts(&cont)
+            .expect("No interrupts found for timer");
+
+        let secure = interrupts.next().expect("No secure interrupt found");
+        let non_secure = interrupts.next().expect("No non-secure interrupt found");
+
+        Ok(Timer {
+            _secure_int: secure,
+            non_secure_int: non_secure,
+            interrupt_parent: cont,
+        })
+    }
+}
+static TIMER_IRQ: SyncUnsafeCell<Option<DeviceIrq>> = SyncUnsafeCell::new(None);
+
+/// Returns the IRQ number of the timer
+pub fn irq_num() -> u32 {
+    unsafe { ((&*TIMER_IRQ.get()).as_ref().unwrap()).irq() }
+}
 
 #[inline(always)]
 /// Resets the timer to count Nms again before tiggring interrupt
@@ -54,16 +88,23 @@ pub fn setup_generic_timer() {
     );
 }
 pub fn init_generic_timer() {
-    TIMER_IRQ
-        .clear_pending_all()
-        .set_group_all(IntGroup::NonSecure)
-        .enable_all();
+    let timer_irq_ptr = TIMER_IRQ.get();
+
+    let timer = Timer::lookup().expect("No arm timer found");
+
+    let timer_irq = interrupts::register_device_irq(
+        &timer.interrupt_parent,
+        timer.non_secure_int,
+        IntGroup::NonSecure,
+    )
+    .expect("Failed to register timer interrupt");
+    unsafe { *timer_irq_ptr = Some(timer_irq) };
 }
 
 pub fn on_interrupt(ctx: &mut InterruptFrame, is_fiq: bool) {
     unsafe {
         super::threading::context_switch(ctx, || {
-            TIMER_IRQ.clear_pending().deactivate(is_fiq);
+            (&*TIMER_IRQ.get()).as_ref().unwrap().send_eoi(is_fiq);
             reset_timer(TIMER_TICK_PER_MS)
         });
     }

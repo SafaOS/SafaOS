@@ -1,6 +1,7 @@
 use core::cell::SyncUnsafeCell;
 
 use alloc::slice;
+use hfdt_rs::Fdt;
 use lazy_static::lazy_static;
 use limine::file::File;
 use limine::framebuffer::MemoryModel;
@@ -80,11 +81,6 @@ const RAMDISK_MODULE: InternalModule = InternalModule::new()
 #[unsafe(link_section = ".requests")]
 static MODULES_REQUEST: ModuleRequest =
     ModuleRequest::new().with_internal_modules(&[&RAMDISK_MODULE]);
-
-#[cfg(target_arch = "aarch64")]
-pub fn device_tree_addr() -> Option<*const ()> {
-    DEVICE_TREE_REQUEST.get_response().map(|r| r.dtb_ptr())
-}
 
 pub fn get_phy_offset() -> usize {
     HHDM_REQUEST.get_response().unwrap().offset() as usize
@@ -168,6 +164,16 @@ lazy_static! {
     pub static ref LIMINE_FRAMEBUFFER: (SyncUnsafeCell<&'static mut [u8]>, FrameBufferInfo) = {
         let (video_buffer, info) = get_framebuffer();
         (SyncUnsafeCell::new(video_buffer), info)
+    };
+    pub static ref FDT: Fdt<'static> = unsafe {
+        Fdt::from_raw(
+            DEVICE_TREE_REQUEST
+                .get_response()
+                .expect("No devicetree found")
+                .dtb_ptr()
+                .cast(),
+        )
+        .expect("Failed to parse devicetree header")
     };
 }
 

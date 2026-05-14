@@ -8,7 +8,7 @@ use crate::{
         frame_allocator::{self},
         paging::PAGE_SIZE,
     },
-    process::{self, mem::MemMappedInterface, resources::Resource},
+    process::{self, mem::MemMappedInterface, poll::PollID, resources::Resource},
     timer::{DurationFmt, SystemInstant},
     utils::{
         locks::Mutex,
@@ -223,6 +223,9 @@ impl Resource for FSObjectDescriptor {
     ) -> Result<Box<dyn MemMappedInterface>, ErrorStatus> {
         let result = self.open_mmap_interface(offset, page_count)?;
         Ok(result)
+    }
+    fn poll_id(&self) -> Option<process::poll::PollID> {
+        self.inner.fs.poll_id(self.inner.fs_obj_id)
     }
     fn try_clone_into_node(&self) -> Result<process::resources::ResourceNodeRef, ErrorStatus> {
         process::resources::generic_clone_impl(self)
@@ -445,6 +448,11 @@ pub trait FileSystem: Send + Sync {
     fn sync(&self, id: FSObjectID) -> FSResult<()> {
         _ = id;
         Err(FSError::OperationNotSupported)
+    }
+
+    fn poll_id(&self, id: FSObjectID) -> Option<PollID> {
+        _ = id;
+        None
     }
 
     fn open_mmap_interface(

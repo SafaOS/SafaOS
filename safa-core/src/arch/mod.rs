@@ -51,7 +51,7 @@ pub mod pci {
 }
 
 pub mod interrupts {
-    pub use super::arch::interrupts::{IRQS, register_irq_handler};
+    pub use super::arch::interrupts::register_irq_handler;
 }
 
 pub mod io {

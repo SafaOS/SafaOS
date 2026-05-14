@@ -5,12 +5,18 @@ use lazy_static::lazy_static;
 use msi::{MSIXCap, MSIXInfo};
 
 use crate::{
-    PhysAddr, VirtAddr,
+    PhysAddr, VirtAddr, arch,
     drivers::{
         audio::ac97::AC97, interrupts::IRQInfo, net::e1000::E1000NetCard,
         pci::extended_caps::CaptabilitiesIter,
     },
     info,
+    memory::{
+        AlignToPage,
+        frame_allocator::Frame,
+        paging::PAGE_SIZE,
+        vmm::{self, VMMMFlags},
+    },
 };
 pub mod extended_caps;
 pub mod msi;
@@ -59,6 +65,138 @@ pub enum AllocatedBar {
     Memory(VirtAddr, usize),
     #[allow(unused)]
     IO(u32, usize),
+}
+
+impl AllocatedBar {
+    #[allow(unused)]
+    /// Writes a u16 to an offset from the given Bar.
+    #[inline]
+    pub unsafe fn write_u16(&self, off: u16, val: u16) {
+        match *self {
+            Self::IO(port, _) => unsafe { arch::io::outw(port as u16 + off, val) },
+            Self::Memory(p, _) => unsafe {
+                core::ptr::write_volatile(p.into_ptr::<u16>().byte_add(off as usize), val)
+            },
+        }
+    }
+
+    #[allow(unused)]
+    /// Reads a u16 from an offset from the given Bar.
+    #[inline]
+    pub unsafe fn read_u16(&self, off: u16) -> u16 {
+        match *self {
+            Self::IO(port, _) => unsafe { arch::io::inw(port as u16 + off) },
+            Self::Memory(p, _) => unsafe {
+                core::ptr::read_volatile(p.into_ptr::<u16>().byte_add(off as usize))
+            },
+        }
+    }
+
+    /// Reads a u32 from an offset from the given Bar.
+    #[inline]
+    pub unsafe fn read_u32(&self, off: u16) -> u32 {
+        match *self {
+            Self::IO(port, _) => unsafe { arch::io::inl(port as u16 + off) },
+            Self::Memory(p, _) => unsafe {
+                core::ptr::read_volatile(p.into_ptr::<u32>().byte_add(off as usize))
+            },
+        }
+    }
+    #[allow(unused)]
+    /// Reads a u8 from an offset from the given Bar.
+    #[inline]
+    pub unsafe fn read_u8(&self, off: u16) -> u8 {
+        match *self {
+            Self::IO(port, _) => unsafe { arch::io::inb(port as u16 + off) },
+            Self::Memory(p, _) => unsafe {
+                core::ptr::read_volatile(p.into_ptr::<u8>().byte_add(off as usize))
+            },
+        }
+    }
+
+    #[allow(unused)]
+    /// Writes a u8 to an offset from the given Bar.
+    #[inline]
+    pub unsafe fn write_u8(&self, off: u16, val: u8) {
+        match self {
+            Self::IO(port, _) => unsafe { arch::io::outb(*port as u16 + off, val) },
+            Self::Memory(p, _) => unsafe {
+                core::ptr::write_volatile(p.into_ptr::<u8>().byte_add(off as usize), val)
+            },
+        }
+    }
+
+    /// Writes a u32 to an offset from the given Bar.
+    #[inline]
+    pub unsafe fn write_u32(&self, off: u16, val: u32) {
+        match *self {
+            Self::IO(port, _) => unsafe { arch::io::outl((port as u16) + off, val) },
+            Self::Memory(p, _) => unsafe {
+                core::ptr::write_volatile(p.into_ptr::<u32>().byte_add(off as usize), val)
+            },
+        }
+    }
+
+    /// Given PCI Bars, allocates and maps space for them in virtual memory in case of memory bars
+    ///
+    /// returns IO Bars as is.
+    ///
+    /// Returns the allocation base address and size in case of memory bars (or null otherwise).
+    /// Only N bars are covered, 6 should be the maximum to cover everyone.
+    pub fn allocate_bars<const N: usize>(
+        memory_base_name: &'static &'static str,
+        bars: &[Bar],
+    ) -> (heapless::Vec<Self, N>, VirtAddr, usize) {
+        let bars = bars.iter().take(N);
+        let mem_bars = bars.clone().filter_map(|b| {
+            if let Bar::Memory(base, size) = b {
+                Some((base, size))
+            } else {
+                None
+            }
+        });
+
+        let total_size = mem_bars.clone().map(|(_, size)| size).sum::<usize>();
+
+        let virt_base_addr = if total_size != 0 {
+            vmm::with_root(|vmm| {
+                vmm.map_direct(
+                    memory_base_name,
+                    None,
+                    total_size.to_next_page(),
+                    VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE,
+                    mem_bars
+                        .map(|(base, size)| {
+                            (0..size.div_ceil(PAGE_SIZE))
+                                .map(|i| Frame::containing_address(*base + (i * PAGE_SIZE)))
+                        })
+                        .flatten(),
+                )
+                .expect("Failed to map XHCI memory")
+            })
+        } else {
+            VirtAddr::null()
+        };
+
+        let mut allocated_bars: heapless::Vec<_, N> = heapless::Vec::new();
+        let mut curr_offset = 0;
+
+        for bar in bars {
+            match bar {
+                Bar::IO(base, port) => allocated_bars
+                    .push(AllocatedBar::IO(*base, *port))
+                    .expect("Too much BARs"),
+                Bar::Memory(_, size) => {
+                    allocated_bars
+                        .push(AllocatedBar::Memory(virt_base_addr + curr_offset, *size))
+                        .expect("Too much BARs");
+                    curr_offset += size.to_next_page();
+                }
+            }
+        }
+
+        (allocated_bars, virt_base_addr, total_size.to_next_page())
+    }
 }
 
 bitflags! {
@@ -146,9 +284,6 @@ impl GeneralPCIHeader {
             let result = /* I/O Space bars */ if info_bits & 1 == 1 {
                 unsafe {
                     let io_base = raw_bar & 0xFFFFFFFC;
-                    if io_base == 0 {
-                        continue
-                    }
 
                     core::ptr::write_volatile(raw_bar_ptr as *mut u32, u32::MAX);
                     let neg_size = core::ptr::read_volatile(raw_bar_ptr) & 0xFFFFFFFC;
@@ -326,6 +461,9 @@ impl<'a> PCIDeviceInfo<'a> {
         let interrupt_line = general.interrupt_line;
 
         Some(IRQInfo::PCIInt {
+            bus: self.bus,
+            device: self.device,
+            function: self.function,
             interrupt_line,
             interrupt_pin,
         })

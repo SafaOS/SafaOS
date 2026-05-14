@@ -125,10 +125,12 @@ irq_list!(
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A
 );
 
+static NEXT_IRQ_NUM: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x10);
+
 /// Registers the handler function `handler` to irq `irq_num`
-/// Make sure the num is retrieved from [`AVAILABLE_RQS`]
-pub unsafe fn register_irq_handler(irq_num: u32, info: &IRQInfo) {
+pub unsafe fn register_irq_handler(info: &IRQInfo) -> u32 {
     let table = unsafe { &mut *IDT.get() };
+    let irq_num = NEXT_IRQ_NUM.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     assert_eq!(table[irq_num as usize], idt::GateDescriptor::default());
     for (i, ava_irq) in IRQS.iter().enumerate() {
         if *ava_irq == irq_num {
@@ -138,7 +140,13 @@ pub unsafe fn register_irq_handler(irq_num: u32, info: &IRQInfo) {
                 IRQInfo::PCIInt {
                     interrupt_line,
                     interrupt_pin,
+                    bus,
+                    device,
+                    function,
                 } => unsafe {
+                    _ = bus;
+                    _ = device;
+                    _ = function;
                     _ = interrupt_pin;
 
                     let redirection = IOREDTBL::new()
@@ -151,7 +159,7 @@ pub unsafe fn register_irq_handler(irq_num: u32, info: &IRQInfo) {
 
             table[irq_num as usize] =
                 idt::GateDescriptor::new(HANDLERS[i] as usize, handlers::ATTR_INT);
-            return;
+            return irq_num;
         }
     }
     panic!("IRQ {irq_num} not in irqs: {IRQS:?}");
