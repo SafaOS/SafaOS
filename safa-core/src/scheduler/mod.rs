@@ -404,13 +404,6 @@ impl Scheduler {
             if let Some((thread, priority)) =
                 scheduler.try_giveup_thread(|thread| thread.try_set_scheduler(self))
             {
-                // If this lost to the clean-up lock.
-                // The clean-up lock will clean up the thread as if it belonged to another scheduler, but it will set the blocked reason to `Dead`.
-                //
-                // If it won, the clean-up would be done as if it was this scheduler's thread.
-                if *thread.status_mut() == ContextStatus::Blocked(BlockedReason::Dead) {
-                    continue;
-                }
                 self.threads_count.fetch_add(1, Ordering::Relaxed);
                 return Some((thread, priority));
             }
