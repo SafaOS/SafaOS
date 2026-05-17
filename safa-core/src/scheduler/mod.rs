@@ -136,7 +136,7 @@ pub struct Scheduler {
     next_wake_time: AtomicU64,
     waiting_threads: Mutex<Vec<(ArcThread, NonZero<u64>)>>,
     awaiting_cleanup: TrackedSpinLock<ThreadList>,
-    ready_queues: TrackedSpinLock<[ThreadList; PRIORITIES_COUNT]>,
+    pub ready_queues: TrackedSpinLock<[ThreadList; PRIORITIES_COUNT]>,
     idle_thread: ArcThread,
     current_thread: UnsafeCell<ArcThread>,
     /// The head thread is the thread that is the head of the thread queue
@@ -155,7 +155,7 @@ impl Scheduler {
     }
 
     /// The Scheduler's IDLE loop
-    pub fn idle(&self) -> ! {
+    pub fn idle(&'static self) -> ! {
         let mut cleanup_vec = ThreadList::new_empty();
 
         let cycles_per_ns = crate::arch::utils::cpu_timer_freq_mhz()
@@ -231,16 +231,14 @@ impl Scheduler {
 
     #[inline]
     fn add_single_thread_to(
-        &self,
+        &'static self,
         queues: &mut [ThreadList],
         thread: ArcThread,
         index: usize,
         front: bool,
     ) {
         let head = &mut queues[index];
-        unsafe {
-            thread.set_scheduler(self);
-        }
+        unsafe { thread.set_scheduler(self) };
 
         if front {
             unsafe { head.push_front(thread) };
@@ -249,7 +247,7 @@ impl Scheduler {
         }
     }
 
-    fn add_single_thread(&self, queues: &mut [ThreadList], thread: ArcThread) {
+    fn add_single_thread(&'static self, queues: &mut [ThreadList], thread: ArcThread) {
         let priority = thread.priority();
         let add_front = priority == ContextPriority::Immediate;
 
@@ -264,7 +262,7 @@ impl Scheduler {
     }
 
     #[inline]
-    pub fn try_pop_waiting_thread(&self) -> bool {
+    pub fn try_pop_waiting_thread(&'static self) -> bool {
         let mut popped = false;
         let mut waiting_threads = self.waiting_threads.lock();
         if waiting_threads.is_empty() {
@@ -297,7 +295,7 @@ impl Scheduler {
 
     #[inline]
     fn try_wake_waiting_threads(
-        &self,
+        &'static self,
         queues: &mut [ThreadList],
         time_now: NonZero<u64>,
         current_thread: Option<&ArcThread>,
@@ -334,7 +332,7 @@ impl Scheduler {
     /// Schedules a thread for execution on this scheduler.
     ///
     /// Safe to call from any context as long as the thread doesn't belong to any scheduler, should never deadlock.
-    pub unsafe fn schedule_thread(&self, thread: ArcThread, reason: ThreadScheduleReason) {
+    pub unsafe fn schedule_thread(&'static self, thread: ArcThread, reason: ThreadScheduleReason) {
         if reason == ThreadScheduleReason::UnblockTimeoutOperation {
             let mut waiting_threads = self.waiting_threads.lock();
             if let Some(index) = waiting_threads.iter().position(|(t, _)| *t == thread) {
@@ -376,26 +374,43 @@ impl Scheduler {
     /// Tries to give up a thread to another scheduler.
     ///
     /// Returns the thread and its priority.
-    fn try_giveup_thread(&self) -> Option<(ArcThread, usize)> {
-        self.ready_queues.try_lock().and_then(|mut q| {
-            let r = self.get_next_thread(&mut *q);
-            self.sub_thread_count();
-            r
-        })
+    fn try_giveup_thread(
+        &'static self,
+        f: impl FnOnce(&ArcThread) -> bool,
+    ) -> Option<(ArcThread, usize)> {
+        let mut ready_queues = self.ready_queues.try_lock()?;
+        self.get_next_thread(&mut *ready_queues)
+            .and_then(|(thread, priority)| {
+                if f(&thread) {
+                    self.sub_thread_count();
+                    Some((thread, priority))
+                } else {
+                    self.add_single_thread_to(&mut *ready_queues, thread, priority, false);
+                    None
+                }
+            })
     }
 
     #[inline]
     /// Tries to steal a thread from another scheduler.
     ///
     /// Returning the thread and its priority.
-    fn try_steal_thread(&self) -> Option<(ArcThread, usize)> {
+    fn try_steal_thread(&'static self) -> Option<(ArcThread, usize)> {
         let schedulers = CpuLocal::get_all()
             .map(|cpu| SCHEDULER.borrow_for(cpu))
             .filter(|s| !core::ptr::eq(self, *s));
 
         for scheduler in schedulers {
-            if let Some((thread, priority)) = scheduler.try_giveup_thread() {
-                unsafe { thread.set_scheduler(self) };
+            if let Some((thread, priority)) =
+                scheduler.try_giveup_thread(|thread| thread.try_set_scheduler(self))
+            {
+                // If this lost to the clean-up lock.
+                // The clean-up lock will clean up the thread as if it belonged to another scheduler, but it will set the blocked reason to `Dead`.
+                //
+                // If it won, the clean-up would be done as if it was this scheduler's thread.
+                if *thread.status_mut() == ContextStatus::Blocked(BlockedReason::Dead) {
+                    continue;
+                }
                 self.threads_count.fetch_add(1, Ordering::Relaxed);
                 return Some((thread, priority));
             }
@@ -403,7 +418,7 @@ impl Scheduler {
         None
     }
 
-    fn try_escape_idle(&self) -> bool {
+    fn try_escape_idle(&'static self) -> bool {
         let mut queues = self.ready_queues.lock();
         if queues.iter().any(|q| !q.is_empty()) {
             return true;
@@ -427,14 +442,14 @@ impl Scheduler {
     /// * `Some((NonNull<CPUStatus>, bool, TrackedSpinLockGuard<[ThreadList; PRIORITIES_COUNT]>))` - The new CPU status, whether the swap was successful, and the locked schedule queues, the schedule queues shall be dropped once the kernel thread stack is swapped.
     /// * `None` - If no swap was performed.
     #[inline]
-    fn try_swap_contexts<'a>(
-        &'a self,
+    fn try_swap_contexts(
+        &'static self,
         current_cpu_status: &CPUStatus,
         swap_if_has_time: bool,
     ) -> Option<(
         NonNull<CPUStatus>,
         bool,
-        TrackedSpinLockGuard<'a, [ThreadList; PRIORITIES_COUNT]>,
+        TrackedSpinLockGuard<'static, [ThreadList; PRIORITIES_COUNT]>,
     )> {
         let current_thread = unsafe { &mut *self.current_thread.get() };
         let curr_pid = current_thread.process().pid();

@@ -250,7 +250,8 @@ impl ArcThread {
     /// # Safety
     /// If the thread is the current thread, this function must be called without interrupts on
     unsafe fn remove_self(&self) {
-        let Some(scheduler) = (unsafe { &*self.scheduler.get() }) else {
+        let schd_guard = self.scheduler.lock();
+        let Some(scheduler) = *schd_guard else {
             panic!("Attempted to remove a thread that isn't associated with a scheduler")
         };
         let scheduler = unsafe { scheduler.as_ref() };
@@ -335,6 +336,10 @@ impl ArcThread {
     /// # Safety
     /// The caller must handle the case that this is the current thread carefully and interrupts must be disabled.
     pub unsafe fn prepare_sleep_for_ms(&self, ms: NonZero<u64>) -> bool {
+        if self.should_terminate() {
+            return false;
+        }
+
         let current_time_ms = time_since_boot_ms();
         let time = ms.saturating_add(current_time_ms);
 
@@ -465,7 +470,7 @@ impl ArcThread {
     }
 
     /// Blocks the current thread forever, making sure it is not running first
-    pub fn block_dead(&self) {
+    fn block_dead(&self) {
         // Safety:
         // - Only block_dead muttates this
         // - Its only goes from false to true and not backwards, the time threads read this after it is true doesn't matter.
@@ -474,14 +479,16 @@ impl ArcThread {
             let mut status = self.status.lock();
 
             match *status {
-                ContextStatus::Runnable
-                    // Safety: we hold a lock on status, and context shall not be accessed before holding a lock on status, perhaps this can be expressed better?
+                // Safety: we hold a lock on status, and context shall not be accessed before holding a lock on status, perhaps this can be expressed better?
+                ContextStatus::Running | ContextStatus::Runnable
                     if unsafe { self.context_unchecked().cpu_status.at().is_in_lower_half() } =>
                 {
-                    *status = ContextStatus::Blocked(BlockedReason::Dead);
-                    break;
+                    // The scheduler should acknowledge the block first.
+                    *status = ContextStatus::Blocking(BlockedReason::Dead);
                 }
-                ContextStatus::Running | ContextStatus::Runnable | ContextStatus::Blocking(BlockedReason::Dead) => {}
+                ContextStatus::Runnable
+                | ContextStatus::Running
+                | ContextStatus::Blocking(BlockedReason::Dead) => {}
                 ContextStatus::Blocked(BlockedReason::Dead) => {
                     break;
                 }
@@ -496,6 +503,8 @@ impl ArcThread {
             drop(status);
             current::yield_now()
         }
+
+        crate::serial!("*\n");
     }
 }
 
@@ -541,7 +550,7 @@ pub struct Thread {
 
     /// The scheduler that this thread belongs to.
     /// null until scheduled
-    scheduler: UnsafeCell<Option<NonNull<Scheduler>>>,
+    pub scheduler: SpinLock<Option<NonNull<Scheduler>>>,
     // For safety we have to follow 2 rules:
     // 1. reads must be performed by the scheduler
     // 2. writes must be performed with the scheduler's lock held
@@ -567,9 +576,23 @@ impl Debug for Thread {
 }
 
 impl Thread {
-    /// Sets the parent scheduler of this thread
-    pub unsafe fn set_scheduler(&self, schd: &Scheduler) {
+    /// Sets the parent scheduler of this thread.
+    ///
+    /// Doesn't acquire any locks so it is unsafe.
+    pub unsafe fn set_scheduler(&self, schd: &'static Scheduler) {
         unsafe { *self.scheduler.get() = Some(NonNull::from_ref(schd)) }
+    }
+
+    /// Tries to set the parent scheduler of this thread, returning `true` if successful.
+    ///
+    /// Returns `false` if the scheduler lock is currently held by another thread.
+    pub fn try_set_scheduler(&self, schd: &'static Scheduler) -> bool {
+        if let Some(mut guard) = self.scheduler.try_lock() {
+            *guard = Some(NonNull::from_ref(schd));
+            true
+        } else {
+            false
+        }
     }
 
     pub fn new(
@@ -591,7 +614,7 @@ impl Thread {
             is_dying: AtomicBool::new(false),
             is_dead: AtomicBool::new(false),
             parent_process: parent_process.clone(),
-            scheduler: UnsafeCell::new(None),
+            scheduler: SpinLock::new(None),
             next: UnsafeCell::new(None),
             should_terminate: UnsafeCell::new(false),
             kernel_stack: UnsafeCell::new(ManuallyDrop::new(kernel_stack)),
@@ -657,15 +680,23 @@ impl Thread {
     }
 
     /// Blocks the current thread temporarily without a condition to wake up at, doesn't begin sleeping until the next thread yield.
+    /// Returns `true` if the thread was blocked, `false` if it should immediately continue as if it was interrupted.
+    ///
     /// # Safety
     /// Safe to call, but may cause a deadlock if not used correctly,
     /// make sure to disable interrupts before calling this and drop all the local locks after calling this, then thread yield.
-    pub unsafe fn block_waiting(&self) {
+    pub unsafe fn block_waiting(&self) -> bool {
         let mut status = self.status.lock();
-        *status = ContextStatus::Blocking(BlockedReason::Waiting)
+        if !self.should_terminate() {
+            *status = ContextStatus::Blocking(BlockedReason::Waiting);
+            true
+        } else {
+            false
+        }
     }
 
-    pub fn scheduler(&self) -> &'static Scheduler {
+    /// Safety: Has to be the current thread and interrupts must be disabled.
+    pub unsafe fn scheduler(&self) -> &'static Scheduler {
         unsafe {
             (*self.scheduler.get())
                 .expect("Scheduler should never be null")
@@ -673,20 +704,28 @@ impl Thread {
         }
     }
 
-    /// Wake up a thread that has been sleeping for a defined time
-    // pub fn wake_up_sleeping_for_time(&self) {
-    //     without_interrupts(|| {
-    //         let mut status = self.status.lock();
-    //         if matches!(*status, ContextStatus::Blocked(_)) {
-    //             *status = ContextStatus::Runnable;
-    //             unsafe { *self.timeouted.get() = true }
-    //         }
-    //     })
-    // }
-
     /// Should only be called by the current thread or the scheduler or on a sleeping thread
     pub fn set_status(&self, status: ContextStatus) {
-        *self.status.lock() = status;
+        let mut guard = self.status.lock();
+        if status == ContextStatus::Running
+            && *guard == ContextStatus::Blocking(BlockedReason::Dead)
+        {
+            return;
+        }
+
+        debug_assert!(
+            *guard == ContextStatus::Runnable
+                || *guard == ContextStatus::Running
+                || (matches!((&*guard, &status), (ContextStatus::Blocking(x), ContextStatus::Blocked(y)) if x == y)
+                    || (matches!(
+                        *guard,
+                        ContextStatus::Blocked(BlockedReason::Waiting | BlockedReason::Sleeping)
+                    ))),
+            "Cannot switch status from {:?} to {:?}",
+            *guard,
+            status
+        );
+        *guard = status;
     }
 }
 

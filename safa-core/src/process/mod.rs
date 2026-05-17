@@ -312,18 +312,19 @@ impl Process {
         let pid = this.pid();
         let killed_by = killed_by.unwrap_or(pid);
 
-        let mut threads = this.threads_manager.lock();
-        let mut wait_queue = this.wait_queue.lock();
-
         // Set state to dead
         *this.exit_info.write() = Some(ExitInfo {
             exit_code,
             killed_by,
         });
 
-        // Once self is killed we cannot yield, so we cannot hold any locks...
-        unsafe { threads.kill_all() };
+        {
+            let mut threads = this.threads_manager.lock();
+            unsafe { threads.kill_all() };
+        }
+
         this.is_alive.store(false, Ordering::Release);
+        let mut wait_queue = this.wait_queue.lock();
         wait_queue.wake_all();
 
         debug!(

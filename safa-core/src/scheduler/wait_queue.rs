@@ -111,9 +111,7 @@ impl<'a, const AVERAGE: usize, Reason, L: GuardedWaitQueue<'a, AVERAGE, Reason>>
                 // Returns true if we should yield
                 unsafe { thread.prepare_sleep_for_ms(timeout) }
             } else {
-                unsafe { thread.block_waiting() };
-                // Not done yet
-                true
+                unsafe { thread.block_waiting() }
             };
 
             L::drop_lock(guard);
