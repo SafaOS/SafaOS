@@ -211,7 +211,13 @@ pub fn run(opts: RunOpts, iso_path: &Path) {
         .arg(format!(
             "if=pflash,unit=0,format=raw,file={},readonly=on",
             path_to_ovmf.display()
-        ));
+        ))
+        .arg("--device")
+        .arg("ac97,id=snd0")
+        .arg("--netdev")
+        .arg("user,id=netdev0")
+        .arg("--device")
+        .arg("e1000,netdev=netdev0");
 
     let arch_args: &[&str] = match opts.arch {
         // FIXME: unefficent and can be written better

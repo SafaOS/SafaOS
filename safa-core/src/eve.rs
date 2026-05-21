@@ -44,10 +44,10 @@ pub fn main() -> ! {
         );
         // Start the UI
         pspawn(
-            Name::try_from("OpalWM").unwrap(),
+            Name::try_from("Bootstrap").unwrap(),
             // Maybe we can make a const function or a macro for this
-            make_path!("sys", "bin/opal-wm"),
-            &["sys:/bin/opal-wm", "-i"],
+            make_path!("sys", "bin/bootstrap"),
+            &["sys:/bin/bootstrap"],
             &[
                 b"PATH=sys:/bin",
                 b"SHELL=sys:/bin/safa",
