@@ -3,12 +3,14 @@ pub mod handlers;
 mod idt;
 pub mod ps2;
 
+use alloc::vec::Vec;
 use core::{arch::asm, fmt::Display};
 use handlers::IDT;
 use idt::IDTDesc;
 
 use crate::arch::x86_64::interrupts::apic::{APIC, IOREDTBL};
 use crate::arch::x86_64::registers::RFLAGS;
+use crate::utils::locks::Mutex;
 use crate::{KERNEL_ELF, VirtAddr};
 
 use crate::drivers::interrupts::IRQInfo;
@@ -91,10 +93,10 @@ const fn irq_handler<const IRQ_NUM: u32>() -> extern "x86-interrupt" fn(Interrup
         for irq in &manager.irqs {
             if irq.irq_num == IRQ_NUM {
                 irq.handler.handle_interrupt();
-                apic::send_eoi();
-                return;
             }
         }
+
+        apic::send_eoi();
     }
     return handler::<IRQ_NUM>;
 }
@@ -127,40 +129,63 @@ irq_list!(
 
 static NEXT_IRQ_NUM: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x10);
 
+fn irq_num_to_index(irq_num: u32) -> usize {
+    IRQS.iter()
+        .position(|&x| x == irq_num)
+        .expect("IRQ number not found in list of available IRQs")
+}
+
+fn allocate_next_irq() -> u32 {
+    let allocated = NEXT_IRQ_NUM.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+
+    let table = unsafe { &mut *IDT.get() };
+    assert_eq!(table[allocated as usize], idt::GateDescriptor::default());
+    allocated
+}
+
+static REGISTERED_PCI_IRQS: Mutex<Vec<(u8, u32)>> = Mutex::new(Vec::new());
+
 /// Registers the handler function `handler` to irq `irq_num`
 pub unsafe fn register_irq_handler(info: &IRQInfo) -> u32 {
-    let table = unsafe { &mut *IDT.get() };
-    let irq_num = NEXT_IRQ_NUM.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    assert_eq!(table[irq_num as usize], idt::GateDescriptor::default());
-    for (i, ava_irq) in IRQS.iter().enumerate() {
-        if *ava_irq == irq_num {
-            match info {
-                // No additional setup needed.
-                IRQInfo::MSIX(_) => {}
-                IRQInfo::PCIInt {
-                    interrupt_line,
-                    interrupt_pin,
-                    bus,
-                    device,
-                    function,
-                } => unsafe {
-                    _ = bus;
-                    _ = device;
-                    _ = function;
-                    _ = interrupt_pin;
+    let (irq_num, is_new) = match info {
+        // No additional setup needed.
+        IRQInfo::MSIX(_) => (allocate_next_irq(), true),
+        IRQInfo::PCIInt {
+            interrupt_line,
+            interrupt_pin,
+            bus,
+            device,
+            function,
+        } => unsafe {
+            _ = bus;
+            _ = device;
+            _ = function;
+            _ = interrupt_pin;
+            let mut registered_pci_irq = REGISTERED_PCI_IRQS.lock();
 
-                    let redirection = IOREDTBL::new()
-                        .with_vector(irq_num as u8)
-                        .with_masked(false);
+            if let Some((_, irq_num)) = registered_pci_irq
+                .iter()
+                .find(|(i, _)| *i == *interrupt_line)
+            {
+                (*irq_num, false)
+            } else {
+                let irq_num = allocate_next_irq();
+                let redirection = IOREDTBL::new()
+                    .with_vector(irq_num as u8)
+                    .with_masked(false);
 
-                    APIC.write_ioapic_irq(*interrupt_line, redirection)
-                },
+                APIC.write_ioapic_irq(*interrupt_line, redirection);
+                registered_pci_irq.push((*interrupt_line, irq_num));
+                (irq_num, true)
             }
+        },
+    };
 
-            table[irq_num as usize] =
-                idt::GateDescriptor::new(HANDLERS[i] as usize, handlers::ATTR_INT);
-            return irq_num;
-        }
+    let irq_index = irq_num_to_index(irq_num);
+    if is_new {
+        let table = unsafe { &mut *IDT.get() };
+        table[irq_num as usize] =
+            idt::GateDescriptor::new(HANDLERS[irq_index] as usize, handlers::ATTR_INT);
     }
-    panic!("IRQ {irq_num} not in irqs: {IRQS:?}");
+    irq_num
 }

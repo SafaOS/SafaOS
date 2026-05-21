@@ -1,8 +1,8 @@
 use core::fmt::Debug;
 
 use crate::drivers::xhci::{
-    rings::trbs::NormalTRB, usb_endpoint::USBEndpoint, usb_interface::USBInterfaceDriver,
-    XHCIResponseQueue,
+    XHCIResponseQueue, rings::trbs::NormalTRB, usb_endpoint::USBEndpoint,
+    usb_interface::USBInterfaceDriver,
 };
 
 pub fn request_hid_report(endpoint: &mut USBEndpoint, queue: &XHCIResponseQueue) {

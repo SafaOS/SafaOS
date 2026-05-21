@@ -1238,20 +1238,21 @@ fn e1000_poll_thread(tid: Tid, nic: &'static E1000NetCard) -> ! {
 }
 
 impl InterruptReceiver for E1000NetCard {
-    fn handle_interrupt(&'static self) {
+    fn handle_interrupt(&'static self) -> bool {
+        let icr = self.read_command(REG_ICR);
+        if icr == 0 {
+            return false;
+        }
+
         // Before we read any registers our anything,
         // We have to lock the polling thread from reading registers, before polling any registers the polling thread must also lock the wait queue.
         // TODO: This could be represented better by putting requiring a combined lock on write_command, read_command
         let mut wait_queue = self.wait_queue.lock();
+        debug!(E1000NetCard, "Interrupt received: {icr:#x}");
+        self.write_command(REG_ICR, icr);
 
-        let icr = self.read_command(REG_ICR);
-        if icr != 0 {
-            debug!(E1000NetCard, "Interrupt received: {icr:#x}");
-            self.write_command(REG_ICR, icr);
-
-            if (icr & (ICR_RXQ0 | ICR_RXT0)) != 0 {
-                wait_queue.wake_all();
-            }
+        if (icr & (ICR_RXQ0 | ICR_RXT0)) != 0 {
+            wait_queue.wake_all();
         }
 
         debug!(
@@ -1259,6 +1260,7 @@ impl InterruptReceiver for E1000NetCard {
             "Handled interrupt with status: {:?}",
             self.status()
         );
+        true
     }
 }
 
@@ -1274,6 +1276,7 @@ impl PCIDevice for E1000NetCard {
     where
         Self: Sized,
     {
+        debug!(E1000NetCard, "Creating: {info:#?}");
         let bars = info.get_bars();
         let irq_info = info
             .get_best_irq_info(&[] /* We currently only allocate the base BAR */)

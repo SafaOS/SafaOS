@@ -1,8 +1,8 @@
 use alloc::{string::String, vec::Vec};
-use serde::{ser::SerializeStruct, Serialize};
+use serde::{Serialize, ser::SerializeStruct};
 
 use crate::drivers::xhci::{
-    usb::UsbDeviceDescriptor, usb_interface::USBInterface, XHCIResponseQueue,
+    XHCIResponseQueue, usb::UsbDeviceDescriptor, usb_interface::USBInterface,
 };
 
 #[derive(Debug)]

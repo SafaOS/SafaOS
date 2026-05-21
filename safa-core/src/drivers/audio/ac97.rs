@@ -358,11 +358,16 @@ unsafe impl Send for AC97 {}
 unsafe impl Sync for AC97 {}
 
 impl InterruptReceiver for AC97 {
-    fn handle_interrupt(&'static self) {
+    fn handle_interrupt(&'static self) -> bool {
         let ts = unsafe {
             self.registers
                 .read_nabmw(AC97Registers::TRANS_STATUS_REG_OUT)
         };
+
+        let is_interrupt = (ts & 0b11100) != 0;
+        if !is_interrupt {
+            return false;
+        }
 
         let last_valid_ent = (ts & 0b10) != 0;
         let last_transfer = (ts & 0b100) != 0;
@@ -410,6 +415,8 @@ impl InterruptReceiver for AC97 {
             self.registers
                 .write_nabmw(AC97Registers::TRANS_STATUS_REG_OUT, 0x1C)
         };
+
+        true
     }
 }
 

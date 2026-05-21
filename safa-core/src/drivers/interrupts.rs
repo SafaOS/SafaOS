@@ -8,7 +8,7 @@ use crate::utils::locks::RwLock;
 use super::pci::msi::MSIXInfo;
 
 pub trait InterruptReceiver: Send + Sync + Debug {
-    fn handle_interrupt(&'static self);
+    fn handle_interrupt(&'static self) -> bool;
 }
 
 #[derive(Debug, Clone, Copy)]

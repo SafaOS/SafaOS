@@ -193,7 +193,7 @@ fn on_interrupt_thread(_: Tid, xhci: &XHCI) -> ! {
 }
 
 impl<'s> InterruptReceiver for XHCI<'s> {
-    fn handle_interrupt(&self) {
+    fn handle_interrupt(&self) -> bool {
         let regs = unsafe { self.regs.as_mut_unchecked() };
         // Defer work to another thread.
         self.interrupters_wait_queue
@@ -203,6 +203,8 @@ impl<'s> InterruptReceiver for XHCI<'s> {
             // We only use interrupter 0 for now
             regs.acknowledge_irq(0);
         }
+
+        true
     }
 }
 

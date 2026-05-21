@@ -134,18 +134,13 @@ fn interrupt(frame: &mut InterruptFrame, is_fiq: bool) {
             let int = IntID::from_int_id(i);
 
             let irq_manager = IRQ_MANAGER.read();
-            let mut handler = None;
             for irq in &*irq_manager.irqs {
                 if irq.irq_num == i {
-                    handler = Some(irq.handler);
-                    break;
+                    irq.handler.handle_interrupt();
                 }
             }
 
             drop(irq_manager);
-            if let Some(handler) = handler {
-                handler.handle_interrupt();
-            }
             int.clear_pending().deactivate(is_fiq);
         }
     }
