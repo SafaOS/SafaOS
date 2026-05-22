@@ -284,6 +284,8 @@ impl ArcThread {
     /// The caller must remove the thread from the parent process's thread list.
     /// If this was called from the current thread, the caller must run it without interrupts.
     /// If this was the last thread in the process, the process must be killed by the caller.
+    ///
+    /// Returns wether the thread was successfully killed by the caller.
     pub unsafe fn soft_kill(&self, process_dead: bool) -> bool {
         if self
             .is_dying

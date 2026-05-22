@@ -136,14 +136,14 @@ impl Process {
     ) -> bool {
         let tid = thread.tid();
 
-        let process_dead = this
-            .context_count
-            .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
-            <= 1;
-
         unsafe {
-            let success = thread.soft_kill(process_dead);
+            let success = thread.soft_kill(false);
             if success {
+                let process_dead = this
+                    .context_count
+                    .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
+                    <= 1;
+
                 this.wait_queue.lock().wake_on_condition(|r| match r {
                     WaitOnProcReason::WaitingOnChild(child) => child.tid() == tid,
                     _ => false,
@@ -152,9 +152,11 @@ impl Process {
                 if process_dead {
                     Process::kill(this, exit_code, None)
                 };
+
+                return process_dead;
             }
 
-            process_dead
+            false
         }
     }
 
@@ -312,20 +314,18 @@ impl Process {
         let pid = this.pid();
         let killed_by = killed_by.unwrap_or(pid);
 
-        // Set state to dead
-        *this.exit_info.write() = Some(ExitInfo {
-            exit_code,
-            killed_by,
-        });
-
         {
             let mut threads = this.threads_manager.lock();
             unsafe { threads.kill_all() };
         }
 
+        *this.exit_info.write() = Some(ExitInfo {
+            exit_code,
+            killed_by,
+        });
+
         this.is_alive.store(false, Ordering::Release);
-        let mut wait_queue = this.wait_queue.lock();
-        wait_queue.wake_all();
+        this.wait_queue.lock().wake_all();
 
         debug!(
             Process,
