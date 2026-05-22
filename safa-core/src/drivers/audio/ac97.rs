@@ -23,7 +23,10 @@ use crate::{
         frame_allocator::{self, Frame, FramePtr},
         paging::PAGE_SIZE,
     },
-    utils::{alloc::PageVec, locks::SpinLock},
+    utils::{
+        alloc::PageVec,
+        locks::{SpinLock, SpinLockGuard},
+    },
     warn, write_ref,
 };
 
@@ -282,22 +285,25 @@ impl AC97Queue {
         (i, size)
     }
 
-    fn try_deque_pending(&self, bdl: &mut [BDesc]) -> Option<usize> {
+    fn try_deque_pending(
+        &self,
+        bdl: &mut [BDesc],
+    ) -> (Option<usize>, SpinLockGuard<'_, PageVec<u8>>) {
         let mut queued = self.queued_samples.lock();
         if queued.len() == 0 {
-            return None;
+            return (None, queued);
         }
         let queued_bytes = queued.len();
 
-        Some(
-            self.transfer_direct(
+        let results = self
+            .transfer_direct(
                 queued
                     .drain(..(bdl.len() * PAGE_SIZE).min(queued_bytes))
                     .as_slice(),
                 bdl,
             )
-            .0,
-        )
+            .0;
+        (Some(results), queued)
     }
 
     pub fn write_data(&self, data: &[u8]) -> Result<(usize, usize), ()> {
@@ -391,10 +397,10 @@ impl InterruptReceiver for AC97 {
                 assert!(queue.bdl.is_locked());
                 let mut our_guard = ManuallyDrop::new(queue.bdl.make_guard_unchecked());
 
+                let (dequeued_count, _queue_guard) =
+                    queue.try_deque_pending(&mut our_guard[*write_ptr as usize..read_ptr as usize]);
                 // Prefetch entries as fast as possible.
-                if let Some(count) =
-                    queue.try_deque_pending(&mut our_guard[*write_ptr as usize..read_ptr as usize])
-                {
+                if let Some(count) = dequeued_count {
                     *write_ptr += count as u8;
                 }
 
