@@ -190,112 +190,6 @@ impl<Ops: PageTableOps> PageTableContext<Ops> {
     }
 }
 
-// impl PageTable {
-//     pub unsafe fn flush_cache(&mut self, start_page: Page, end_page: Page) {
-//         unsafe {
-//             arch::tlb::flush_cache_range(self, start_page.addr(), end_page.addr());
-//         }
-//     }
-
-//     /// Maps a virtual `Page` to a physical `Frame` filling the frame with zeros
-//     ///
-//     /// Doesn't flush the cache
-//     pub unsafe fn map_zeroed_to_uncached(
-//         &mut self,
-//         page: Page,
-//         frame: Frame,
-//         flags: PageEntryFlags,
-//     ) -> Result<(), MapToError> {
-//         unsafe {
-//             self.map_to_uncached(page, frame, flags)?;
-
-//             let addr = frame.virt_addr();
-//             let ptr = addr.into_ptr::<[u8; PAGE_SIZE]>();
-//             ptr.write_bytes(0, 1);
-//             Ok(())
-//         }
-//     }
-
-//     /// You likely want to use [`PendingOp::map_contigous_pages`], see [`SyncPageTable`], this is not thread safe.
-//     ///
-//     /// Map `page_num` pages starting at `start_virt_addr` to frames starting at `start_phys_addr` and flushes cache if successful
-//     ///
-//     /// Same as [`map_contiguous_to_frames`] but instead of using a frame iterator, we take in raw addresses and the page number.
-//     pub unsafe fn map_contiguous_pages(
-//         &mut self,
-//         start_virt_addr: VirtAddr,
-//         start_phys_addr: PhysAddr,
-//         page_num: usize,
-//         flags: PageEntryFlags,
-//     ) -> Result<(), MapToError> {
-//         let size = page_num * PAGE_SIZE;
-//         let start_page = Page::containing(start_virt_addr);
-//         let start_frame = Frame::containing_address(start_phys_addr);
-//         let end_frame = Frame::containing_address(start_phys_addr + size);
-
-//         let frame_iter = Frame::iter_frames(start_frame, end_frame);
-//         unsafe { self.map_contiguous_to_frames(start_page, frame_iter, flags) }
-//     }
-
-//     #[inline]
-//     /// Maps a contiguous range of pages to frames from an iterator.
-//     /// `start_page` is the first page to map, and `frames` is an iterator over the frames to map to.
-//     unsafe fn map_contiguous_to_frames<I: Iterator<Item = Frame>>(
-//         &mut self,
-//         start_page: Page,
-//         frames: I,
-//         flags: PageEntryFlags,
-//     ) -> Result<(), MapToError> {
-//         let mut current_page = start_page;
-//         for frame in frames {
-//             unsafe {
-//                 self.map_to_uncached(current_page, frame, flags)?;
-//             }
-
-//             current_page = current_page.next();
-//         }
-
-//         unsafe { self.flush_cache(start_page, current_page) };
-//         Ok(())
-//     }
-
-//     /// You should use [`PendingOp::free_unmap`], see [`SyncPageTable`], this is not thread safe.
-//     ///
-//     /// Deallocates and unmaps pages from `from` to `to` then flushes the cache if necessary
-//     pub unsafe fn free_unmap(&mut self, from: VirtAddr, to: VirtAddr) {
-//         let from_page = Page::containing(from);
-//         let to_page = Page::containing(to);
-
-//         let iter = Page::iter_pages(from_page, to_page);
-
-//         unsafe { self.sync_before_free() };
-//         for page in iter {
-//             unsafe {
-//                 self.free_unmap_uncached(page);
-//             }
-//         }
-
-//         unsafe { self.flush_cache(from_page, to_page) };
-//     }
-
-//     /// You should use [`PendingOp::unmap_without_freeing`], see [`SyncPageTable`], this is not thread safe.
-//     pub unsafe fn unmap_without_freeing(&mut self, from: VirtAddr, to: VirtAddr) {
-//         let from_page = Page::containing(from);
-//         let to_page = Page::containing(to);
-
-//         let iter = Page::iter_pages(from_page, to_page);
-
-//         unsafe { self.sync_before_free() };
-//         for page in iter {
-//             unsafe {
-//                 self.unmap_uncached(page);
-//             }
-//         }
-
-//         unsafe { self.flush_cache(from_page, to_page) };
-//     }
-// }
-
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum MapToError {
     #[error("frame allocator: out of memory")]
@@ -304,6 +198,8 @@ pub enum MapToError {
     AlreadyMapped,
     #[error("fatal: attempt to unmap an unmapped region")]
     NotMapped,
+    #[error("fatal: unknown error")]
+    Other,
 }
 
 impl IntoErr for MapToError {
@@ -312,6 +208,7 @@ impl IntoErr for MapToError {
             Self::AlreadyMapped => safa_abi::errors::ErrorStatus::MMapError,
             Self::FrameAllocationFailed => safa_abi::errors::ErrorStatus::OutOfMemory,
             Self::NotMapped => safa_abi::errors::ErrorStatus::MMapError,
+            Self::Other => safa_abi::errors::ErrorStatus::Generic,
         }
     }
 }
@@ -322,6 +219,7 @@ impl From<MapToError> for FSError {
             MapToError::AlreadyMapped => FSError::MMapError,
             MapToError::FrameAllocationFailed => FSError::OutOfMemory,
             MapToError::NotMapped => FSError::MMapError,
+            MapToError::Other => FSError::MMapError,
         }
     }
 }

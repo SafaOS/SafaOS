@@ -10,10 +10,10 @@ use crate::{
     process::threads::ThreadsManager,
     scheduler::{
         self,
-        wait_queue::{WaitQueue, WaitQueueWithTimeout},
+        wait_queue::{WaitError, WaitQueue, WaitQueueWithTimeout},
     },
     thread::{self, ArcThread},
-    utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SPIN_AMOUNT},
 };
 
 use crate::{memory::paging::MapToError, utils::types::Name};
@@ -82,6 +82,7 @@ pub struct Process {
     /// The priortiy of the root thread, that other threads will inherit unless otherwise specified
     default_priority: ContextPriority,
     threads_manager: Mutex<ThreadsManager>,
+    is_dying: AtomicBool,
     wait_queue: Mutex<WaitQueueWithTimeout<3, WaitOnProcReason>>,
     pub context_count: AtomicU32,
 }
@@ -186,6 +187,7 @@ impl Process {
             page_table: UnsafeCell::new(ManuallyDrop::new(page_table)),
             resources: RwLock::new(resources),
             cwd: RwLock::new(cwd),
+            is_dying: AtomicBool::new(false),
         }
     }
 
@@ -298,11 +300,37 @@ impl Process {
         self.resources.write()
     }
 
-    pub fn threads_manager<'s>(&'s self) -> MutexGuard<'s, ThreadsManager> {
-        self.threads_manager.lock()
+    /// Attempts to acquire the threads manager lock, returning an error if the process is dying.
+    pub fn threads_manager<'s>(&'s self) -> Result<MutexGuard<'s, ThreadsManager>, ()> {
+        // Process will acquire a lock on the threads manager while dying.
+        if self.is_dying.load(Ordering::Acquire) {
+            return Err(());
+        }
+
+        let mut spins = SPIN_AMOUNT;
+        loop {
+            let guard_attempt = self.try_threads_manager();
+            if self.is_dying.load(Ordering::Acquire) {
+                return Err(());
+            }
+
+            if let Some(guard) = guard_attempt {
+                break Ok(guard);
+            } else {
+                spins -= 1;
+                if spins == 0 {
+                    thread::current::yield_now();
+                    spins = SPIN_AMOUNT;
+                }
+            }
+        }
     }
 
     pub fn try_threads_manager<'s>(&'s self) -> Option<MutexGuard<'s, ThreadsManager>> {
+        if self.is_dying.load(Ordering::Relaxed) {
+            return None;
+        }
+
         self.threads_manager.try_lock()
     }
 
@@ -340,6 +368,7 @@ impl Process {
         let pid = this.pid();
         let killed_by = killed_by.unwrap_or(pid);
 
+        this.is_dying.store(true, Ordering::Release);
         // We cannot attempt to acquire any locks after this point:
         let mut threads = this.threads_manager.lock();
         let mut wait_queue = this.wait_queue.lock();
@@ -375,7 +404,11 @@ impl Process {
         &self,
         reason: WaitOnProcReason,
         duration: Option<NonZero<u64>>,
-    ) -> Result<(), scheduler::wait_queue::WaitError> {
+    ) -> Result<(), WaitError> {
+        if self.is_dying.load(Ordering::Relaxed) {
+            return Err(WaitError::ForceTerminated);
+        }
+
         let pending = self.wait_queue.prepare_wait();
         let cont = match &reason {
             WaitOnProcReason::WaitingOnChild(child) => !child.is_dead(),

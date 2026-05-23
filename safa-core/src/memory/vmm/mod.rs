@@ -101,6 +101,7 @@ impl From<MapToError> for VMMAllocError {
                 unreachable!("VMM shouldn't try to map an already mapped region")
             }
             MapToError::NotMapped => unreachable!("VMM Shouldn't try to unmap an unmapped region"),
+            MapToError::Other => unreachable!("VMM Shouldn't get an unknown error"),
         }
     }
 }

@@ -473,6 +473,7 @@ impl ArcThread {
 
     /// Blocks the current thread forever, making sure it is not running first
     fn block_dead(&self) {
+        crate::debug!(Thread, "blocking: {}", self.tid());
         // Safety:
         // - Only block_dead muttates this
         // - Its only goes from false to true and not backwards, the time threads read this after it is true doesn't matter.
@@ -506,7 +507,7 @@ impl ArcThread {
             current::yield_now()
         }
 
-        crate::serial!("*\n");
+        crate::debug!(Thread, "blocked: {}", self.tid());
     }
 }
 
