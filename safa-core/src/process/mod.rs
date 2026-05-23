@@ -144,13 +144,14 @@ impl Process {
                     .fetch_sub(1, core::sync::atomic::Ordering::SeqCst)
                     <= 1;
 
-                this.wait_queue.lock().wake_on_condition(|r| match r {
+                let mut wait_queue = this.wait_queue.lock();
+                wait_queue.wake_on_condition(|r| match r {
                     WaitOnProcReason::WaitingOnChild(child) => child.tid() == tid,
                     _ => false,
                 });
 
                 if process_dead {
-                    Process::kill(this, exit_code, None)
+                    Process::finalize_kill(this, exit_code, this.pid(), &mut *wait_queue)
                 };
 
                 return process_dead;
@@ -305,6 +306,31 @@ impl Process {
         self.threads_manager.try_lock()
     }
 
+    /// Called after the last thread in a process is killed successfully.
+    unsafe fn finalize_kill(
+        this: &Arc<Process>,
+        exit_code: isize,
+        killed_by: Pid,
+        wait_queue: &mut WaitQueueWithTimeout<3, WaitOnProcReason>,
+    ) {
+        *this.exit_info.write() = Some(ExitInfo {
+            exit_code,
+            killed_by,
+        });
+
+        this.is_alive.store(false, Ordering::Release);
+        wait_queue.wake_all();
+
+        debug!(
+            Process,
+            "Process {} ({}) TERMINATED with code {} by {}",
+            this.pid(),
+            this.name(),
+            exit_code,
+            killed_by
+        );
+    }
+
     // TODO: Implement ArcProcess
     /// kills the process
     /// if `killed_by` is `None` the process will be killed by itself
@@ -314,27 +340,12 @@ impl Process {
         let pid = this.pid();
         let killed_by = killed_by.unwrap_or(pid);
 
-        {
-            let mut threads = this.threads_manager.lock();
-            unsafe { threads.kill_all() };
-        }
+        // We cannot attempt to acquire any locks after this point:
+        let mut threads = this.threads_manager.lock();
+        let mut wait_queue = this.wait_queue.lock();
 
-        *this.exit_info.write() = Some(ExitInfo {
-            exit_code,
-            killed_by,
-        });
-
-        this.is_alive.store(false, Ordering::Release);
-        this.wait_queue.lock().wake_all();
-
-        debug!(
-            Process,
-            "Process {} ({}) TERMINATED with code {} by {}",
-            pid,
-            this.name(),
-            exit_code,
-            killed_by
-        );
+        unsafe { threads.kill_all() };
+        unsafe { Self::finalize_kill(&this, exit_code, killed_by, &mut *wait_queue) }
     }
 
     pub(super) fn info(&self) -> ProcessInfo {
