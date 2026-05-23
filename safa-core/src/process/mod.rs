@@ -306,10 +306,6 @@ impl Process {
     }
 
     pub fn try_threads_manager<'s>(&'s self) -> Option<MutexGuard<'s, ThreadsManager>> {
-        if self.is_dying.load(Ordering::Relaxed) {
-            return None;
-        }
-
         self.threads_manager.try_lock()
     }
 
@@ -384,10 +380,6 @@ impl Process {
         reason: WaitOnProcReason,
         duration: Option<NonZero<u64>>,
     ) -> Result<(), WaitError> {
-        if self.is_dying.load(Ordering::Relaxed) {
-            return Err(WaitError::ForceTerminated);
-        }
-
         let pending = self.wait_queue.prepare_wait();
         let cont = match &reason {
             WaitOnProcReason::WaitingOnChild(child) => !child.is_dead(),
