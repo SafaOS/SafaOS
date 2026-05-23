@@ -38,7 +38,6 @@ percpu::define! {
         let process = unsafe {(*INIT_PROCESS.get()).as_ref().expect("Running scheduler's initializer before the init processes has been decided")};
         let (idle_thread, _) = process
             .threads_manager()
-            .unwrap()
             .create_thread(
                 process,
                 VirtAddr::from(eve::idle_function as usize),

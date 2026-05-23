@@ -110,7 +110,6 @@ pub fn wait_for_thread(tid: Tid) -> Result<bool, WaitError> {
         let this_process = this_thread.process();
         let try_remove = this_process
             .threads_manager()
-            .map_err(|()| WaitError::ForceTerminated)?
             .remove_tid(tid)
             .map_err(|e| e.clone());
 

@@ -13,7 +13,7 @@ use crate::{
         wait_queue::{WaitError, WaitQueue, WaitQueueWithTimeout},
     },
     thread::{self, ArcThread},
-    utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SPIN_AMOUNT},
+    utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use crate::{memory::paging::MapToError, utils::types::Name};
@@ -301,29 +301,8 @@ impl Process {
     }
 
     /// Attempts to acquire the threads manager lock, returning an error if the process is dying.
-    pub fn threads_manager<'s>(&'s self) -> Result<MutexGuard<'s, ThreadsManager>, ()> {
-        // Process will acquire a lock on the threads manager while dying.
-        if self.is_dying.load(Ordering::Acquire) {
-            return Err(());
-        }
-
-        let mut spins = SPIN_AMOUNT;
-        loop {
-            let guard_attempt = self.try_threads_manager();
-            if self.is_dying.load(Ordering::Acquire) {
-                return Err(());
-            }
-
-            if let Some(guard) = guard_attempt {
-                break Ok(guard);
-            } else {
-                spins -= 1;
-                if spins == 0 {
-                    thread::current::yield_now();
-                    spins = SPIN_AMOUNT;
-                }
-            }
-        }
+    pub fn threads_manager<'s>(&'s self) -> MutexGuard<'s, ThreadsManager> {
+        self.threads_manager.lock()
     }
 
     pub fn try_threads_manager<'s>(&'s self) -> Option<MutexGuard<'s, ThreadsManager>> {

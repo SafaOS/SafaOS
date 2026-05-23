@@ -199,6 +199,7 @@ pub enum MapToError {
     #[error("fatal: attempt to unmap an unmapped region")]
     NotMapped,
     #[error("fatal: unknown error")]
+    #[allow(dead_code)]
     Other,
 }
 

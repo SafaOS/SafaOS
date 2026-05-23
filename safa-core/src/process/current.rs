@@ -32,16 +32,13 @@ pub fn thread_spawn(
     custom_stack_size: Option<NonZero<usize>>,
 ) -> Result<Tid, MapToError> {
     let this = process::current();
-    let (thread, cid) = this
-        .threads_manager()
-        .map_err(|()| MapToError::Other)?
-        .create_thread(
-            &this,
-            entry_point,
-            argument_ptr,
-            priority,
-            custom_stack_size,
-        )?;
+    let (thread, cid) = this.threads_manager().create_thread(
+        &this,
+        entry_point,
+        argument_ptr,
+        priority,
+        custom_stack_size,
+    )?;
     scheduler::add_thread(thread, cpu);
     Ok(cid)
 }
