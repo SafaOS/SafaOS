@@ -26,11 +26,13 @@ pub trait AudioCard: Send + Sync {
     fn name(&self) -> &'static str;
     fn info(&self) -> AudioInfo;
     fn transfer_buf_size(&self) -> usize;
+    fn queued_samples_count(&self) -> usize;
     fn transfer_data(&self, data: &[u8]) -> Result<usize, ()>;
 }
 
 const CMD_GET_AC_AUDIO_INFO: u16 = 0x1001;
 const CMD_GET_AC_BUF_SIZE: u16 = 0x1002;
+const CMD_GET_AC_QUEUED_SAMPLES: u16 = 0x1003;
 
 /// An audio device that represents a reference to an AudioCard.
 pub struct AudioDev<'a>(pub &'a dyn AudioCard);
@@ -58,6 +60,13 @@ impl<'a> CharDevice for AudioDev<'a> {
                 let ptr: &mut usize =
                     SyscallFFI::make(arg as *mut usize).map_err(|_| FSError::InvalidArg)?;
                 *ptr = self.0.transfer_buf_size();
+                Ok(())
+            }
+
+            CMD_GET_AC_QUEUED_SAMPLES => {
+                let ptr: &mut usize =
+                    SyscallFFI::make(arg as *mut usize).map_err(|_| FSError::InvalidArg)?;
+                *ptr = self.0.queued_samples_count();
                 Ok(())
             }
             _ => Err(FSError::InvalidCmd),

@@ -1,8 +1,3 @@
-use core::{
-    cell::{OnceCell, UnsafeCell},
-    mem::ManuallyDrop,
-};
-
 use bitflags::bitflags;
 
 use crate::{
@@ -29,6 +24,10 @@ use crate::{
     },
     warn, write_ref,
 };
+
+const BYTES_PER_ENTRY: usize = PAGE_SIZE;
+const BYTES_PER_SAMPLE: usize = size_of::<u16>();
+const SAMPLES_PER_ENTRY: usize = BYTES_PER_ENTRY / BYTES_PER_SAMPLE;
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -191,7 +190,6 @@ impl AC97Registers {
 struct AC97Queue {
     bdl: SpinLock<FramePtr<[BDesc]>>,
     queued_samples: SpinLock<PageVec<u8>>,
-    write_ptr: UnsafeCell<u8>,
 }
 
 impl AC97Queue {
@@ -210,6 +208,7 @@ impl AC97Queue {
 
             raw_frames.push(frame).unwrap();
             let mut bd = BDesc::new(paddr);
+            bd.buf_mut().fill(0);
             // Make things a bit smoother by delaying interrupts.
             if i.is_multiple_of(8) && i != 0 {
                 bd.config = BDConf::IOC;
@@ -247,7 +246,6 @@ impl AC97Queue {
                 &"AC97_QUEUE",
                 allocated.len() * PAGE_SIZE,
             )),
-            write_ptr: UnsafeCell::new(0),
         })
     }
 
@@ -276,8 +274,6 @@ impl AC97Queue {
             bd.buf_mut()[to_copy..].fill(0);
             bd.samples = ((to_copy / 2).to_next_multiple_of(2usize)).min(0xFFFE) as u16;
 
-            // Set on bd init:
-            // bdl.config = BDLConf::IOC;
             left -= to_copy;
             i += 1;
         }
@@ -313,20 +309,6 @@ impl AC97Queue {
 
         without_interrupts(|| {
             let mut queue = self.queued_samples.lock();
-            // Direct transfer if possible else queue.
-            if let Some(mut bdl) = self.bdl.try_lock() {
-                let (desc_count, mut transferred) = self.transfer_direct(data, &mut bdl);
-                let left = data.len() - transferred;
-
-                if left != 0 {
-                    transferred += self.queue(&mut queue, &data[transferred..]).unwrap_or(0);
-                }
-                if desc_count != 0 {
-                    core::mem::forget(bdl);
-                }
-                return Ok((desc_count, transferred));
-            }
-
             Ok((0, self.queue(&mut queue, data)?))
         })
     }
@@ -336,12 +318,12 @@ impl AC97Queue {
 pub struct AC97 {
     registers: AC97Registers,
     irq_info: IRQInfo,
-    queue: OnceCell<AC97Queue>,
+    queue: AC97Queue,
 }
 
 impl AC97 {
     pub fn transfer_data(&self, data: &[u8]) -> Result<usize, ()> {
-        let (reset_val, transferred) = self.queue.get().unwrap().write_data(data)?;
+        let (reset_val, transferred) = self.queue.write_data(data)?;
         unsafe {
             if reset_val != 0 {
                 self.registers.reset_transfer(reset_val as u8);
@@ -351,11 +333,7 @@ impl AC97 {
     }
 
     unsafe fn init_bdl(&self) -> Result<(), ()> {
-        let mut queue = AC97Queue::create()?;
-        unsafe { self.registers.init_bdl(*queue.bdl.get_mut())? };
-        self.queue
-            .set(queue)
-            .expect("Reinitilization of AC97 Queue");
+        unsafe { self.registers.init_bdl(*self.queue.bdl.get())? };
         Ok(())
     }
 }
@@ -375,52 +353,36 @@ impl InterruptReceiver for AC97 {
             return false;
         }
 
-        let last_valid_ent = (ts & 0b10) != 0;
-        let last_transfer = (ts & 0b100) != 0;
-        let ioc = (ts & 0b1000) != 0;
-        let fifo_error = (ts & 0b10000) != 0;
-        if fifo_error {
-            warn!(AC97, "FIFO Error");
-        }
-
-        let read_ptr = if last_valid_ent {
-            31
-        } else {
-            unsafe { self.registers.read_nabmb(AC97Registers::CURR_ENT_OUT) }
-        };
-
-        if ioc || last_valid_ent || last_transfer {
-            unsafe {
-                let queue = self.queue.get().unwrap_unchecked();
-                let write_ptr = &mut *queue.write_ptr.get();
-
-                assert!(queue.bdl.is_locked());
-                let mut our_guard = ManuallyDrop::new(queue.bdl.make_guard_unchecked());
-
-                let (dequeued_count, _queue_guard) =
-                    queue.try_deque_pending(&mut our_guard[*write_ptr as usize..read_ptr as usize]);
-                // Prefetch entries as fast as possible.
-                if let Some(count) = dequeued_count {
-                    *write_ptr += count as u8;
-                }
-
-                if last_valid_ent || last_transfer {
-                    if *write_ptr != 0 {
-                        self.registers.reset_transfer(*write_ptr as u8);
-                    } else {
-                        drop(ManuallyDrop::into_inner(our_guard));
-                    }
-
-                    *write_ptr = 0;
-                }
-            }
-        }
-
+        // Clear interrupt.
         unsafe {
-            // Clear interrupt.
             self.registers
                 .write_nabmw(AC97Registers::TRANS_STATUS_REG_OUT, 0x1C)
         };
+        let ioc = ts & (1 << 3) != 0;
+
+        if ioc {
+            let queue = &self.queue;
+            let mut bdl_guard = queue.bdl.lock();
+
+            let cvi = unsafe { self.registers.read_nabmb(AC97Registers::CURR_ENT_OUT) as usize };
+            let next = (cvi + 1) % bdl_guard.len();
+            let rest_val = next as u8;
+
+            let next_bdl = &mut bdl_guard[next..];
+            let (count, audi_queue_guard) = queue.try_deque_pending(&mut next_bdl[..1]);
+            drop(audi_queue_guard);
+
+            next_bdl[0].config = BDConf::IOC;
+            if count.is_none_or(|c| c == 0) {
+                next_bdl[0].samples = SAMPLES_PER_ENTRY as u16 / 2;
+                next_bdl[0].buf_mut().fill(0);
+            }
+
+            unsafe {
+                self.registers
+                    .write_nabmb(AC97Registers::LAST_VALID_INDEX_OUT, rest_val)
+            };
+        }
 
         true
     }
@@ -444,10 +406,11 @@ impl PCIDevice for AC97 {
         let irq_info = info
             .get_best_irq_info(&[] /* FIXME: We currently don't allocate the BARs */)
             .expect("AC97 must support interrupts");
+
         Self {
             registers,
             irq_info,
-            queue: OnceCell::new(),
+            queue: AC97Queue::create().expect("Failed to create AC97 queue"),
         }
     }
 
@@ -462,6 +425,10 @@ impl PCIDevice for AC97 {
 
             self.registers.enable_transfer_int();
         };
+
+        unsafe {
+            self.registers.reset_transfer(32);
+        }
 
         interrupts::register_irq(self.irq_info.clone(), interrupts::IntTrigger::Edge, self);
         audio::register_interface(self);
@@ -479,7 +446,10 @@ impl AudioCard for AC97 {
 
     fn transfer_buf_size(&self) -> usize {
         // FIXME: feels illegal
-        without_interrupts(|| self.queue.get().unwrap().queued_samples.lock().capacity())
+        without_interrupts(|| self.queue.queued_samples.lock().capacity())
+    }
+    fn queued_samples_count(&self) -> usize {
+        without_interrupts(|| self.queue.queued_samples.lock().len()) / BYTES_PER_SAMPLE
     }
 
     fn transfer_data(&self, data: &[u8]) -> Result<usize, ()> {
