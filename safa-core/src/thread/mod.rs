@@ -723,7 +723,9 @@ impl Thread {
                     || (matches!(
                         *guard,
                         ContextStatus::Blocked(BlockedReason::Waiting | BlockedReason::Sleeping)
-                    ))),
+                    )))
+                || (matches!(status, ContextStatus::Blocking(BlockedReason::Dead))
+                    && status == *guard),
             "Cannot switch status from {:?} to {:?}",
             *guard,
             status
