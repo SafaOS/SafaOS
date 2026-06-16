@@ -1,5 +1,5 @@
 use libgems::{
-    App, AppState, Color, Data, Padding, WindowBuilder,
+    App, Color, Data, Padding, WindowBuilder,
     cosmic_text::Metrics,
     shards::{AxisAlign, Button, Justify, Label, Shard, ShardsExt, Stack},
 };
@@ -17,11 +17,7 @@ pub struct Calculator {
     value: Result<f64, &'static str>,
 }
 
-impl AppState for Calculator {
-    type Message = Message;
-}
-
-fn buttons_area() -> impl Shard<Data<Calculator>> {
+fn buttons_area() -> impl Shard<Data<Calculator, Message>> {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Size {
         Normal,
@@ -69,7 +65,7 @@ fn buttons_area() -> impl Shard<Data<Calculator>> {
 
     let mut btns = BUTTONS.iter();
 
-    let mut current_stack: Stack<Data<Calculator>> = Stack::column();
+    let mut current_stack: Stack<Data<Calculator, Message>> = Stack::column();
     let mut left_in_current = 4;
     let mut stacks = Vec::new();
 
@@ -90,7 +86,7 @@ fn buttons_area() -> impl Shard<Data<Calculator>> {
                     // Message::Results => Color::hex_rgb(0xfe8019),
                     _ => Color::hex_rgb(0x783653),
                 })
-                .on_click(move |_, ctx: &mut Data<Calculator>, _| {
+                .on_click(move |_, ctx: &mut Data<Calculator, _>, _| {
                     ctx.broadcast_message(*action);
                 })
                 .fix_height(32.)
@@ -119,7 +115,7 @@ fn buttons_area() -> impl Shard<Data<Calculator>> {
         .with_padding(Padding::none())
         .fix_width(WIDTH as f32)
 }
-fn expr_screen() -> impl Shard<Data<Calculator>> {
+fn expr_screen() -> impl Shard<Data<Calculator, Message>> {
     Stack::row()
         .with_padding(Padding::none())
         .with(
@@ -128,7 +124,7 @@ fn expr_screen() -> impl Shard<Data<Calculator>> {
                 .with_metrics(Metrics::relative(17., 1.0))
                 .with_wrap(libgem::cosmic_text::Wrap::None)
                 .fix_height(17.)
-                .on_update(|ctx: &Data<Calculator>, this| {
+                .on_update(|ctx: &Data<Calculator, Message>, this| {
                     if !ctx.current.is_empty() {
                         this.set_text(&ctx.current);
                     } else {
@@ -141,7 +137,7 @@ fn expr_screen() -> impl Shard<Data<Calculator>> {
             Label::from_str("99230")
                 .with_color(Color::hex_rgb(0xFBF1C7))
                 .with_metrics(Metrics::relative(12., 1.0))
-                .on_update(|ctx: &Data<Calculator>, this| {
+                .on_update(|ctx: &Data<Calculator, Message>, this| {
                     match ctx.value {
                         Err(_) => this.set_text("Error"),
                         Ok(n) => this.set_text(&format!("{n}")),
@@ -158,13 +154,13 @@ fn expr_screen() -> impl Shard<Data<Calculator>> {
         .pad(Padding::equal(8.))
 }
 
-fn build_ui() -> impl Shard<Data<Calculator>> {
+fn build_ui() -> impl Shard<Data<Calculator, Message>> {
     Stack::row()
         .align(AxisAlign::Center)
         .with(expr_screen())
         .with(buttons_area())
         .justify(Justify::SpaceBetween)
-        .on_msg(|ctx: &mut Data<Calculator>, m, _| {
+        .on_msg(|ctx: &mut Data<Calculator, Message>, m, _| {
             if let Err(e) = ctx.logic.execute(&m) {
                 ctx.current.clear();
                 ctx.current.push_str(e);

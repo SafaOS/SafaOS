@@ -90,7 +90,7 @@ impl TaskBar {
 }
 
 fn main() {
-    let _ = init_wallpaper();
+    let _win = init_wallpaper();
     let mut taskbar = TaskBar::init();
     taskbar.body().set_styles(
         ContainerStyles::new().with_layout(ContainerLayout::Vertical(
