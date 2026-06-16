@@ -328,6 +328,14 @@ impl<'a> Path<'a> {
             return Ok(Self { drive, path: None });
         }
 
+        // Unix path compatibility.
+        if path.starts_with('/') {
+            let rest = (path.len() > 1).then(|| PathParts::new(&path[1..]));
+            return Ok(Self {
+                drive: Some("sys"),
+                path: rest,
+            });
+        }
         let mut parts = path.split(':');
 
         let first_part = parts.next();
