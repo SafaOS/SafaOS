@@ -18,6 +18,7 @@ use super::{PhysAddr, VirtAddr, paging::PAGE_SIZE};
 pub const SIZE_1K: usize = 1024 * 1;
 /// 64 KiB
 pub const SIZE_64K: usize = SIZE_1K * 64;
+pub const SIZE_1M: usize = SIZE_1K * 1024;
 #[allow(unused)]
 // Pages worth 64 KiB
 pub const SIZE_64K_PAGES: usize = SIZE_64K / PAGE_SIZE;
