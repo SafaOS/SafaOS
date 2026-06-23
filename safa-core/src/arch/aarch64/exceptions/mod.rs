@@ -1,8 +1,13 @@
+use safa_abi::errors::ErrorStatus;
+
 use super::gic;
 use crate::{
-    arch::aarch64::{gic::IntID, registers::MPIDR},
+    VirtAddr,
+    arch::aarch64::{gic::IntID, registers::MPIDR, tlb::flush_cache_range},
+    debug,
     drivers::interrupts::IRQ_MANAGER,
     khalt,
+    memory::{AlignToPage, paging::PAGE_SIZE, vmm},
     syscalls::syscall,
 };
 use core::{
@@ -162,6 +167,37 @@ fn exception(kind: ExcClass, frame: &mut InterruptFrame) {
             )
             .as_isize();
             registers[0] = Reg(result as u64);
+        }
+        ExcClass::DataAbort | ExcClass::DataAbortLower if frame.esr.cause() == 1 /* translation fault */ && !frame.esr.fnv() =>
+        {
+            let addr = VirtAddr::from((*frame.far) as usize);
+            let lower_addr = addr.is_in_lower_half();
+
+            match vmm::try_page_fault_recover(addr) {
+                Ok(()) => flush_cache_range(addr.to_previous_page(), addr + (4 * PAGE_SIZE)),
+                Err(region) => {
+                    if let Some((start_addr, size)) = region {
+                        debug!(
+                            "Failed to recover from a page fault, within a region starting at {start_addr:?} with size: {size}"
+                        );
+                    }
+
+                    if lower_addr
+                        && VirtAddr::from((*frame.elr) as usize).is_in_lower_half()
+                        && region.is_none()
+                    {
+                        let process = crate::process::current();
+                        debug!(
+                            "---- PID: {} Translation Fault ----\n{}",
+                            process.pid(),
+                            frame
+                        );
+                        crate::process::current::exit(-(ErrorStatus::MMapError as isize))
+                    } else {
+                        panic!("---- Translation Fault ----\n{}", frame)
+                    }
+                }
+            }
         }
         _ => panic!("Unhandled Synchronous Exception:\n{frame}"),
     }

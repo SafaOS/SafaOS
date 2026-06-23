@@ -312,6 +312,9 @@ impl<T: 'static> PerCpuStorage<T> {
     ///
     /// Purpose: Allow access to urgent data without panicking when for example executing an interrupt, you may use this to access the scheduler if it wasn't initialized.
     pub fn maybe_borrow(&self) -> Option<&T> {
+        if !self.initialized() {
+            return None;
+        }
         self.get_curr().maybe_borrow_this()
     }
 
@@ -321,6 +324,11 @@ impl<T: 'static> PerCpuStorage<T> {
     /// Purpose: Allow access to data created with [`PerCpuStorage::new_uninit`], before CPU initialization.
     pub unsafe fn borrow_uninit(&'static self) -> &'static T {
         unsafe { self.get_curr().borrow_this_uninit() }
+    }
+
+    #[allow(unused)]
+    pub fn initialized(&self) -> bool {
+        unsafe { *self.initialized.get() }
     }
 }
 

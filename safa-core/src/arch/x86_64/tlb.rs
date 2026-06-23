@@ -88,7 +88,7 @@ unsafe impl Send for TLBIRequest {}
 unsafe impl Sync for TLBIRequest {}
 
 #[inline]
-fn flush_range(start: VirtAddr, end: VirtAddr) {
+pub fn flush_range(start: VirtAddr, end: VirtAddr) {
     let mut current = start;
     while current < end {
         invlpg(current);
@@ -96,14 +96,14 @@ fn flush_range(start: VirtAddr, end: VirtAddr) {
     }
 }
 #[inline]
-fn invlpg(addr: VirtAddr) {
+pub fn invlpg(addr: VirtAddr) {
     unsafe {
         core::arch::asm!("invlpg ({})", in(reg) addr.into_raw(), options(att_syntax, nostack, preserves_flags))
     };
 }
 
 #[inline]
-fn reload_cr3() {
+pub fn reload_cr3() {
     let _tmp: usize;
 
     unsafe {

@@ -2,7 +2,6 @@
 pub mod tests;
 
 mod objects;
-
 use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::alloc::{AllocError, Allocator};
@@ -460,12 +459,13 @@ impl VirtualMemoryManager {
         match state {
             ObjectState::Allocated(s) => {
                 let mut op = self.page_table.begin();
-                drop(inner);
-                op.alloc_map(
+                let result = op.alloc_map(
                     unmapped_addr,
                     unmapped_addr + unmapped_size,
                     s.to_entry_flags(),
-                )?;
+                );
+                drop(inner);
+                result?;
             }
             ObjectState::LazyAllocated(_) => {}
 
@@ -482,9 +482,8 @@ impl VirtualMemoryManager {
         let mut current = Some(inner.head());
 
         while let Some(obj) = current {
-            crate::debug!(
-                VirtualMemoryManager,
-                "{} at {:#x}: size = {:#x}, state = {:?}",
+            crate::serial!(
+                "{} at {:#x}: size = {:#x}, state = {:?}\n",
                 obj.name,
                 obj.addr(),
                 obj.size(),
@@ -507,13 +506,13 @@ impl VirtualMemoryManager {
             ObjectState::Allocated(_) | ObjectState::LazyAllocated(_) /* TODO: Proper Lazy Allocation implementation */ => unsafe {
                 let mut op = self.page_table.begin();
                 drop(inner);
-                op.unmap_dealloc(start_addr, del_size.div_ceil(PAGE_SIZE)).expect("Failed to unmap VMM Allocated memory");
+                op.unmap_dealloc(start_addr, del_size.div_ceil(PAGE_SIZE), matches!(deallocated, ObjectState::LazyAllocated(_))).expect("Failed to unmap VMM Allocated memory");
             },
             /* DMA is responsible for itself */
             ObjectState::DMAAllocated(_) => {
                 let mut op = self.page_table.begin();
                 drop(inner);
-                unsafe { op.unmap(start_addr, del_size.div_ceil(PAGE_SIZE)).expect("Failed to unmap VMM Allocated memory") };
+                unsafe { op.unmap(start_addr, del_size.div_ceil(PAGE_SIZE), false).expect("Failed to unmap VMM Allocated memory") };
             },
         }
 
@@ -527,22 +526,85 @@ impl VirtualMemoryManager {
             return false;
         };
 
-        let state = obj.state;
         let size = obj.size();
+        let addr = obj.addr();
+        let state = &mut obj.state;
 
         match state {
             ObjectState::Free => return false,
-            ObjectState::Allocated(_)
-            | ObjectState::LazyAllocated(_)
-            | ObjectState::DMAAllocated(_) => unsafe {
+            ObjectState::Allocated(old_flags)
+            | ObjectState::LazyAllocated(old_flags)
+            | ObjectState::DMAAllocated(old_flags) => unsafe {
+                *old_flags = flags;
+
+                let mut new_page_flags = flags.to_entry_flags();
+                if matches!(state, ObjectState::LazyAllocated(_)) {
+                    new_page_flags |= PageEntryFlags::IS_LAZY;
+                }
+
                 let mut op = self.page_table.begin();
                 drop(inner);
-                op.set_flags(start_addr, size.div_ceil(PAGE_SIZE), flags.to_entry_flags())
+                op.set_flags(addr, size.div_ceil(PAGE_SIZE), new_page_flags)
                     .expect("VMM failed to change the flags of a page, should never happen")
             },
         }
 
         true
+    }
+    /// Attempts to map the given `addr` on demand returning wheither it was successful.
+    ///
+    /// And if it wasn't returns whether an Object containing address was found or not.
+    pub fn try_on_demand_map(&self, addr: VirtAddr) -> Result<(), Option<(VirtAddr, usize)>> {
+        let mut inner = self.inner.lock();
+        let obj = inner.lookup_addr_mut(addr).ok_or(None)?;
+        let state = obj.state;
+        let start_addr = obj.addr();
+        let size = obj.size();
+
+        let flags = match obj.state {
+            ObjectState::LazyAllocated(flags) => flags,
+            ObjectState::Allocated(_) | ObjectState::DMAAllocated(_) => {
+                debug!(
+                    "Attempt to recover from non-lazy region: at: {start_addr:?} with size {size} => {state:?}, vmm page table: {:?}",
+                    unsafe { self.page_table.inner_ptr().phys_addr() }
+                );
+                drop(inner);
+                self.debug_regions();
+                return Err(Some((start_addr, size)));
+            }
+            ObjectState::Free => {
+                // Not allocated not mapped, just a page fault.
+                return Err(None);
+            }
+        };
+
+        let diff = addr - start_addr;
+        let pages_left = (size - diff).div_ceil(PAGE_SIZE);
+
+        debug_assert_ne!(pages_left, 0);
+        // Maps 4 pages at a time to account for my kinda slow pagefault and lookup process.
+        let pages_to_map = 4.min(pages_left);
+
+        let mut op = self.page_table.begin();
+        drop(inner);
+        match op.alloc_map_missing(
+            addr,
+            addr + (pages_to_map * PAGE_SIZE),
+            flags.to_entry_flags(),
+        ) {
+            Ok(_) | Err(MapToError::AlreadyMapped) => Ok(()),
+            Err(MapToError::FrameAllocationFailed) => {
+                error!(
+                    "OOM while trying to lazy allocate address: {addr:?}, of a VMM memory allocation at: {start_addr:?} with size: {size} and state: {state:?}",
+                );
+                Err(Some((start_addr, size)))
+            }
+            Err(MapToError::NotMapped) => unreachable!(),
+            Err(MapToError::Other) => {
+                debug!("Failed because of an unknown error");
+                Err(Some((start_addr, size)))
+            }
+        }
     }
 
     /// Allocates a new memory region with size `size`, and maps it to newly allocated memory frames based on [`VMMAllocMode`].
@@ -642,23 +704,32 @@ impl VirtualMemoryManager {
 
         let map_flags = flags.to_entry_flags();
 
-        let mut op = self.page_table.begin();
-        drop(inner);
         match (mode, frames) {
             (VMMAllocMode::Normal, Some(frames)) => unsafe {
                 // Safety: We have got exclusive access to the whole address space we own, once a region is allocated,
                 // we can safely map it, no one else can access it.
-                op.map_contiguous_to_frames(
+                let mut op = self.page_table.begin();
+                let result = op.map_contiguous_to_frames(
                     Page::containing(allocated_start_addr),
                     frames,
                     map_flags,
-                )?;
+                );
+                drop(inner);
+                result?;
             },
-            (VMMAllocMode::Normal | VMMAllocMode::Lazy, None) => {
-                // FIXME: alloc_map zeroizes frames by default
-                op.alloc_map(allocated_start_addr, allocated_start_addr + size, map_flags)?;
+            (VMMAllocMode::Lazy, None) => {
+                // do nothing
+                drop(inner);
             }
-            _ => unreachable!(),
+            (VMMAllocMode::Normal, None) => {
+                // FIXME: alloc_map zeroizes frames by default
+                let mut op = self.page_table.begin();
+                let result =
+                    op.alloc_map(allocated_start_addr, allocated_start_addr + size, map_flags);
+                drop(inner);
+                result?;
+            }
+            (VMMAllocMode::Lazy, Some(_)) => unreachable!(),
         }
 
         Ok(allocated_start_addr)
@@ -840,4 +911,19 @@ pub unsafe fn init(vmm: VirtualMemoryManager) {
     let vmm = vmm_guard.write(vmm);
     debug!(VirtualMemoryManager, "Initialized");
     vmm.debug_regions();
+}
+
+/// Attempts to recover from a page fault with addr `addr`.
+/// If not succesfful returns whether the VMM found a region containing address or not.
+pub fn try_page_fault_recover(addr: VirtAddr) -> Result<(), Option<(VirtAddr, usize)>> {
+    let addr = addr.to_previous_page();
+    let lower_addr = addr.is_in_lower_half();
+
+    let f = |vmm: &VirtualMemoryManager| vmm.try_on_demand_map(addr);
+
+    if lower_addr {
+        with_user_vmm(f)
+    } else {
+        with_root(f)
+    }
 }

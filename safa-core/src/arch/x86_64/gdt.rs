@@ -96,17 +96,14 @@ impl TaskStateSegment {
         }
     }
 
-    fn new(stack0: *mut Stack, stack1: *mut Stack) -> Self {
+    fn new(stacks: &[SyncUnsafeCell<Stack>]) -> Self {
         Self {
             reserved_1: 0,
             privilege_stack_table: [VirtAddr::null(); 3],
             reserved_2: 0,
             interrupt_stack_table: core::array::from_fn(|i| {
-                if (i % 2) == 1 {
-                    VirtAddr::from_ptr(stack1) + size_of::<Stack>()
-                } else {
-                    VirtAddr::from_ptr(stack0) + size_of::<Stack>()
-                }
+                let stack = &stacks[i % stacks.len()];
+                VirtAddr::from_ptr(stack.get()) + size_of::<Stack>()
             }),
             reserved_3: 0,
             reserved_4: 0,
@@ -118,9 +115,10 @@ impl TaskStateSegment {
 #[repr(C, align(16))]
 struct Stack([u8; STACK_SIZE]);
 
+const TSS_STACKS_COUNT: usize = 3;
 percpu::define! {
-    static TSS_STACKS: [SyncUnsafeCell<Stack>; 2] = const {
-        [const { SyncUnsafeCell::new(Stack([0xFA; STACK_SIZE])) }; 2]
+    static TSS_STACKS: [SyncUnsafeCell<Stack>; TSS_STACKS_COUNT] = const {
+        [const { SyncUnsafeCell::new(Stack([0xFA; STACK_SIZE])) }; TSS_STACKS_COUNT]
     };
 }
 
@@ -251,7 +249,7 @@ pub fn init_gdt(cpu: &'static CpuLocal) {
         );
 
         set_gs(VirtAddr::from_ptr(cpu as *const CpuLocal));
-        *tss.get() = TaskStateSegment::new(TSS_STACKS[0].get(), TSS_STACKS[1].get());
+        *tss.get() = TaskStateSegment::new(&*TSS_STACKS);
         reload_tss();
     }
 }

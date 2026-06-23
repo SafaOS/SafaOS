@@ -1,8 +1,75 @@
 use crate::VirtAddr;
 use crate::memory::paging::PhysPageTable;
+use crate::memory::vmm::{self, VMMAllocMode};
 use crate::memory::vmm::{VMMMFlags, VirtualMemoryManager, objects::ObjectState};
 use crate::timer::{DurationFmt, SystemInstant};
 
+#[test_case]
+fn map_random_regions() {
+    const RUNS: usize = 100;
+    vmm::with_root(|vmm| {
+        let mut curr_i = 0;
+        let mut curr_j = 1;
+
+        let size_choices = [4096, 8192, 8192 * 2];
+        let mode_choices = [VMMAllocMode::Normal, VMMAllocMode::Lazy];
+
+        let mut results = heapless::Vec::<VirtAddr, { RUNS }>::new();
+
+        let start_instant = SystemInstant::now();
+        for _ in 0..RUNS {
+            let size = size_choices[curr_i % size_choices.len()];
+            let mode = mode_choices[curr_j % mode_choices.len()];
+
+            let addr = vmm
+                .map_new(&"TEST_CASE", None, size, VMMMFlags::WRITEABLE, mode)
+                .expect("Allocations ran out of memory");
+            results.push(addr).expect("Failed to push address");
+
+            unsafe {
+                core::slice::from_raw_parts_mut(addr.into_ptr::<u8>(), size).fill(0xFA);
+            };
+            curr_i += 1;
+            curr_j += 1;
+        }
+
+        let time_taken = start_instant.elapsed();
+        crate::test_log!(
+            "Time taken to allocate {} regions: {}",
+            RUNS,
+            DurationFmt::new(time_taken),
+        );
+
+        for addr in results.iter() {
+            unsafe {
+                assert!(
+                    core::slice::from_raw_parts(addr.into_ptr::<u8>(), 1024)
+                        .iter()
+                        .all(|b| *b == 0xFA),
+                    "Memory corrupted"
+                )
+            };
+        }
+
+        // ======== Deallocation ========
+        // deallocating random regions
+
+        let start_instant = SystemInstant::now();
+        for index in 0..RUNS {
+            let cpu_cycles = crate::arch::utils::cpu_cycles() as usize;
+            let random_i = (index + cpu_cycles) % results.len();
+            let addr = results.swap_remove(random_i);
+            assert!(vmm.unmap(addr), "Failed to deallocate a region");
+        }
+        let time_taken = start_instant.elapsed();
+
+        crate::test_log!(
+            "Time taken to deallocate {} regions: {}",
+            RUNS,
+            DurationFmt::new(time_taken),
+        );
+    })
+}
 #[test_case]
 fn allocate_random_regions() {
     const RUNS: usize = 1000;

@@ -75,6 +75,17 @@ impl Esr {
     pub fn class(&self) -> ExcClass {
         ExcClass::try_from(self.class_raw()).unwrap_or(ExcClass::Unknown)
     }
+
+    #[inline(always)]
+    pub fn cause(&self) -> u8 {
+        ((self.0 >> 2) & 0x3) as u8
+    }
+
+    /// FAR not valid
+    #[inline(always)]
+    pub fn fnv(&self) -> bool {
+        ((self.0 >> 10) & 1) == 1
+    }
 }
 
 impl Display for Esr {
@@ -85,9 +96,9 @@ impl Display for Esr {
         write!(f, "Exception Class: {:#06b} {:?}", self.class_raw(), class)?;
 
         if class == ExcClass::DataAbort || class == ExcClass::DataAbortLower {
-            let cause = (self.0 >> 2) & 0x3;
+            let cause = self.cause();
             let level = (self.0) & 0x3;
-            let fnv = ((self.0 >> 10) & 1) == 1;
+            let fnv = self.fnv();
 
             let cause = match cause {
                 0 => Some("Address Size Fault"),

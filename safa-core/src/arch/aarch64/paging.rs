@@ -345,13 +345,19 @@ impl PageTableOps for ArchPageTable {
         &mut self,
         pages: crate::memory::paging::IterPage,
         mut with_each: F,
+        lazy: bool,
     ) -> Result<(), MapToError>
     where
         F: FnMut(Page, Frame),
     {
         for page in pages {
-            let frame = unsafe { self.unmap_single(page) }.ok_or(MapToError::NotMapped)?;
-            with_each(page, frame);
+            match unsafe { self.unmap_single(page) } {
+                Some(frame) => {
+                    with_each(page, frame);
+                }
+                None if lazy => {}
+                None => return Err(MapToError::NotMapped),
+            }
         }
 
         Ok(())
@@ -366,15 +372,17 @@ impl PageTableOps for ArchPageTable {
         pages: crate::memory::paging::IterPage,
         flags: PageEntryFlags,
     ) -> Result<(), MapToError> {
+        let lazy = flags.contains(PageEntryFlags::IS_LAZY);
+        let arch_flags = flags.into();
+
         for page in pages {
-            let entry = unsafe { self.get_entry(page).ok_or(MapToError::NotMapped)? };
-            entry.set(
-                flags.into(),
-                entry
-                    .frame()
-                    .map(|f| f.phys_addr())
-                    .unwrap_or(PhysAddr::null()),
-            );
+            match unsafe { self.get_entry(page).and_then(|e| Some((e.frame()?, e))) } {
+                Some((f, ent)) => {
+                    ent.set(arch_flags, f.phys_addr());
+                }
+                None if lazy => {}
+                None => return Err(MapToError::NotMapped),
+            }
         }
         Ok(())
     }

@@ -57,7 +57,14 @@ pub trait PageTableOps: Debug {
     /// Unmap operations are pending until [`Self::flush_unmap_ops`] is called.
     ///
     /// Unmapping is unsafe because you are changing existing mappings.
-    unsafe fn unmap_range<F>(&mut self, pages: IterPage, with_each: F) -> Result<(), MapToError>
+    ///
+    /// If `lazy` is set unmap wouldn't be performed in case the page wasn't mapped, aka won't return an error.
+    unsafe fn unmap_range<F>(
+        &mut self,
+        pages: IterPage,
+        with_each: F,
+        lazy: bool,
+    ) -> Result<(), MapToError>
     where
         F: FnMut(Page, Frame);
     /// Does a TLB Invalidation/Makes other CPUs see unmapping changes.
@@ -184,17 +191,121 @@ impl<Ops: PageTableOps> PageTableContext<Ops> {
         self.ops.map_range(pages, frames, flags)
     }
 
+    /// [`PageTableOps::unmap_range`].
     #[inline]
-    pub unsafe fn unmap_range<F>(&mut self, pages: IterPage, with_each: F) -> Result<(), MapToError>
+    pub unsafe fn unmap_range<F>(
+        &mut self,
+        pages: IterPage,
+        with_each: F,
+        lazy: bool,
+    ) -> Result<(), MapToError>
     where
         F: FnMut(Page, Frame),
     {
-        unsafe { self.ops.unmap_range(pages, with_each) }
+        unsafe { self.ops.unmap_range(pages, with_each, lazy) }
     }
 
     #[inline]
     pub fn get_frame_of(&self, page: Page) -> Option<Frame> {
         self.ops.get_frame_of(page)
+    }
+
+    #[inline]
+    /// Maps a virtual `Page` to physical `Frame`.
+    /// Safety: unsafe because of sync issues.
+    pub unsafe fn map_to(
+        &mut self,
+        page: Page,
+        frame: Frame,
+        flags: PageEntryFlags,
+    ) -> Result<(), MapToError> {
+        self.map_range_to(
+            Page::iter_pages(page, page.next()),
+            Frame::iter_frames(
+                frame,
+                Frame::containing_address(frame.phys_addr() + PAGE_SIZE),
+            ),
+            flags,
+        )?;
+        Ok(())
+    }
+
+    /// maps virtual pages from Page `from` to Page `to` with `flags` in `self`
+    /// returns Err if any of the frames couldn't be allocated
+    /// the mapped pages are zeroed
+    ///
+    /// flushes the cache if successful
+    ///
+    /// returns the end virtual address aligned up to PAGE_SIZE
+    ///
+    /// Unsafe because of sync problems.
+    #[must_use = "the actual end address is returned"]
+    pub unsafe fn alloc_map(
+        &mut self,
+        from: VirtAddr,
+        to: VirtAddr,
+        flags: PageEntryFlags,
+    ) -> Result<VirtAddr, MapToError> {
+        let end_addr = to.to_next_page();
+
+        let from_page = Page::containing(from);
+        let to_page = Page::containing(end_addr);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+            let virt_addr = frame.virt_addr();
+
+            unsafe {
+                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
+                if let Err(err) = self.map_to(page, frame, flags) {
+                    frame_allocator::deallocate_frame(frame);
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(end_addr)
+    }
+
+    /// Maps only pages that are not already present.
+    ///
+    /// This is used by lazy fault recovery.
+    #[must_use = "the actual end address is returned"]
+    pub unsafe fn alloc_map_missing(
+        &mut self,
+        from: VirtAddr,
+        to: VirtAddr,
+        flags: PageEntryFlags,
+    ) -> Result<VirtAddr, MapToError> {
+        let end_addr = to.to_next_page();
+
+        let from_page = Page::containing(from);
+        let to_page = Page::containing(end_addr);
+
+        let iter = Page::iter_pages(from_page, to_page);
+
+        for page in iter {
+            if self.get_frame_of(page).is_some() {
+                continue;
+            }
+
+            let frame =
+                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+            let virt_addr = frame.virt_addr();
+
+            unsafe {
+                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
+                if let Err(err) = self.map_to(page, frame, flags) {
+                    frame_allocator::deallocate_frame(frame);
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(end_addr)
     }
 }
 
@@ -241,6 +352,7 @@ bitflags! {
         const DISABLE_EXEC = 1 << 2;
         const DEVICE_UNCACHEABLE = 1 << 3;
         const FRAMEBUFFER_CACHED = 1 << 4;
+        const IS_LAZY = 1 << 5;
     }
 }
 
@@ -489,25 +601,23 @@ impl<'a> PendingOp<'a> {
         frame: Frame,
         flags: PageEntryFlags,
     ) -> Result<(), MapToError> {
-        self.guard.map_range_to(
-            Page::iter_pages(page, page.next()),
-            Frame::iter_frames(
-                frame,
-                Frame::containing_address(frame.phys_addr() + PAGE_SIZE),
-            ),
-            flags,
-        )?;
-        Ok(())
+        // Safety: No sync issues.
+        unsafe { self.guard.map_to(page, frame, flags) }
     }
 
     /// Unmaps `pages` pages starting at `addr` without deallocating the frames.
-    pub unsafe fn unmap(&mut self, addr: VirtAddr, pages: usize) -> Result<(), MapToError> {
+    pub unsafe fn unmap(
+        &mut self,
+        addr: VirtAddr,
+        pages: usize,
+        lazy: bool,
+    ) -> Result<(), MapToError> {
         unsafe {
             let start = Page::containing(addr);
             let end = Page::containing(addr + (pages * PAGE_SIZE));
             let pages = Page::iter_pages(start, end);
 
-            self.guard.unmap_range(pages, |_, _| {})?;
+            self.guard.unmap_range(pages, |_, _| {}, lazy)?;
             self.pending_unmaps.after_unmap(start, end);
             Ok(())
         }
@@ -547,25 +657,20 @@ impl<'a> PendingOp<'a> {
         to: VirtAddr,
         flags: PageEntryFlags,
     ) -> Result<VirtAddr, MapToError> {
-        let end_addr = to.to_next_page();
+        // Safety: No sync issues as we have a lock on page table.
+        unsafe { self.guard.alloc_map(from, to, flags) }
+    }
 
-        let from_page = Page::containing(from);
-        let to_page = Page::containing(end_addr);
-
-        let iter = Page::iter_pages(from_page, to_page);
-
-        for page in iter {
-            let frame =
-                frame_allocator::allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
-            let virt_addr = frame.virt_addr();
-            self.map_to(page, frame, flags)?;
-
-            unsafe {
-                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
-            }
-        }
-
-        Ok(end_addr)
+    /// Maps only pages that are not already present.
+    #[must_use = "the actual end address is returned"]
+    pub fn alloc_map_missing(
+        &mut self,
+        from: VirtAddr,
+        to: VirtAddr,
+        flags: PageEntryFlags,
+    ) -> Result<VirtAddr, MapToError> {
+        // Safety: No sync issues as we have a lock on page table.
+        unsafe { self.guard.alloc_map_missing(from, to, flags) }
     }
 
     #[inline]
@@ -586,16 +691,25 @@ impl<'a> PendingOp<'a> {
     }
 
     /// Deallocates and unmaps pages from `from` to `from + (pages * PAGE_SIZE)`.
-    pub unsafe fn unmap_dealloc(&mut self, from: VirtAddr, pages: usize) -> Result<(), MapToError> {
+    pub unsafe fn unmap_dealloc(
+        &mut self,
+        from: VirtAddr,
+        pages: usize,
+        lazy: bool,
+    ) -> Result<(), MapToError> {
         let from_page = Page::containing(from);
         let to_page = Page::containing(from + (pages * PAGE_SIZE));
 
         let pages = Page::iter_pages(from_page, to_page);
 
         unsafe {
-            self.guard.unmap_range(pages, |_, frame| {
-                self.pending_unmaps.on_each_unmap(frame);
-            })?;
+            self.guard.unmap_range(
+                pages,
+                |_, frame| {
+                    self.pending_unmaps.on_each_unmap(frame);
+                },
+                lazy,
+            )?;
             self.pending_unmaps.after_unmap(from_page, to_page);
             Ok(())
         }

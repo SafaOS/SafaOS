@@ -113,7 +113,13 @@ pub fn sysmem_map(
             Location::Hint(s)
         }
     });
-    let tracker = process::mem::mem_map(location, page_count, mem_flags, interface)?;
+    let tracker = process::mem::mem_map(
+        location,
+        page_count,
+        mem_flags,
+        flags.contains(MemMapFlags::POPULATE),
+        interface,
+    )?;
     let start_addr = tracker.start();
     // TODO: Implement local option
     let ri = resources::add_global_resource(tracker);

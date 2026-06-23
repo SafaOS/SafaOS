@@ -389,6 +389,7 @@ pub fn mem_map(
     location: Option<Location>,
     page_count: usize,
     flags: VMMMFlags,
+    populate: bool,
     interface: Option<Box<dyn MemMappedInterface>>,
 ) -> Result<TrackedMemoryAllocation, VMMAllocError> {
     let size_bytes = page_count * PAGE_SIZE;
@@ -404,13 +405,12 @@ pub fn mem_map(
                 interface.frames().iter().copied(),
             )
         } else {
-            vmm.map_new(
-                &"MemMap",
-                location,
-                page_count * PAGE_SIZE,
-                flags,
-                vmm::VMMAllocMode::Lazy,
-            )
+            let mode = if populate {
+                vmm::VMMAllocMode::Normal
+            } else {
+                vmm::VMMAllocMode::Lazy
+            };
+            vmm.map_new(&"MemMap", location, page_count * PAGE_SIZE, flags, mode)
         }
     })?;
 

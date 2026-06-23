@@ -4,15 +4,22 @@ use core::cell::SyncUnsafeCell;
 use core::fmt::Display;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use lazy_static::lazy_static;
+use safa_abi::errors::ErrorStatus;
 
 use super::idt::{GateDescriptor, IDTT};
 use super::{InterruptFrame, TrapFrame};
 
+use crate::arch::paging::current_lower_root_table;
 use crate::arch::threading::CPUStatus;
 use crate::arch::x86_64::interrupts::apic::send_eoi;
 use crate::arch::x86_64::interrupts::ps2::{self};
+use crate::arch::x86_64::tlb::flush_range;
 use crate::arch::x86_64::{threading, tlb};
-use crate::{khalt, serial};
+use crate::memory::AlignToPage;
+use crate::memory::paging::{PAGE_SIZE, Page};
+use crate::memory::vmm::{self};
+use crate::scheduler::SCHEDULER;
+use crate::{VirtAddr, debug, khalt, process, serial};
 
 pub static NMI_REASON: AtomicUsize = AtomicUsize::new(0);
 
@@ -133,11 +140,11 @@ lazy_static! {
         (0, divide_by_zero_handler, ATTR_INT),
         (2, nmi_handler, ATTR_INT),
         (3, breakpoint_handler, ATTR_INT | ATTR_RING3),
-        (6, invalid_opcode, ATTR_INT),
+        (6, make_handler!(invalid_opcode), ATTR_INT),
         (8, double_fault_handler, ATTR_TRAP, 0),
         (0xC, stack_segment_fault_handler, ATTR_TRAP, 0),
         (13, make_handler!(general_protection_fault), ATTR_TRAP),
-        (14, make_handler!(page_fault), ATTR_TRAP, 0),
+        (14, make_handler!(page_fault), ATTR_INT, 2),
         (0x13, simd_exception_handler, ATTR_TRAP),
         (
             0x20,
@@ -176,7 +183,7 @@ extern "x86-interrupt" fn divide_by_zero_handler(frame: InterruptFrame) {
     panic!("---- Divide By Zero Exception ----\n{}", frame);
 }
 
-extern "x86-interrupt" fn invalid_opcode(frame: InterruptFrame) {
+extern "C" fn invalid_opcode(frame: &mut InterruptCpuFrame) {
     panic!("---- Invalid OPCODE ----\n{}", frame);
 }
 
@@ -205,7 +212,44 @@ extern "C" fn page_fault(frame: &mut InterruptCpuFrame) {
     let cr2: u64;
     unsafe { asm!("mov {}, cr2", out(reg) cr2) }
 
-    panic!("---- Page Fault ----\naddress: {:#x}\n{}", cr2, frame)
+    let addr = VirtAddr::from(cr2 as usize);
+    let lower_addr = addr.is_in_lower_half();
+
+    match if (frame.error_code & 1) == 1 || SCHEDULER.maybe_borrow().is_none() {
+        // Page fault is an access violation.
+        Err(None)
+    } else {
+        vmm::try_page_fault_recover(addr)
+    } {
+        Ok(()) => flush_range(addr.to_previous_page(), addr + (4 * PAGE_SIZE)),
+        Err(region) => {
+            if let Some((start_addr, size)) = region {
+                debug!(
+                    "Failed to recover from a page fault, within a region starting at {start_addr:?} with size: {size}"
+                );
+            }
+
+            if lower_addr && frame.capture.at().is_in_lower_half() && region.is_none() {
+                let t = unsafe { current_lower_root_table() };
+                let ent = t.get_entry(Page::containing(addr));
+                let process = process::current();
+                debug!(
+                    "---- PID: {} Page Fault ----\naddress: {:#x}, ent: {ent:?}\n{}",
+                    process.pid(),
+                    cr2,
+                    frame
+                );
+                crate::process::current::exit(-(ErrorStatus::MMapError as isize))
+            } else {
+                let t = unsafe { current_lower_root_table() };
+                let ent = t.get_entry(Page::containing(addr));
+                panic!(
+                    "---- Page Fault ----\naddress: {:#x}, ent: {ent:?}\n{}",
+                    cr2, frame
+                )
+            }
+        }
+    }
 }
 
 pub extern "x86-interrupt" fn keyboard_interrupt_handler(_: InterruptFrame) {

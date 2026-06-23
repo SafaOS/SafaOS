@@ -255,13 +255,18 @@ impl PageTableOps for ArchPageTable {
         &mut self,
         pages: crate::memory::paging::IterPage,
         mut with_each: F,
+        lazy: bool,
     ) -> Result<(), MapToError>
     where
         F: FnMut(Page, Frame),
     {
         for page in pages {
-            let frame = unsafe { self.unmap(page)? };
-            with_each(page, frame);
+            let frame = unsafe { self.unmap(page) };
+            match frame {
+                Ok(frame) => with_each(page, frame),
+                Err(MapToError::NotMapped) if lazy => {}
+                Err(err) => return Err(err),
+            }
         }
         Ok(())
     }
@@ -272,8 +277,16 @@ impl PageTableOps for ArchPageTable {
         flags: PageEntryFlags,
     ) -> Result<(), MapToError> {
         for page in pages {
-            let entry = self.get_entry(page).ok_or(MapToError::NotMapped)?;
-            entry.set(flags.into(), entry.phys_addr());
+            match self.get_entry(page).and_then(|e| Some((e.frame()?, e))) {
+                Some((f, entry)) => {
+                    entry.set(
+                        flags.difference(PageEntryFlags::IS_LAZY).into(),
+                        f.phys_addr(),
+                    );
+                }
+                None if flags.contains(PageEntryFlags::IS_LAZY) => {}
+                None => return Err(MapToError::NotMapped),
+            }
         }
         Ok(())
     }
@@ -353,7 +366,7 @@ impl ArchPageTable {
 
     #[inline]
     /// get a mutable reference to the entry for a given page
-    fn get_entry(&self, page: Page) -> Option<&mut Entry> {
+    pub fn get_entry(&self, page: Page) -> Option<&mut Entry> {
         let (level_1_index, level_2_index, level_3_index, level_4_index) = translate(page.addr());
         let level_3_table = self[level_4_index].mapped_to()?;
         let level_2_table = level_3_table[level_3_index].mapped_to()?;
