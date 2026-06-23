@@ -357,8 +357,26 @@ impl PageTableOps for ArchPageTable {
         Ok(())
     }
 
-    fn finish_unmap_ops(&mut self, pages: crate::memory::paging::IterPage) {
+    fn finish_ops(&mut self, pages: crate::memory::paging::IterPage) {
         tlb::flush_cache_range(pages.current_addr(), pages.end_addr())
+    }
+
+    unsafe fn set_flags_range(
+        &mut self,
+        pages: crate::memory::paging::IterPage,
+        flags: PageEntryFlags,
+    ) -> Result<(), MapToError> {
+        for page in pages {
+            let entry = unsafe { self.get_entry(page).ok_or(MapToError::NotMapped)? };
+            entry.set(
+                flags.into(),
+                entry
+                    .frame()
+                    .map(|f| f.phys_addr())
+                    .unwrap_or(PhysAddr::null()),
+            );
+        }
+        Ok(())
     }
 }
 

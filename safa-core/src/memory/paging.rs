@@ -44,6 +44,14 @@ pub trait PageTableOps: Debug {
         frames: FrameIter,
         flags: PageEntryFlags,
     ) -> Result<(), MapToError>;
+    /// Sets the entry flags for every page in `pages` to `flags`.
+    ///
+    /// A [`Self::finish_ops`] call is required afterwards.
+    unsafe fn set_flags_range(
+        &mut self,
+        pages: IterPage,
+        flags: PageEntryFlags,
+    ) -> Result<(), MapToError>;
     /// Given an iterator of pages, unmap the pages, and on each unmapped (page, frame), call the `with_each` function.
     ///
     /// Unmap operations are pending until [`Self::flush_unmap_ops`] is called.
@@ -55,7 +63,7 @@ pub trait PageTableOps: Debug {
     /// Does a TLB Invalidation/Makes other CPUs see unmapping changes.
     ///
     /// Safe because it only invalidates the TLB, not changing any mappings.
-    fn finish_unmap_ops(&mut self, pages: IterPage);
+    fn finish_ops(&mut self, pages: IterPage);
     /// Given a page, return the frame it is mapped to.
     fn get_frame_of(&self, page: Page) -> Option<Frame>;
 }
@@ -449,7 +457,7 @@ impl PendingUnmaps {
             debug_assert!(start <= end);
 
             let pages = Page::iter_pages(start, end.next());
-            table.ops.finish_unmap_ops(pages);
+            table.ops.finish_ops(pages);
 
             self.flushes_page
                 .for_each(|frame| frame_allocator::deallocate_frame(frame));
@@ -500,6 +508,26 @@ impl<'a> PendingOp<'a> {
             let pages = Page::iter_pages(start, end);
 
             self.guard.unmap_range(pages, |_, _| {})?;
+            self.pending_unmaps.after_unmap(start, end);
+            Ok(())
+        }
+    }
+
+    /// Sets the flags of `pages` pages from `addr` to flags `flags`.
+    pub unsafe fn set_flags(
+        &mut self,
+        addr: VirtAddr,
+        pages: usize,
+        flags: PageEntryFlags,
+    ) -> Result<(), MapToError> {
+        unsafe {
+            let start = Page::containing(addr);
+            let end = Page::containing(addr + (pages * PAGE_SIZE));
+            let pages = Page::iter_pages(start, end);
+
+            self.guard.ops.set_flags_range(pages, flags)?;
+            // TODO:
+            // This is valid, after_unmap and pending_unmaps need a rename.
             self.pending_unmaps.after_unmap(start, end);
             Ok(())
         }

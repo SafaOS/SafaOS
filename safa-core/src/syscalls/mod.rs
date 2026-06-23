@@ -121,6 +121,7 @@ pub fn syscall(
             }
             // Memory
             SyscallTable::SysMemMap => mem::sysmem_map_raw(a as *const _, b, c as *mut _),
+            SyscallTable::SysMemProtect => mem::sysmem_protect_raw(a as Ri, b as u16),
             SyscallTable::SysMemShmCreate => mem::sysshm_create_raw(a, b, c as *mut _),
             SyscallTable::SysMemShmOpen => mem::sysshm_open_raw(a, b),
             // Sockets

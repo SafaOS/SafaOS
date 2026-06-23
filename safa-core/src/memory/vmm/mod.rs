@@ -520,6 +520,31 @@ impl VirtualMemoryManager {
         true
     }
 
+    #[must_use = "Returns whether or not a region was found"]
+    pub fn set_page_flags(&self, start_addr: VirtAddr, flags: VMMMFlags) -> bool {
+        let mut inner = self.inner.lock();
+        let Some(obj) = inner.lookup_addr_mut(start_addr) else {
+            return false;
+        };
+
+        let state = obj.state;
+        let size = obj.size();
+
+        match state {
+            ObjectState::Free => return false,
+            ObjectState::Allocated(_)
+            | ObjectState::LazyAllocated(_)
+            | ObjectState::DMAAllocated(_) => unsafe {
+                let mut op = self.page_table.begin();
+                drop(inner);
+                op.set_flags(start_addr, size.div_ceil(PAGE_SIZE), flags.to_entry_flags())
+                    .expect("VMM failed to change the flags of a page, should never happen")
+            },
+        }
+
+        true
+    }
+
     /// Allocates a new memory region with size `size`, and maps it to newly allocated memory frames based on [`VMMAllocMode`].
     ///
     /// `size` must be a multiple of [`PAGE_SIZE`] or it panicks.

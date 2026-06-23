@@ -234,7 +234,7 @@ impl PageTableOps for ArchPageTable {
         unsafe { self.free(4) };
     }
 
-    fn finish_unmap_ops(&mut self, pages: crate::memory::paging::IterPage) {
+    fn finish_ops(&mut self, pages: crate::memory::paging::IterPage) {
         unsafe { tlb::flush_cache_range(self, pages.current_addr(), pages.end_addr()) };
     }
 
@@ -262,6 +262,18 @@ impl PageTableOps for ArchPageTable {
         for page in pages {
             let frame = unsafe { self.unmap(page)? };
             with_each(page, frame);
+        }
+        Ok(())
+    }
+
+    unsafe fn set_flags_range(
+        &mut self,
+        pages: crate::memory::paging::IterPage,
+        flags: PageEntryFlags,
+    ) -> Result<(), MapToError> {
+        for page in pages {
+            let entry = self.get_entry(page).ok_or(MapToError::NotMapped)?;
+            entry.set(flags.into(), entry.phys_addr());
         }
         Ok(())
     }

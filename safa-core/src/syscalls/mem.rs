@@ -1,14 +1,18 @@
 use crate::drivers::vfs::SeekOffset;
 use crate::memory::paging::MapToError;
+use crate::memory::vmm;
 use crate::memory::vmm::Location;
 use crate::memory::vmm::VMMMFlags;
 use crate::process;
+use crate::process::mem::TrackedMemoryAllocation;
 use crate::process::resources;
 use crate::shared_mem;
 use crate::shared_mem::ShmKey;
 use crate::syscalls::ErrorStatus;
 use crate::syscalls::SyscallFFI;
+use crate::syscalls::ffi::ExpectedResource;
 use macros::syscall_handler;
+use safa_abi::mem::MemFlags;
 use safa_abi::mem::MemMapFlags;
 use safa_abi::mem::RawMemMapConfig;
 use safa_abi::mem::ShmFlags;
@@ -21,6 +25,33 @@ impl SyscallFFI for MemMapFlags {
     fn make(args: Self::Args) -> Result<Self, safa_abi::errors::ErrorStatus> {
         Ok(MemMapFlags::from_bits(args as u8))
     }
+}
+
+#[syscall_handler]
+pub fn sysmem_protect(
+    resource: ExpectedResource<TrackedMemoryAllocation>,
+    flags: u16,
+) -> Result<(), ErrorStatus> {
+    let flags = MemFlags::from_bits(flags as u8);
+    let addr = resource.start();
+
+    let mut vmm_flags = VMMMFlags::USER_ACCESSIBLE;
+    if flags.contains(MemFlags::WRITE) {
+        vmm_flags |= VMMMFlags::WRITEABLE;
+    }
+
+    if flags.contains(MemFlags::EXEC) {
+        vmm_flags |= VMMMFlags::EXECUTABLE;
+    }
+
+    vmm::with_user_vmm(|vmm| {
+        assert!(
+            vmm.set_page_flags(addr, vmm_flags),
+            "Valid memory Resource at {:?} corrupted, failed to sysmem_protect.",
+            resource.start(),
+        )
+    });
+    Ok(())
 }
 
 #[syscall_handler]
