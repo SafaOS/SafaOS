@@ -13,6 +13,8 @@ use crate::thread::Tid;
 use crate::timer::time_since_boot_ms;
 use crate::{VirtAddr, arch::power};
 
+/// SysClock syscalls implementation.
+mod clock;
 pub mod ffi;
 mod fs;
 mod io;
@@ -51,6 +53,12 @@ pub fn syscall(
     ) -> Result<usize, ErrorStatus> {
         let syscall = SyscallTable::try_from(number).map_err(|_| ErrorStatus::InvalidSyscall)?;
         match syscall {
+            SyscallTable::SysClockGetCntFreq => {
+                clock::sysclock_getcntfreq_raw(a as *mut u64, b as u32)
+            }
+            SyscallTable::SysClockGetRes => clock::sysclock_getres_raw(a as u32, b as *mut _),
+            SyscallTable::SysClockGetTime => clock::sysclock_gettime_raw(a as u32, b as *mut _),
+            SyscallTable::SysClockSetTime => clock::sysclock_settime_raw(a as u32, b as *const _),
             // IO related syscalls
             SyscallTable::SysFDirIterOpen => io::sysdiriter_open_raw(a as Ri),
             SyscallTable::SysDirIterClose => {

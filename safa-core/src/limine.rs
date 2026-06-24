@@ -1,4 +1,5 @@
 use core::cell::SyncUnsafeCell;
+use core::time::Duration;
 
 use alloc::slice;
 use hfdt_rs::Fdt;
@@ -7,6 +8,7 @@ use limine::file::File;
 use limine::framebuffer::MemoryModel;
 use limine::modules::InternalModule;
 use limine::modules::ModuleFlags;
+use limine::request::DateAtBootRequest;
 use limine::request::DeviceTreeBlobRequest;
 use limine::request::ExecutableAddressRequest;
 use limine::request::ExecutableFileRequest;
@@ -72,6 +74,17 @@ static MMAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 #[used]
 #[unsafe(link_section = ".requests")]
 static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
+
+#[used]
+#[unsafe(link_section = ".requests")]
+static DATE_REQUEST: DateAtBootRequest = DateAtBootRequest::new();
+
+pub fn date_at_boot() -> Duration {
+    DATE_REQUEST
+        .get_response()
+        .expect("Failed to get Date at boot")
+        .timestamp()
+}
 
 const RAMDISK_MODULE: InternalModule = InternalModule::new()
     .with_path(c"ramdisk.tar")

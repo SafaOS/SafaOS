@@ -39,6 +39,7 @@ rustc-demangle = "0.1.25"
 smallvec = { version = "1.15.1", features = ["union", "const_generics", "const_new"] }
 rustc-hash = { version = "2.1.1", default-features = false }
 hfdt-rs = { version = "0.1.0", git = "https://github.com/safiworks/hfdt-rs" }
+time = { version = "0.3.51", default-features = false }
 
 [dev-dependencies]
 
