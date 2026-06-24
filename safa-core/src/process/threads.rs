@@ -15,6 +15,7 @@ use crate::{
         mem::{allocate_kernel_stack, allocate_tls, allocate_user_stack},
     },
     thread::{ArcThread, ContextPriority, Thread, Tid},
+    utils::elf::TLSInfo,
 };
 
 pub struct ThreadsManager {
@@ -22,14 +23,11 @@ pub struct ThreadsManager {
     threads: HashMap<Tid, ArcThread, FxBuildHasher>,
     userspace_process: bool,
     /// Information about the master TLS if it exits
-    master_tls: Option<(VirtAddr, usize, usize, usize)>,
+    master_tls: Option<TLSInfo>,
 }
 
 impl ThreadsManager {
-    const fn new(
-        userspace_process: bool,
-        master_tls: Option<(VirtAddr, usize, usize, usize)>,
-    ) -> Self {
+    const fn new(userspace_process: bool, master_tls: Option<TLSInfo>) -> Self {
         Self {
             thread_ids: Slab::new(),
             threads: HashMap::with_hasher(FxBuildHasher),
@@ -80,7 +78,7 @@ impl ThreadsManager {
         env: &[&[u8]],
         abi_structures: AbiStructures,
         userspace_process: bool,
-        master_tls: Option<(VirtAddr, usize, usize, usize)>,
+        master_tls: Option<TLSInfo>,
     ) -> Result<(Self, ArcThread), MapToError> {
         let mut this = Self::new(userspace_process, master_tls);
         assert_eq!(this.next_tid(), 0);
@@ -106,8 +104,14 @@ impl ThreadsManager {
         let (ke_stack_tracker, ke_stack_end) = allocate_kernel_stack(DEFAULT_STACK_SIZE)?;
         let tls_allocation = this
             .master_tls
-            .map(|(addr_within, size_in_mem, file_size, align)| {
-                allocate_tls(vmm.clone(), addr_within, align, size_in_mem, file_size)
+            .map(|tls| {
+                allocate_tls(
+                    vmm.clone(),
+                    tls.addr,
+                    tls.alignment,
+                    tls.memsize,
+                    tls.filesize,
+                )
             })
             .transpose()?;
 
@@ -178,13 +182,13 @@ impl ThreadsManager {
         let (th_stack_tracker, stack_end) = allocate_user_stack(parent.vmm.clone(), stack_size)?;
         let tls_allocation = self
             .master_tls
-            .map(|(addr_within, size_in_mem, file_size, align)| {
+            .map(|tls| {
                 allocate_tls(
                     parent.vmm.clone(),
-                    addr_within,
-                    align,
-                    size_in_mem,
-                    file_size,
+                    tls.addr,
+                    tls.alignment,
+                    tls.memsize,
+                    tls.filesize,
                 )
             })
             .transpose()?;

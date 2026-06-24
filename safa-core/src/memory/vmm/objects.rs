@@ -266,13 +266,18 @@ impl VMMObject {
     }
 
     #[inline]
+    pub const fn allocated_flags(&self) -> Option<VMMMFlags> {
+        match self.state {
+            ObjectState::Allocated(f)
+            | ObjectState::DMAAllocated(f)
+            | ObjectState::LazyAllocated(f) => Some(f),
+            ObjectState::Free => None,
+        }
+    }
+
+    #[inline]
     pub const fn allocated(&self) -> bool {
-        matches!(
-            self.state,
-            ObjectState::Allocated(_)
-                | ObjectState::DMAAllocated(_)
-                | ObjectState::LazyAllocated(_)
-        )
+        self.allocated_flags().is_some()
     }
 
     pub const fn new_free(addr: VirtAddr, size: usize) -> Self {

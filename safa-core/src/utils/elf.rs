@@ -7,9 +7,10 @@ use macros::display_consts;
 use spin::once::Once;
 use thiserror::Error;
 
+use crate::drivers::vfs::FSError;
 use crate::memory::AlignToPage;
 use crate::memory::vmm::{Location, VMMAllocError, VMMMFlags, VirtualMemoryManager};
-use crate::{PhysAddr, error};
+use crate::{PhysAddr, debug, error};
 use crate::{
     VirtAddr,
     memory::{
@@ -27,6 +28,7 @@ pub struct ElfType(u16);
 impl ElfType {
     pub const RELOC: ElfType = Self(1);
     pub const EXE: ElfType = Self(2);
+    pub const DYN: ElfType = Self(3);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -101,6 +103,37 @@ pub struct ElfHeader {
     pub sections_names_section_offset: u16,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct TLSInfo {
+    pub addr: VirtAddr,
+    pub memsize: usize,
+    pub filesize: usize,
+    pub alignment: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProgramHeaderInfo {
+    pub addr: VirtAddr,
+    pub ent_size: usize,
+    pub ent_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ElfInfo {
+    pub entry: VirtAddr,
+    pub elf_end: VirtAddr,
+    pub master_tls: Option<TLSInfo>,
+    pub program_header: Option<ProgramHeaderInfo>,
+    pub program_interp: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Error)]
+pub enum ElfOrFSError {
+    #[error("Elf: {0}")]
+    ElfError(#[from] ElfError),
+    #[error("FS: {0}")]
+    FSError(#[from] FSError),
+}
 #[derive(Debug, Clone, Copy, Error)]
 pub enum ElfError {
     UnsupportedClass,
@@ -153,7 +186,7 @@ impl ElfHeader {
             Err(ElfError::UnsupportedClass)
         } else if self.endianness != ElfIEndianness::LITTLE {
             Err(ElfError::UnsupportedEndianness)
-        } else if ![ElfType::EXE, ElfType::RELOC].contains(&self.kind) {
+        } else if ![ElfType::EXE, ElfType::RELOC, ElfType::DYN].contains(&self.kind) {
             Err(ElfError::UnsupportedKind)
         } else if !SUPPORTED_INSTRUCTION_SETS.contains(&self.instruction_set) {
             Err(ElfError::UnsupportedInstructionSet)
@@ -201,6 +234,8 @@ pub struct ProgramType(u32);
 impl ProgramType {
     pub const NULL: Self = Self(0);
     pub const LOAD: Self = Self(1);
+    pub const INTERP: Self = Self(3);
+    pub const PHDR: Self = Self(6);
     pub const TLS: Self = Self(7);
 }
 
@@ -257,6 +292,14 @@ impl<'a, T: Readable> Iterator for SectionHeaderIter<'a, T> {
 struct ProgramHeaderIter<'a, T: Readable> {
     elf: &'a Elf<'a, T>,
     current: usize,
+}
+impl<'a, T: Readable> Clone for ProgramHeaderIter<'a, T> {
+    fn clone(&self) -> Self {
+        Self {
+            current: self.current,
+            elf: self.elf,
+        }
+    }
 }
 
 impl<'a, T: Readable> Iterator for ProgramHeaderIter<'a, T> {
@@ -475,26 +518,89 @@ impl<'a, T: Readable> Elf<'a, T> {
 
     /// loads an executable ELF, maps, and copies it to `page_table`.
     /// # Returns
-    /// - Ok((program_break, None)) if successful and there is no TLS (Thread Local Storage)
-    /// - Ok((program_break, Some((master_tls_start_addr, master_tls_size, master_tls_alignment))) if successful and there happens to be TLS
-    /// - Err([`ElfError::NotAnExecutable`]) if elf header isn't an [`ElfType::EXE`]
+    /// - Ok([`ElfInfo`]) if successful, info include master TLS, program interpreter, PT_PHDR...
+    /// - Err([`ElfError::NotAnExecutable`]) if elf header isn't an [`ElfType::EXE`] or [`ElfType::DYN`].
+    /// - Err([`ElfError::Corrupted`]) if elf header contains bad data such as invalid UTF8 in a PT_INTERP.
     pub fn load_exec(
         &self,
         vmm: &mut VirtualMemoryManager,
-    ) -> Result<(VirtAddr, Option<(VirtAddr, usize, usize, usize)>), ElfError> {
-        if self.header.kind != ElfType::EXE {
+        mut load_at: VirtAddr,
+    ) -> Result<ElfInfo, ElfError> {
+        if self.header.kind != ElfType::EXE && self.header.kind != ElfType::DYN {
             return Err(ElfError::NotAnExecutable);
         }
 
+        assert!(
+            // NOT ET_EXE OR load at == 0
+            self.header.kind != ElfType::EXE || load_at == VirtAddr::null(),
+            "Cannot load an ET_EXE elf file at: {load_at:?}, ET_EXE elf can only be loaded at base 0"
+        );
+
+        if self.header.kind == ElfType::DYN && load_at == VirtAddr::null() {
+            // TODO: Ensures nothing is loaded at NULL but I'm not quite sure if that is necessary.
+            load_at = VirtAddr::from(0x1000);
+        }
+
         let mut program_break = VirtAddr::null();
+
         let mut master_tls = None;
+        let mut phdr = None;
+        let mut interp = None;
 
         let mut buf = [0u8; PAGE_SIZE];
 
-        let headers = self
-            .get_programs()
-            .filter(|header| header.ptype == ProgramType::LOAD || header.ptype == ProgramType::TLS);
+        let headers = self.get_programs().filter(|header| {
+            header.ptype == ProgramType::LOAD
+                || header.ptype == ProgramType::TLS
+                || header.ptype == ProgramType::PHDR
+                || header.ptype == ProgramType::INTERP
+        });
+
         for header in headers {
+            let vaddr = header.vaddr + load_at;
+
+            let size_in_mem = header.memz;
+            let alignment_in_mem = header.align;
+
+            let start_addr = vaddr.to_previous_page();
+            let end_addr = (vaddr + size_in_mem).to_next_page();
+            let map_size = end_addr - start_addr;
+
+            if vaddr + size_in_mem > program_break {
+                program_break = vaddr + size_in_mem;
+            }
+
+            if header.ptype == ProgramType::INTERP {
+                let mut bytes = Vec::new();
+
+                let mut offset = header.offset;
+                let mut size = header.filez;
+                if size == 0 {
+                    continue;
+                }
+
+                while let Ok(amount) = self.reader.read(offset as isize, &mut buf) {
+                    if amount == 0 {
+                        break;
+                    }
+
+                    let count = amount.min(size);
+                    bytes.extend_from_slice(&buf[..count]);
+
+                    offset += count;
+                    size -= count;
+                }
+
+                let string = String::from_utf8(bytes).map_err(|e| {
+                    error!("Invalid UTF-8 bytes in PT_INTERP {:?} ('{}'...), header: {header:#?}, elf_header: {:#?}", e.as_bytes(), String::from_utf8_lossy(&e.as_bytes()[..e.utf8_error().valid_up_to()]), self.header());
+                    ElfError::Corrupted
+                })?;
+
+                debug!("{header:#?} => PT_INTERP {string}");
+                interp = Some(string);
+                continue;
+            }
+
             let mut alloc_flags = VMMMFlags::USER_ACCESSIBLE | VMMMFlags::ZEROED;
             if header.flags.contains(ProgramFlags::READ) {
                 alloc_flags |= VMMMFlags::empty();
@@ -508,30 +614,79 @@ impl<'a, T: Readable> Elf<'a, T> {
                 alloc_flags |= VMMMFlags::EXECUTABLE;
             }
 
-            let size_in_mem = header.memz;
-            let alignment_in_mem = header.align;
+            fn map_frag(
+                vmm: &mut VirtualMemoryManager,
+                start_addr: VirtAddr,
+                map_size: usize,
+                alloc_flags: VMMMFlags,
+            ) -> Result<(), ElfError> {
+                // FIXME: Hacks to deal with fragmentation.
+                match vmm.map_new(
+                    &"elf.load",
+                    Some(Location::Fixed(start_addr)),
+                    map_size,
+                    alloc_flags,
+                    crate::memory::vmm::VMMAllocMode::Normal,
+                ) {
+                    Ok(_) => Ok(()),
+                    Err(VMMAllocError::Used) => Ok(()),
+                    Err(VMMAllocError::UsedBy {
+                        at: r_at,
+                        size: r_size,
+                        flags: r_flags,
+                    }) => {
+                        // We want to map after the region within it.
+                        if r_at <= start_addr {
+                            let off_from = start_addr - r_at;
+                            let size_left = r_size - off_from;
+                            if map_size > size_left {
+                                map_frag(
+                                    vmm,
+                                    start_addr + size_left,
+                                    map_size - size_left,
+                                    alloc_flags,
+                                )?;
+                            }
+                        } else {
+                            // We want to map before the region and beyond.
+                            let can_map = r_at - start_addr;
+                            map_frag(vmm, start_addr, can_map, alloc_flags)?;
 
-            let start_addr = header.vaddr.to_previous_page();
-            let end_addr = (header.vaddr + size_in_mem).to_next_page();
-            let map_size = end_addr - start_addr;
+                            let map_left = map_size - can_map;
+                            if map_left > r_size {
+                                map_frag(vmm, r_at + r_size, map_left - r_size, alloc_flags)?;
+                            }
+                        }
 
-            match vmm.map_new(
-                &"elf.load",
-                Some(Location::Fixed(start_addr)),
-                map_size,
-                alloc_flags,
-                crate::memory::vmm::VMMAllocMode::Normal,
-            ) {
-                Ok(_) => {}
-                Err(VMMAllocError::Used) => { /* Mapped in a previous load */ }
-                Err(VMMAllocError::OutOfMemory) => {
-                    return Err(ElfError::MapToError);
-                }
-                Err(VMMAllocError::InvalidSize | VMMAllocError::OutOfRange) => {
-                    return Err(ElfError::Corrupted);
+                        // Update flags if we have more prems.
+                        let mut flags_or = VMMMFlags::empty();
+                        if !r_flags.contains(VMMMFlags::WRITEABLE)
+                            && alloc_flags.contains(VMMMFlags::WRITEABLE)
+                        {
+                            flags_or |= VMMMFlags::WRITEABLE;
+                        }
+
+                        if !r_flags.contains(VMMMFlags::EXECUTABLE)
+                            && alloc_flags.contains(VMMMFlags::EXECUTABLE)
+                        {
+                            flags_or |= VMMMFlags::EXECUTABLE;
+                        }
+
+                        if !flags_or.is_empty() {
+                            let _ = vmm.set_page_flags(r_at, r_flags | flags_or);
+                        }
+                        Ok(())
+                    }
+                    Err(VMMAllocError::OutOfMemory) => {
+                        return Err(ElfError::MapToError);
+                    }
+                    Err(VMMAllocError::InvalidSize | VMMAllocError::OutOfRange) => {
+                        return Err(ElfError::Corrupted);
+                    }
                 }
             }
 
+            map_frag(vmm, start_addr, map_size, alloc_flags)?;
             let page_table = unsafe { vmm.table_mut() };
 
             let mut file_offset = header.offset;
@@ -545,11 +700,7 @@ impl<'a, T: Readable> Elf<'a, T> {
                 let count = amount.min(size);
                 let buf = &buf[..count];
 
-                copy_to_pagetable(
-                    page_table,
-                    header.vaddr + (file_offset - header.offset),
-                    &buf,
-                );
+                copy_to_pagetable(page_table, vaddr + (file_offset - header.offset), &buf);
 
                 size -= count;
                 if size == 0 {
@@ -557,9 +708,6 @@ impl<'a, T: Readable> Elf<'a, T> {
                 }
 
                 file_offset += count;
-            }
-            if header.vaddr + size_in_mem > program_break {
-                program_break = header.vaddr + size_in_mem;
             }
 
             if header.ptype == ProgramType::TLS {
@@ -569,14 +717,28 @@ impl<'a, T: Readable> Elf<'a, T> {
                     );
                     return Err(ElfError::Corrupted);
                 }
-                master_tls = Some((
-                    header.vaddr,
-                    size_in_mem,
-                    header.filez, /* we only want to copy filez bytes of the master TLS but allocate a memz area */
-                    alignment_in_mem,
-                ));
+                master_tls = Some(TLSInfo {
+                    addr: vaddr,
+                    memsize: size_in_mem,
+                    filesize: header.filez,
+                    alignment: alignment_in_mem,
+                });
+            }
+
+            if header.ptype == ProgramType::PHDR {
+                phdr = Some(ProgramHeaderInfo {
+                    addr: vaddr,
+                    ent_size: self.header().program_headers_table_entry_size as usize,
+                    ent_count: self.header().program_headers_table_entries_number as usize,
+                });
             }
         }
-        Ok((program_break, master_tls))
+        Ok(ElfInfo {
+            entry: self.header.entry_point,
+            elf_end: program_break,
+            master_tls,
+            program_header: phdr,
+            program_interp: interp,
+        })
     }
 }

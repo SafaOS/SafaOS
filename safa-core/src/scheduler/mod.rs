@@ -732,6 +732,8 @@ pub unsafe fn init(main_function: fn() -> !, name: &str) -> ! {
             Arc::new(VirtualMemoryManager::new_user(page_table.frame_ptr())),
             page_table,
             None,
+            None,
+            None,
             ContextPriority::Medium,
             false,
             None,

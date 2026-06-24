@@ -20,7 +20,7 @@ use crate::{
     scheduler,
     thread::{ArcThread, ContextPriority},
     utils::{
-        elf::{Elf, ElfError},
+        elf::{Elf, ElfError, ElfOrFSError},
         io::Readable,
         path::{self, Path, PathBuf},
         types::Name,
@@ -49,6 +49,15 @@ pub enum SpawnError {
     ElfError(#[from] ElfError),
     #[error("fs error while creating process {0}")]
     FSError(#[from] FSError),
+}
+
+impl From<ElfOrFSError> for SpawnError {
+    fn from(value: ElfOrFSError) -> Self {
+        match value {
+            ElfOrFSError::ElfError(e) => SpawnError::ElfError(e),
+            ElfOrFSError::FSError(e) => Self::FSError(e),
+        }
+    }
 }
 
 #[inline(always)]

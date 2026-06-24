@@ -6,6 +6,7 @@ use core::{
 };
 
 use crate::{
+    error,
     memory::{frame_allocator::SIZE_1M, vmm::VirtualMemoryManager},
     process::threads::ThreadsManager,
     scheduler::{
@@ -13,7 +14,11 @@ use crate::{
         wait_queue::{WaitError, WaitQueue, WaitQueueWithTimeout},
     },
     thread::{self, ArcThread},
-    utils::locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    utils::{
+        elf::{ElfInfo, ElfOrFSError, TLSInfo},
+        locks::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
+        path::Path,
+    },
 };
 
 use crate::{memory::paging::MapToError, utils::types::Name};
@@ -203,14 +208,34 @@ impl Process {
         stdio: ProcessStdio,
         vmm: Arc<VirtualMemoryManager>,
         root_page_table: PhysPageTable,
-        master_tls: Option<(VirtAddr, usize, usize, usize)>,
+        master_tls: Option<TLSInfo>,
+        elf_info: Option<&ElfInfo>,
+        interp_base: Option<VirtAddr>,
         default_priority: ContextPriority,
         userspace_process: bool,
         custom_stack_size: Option<NonZero<usize>>,
         with_resources: Option<ResourceManager>,
     ) -> Result<(Arc<Self>, ArcThread), MapToError> {
         let resources = with_resources.unwrap_or(ResourceManager::new());
-        let abi_structures = AbiStructures::new(stdio, pid, crate::arch::available_cpus());
+        let abi_structures = if let Some(elf_info) = elf_info {
+            AbiStructures {
+                stdio,
+                parent_process_pid: ppid,
+                available_cpus: crate::arch::available_cpus(),
+                at_base: interp_base.map(|v| *v).unwrap_or(0),
+                at_entry: *elf_info.entry,
+                at_phdr: elf_info.program_header.map(|ph| *ph.addr).unwrap_or(0),
+                at_phent: elf_info.program_header.map(|ph| ph.ent_size).unwrap_or(0),
+                at_phnum: elf_info.program_header.map(|ph| ph.ent_count).unwrap_or(0),
+            }
+        } else {
+            AbiStructures {
+                stdio,
+                parent_process_pid: ppid,
+                available_cpus: crate::arch::available_cpus(),
+                ..Default::default()
+            }
+        };
 
         let mut process = Arc::new(Self::new(
             name,
@@ -254,11 +279,30 @@ impl Process {
         stdio: ProcessStdio,
         custom_stack_size: Option<NonZero<usize>>,
         with_resources: Option<ResourceManager>,
-    ) -> Result<(Arc<Self>, ArcThread), ElfError> {
-        let entry_point = elf.header().entry_point;
-        let page_table = PhysPageTable::create()?;
+    ) -> Result<(Arc<Self>, ArcThread), ElfOrFSError> {
+        let page_table = PhysPageTable::create().map_err(|_| ElfError::MapToError)?;
         let mut vmm = VirtualMemoryManager::new_user(page_table.frame_ptr());
-        let (_, master_tls) = elf.load_exec(&mut vmm)?;
+        let mut elf_info = elf.load_exec(&mut vmm, VirtAddr::null())?;
+
+        let master_tls = elf_info.master_tls;
+        let mut entry_point = elf_info.entry;
+        let mut interp_base = None;
+
+        if let Some(interp_name) = elf_info.program_interp.take() {
+            let load_at = elf_info.elf_end + 0x6000;
+            interp_base = Some(load_at);
+
+            let interp_path = Path::new(&interp_name).map_err(|e| {
+                error!("PT_INTERP {interp_name} is a bad path: {e:?}");
+                ElfError::Corrupted
+            })?;
+
+            let file = crate::fs::File::open_all(interp_path)?;
+            let interp_elf = Elf::new(&file)?;
+            let interp_info = interp_elf.load_exec(&mut vmm, load_at)?;
+            entry_point = interp_info.entry;
+            debug!("Elf Interpreter=>{interp_info:#?}");
+        }
 
         Self::create(
             name,
@@ -272,12 +316,14 @@ impl Process {
             Arc::new(vmm),
             page_table,
             master_tls,
+            Some(&elf_info),
+            interp_base,
             default_priority,
             true,
             custom_stack_size,
             with_resources,
         )
-        .map_err(|e| e.into())
+        .map_err(|_| ElfError::MapToError.into())
     }
 
     pub fn name(&self) -> &Name {

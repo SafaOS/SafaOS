@@ -22,7 +22,7 @@ use crate::{
 };
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct VMMMFlags: u8 {
         /// By default the region is read-only.
         const WRITEABLE = 1 << 0;
@@ -88,6 +88,11 @@ pub enum VMMAllocMode {
 pub enum VMMAllocError {
     OutOfMemory,
     OutOfRange,
+    UsedBy {
+        at: VirtAddr,
+        size: usize,
+        flags: VMMMFlags,
+    },
     Used,
     InvalidSize,
 }
@@ -108,7 +113,7 @@ impl From<MapToError> for VMMAllocError {
 impl IntoErr for VMMAllocError {
     fn into_err(self) -> safa_abi::errors::ErrorStatus {
         match self {
-            Self::Used => safa_abi::errors::ErrorStatus::AddressAlreadyInUse,
+            Self::Used | Self::UsedBy { .. } => safa_abi::errors::ErrorStatus::AddressAlreadyInUse,
             Self::InvalidSize => safa_abi::errors::ErrorStatus::InvalidSize,
             Self::OutOfMemory => safa_abi::errors::ErrorStatus::OutOfMemory,
             Self::OutOfRange => safa_abi::errors::ErrorStatus::InvalidOffset,
@@ -213,27 +218,39 @@ impl VMMInner {
             if curr_obj.addr() > start_addr {
                 let prev = curr_obj.prev();
 
-                crate::warn!(
-                    VirtualMemoryManager,
-                    "Request allocation area fragmented, detected on: addr={:?}, size={:#x}, state={:?}",
-                    curr_obj.addr(),
-                    curr_obj.size(),
-                    curr_obj.state,
-                );
-                if let Some(prev) = prev {
-                    crate::serial!(
-                        "prev addr={:?}, prev size={:#x}, prev state={:?}\n",
-                        prev.addr(),
-                        prev.size(),
-                        prev.state
+                if prev.is_none_or(|prev| prev.addr() > start_addr || !prev.allocated()) {
+                    crate::warn!(
+                        VirtualMemoryManager,
+                        "Request allocation: {start_addr:?} area fragmented, detected on: addr={:?}, size={:#x}, state={:?}",
+                        curr_obj.addr(),
+                        curr_obj.size(),
+                        curr_obj.state,
                     );
+                    if let Some(prev) = prev {
+                        crate::serial!(
+                            "prev addr={:?}, prev size={:#x}, prev state={:?}\n",
+                            prev.addr(),
+                            prev.size(),
+                            prev.state
+                        );
+                    }
+                    return Err(VMMAllocError::Used);
+                } else if let Some(prev) = prev {
+                    return Err(VMMAllocError::UsedBy {
+                        at: prev.addr(),
+                        size: prev.size(),
+                        flags: prev.allocated_flags().unwrap(),
+                    });
                 }
-                return Err(VMMAllocError::Used);
             }
 
             if curr_obj.addr() <= start_addr && curr_obj.region_end() >= end_addr {
-                if curr_obj.allocated() {
-                    return Err(VMMAllocError::Used);
+                if let Some(flags) = curr_obj.allocated_flags() {
+                    return Err(VMMAllocError::UsedBy {
+                        at: curr_obj.addr(),
+                        size: curr_obj.size(),
+                        flags: flags,
+                    });
                 }
 
                 let offset = start_addr - curr_obj.addr();
@@ -829,7 +846,7 @@ unsafe impl Allocator for VMMAlloc {
                 Ok(()) => {
                     return Ok(NonNull::slice_from_raw_parts(ptr, new_size));
                 }
-                Err(VMMAllocError::Used) => {
+                Err(VMMAllocError::Used { .. }) => {
                     let new_memory = self.allocate_new(vmm, new_size)?;
                     unsafe {
                         new_memory
