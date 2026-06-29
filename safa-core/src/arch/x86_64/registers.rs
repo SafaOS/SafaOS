@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 use core::{arch::asm, fmt::Display};
 
-use crate::arch::x86_64::interrupts::apic::APIC;
+use crate::{VirtAddr, arch::x86_64::interrupts::apic::APIC};
 
 bitflags! {
     #[derive(Default, Debug, Clone, Copy)]
@@ -91,6 +91,16 @@ pub fn rdmsr(msr: u32) -> usize {
     }
 
     (high as usize) << 32 | (low as usize)
+}
+
+#[inline(always)]
+pub fn rdfsbase() -> VirtAddr {
+    VirtAddr::from(rdmsr(0xC0000100))
+}
+
+#[inline(always)]
+pub unsafe fn wrfsbase(value: VirtAddr) {
+    unsafe { wrmsr(0xC0000100, value.into_raw() as u64) }
 }
 
 pub unsafe fn wrmsr(msr: u32, value: u64) {

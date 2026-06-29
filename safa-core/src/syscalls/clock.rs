@@ -74,17 +74,14 @@ pub fn sysclock_getres(clock: Clock, results: &mut CDuration) {
 #[test_case]
 pub fn test_rtc() {
     use crate::debug;
-    use time::Date;
-    use time::{Month, OffsetDateTime};
+    use time::OffsetDateTime;
 
     let mut date = CDuration::ZERO;
     sysclock_gettime(Clock::RTC, &mut date);
     let date_now: Duration = date.into();
     let compile_date = compile_time::date!();
 
-    let base_date = Date::from_calendar_date(0, Month::January, 1).unwrap();
     let base_datetime = OffsetDateTime::UNIX_EPOCH;
-
     let date_now: OffsetDateTime = base_datetime + date_now;
     debug!("Compiled at: {compile_date}, date now is {date_now}");
     assert_eq!(date_now.year(), compile_date.year());

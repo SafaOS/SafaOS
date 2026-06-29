@@ -5,7 +5,7 @@ use crate::{
     arch::x86_64::{
         gdt::{get_kernel_tss_stack, set_kernel_tss_stack},
         interrupts::handlers::InterruptCpuFrame,
-        registers::{RFLAGS, rdmsr, wrmsr},
+        registers::{RFLAGS, rdfsbase, wrfsbase},
     },
     globals::KERNEL_ELF,
     thread::Tid,
@@ -255,7 +255,7 @@ unsafe fn context_switch_and_return_inner(
     let Err(before_switch) = {
         unsafe {
             capture.ring0_rsp = get_kernel_tss_stack();
-            capture.fs_base = VirtAddr::from(rdmsr(0xC0000100));
+            capture.fs_base = rdfsbase();
         }
         swtch(capture, before_switch, is_thread_yielding)
     };
@@ -290,7 +290,7 @@ pub unsafe fn restore_cpu_status(status: &CPUStatus) -> ! {
 unsafe extern "C" fn restore_cpu_status_partial_all(status: &CPUStatus) -> ! {
     unsafe {
         set_kernel_tss_stack(status.ring0_rsp);
-        wrmsr(0xC0000100, status.fs_base.into_raw() as u64);
+        wrfsbase(status.fs_base);
         restore_cpu_status_partial(status)
     }
 }
@@ -299,7 +299,7 @@ unsafe extern "C" fn restore_cpu_status_partial_all(status: &CPUStatus) -> ! {
 unsafe extern "C" fn restore_cpu_status_full_all(status: &CPUStatus) -> ! {
     unsafe {
         set_kernel_tss_stack(status.ring0_rsp);
-        wrmsr(0xC0000100, status.fs_base.into_raw() as u64);
+        wrfsbase(status.fs_base);
         restore_cpu_status_full(status)
     }
 }

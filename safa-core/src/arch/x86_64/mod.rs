@@ -8,7 +8,7 @@ pub(super) mod io;
 pub mod paging;
 pub(super) mod pci;
 pub(super) mod power;
-pub(super) mod registers;
+pub(crate) mod registers;
 pub(super) mod serial;
 pub mod smp;
 mod syscalls;
