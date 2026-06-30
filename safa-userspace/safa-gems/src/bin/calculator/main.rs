@@ -1,7 +1,8 @@
 use libgems::{
-    App, Color, Data, Padding, WindowBuilder,
+    App, AppEnv, Data, Padding, WindowBuilder,
     cosmic_text::Metrics,
     shards::{AxisAlign, Button, Justify, Label, Shard, ShardsExt, Stack},
+    theme,
 };
 
 use crate::logic::LexerData;
@@ -17,7 +18,7 @@ pub struct Calculator {
     value: Result<f64, &'static str>,
 }
 
-fn buttons_area() -> impl Shard<Data<Calculator, Message>> {
+fn buttons_area(env: &AppEnv) -> impl Shard<Calculator, Message> + 'static {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Size {
         Normal,
@@ -65,7 +66,7 @@ fn buttons_area() -> impl Shard<Data<Calculator, Message>> {
 
     let mut btns = BUTTONS.iter();
 
-    let mut current_stack: Stack<Data<Calculator, Message>> = Stack::column();
+    let mut current_stack: Stack<Calculator, Message> = Stack::column();
     let mut left_in_current = 4;
     let mut stacks = Vec::new();
 
@@ -77,14 +78,15 @@ fn buttons_area() -> impl Shard<Data<Calculator, Message>> {
         }
 
         current_stack = current_stack.with_flex(
-            Button::new(Label::from_str(*name).with_color(Color::hex_rgb(0xFBF1C7)))
+            Button::new(Label::from_str(*name))
                 .with_paint(match action {
                     Message::Add | Message::Mul | Message::Sub | Message::Div => {
-                        Color::hex_rgb(0x8b365c)
+                        env.get(theme::ACCENT_COLOR_2)
                     }
-                    Message::Clear | Message::Results | Message::Remove => Color::hex_rgb(0xb33670),
-                    // Message::Results => Color::hex_rgb(0xfe8019),
-                    _ => Color::hex_rgb(0x783653),
+                    Message::Clear | Message::Results | Message::Remove => {
+                        env.get(theme::ACCENT_COLOR_1)
+                    }
+                    _ => env.get(theme::ACCENT_COLOR_3),
                 })
                 .on_click(move |_, ctx: &mut Data<Calculator, _>, _| {
                     ctx.broadcast_message(*action);
@@ -115,12 +117,11 @@ fn buttons_area() -> impl Shard<Data<Calculator, Message>> {
         .with_padding(Padding::none())
         .fix_width(WIDTH as f32)
 }
-fn expr_screen() -> impl Shard<Data<Calculator, Message>> {
+fn expr_screen(env: &AppEnv) -> impl Shard<Calculator, Message> + 'static {
     Stack::row()
         .with_padding(Padding::none())
         .with(
             Label::from_str("0000")
-                .with_color(Color::hex_rgb(0xFBF1C7))
                 .with_metrics(Metrics::relative(17., 1.0))
                 .with_wrap(libgem::cosmic_text::Wrap::None)
                 .fix_height(17.)
@@ -135,7 +136,6 @@ fn expr_screen() -> impl Shard<Data<Calculator, Message>> {
         )
         .with(
             Label::from_str("99230")
-                .with_color(Color::hex_rgb(0xFBF1C7))
                 .with_metrics(Metrics::relative(12., 1.0))
                 .on_update(|ctx: &Data<Calculator, Message>, this| {
                     match ctx.value {
@@ -147,18 +147,18 @@ fn expr_screen() -> impl Shard<Data<Calculator, Message>> {
                 .pad(Padding::equal(8.))
                 .align(AxisAlign::End),
         )
-        .background(Color::hex_rgb(0xb33470))
+        .background(env.get(theme::BACKGROUND_COLOR_1))
         .round(12.)
         .fix_height(50.)
         .fix_width(218.)
         .pad(Padding::equal(8.))
 }
 
-fn build_ui() -> impl Shard<Data<Calculator, Message>> {
+fn build_ui(env: &AppEnv) -> impl Shard<Calculator, Message> + 'static {
     Stack::row()
         .align(AxisAlign::Center)
-        .with(expr_screen())
-        .with(buttons_area())
+        .with(expr_screen(env))
+        .with(buttons_area(env))
         .justify(Justify::SpaceBetween)
         .on_msg(|ctx: &mut Data<Calculator, Message>, m, _| {
             if let Err(e) = ctx.logic.execute(&m) {
@@ -178,13 +178,13 @@ fn main() {
         value: Ok(0.),
         current: String::new(),
         logic: LexerData::default(),
-    })
-    .window(
-        WindowBuilder::new(WIDTH, HEIGHT)
-            .title("Calculator")
-            .background(Color::hex_rgb(0x3c3836))
-            .build::<_, _>(build_ui()),
-    );
+    });
+    let env = app.env();
+
+    let window = WindowBuilder::new(WIDTH, HEIGHT)
+        .title("Calculator")
+        .build(build_ui(env));
+    app = app.window(window);
 
     loop {
         if app.needs_redraw() {

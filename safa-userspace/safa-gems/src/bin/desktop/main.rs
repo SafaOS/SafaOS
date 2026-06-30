@@ -54,8 +54,14 @@ fn init_wallpaper() -> Option<Window> {
             let elapsed = now.elapsed();
             println!("Scaling took {}ms", elapsed.as_millis());
 
-            let mut wall_window =
-                Window::create("", WindowFlags::BG_WINDOW, width, height, None, None);
+            let mut wall_window = Window::create(
+                "",
+                WindowFlags::BG_WINDOW | WindowFlags::NO_DECORATIONS,
+                width,
+                height,
+                None,
+                None,
+            );
 
             let pixels = scaled.get_pixels();
             wall_window.pixels_mut()[..pixels.len()]
