@@ -160,16 +160,16 @@ fn build_ui(env: &AppEnv) -> impl Shard<Calculator, Message> + 'static {
         .with(expr_screen(env))
         .with(buttons_area(env))
         .justify(Justify::SpaceBetween)
-        .on_msg(|ctx: &mut Data<Calculator, Message>, m, _| {
-            if let Err(e) = ctx.logic.execute(&m) {
-                ctx.current.clear();
-                ctx.current.push_str(e);
+        .on_msg(|_, data: &mut Data<Calculator, Message>, m, _| {
+            if let Err(e) = data.logic.execute(&m) {
+                data.current.clear();
+                data.current.push_str(e);
             } else {
-                let data = &mut **ctx;
+                let data = &mut **data;
                 data.logic.view_to(&mut data.current);
             }
 
-            ctx.value = ctx.logic.eval();
+            data.value = data.logic.eval();
         })
 }
 

@@ -1,176 +1,108 @@
-use libgem::{
-    Gem,
-    canvas::{DrawingCanvas, Pixel},
-    element::{Element, is_inside_rect},
-    image::{PixelImage, ScaleType, display::ARGB},
+use libgem::image::{PixelImage, ScaleType};
+use libgems::{
+    BoundingRect, Data, EventCtx, Point, ShardEvent,
+    render::{PaintBrush, shapes::Circle},
+    shards::{LayoutCtx, LifeCycleCtx, RenderCtx, Shard, ShardLayout, lifecycle::LifeCycle},
+    theme,
+    tiny_skia::ColorU8,
 };
-use libopal::defs::HeldMouseButtons;
 
 const BTN_SIZE: u32 = 32;
-const BTN_HEIGHT: u32 = 48;
 
-const FOCUSED_COLOR: Pixel = Pixel::rgb(0xb1, 0x62, 0x86);
-const IDLE_COLOR: Pixel = Pixel::rgb(0x7c, 0x6f, 0x64);
 const MASK: u8 = 0x2F;
 
 pub struct TaskButton {
     icon: PixelImage,
-    win_id: u16,
-    status_color: Pixel,
+    pub(crate) win_id: u16,
+    focused: bool,
     needs_redraw: bool,
-    is_hovering: bool,
-    is_held: bool,
 }
 
 impl TaskButton {
     pub fn new(win_id: u16, mut icon: PixelImage) -> Self {
         icon.scale(BTN_SIZE, BTN_SIZE, ScaleType::Triangle);
         Self {
-            is_hovering: false,
-            is_held: false,
             icon,
             win_id,
-            status_color: IDLE_COLOR,
+            focused: false,
             needs_redraw: true,
         }
     }
 
-    pub const fn width(&self) -> u32 {
-        BTN_SIZE
-    }
-
-    pub const fn height(&self) -> u32 {
-        BTN_HEIGHT
-    }
-
-    pub const fn needs_redraw(&self) -> bool {
-        self.needs_redraw
-    }
-
     pub const fn set_focused(&mut self, focus: bool) {
-        if focus {
-            self.status_color = FOCUSED_COLOR;
-        } else {
-            self.status_color = IDLE_COLOR;
-        }
+        self.focused = focus;
         self.needs_redraw = true;
-    }
-
-    pub const fn win(&self) -> u16 {
-        self.win_id
     }
 }
 
-impl<G: Gem, Canvas: DrawingCanvas> Element<Canvas, G> for TaskButton {
-    fn container_width(&self) -> u32 {
-        BTN_SIZE
-    }
+const STATUS_RADIUS: f32 = 2.5;
 
-    fn container_height(&self) -> u32 {
-        BTN_SIZE
-    }
-
-    fn draw_height(&self) -> u32 {
-        BTN_SIZE
-    }
-
-    fn draw_width(&self) -> u32 {
-        BTN_SIZE
-    }
-
-    fn needs_redraw(&self) -> bool {
+impl<S, M> Shard<S, M> for TaskButton {
+    fn dirty(&self) -> bool {
         self.needs_redraw
     }
-
-    fn draw(
-        &mut self,
-        canvas: &mut Canvas,
-        start_x: u32,
-        start_y: u32,
-        bg_color: Pixel,
-    ) -> (Option<(u32, u32)>, Option<(u32, u32)>) {
-        let width = self.width();
-        let height = self.height();
-
-        canvas.draw_rect(start_x, start_y, width, height, Pixel::NONE, Some(bg_color));
-
-        for (y, row) in self.icon.iter_rows_from(0).enumerate() {
-            canvas.draw_row_iter(
-                start_x,
-                start_y + y as u32,
-                row.iter().map(|a| {
-                    if self.is_hovering {
-                        ARGB::from_rgba(
-                            a.red() | MASK,
-                            a.green() | MASK,
-                            a.blue() | MASK,
-                            a.alpha(),
-                        )
-                    } else {
-                        *a
-                    }
-                }),
-                Some(bg_color),
-            );
+    fn layout(&mut self, _: &mut LayoutCtx) -> ShardLayout {
+        ShardLayout {
+            bounds: BoundingRect::new(
+                BTN_SIZE as f32,
+                (BTN_SIZE + 4) as f32 + (STATUS_RADIUS * STATUS_RADIUS),
+            ),
+            ..Default::default()
         }
-
-        canvas.draw_circle_filled(
-            start_x + (width / 2),
-            start_y + BTN_SIZE + 4,
-            2,
-            self.status_color,
-            Some(bg_color),
-        );
-
-        self.needs_redraw = false;
-        (
-            Some((start_x, start_y)),
-            Some((start_x + width, start_y + height)),
-        )
     }
 
-    fn handle_event(&mut self, gem: &mut G, event: libopal::WindowEvent, ele_x: u32, ele_y: u32) {
-        _ = gem;
-        let width = self.width();
-        let height = self.height();
+    fn render(&mut self, ctx: &mut RenderCtx, data: &Data<S, M>) -> Option<(Point, BoundingRect)> {
+        let env = data.env();
+        let is_hovering = ctx.is_hot() && !ctx.is_active();
+        let pixmap = ctx.pixmap();
 
-        let (pos, leave, btn_left) = match event {
-            libopal::WindowEvent::MouseChange(m) => (
-                Some((m.x(), m.y())),
-                false,
-                m.buttons_changed()
-                    .then_some(m.held_buttons().contains(HeldMouseButtons::LEFT)),
-            ),
-            libopal::WindowEvent::MouseLeave(_) => (None, true, None),
-            libopal::WindowEvent::MouseEnter(m) => (Some((m.x(), m.y())), false, None),
-            _ => (None, false, None),
-        };
+        let width = pixmap.width();
 
-        let mut is_hovering = self.is_hovering;
-        let mut is_held = self.is_held;
+        for (y, row) in self.icon.iter_rows_from(0).enumerate() {
+            let px_row = &mut pixmap.pixels_mut()[(y as u32 * width) as usize..];
+            for (px, a) in px_row.iter_mut().zip(row.iter()) {
+                let mask = if is_hovering { MASK } else { 0 };
 
-        if let Some((x, y)) = pos {
-            is_hovering = is_inside_rect(x, y, ele_x, ele_y, width, height);
-        }
-
-        if leave {
-            is_hovering = false;
-        }
-
-        if let Some(btn_left) = btn_left
-            && is_hovering
-        {
-            if btn_left {
-                is_hovering = false;
-                is_held = true;
-            } else if self.is_held {
-                _ = libopal::window::focus_window(self.win_id);
+                *px = ColorU8::from_rgba(
+                    a.red() | mask,
+                    a.green() | mask,
+                    a.blue() | mask,
+                    a.alpha(),
+                )
+                .premultiply();
             }
         }
 
-        self.needs_redraw = is_hovering != self.is_hovering;
+        ctx.move_by(Point::new(width as f32 / 2., (BTN_SIZE + 4) as f32))
+            .fill(
+                &PaintBrush::Color(match self.focused {
+                    false => env.get(theme::BACKGROUND_COLOR_1),
+                    true => env.get(theme::ACCENT_COLOR_4),
+                }),
+                &Circle::new(STATUS_RADIUS),
+            );
+        self.needs_redraw = false;
+        None
+    }
 
-        self.is_hovering = is_hovering;
-        self.is_held = is_held;
+    fn on_event(&mut self, event_ctx: &mut EventCtx, event: &ShardEvent, _: &mut Data<S, M>) {
+        match event {
+            ShardEvent::MouseClick(_) => {
+                event_ctx.set_active(true);
+                self.needs_redraw = true;
+            }
+            ShardEvent::MouseRelease(_) => {
+                event_ctx.set_active(false);
+                self.needs_redraw = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn lifecycle(&mut self, _: &mut LifeCycleCtx, event: &LifeCycle, _: &Data<S, M>) {
+        match event {
+            LifeCycle::HotChanged(_) => self.needs_redraw = true,
+            _ => {}
+        }
     }
 }

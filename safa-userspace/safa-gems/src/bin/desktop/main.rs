@@ -1,17 +1,13 @@
 use std::path::PathBuf;
 
-use libgem::{
-    App, Gem, GemConfig,
-    canvas::Pixel,
-    element::container::{ContainerLayout, ContainerStyles, VerticalLayout},
-    image::QOIImage,
-};
+use libgem::{canvas::Pixel, image::QOIImage};
+use libgems::{AppEnv, WindowBuilder};
 use libopal::{
     WindowEvent,
     window::{Window, WindowFlags},
 };
 
-use crate::main_dock::MainDock;
+use crate::main_dock::{DockData, DockMessage};
 
 mod main_dock;
 mod task_button;
@@ -80,44 +76,27 @@ fn init_wallpaper() -> Option<Window> {
     }
 }
 
-struct TaskBar;
-impl Gem for TaskBar {}
-impl TaskBar {
-    pub fn init() -> App<Self> {
-        let (screen_width, screen_height) = libopal::get_screen_dimensions();
-
-        let config = GemConfig::new("Taskbar", screen_width, 48)
-            .with_border(None)
-            .with_position(0, (screen_height - (40 * 2) - 16) as i32)
-            .with_win_flags(WindowFlags::OVERLAY_WINDOW)
-            .with_bg_color(Pixel::NONE);
-        Self.init(config)
-    }
-}
-
 fn main() {
     let _win = init_wallpaper();
-    let mut taskbar = TaskBar::init();
-    taskbar.body().set_styles(
-        ContainerStyles::new().with_layout(ContainerLayout::Vertical(
-            VerticalLayout::new().with_align_center(true),
-        )),
-    );
 
-    let main_dock = MainDock::new();
-    let main_dock_id = taskbar.add_element(main_dock);
-    let win_id = taskbar.win().id();
+    let data = DockData::new();
+
+    let (screen_width, screen_height) = libopal::get_screen_dimensions();
+
+    let height = 64;
+    let env = AppEnv::sys_theme();
+    let window = WindowBuilder::new(screen_width, height)
+        .y(Some((screen_height - (40 * 2) - 16) as i32))
+        .flags(WindowFlags::OVERLAY_WINDOW | WindowFlags::NO_DECORATIONS)
+        .title("")
+        .background(Pixel::NONE)
+        .build(main_dock::build_ui(&env, screen_width, height));
+    let mut app = libgems::App::new(data).with_env(env);
+    let win_id = app.add_window(window);
 
     loop {
-        taskbar.redraw();
-        let events = taskbar.handle_events_blocking();
-        let main_dock: &mut MainDock = unsafe {
-            taskbar
-                .body()
-                .get_element_as_mut(main_dock_id)
-                .unwrap_unchecked()
-        };
-
+        app.redraw_needed();
+        let events = app.wait_for_events();
         if REALLY_VERBOSE {
             println!("taskbar events: {events:?}");
         }
@@ -128,10 +107,14 @@ fn main() {
         {
             let event = win_even.event();
             match event {
-                WindowEvent::GlobalWindowAttached(win) => main_dock.attached(win.win_id()),
-                WindowEvent::GlobalWindowDeatached(win) => main_dock.deatached(win.win_id()),
+                WindowEvent::GlobalWindowAttached(win) => {
+                    app.broadcast_message(DockMessage::Attached(win.win_id()));
+                }
+                WindowEvent::GlobalWindowDeatached(win) => {
+                    app.broadcast_message(DockMessage::Deatached(win.win_id()))
+                }
                 WindowEvent::GlobalWindowFocusChanged(change, window) => {
-                    main_dock.focus_changed(window, change.is_focused())
+                    app.broadcast_message(DockMessage::FocusChanged(window, change.is_focused()));
                 }
                 _ => {}
             }
