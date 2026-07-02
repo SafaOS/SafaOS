@@ -1,9 +1,8 @@
 use libgem::image::{PixelImage, ScaleType};
 use libgems::{
-    BoundingRect, Data, EventCtx, Point, ShardEvent,
+    BoundingRect, Color, Data, EventCtx, Point, ShardEvent,
     render::{PaintBrush, shapes::Circle},
     shards::{LayoutCtx, LifeCycleCtx, RenderCtx, Shard, ShardLayout, lifecycle::LifeCycle},
-    theme,
     tiny_skia::ColorU8,
 };
 
@@ -11,6 +10,8 @@ const BTN_SIZE: u32 = 32;
 
 const MASK: u8 = 0x2F;
 
+const IDLE_COLOR: Color = Color::rgb(0x7c, 0x6f, 0x64);
+const FOCUSED_COLOR: Color = Color::rgb(0xb1, 0x62, 0x86);
 pub struct TaskButton {
     icon: PixelImage,
     pub(crate) win_id: u16,
@@ -51,8 +52,7 @@ impl<S, M> Shard<S, M> for TaskButton {
         }
     }
 
-    fn render(&mut self, ctx: &mut RenderCtx, data: &Data<S, M>) -> Option<(Point, BoundingRect)> {
-        let env = data.env();
+    fn render(&mut self, ctx: &mut RenderCtx, _: &Data<S, M>) -> Option<(Point, BoundingRect)> {
         let is_hovering = ctx.is_hot() && !ctx.is_active();
         let pixmap = ctx.pixmap();
 
@@ -76,8 +76,8 @@ impl<S, M> Shard<S, M> for TaskButton {
         ctx.move_by(Point::new(width as f32 / 2., (BTN_SIZE + 4) as f32))
             .fill(
                 &PaintBrush::Color(match self.focused {
-                    false => env.get(theme::BACKGROUND_COLOR_1),
-                    true => env.get(theme::ACCENT_COLOR_4),
+                    false => IDLE_COLOR,
+                    true => FOCUSED_COLOR,
                 }),
                 &Circle::new(STATUS_RADIUS),
             );
