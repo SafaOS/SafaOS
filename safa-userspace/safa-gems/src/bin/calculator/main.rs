@@ -136,6 +136,7 @@ fn expr_screen(env: &AppEnv) -> impl Shard<Calculator, Message> + 'static {
         )
         .with(
             Label::from_str("99230")
+                .with_align(libgems::cosmic_text::Align::End)
                 .with_metrics(Metrics::relative(12., 1.0))
                 .on_update(|ctx: &Data<Calculator, Message>, this| {
                     match ctx.value {
@@ -144,8 +145,7 @@ fn expr_screen(env: &AppEnv) -> impl Shard<Calculator, Message> + 'static {
                     };
                 })
                 .fix_height(12.)
-                .pad(Padding::equal(8.))
-                .align(AxisAlign::End),
+                .pad(Padding::equal(8.)),
         )
         .background(env.get(theme::BACKGROUND_COLOR_1))
         .round(12.)
@@ -187,9 +187,9 @@ fn main() {
     app = app.window(window);
 
     loop {
-        if app.needs_redraw() {
-            app.redraw_needed();
-        }
+        // if app.needs_redraw() {
+        //     app.redraw_needed();
+        // }
 
         app.wait_for_events();
     }

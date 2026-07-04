@@ -95,7 +95,7 @@ fn main() {
     let win_id = app.add_window(window);
 
     loop {
-        app.redraw_needed();
+        // app.redraw_needed();
         let events = app.wait_for_events();
         if REALLY_VERBOSE {
             println!("taskbar events: {events:?}");
