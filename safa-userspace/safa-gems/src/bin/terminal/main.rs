@@ -1,4 +1,5 @@
-mod term_display;
+mod display;
+mod utils;
 
 use std::{
     io::{Read, Write},
@@ -8,41 +9,65 @@ use std::{
     time::Instant,
 };
 
-use libgem::{
-    App, Gem, GemConfig,
-    image::BMPImage,
-    libopal::{
-        WindowEvent,
-        event::{KeyCode, KeyEventKind},
-        window::Pixel,
-    },
+use libgems::{
+    Color, Data, Padding, WindowBuilder,
+    shards::{Shard, ShardsExt},
 };
-use libopal::defs::KeyModifiers;
+use libopal::{
+    WindowEvent,
+    defs::KeyModifiers,
+    event::{KeyCode, KeyEventKind},
+};
 use safa_api::abi::poll::{PollEntry, PollEvents};
 
-use crate::term_display::TerminalElement;
+use crate::display::TermDisplay;
 use std::os::safaos::AsRawResource;
 
+pub const FONT_HEIGHT: f32 = 12.;
+pub const LINE_HEIGHT: f32 = 14.;
+pub const FONT_WIDTH: f32 = 7.;
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 560;
+
+const CHAR_WIDTH: u32 = (WIDTH / FONT_WIDTH as u32) - 2 /* padding */;
+const CHAR_LINES: u32 = 150;
+
 const TITLE: &str = "Terminal";
-const BG_COLOR: Pixel = Pixel::rgb(0x28, 0x28, 0x28).with_alpha(0xF0);
+const BG_COLOR: Color = Color::rgb(0x28, 0x28, 0x28).with_alpha(0xF0);
 
 static ICON: &[u8] = include_bytes!("../../../assets/terminal.bmp");
 
 use libopal::keys::keycode_to_char;
+struct TerminalData {
+    statemachine: vte::Parser,
+    buf: Vec<u8>,
+}
+enum Message {
+    NewData,
+    ScrollView(i32),
+}
 
-struct Terminal;
-impl Gem for Terminal {}
+fn build_ui() -> impl Shard<TerminalData, Message> + 'static {
+    TermDisplay::new(CHAR_WIDTH, CHAR_LINES)
+        .on_msg(
+            |_, data: &mut Data<TerminalData, Message>, msg, this| match msg {
+                Message::NewData => {
+                    let data = &mut **data;
 
-impl Terminal {
-    fn init() -> App<Self> {
-        Self.init(
-            GemConfig::new(TITLE, WIDTH, HEIGHT)
-                .with_bg_color(BG_COLOR)
-                .with_icon(BMPImage::from_slice(ICON).expect("Failed to parse icon bmp")),
+                    let instant = Instant::now();
+                    data.statemachine.advance(this, &data.buf);
+                    let elapsed = instant.elapsed();
+                    println!(
+                        "elapsed: {}ms, parsing {}",
+                        elapsed.as_millis(),
+                        data.buf.len()
+                    );
+                }
+                Message::ScrollView(amoun) => this.move_view_by(*amoun),
+            },
         )
-    }
+        .fix_size(WIDTH as f32 - (FONT_WIDTH * 2.) as f32, HEIGHT as f32)
+        .pad(Padding::lr(FONT_WIDTH as f32))
 }
 
 fn main() {
@@ -68,18 +93,23 @@ fn main() {
         .spawn()
         .expect("Failed to spawn shell");
 
-    let mut term = Terminal::init();
-    let console_editor = TerminalElement::new(WIDTH, HEIGHT);
-    let id = term.add_element(console_editor);
+    let window = WindowBuilder::new(WIDTH, HEIGHT)
+        .background(BG_COLOR)
+        .icon(ICON)
+        .title(TITLE)
+        .build(build_ui());
+    let mut app = libgems::App::new(TerminalData {
+        statemachine: vte::Parser::new(),
+        buf: Vec::with_capacity(4096),
+    })
+    .window(window);
 
-    let mut buf = Vec::with_capacity(4096);
     let mut write_to = mother
         .try_clone()
         .expect("Cloning mother should never fail");
     let mut write = move |b: &[u8]| write_to.write(b).expect("Failed to write to stdin");
     let mut read_from = mother;
 
-    let mut statemechaine = vte::Parser::new();
     let mut poll_entries = [
         PollEntry::new(0, PollEvents::NONE),
         PollEntry::new(
@@ -88,30 +118,20 @@ fn main() {
         ),
     ];
 
-    let win_id = term.win().id();
     loop {
-        term.redraw();
-
-        let events = term.try_handle_events_with_poll(&mut poll_entries);
-        let console: &mut TerminalElement = term.body().get_element_as_mut(id).expect("SDASsada??");
+        let events = app.try_handle_events_with_poll(&mut poll_entries);
 
         let len = read_from
-            .read_to_end(&mut buf)
+            .read_to_end(&mut app.data_mut().buf)
             .expect("Failed to read stdout");
         if len != 0 {
-            let instant = Instant::now();
-            statemechaine.advance(console, &buf);
-            let elapsed = instant.elapsed();
-            println!("elapsed: {}ms, parsing {}", elapsed.as_millis(), buf.len());
-            buf.clear();
+            app.broadcast_message(Message::NewData);
+            app.data_mut().buf.clear();
         }
 
+        let mut scroll_lines = 0;
         if let Some(events) = events {
-            for event in events
-                .iter()
-                .filter(|w_eve| w_eve.receiver() == win_id)
-                .map(|w_eve| w_eve.event())
-            {
+            for event in events.iter().map(|w_eve| w_eve.event()) {
                 match event {
                     WindowEvent::Key(k_eve) => {
                         if k_eve.kind == KeyEventKind::Press {
@@ -144,6 +164,17 @@ fn main() {
                                     KeyCode::Return => {
                                         write(b"\n");
                                     }
+                                    KeyCode::PageUp
+                                        if k_eve.modifiers.contains(KeyModifiers::SHIFT) =>
+                                    {
+                                        scroll_lines -= 3;
+                                    }
+
+                                    KeyCode::PageDown
+                                        if k_eve.modifiers.contains(KeyModifiers::SHIFT) =>
+                                    {
+                                        scroll_lines += 3;
+                                    }
                                     _ => {}
                                 }
                             }
@@ -152,6 +183,10 @@ fn main() {
                     _ => {}
                 }
             }
+        }
+
+        if scroll_lines != 0 {
+            app.broadcast_message(Message::ScrollView(scroll_lines));
         }
     }
 }
