@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::{FONT_HEIGHT, FONT_WIDTH, LINE_HEIGHT, utils};
+use crate::{FONT_HEIGHT, FONT_WIDTH, LINE_HEIGHT, play_beep, utils};
 
 use libgems::{
     BoundingRect, Color, Data, Point, cosmic_text,
@@ -101,7 +101,6 @@ impl Default for Cell {
 struct Row {
     cells: Box<[Cell]>,
     text: String,
-    attrs_list: cosmic_text::AttrsList,
     buffer: cosmic_text::Buffer,
     dirty: bool,
     empty: bool,
@@ -116,7 +115,6 @@ impl Row {
                 LINE_HEIGHT as f32,
             )),
             text: String::with_capacity(len as usize),
-            attrs_list: cosmic_text::AttrsList::new(&default_attrs()),
             dirty: false,
             empty: true,
         }
@@ -127,7 +125,7 @@ impl Row {
     ) -> &mut cosmic_text::Buffer {
         if self.dirty {
             if !self.empty {
-                let attrs_list = &mut self.attrs_list;
+                let mut attrs_list = cosmic_text::AttrsList::new(&default_attrs());
 
                 let string = &mut self.text;
                 string.clear();
@@ -184,17 +182,21 @@ impl Row {
         &mut self.buffer
     }
 
-    pub fn clear(&mut self) {
-        self.cells.fill(Cell::default());
-        self.buffer.lines.get_mut(0).map(|line| {
-            line.set_text(
-                String::new(),
-                cosmic_text::LineEnding::None,
-                cosmic_text::AttrsList::new(&default_attrs()),
-            )
-        });
+    pub fn clear(&mut self, start: usize, end: usize) {
+        self.cells[start..end].fill(Cell::default());
+
         self.dirty = true;
-        self.empty = true;
+        if start == 0 && end == self.cells.len() {
+            self.buffer.lines.get_mut(0).map(|line| {
+                line.set_text(
+                    String::new(),
+                    cosmic_text::LineEnding::None,
+                    cosmic_text::AttrsList::new(&default_attrs()),
+                )
+            });
+
+            self.empty = true;
+        }
     }
 
     pub fn put(
@@ -259,24 +261,45 @@ impl Grid {
     }
 }
 
-pub struct TermDisplay {
-    pixmap: tiny_skia::Pixmap,
-    grid: Grid,
-    damage_min: Option<u32>,
-    damage_max: Option<u32>,
-    viewport_index: u32,
-    viewport_lines: u32,
-    cursor: (u32, u32),
-    default_fg: Color,
+pub enum TermRequest {
+    CursorRequest((u32, u32)),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DrawCursor {
+    x: u32,
+    y: u32,
     curr_fg: Color,
     curr_bg: Color,
     curr_weight: cosmic_text::Weight,
     curr_attr: u16,
 }
+pub struct TermDisplay {
+    pixmap: tiny_skia::Pixmap,
+    grid: Grid,
+    requests: Vec<TermRequest>,
+    damage_min: Option<u32>,
+    damage_max: Option<u32>,
+    viewport_index: u32,
+    viewport_lines: u32,
+    cursor: DrawCursor,
+    saved_cursor: DrawCursor,
+    default_fg: Color,
+}
 
 impl TermDisplay {
     pub fn new(width: u32, height: u32) -> Self {
+        let draw = DrawCursor {
+            x: 0,
+            y: 0,
+
+            curr_fg: Color::WHITE,
+            curr_bg: Color::NONE,
+            curr_weight: cosmic_text::Weight::default(),
+            curr_attr: 0,
+        };
         Self {
+            saved_cursor: draw,
             pixmap: tiny_skia::Pixmap::new(
                 width * FONT_WIDTH.ceil() as u32,
                 height * LINE_HEIGHT.ceil() as u32,
@@ -287,31 +310,54 @@ impl TermDisplay {
             damage_max: None,
             viewport_index: 0,
             viewport_lines: height,
-            cursor: (0, 0),
+            cursor: draw,
             default_fg: Color::WHITE,
-            curr_fg: Color::WHITE,
-            curr_bg: Color::NONE,
-            curr_weight: cosmic_text::Weight::default(),
-            curr_attr: 0,
+            requests: Vec::new(),
         }
+    }
+
+    pub fn cursor(&self) -> (u32, u32) {
+        (self.cursor.x, self.cursor.y)
+    }
+
+    pub fn collect_requests(&mut self) -> std::vec::Drain<TermRequest> {
+        self.requests.drain(..)
     }
 
     fn reset(&mut self) {
-        self.curr_fg = self.default_fg;
-        self.curr_bg = Color::NONE;
-        self.curr_weight = cosmic_text::Weight::default();
-        self.curr_attr = 0;
+        self.cursor.curr_fg = self.default_fg;
+        self.cursor.curr_bg = Color::NONE;
+        self.cursor.curr_weight = cosmic_text::Weight::default();
+        self.cursor.curr_attr = 0;
     }
 
-    fn clear(&mut self) {
-        self.reset();
-        for row in &mut self.grid.rows {
-            row.clear();
+    fn clear(&mut self, x: u32, end_x: u32, y_range: std::ops::Range<u32>, scrollback: bool) {
+        for y in y_range.clone() {
+            if y as usize >= self.grid.rows.len() {
+                break;
+            }
+
+            let row = &mut self.grid.rows[y as usize];
+
+            let mut start = 0;
+            let mut end = row.cells.len();
+
+            if y == y_range.start {
+                start = x as usize;
+            }
+
+            if y == y_range.end {
+                end = end_x as usize;
+            }
+
+            row.clear(start, end);
         }
-        self.move_cursor(0, 0);
+        if scrollback {
+            self.move_cursor(0, 0);
+        }
     }
     fn insert_char(&mut self, c: char) {
-        let (x, y) = self.cursor;
+        let (x, y) = self.cursor();
         if c == '\n' {
             return self.move_cursor(0, y + 1);
         }
@@ -319,18 +365,20 @@ impl TermDisplay {
         if c == '\x08' {
             match (x.checked_sub(1), y.checked_sub(1)) {
                 (None, None) => return,
-                (Some(x), _) => return self.cursor = (x, y),
-                (None, Some(y)) => return self.cursor = (self.grid.width() - 1, y),
+                (Some(x), _) => {
+                    return self.move_cursor(x, y);
+                }
+                (None, Some(y)) => return self.move_cursor(self.grid.width() - 1, y),
             }
         }
 
         self.grid.rows[y as usize].put(
             x as usize,
             c,
-            self.curr_fg,
-            self.curr_bg,
-            self.curr_weight,
-            self.curr_attr,
+            self.cursor.curr_fg,
+            self.cursor.curr_bg,
+            self.cursor.curr_weight,
+            self.cursor.curr_attr,
         );
 
         self.move_cursor(x + 1, y);
@@ -368,7 +416,7 @@ impl TermDisplay {
             return;
         }
 
-        let (_, y) = self.cursor;
+        let (_, y) = self.cursor();
 
         if let Some(ref mut d_y) = self.damage_min {
             *d_y = (*d_y).min(y);
@@ -383,6 +431,30 @@ impl TermDisplay {
         }
     }
 
+    fn restore_viewport(&mut self, cursor: DrawCursor) {
+        self.move_cursor_viewport(cursor.x, cursor.y);
+
+        self.cursor = DrawCursor {
+            x: self.cursor.x,
+            y: self.cursor.y,
+            ..cursor
+        };
+    }
+    fn move_cursor_viewport(&mut self, mut x: u32, mut y: u32) {
+        self.refresh_damage(false);
+        let max_x = self.grid.width() - 1;
+        let min_x = 0;
+
+        let max_y = self.viewport_index + self.viewport_lines - 1;
+        let min_y = self.viewport_index;
+
+        x = x.clamp(min_x, max_x);
+        y = y.clamp(min_y, max_y);
+
+        self.cursor.x = x;
+        self.cursor.y = y;
+        self.refresh_damage(false);
+    }
     fn move_cursor(&mut self, mut x: u32, mut y: u32) {
         self.refresh_damage(false);
 
@@ -401,26 +473,21 @@ impl TermDisplay {
         let old_v = self.viewport_index;
         self.viewport_index = (y + 1).saturating_sub(self.viewport_lines);
 
-        self.cursor = (x, y);
+        self.cursor.x = x;
+        self.cursor.y = y;
         self.refresh_damage(old_v != self.viewport_index || to_scroll);
     }
 
     fn move_cursor_lines(&mut self, amount: i32) {
-        let (x, y) = self.cursor;
+        let (x, y) = self.cursor();
 
-        self.move_cursor(
-            x,
-            y.saturating_add_signed(amount).min(self.grid.height() - 1),
-        );
+        self.move_cursor_viewport(x, y.saturating_add_signed(amount));
     }
 
     fn move_cursor_chars(&mut self, amount: i32) {
-        let (x, y) = self.cursor;
+        let (x, y) = self.cursor();
 
-        self.move_cursor(
-            x.saturating_add_signed(amount).min(self.grid.width() - 1),
-            y,
-        );
+        self.move_cursor_viewport(x.saturating_add_signed(amount), y);
     }
 }
 
@@ -433,6 +500,16 @@ impl vte::Perform for TermDisplay {
         match byte {
             0xa => self.insert_char('\n'),
             0x8 => self.insert_char('\x08'),
+            0x0d => {
+                let (_, y) = self.cursor();
+                self.move_cursor_viewport(0, y);
+            }
+            0x09 => {
+                self.insert_char('\t');
+            }
+            0x07 => {
+                play_beep();
+            }
             _ => println!("[execute] {:02x}", byte),
         }
     }
@@ -465,12 +542,28 @@ impl vte::Perform for TermDisplay {
             params, intermediates, ignore, c
         );
         match c {
-            'J' => self.clear(),
+            'J' => {
+                let mode = params.into_iter().next().map(|p| p[0]).unwrap_or(0);
+
+                match mode {
+                    0 => {
+                        let (x, y) = self.cursor();
+                        self.clear(x, self.grid.width(), y..self.grid.height(), false);
+                    }
+                    1 => {
+                        let (x, y) = self.cursor();
+                        self.clear(0, x + 1, 0..(y + 1), false);
+                    }
+                    2 => self.clear(0, self.grid.width(), 0..self.grid.height(), false),
+                    3 => self.clear(0, self.grid.width(), 0..self.grid.height(), true),
+                    _ => {}
+                }
+            }
             'H' => {
                 let mut iter = params.into_iter();
-                let y = iter.next().unwrap_or(&[0])[0] as u32;
-                let x = iter.next().unwrap_or(&[0])[0] as u32;
-                self.move_cursor(x, y)
+                let y = (iter.next().unwrap_or(&[1])[0].max(1) - 1) as u32;
+                let x = (iter.next().unwrap_or(&[1])[0].max(1) - 1) as u32;
+                self.move_cursor_viewport(x, y)
             }
             'A' | 'B' | 'D' | 'C' => {
                 let mut params = params.into_iter();
@@ -493,8 +586,8 @@ impl vte::Perform for TermDisplay {
                         0 => {
                             self.reset();
                         }
-                        1 => self.curr_weight = cosmic_text::Weight::BOLD,
-                        22 => self.curr_weight = cosmic_text::Weight::default(),
+                        1 => self.cursor.curr_weight = cosmic_text::Weight::BOLD,
+                        22 => self.cursor.curr_weight = cosmic_text::Weight::default(),
                         color @ 30..=37
                         | color @ 40..=47
                         | color @ 90..=97
@@ -539,9 +632,9 @@ impl vte::Perform for TermDisplay {
                             };
 
                             if !is_bg {
-                                self.curr_fg = pix;
+                                self.cursor.curr_fg = pix;
                             } else {
-                                self.curr_bg = pix;
+                                self.cursor.curr_bg = pix;
                             }
                         }
 
@@ -554,9 +647,9 @@ impl vte::Perform for TermDisplay {
 
                                 let pix = Pixel::rgb(r, g, b);
                                 if !is_bg {
-                                    self.curr_fg = pix;
+                                    self.cursor.curr_fg = pix;
                                 } else {
-                                    self.curr_bg = pix;
+                                    self.cursor.curr_bg = pix;
                                 }
                             }
                             _ => {}
@@ -565,6 +658,22 @@ impl vte::Perform for TermDisplay {
                     }
                 }
             }
+            'n' => {
+                if let Some([n]) = params.iter().next() {
+                    match n {
+                        6 => {
+                            self.requests
+                                .push(TermRequest::CursorRequest(self.cursor()));
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                println!(
+                    "[csi_dispatch] params={:#?}, intermediates={:?}, ignore={:?}, char={:?}",
+                    params, intermediates, ignore, c
+                );
+            }
             _ => println!(
                 "[csi_dispatch] params={:#?}, intermediates={:?}, ignore={:?}, char={:?}",
                 params, intermediates, ignore, c
@@ -572,11 +681,21 @@ impl vte::Perform for TermDisplay {
         }
     }
 
-    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
-        println!(
-            "[esc_dispatch] intermediates={:?}, ignore={:?}, byte={:02x}",
-            intermediates, ignore, byte
-        );
+    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        match byte {
+            b'7' => {
+                self.saved_cursor = self.cursor;
+            }
+            b'8' => {
+                self.restore_viewport(self.saved_cursor);
+            }
+            _ => {
+                println!(
+                    "[esc_dispatch] intermediates={:?}, byte={:02x}",
+                    intermediates, byte
+                );
+            }
+        }
     }
 }
 
@@ -766,7 +885,7 @@ impl<S, M> Shard<S, M> for TermDisplay {
             (origin.y() + render_point.y()).floor() as i32,
         );
 
-        let (c_x, c_y) = self.cursor;
+        let (c_x, c_y) = self.cursor();
 
         if c_y >= cur_y && c_y <= m_cur_y {
             let target_y = ((c_y - self.viewport_index) as f32 * LINE_HEIGHT) as f32 + origin.y();

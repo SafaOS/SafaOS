@@ -2,13 +2,15 @@ mod display;
 mod utils;
 
 use std::{
-    io::{Read, Write},
+    io::{Cursor, Read, Write},
     os::safaos::io::IoUtils,
     process::Command,
     str,
+    sync::{LazyLock, Mutex},
     time::Instant,
 };
 
+use libartemis::audio::AudioPlayer;
 use libgems::{
     Color, Data, Padding, WindowBuilder,
     shards::{Shard, ShardsExt},
@@ -20,7 +22,7 @@ use libopal::{
 };
 use safa_api::abi::poll::{PollEntry, PollEvents};
 
-use crate::display::TermDisplay;
+use crate::display::{TermDisplay, TermRequest};
 use std::os::safaos::AsRawResource;
 
 pub const FONT_HEIGHT: f32 = 12.;
@@ -41,6 +43,7 @@ use libopal::keys::keycode_to_char;
 struct TerminalData {
     statemachine: vte::Parser,
     buf: Vec<u8>,
+    requests: Vec<TermRequest>,
 }
 enum Message {
     NewData,
@@ -56,6 +59,8 @@ fn build_ui() -> impl Shard<TerminalData, Message> + 'static {
 
                     let instant = Instant::now();
                     data.statemachine.advance(this, &data.buf);
+                    data.requests.extend(this.collect_requests());
+
                     let elapsed = instant.elapsed();
                     println!(
                         "elapsed: {}ms, parsing {}",
@@ -70,7 +75,31 @@ fn build_ui() -> impl Shard<TerminalData, Message> + 'static {
         .pad(Padding::lr(FONT_WIDTH as f32))
 }
 
+const BEEP_DATA: &[u8] = include_bytes!("../../../assets/beep.wav");
+static BEEP_AUDIO: LazyLock<AudioPlayer<Cursor<&'static [u8]>>> = LazyLock::new(|| {
+    AudioPlayer::load_wav(Cursor::new(BEEP_DATA)).expect("Failed to load beep audio")
+});
+
+static BEEP_MUT: Mutex<()> = Mutex::new(());
+static BEEP_THREAD: std::sync::Condvar = std::sync::Condvar::new();
+
+fn beep_main() {
+    loop {
+        let _guard = BEEP_THREAD
+            .wait(BEEP_MUT.lock().expect("Failed to lock mutex"))
+            .expect("Failed to lock mutex");
+        BEEP_AUDIO.play().expect("Failed to play beep audio");
+        BEEP_AUDIO.reset();
+    }
+}
+
+pub fn play_beep() {
+    BEEP_THREAD.notify_one();
+}
+
 fn main() {
+    std::thread::spawn(|| beep_main());
+
     const SET_FLAGS: u16 = 1;
     const ECHO: u64 = 1 << 0;
     const CANONICAL: u64 = 1 << 1;
@@ -101,13 +130,14 @@ fn main() {
     let mut app = libgems::App::new(TerminalData {
         statemachine: vte::Parser::new(),
         buf: Vec::with_capacity(4096),
+        requests: Vec::new(),
     })
     .window(window);
 
     let mut write_to = mother
         .try_clone()
         .expect("Cloning mother should never fail");
-    let mut write = move |b: &[u8]| write_to.write(b).expect("Failed to write to stdin");
+
     let mut read_from = mother;
 
     let mut poll_entries = [
@@ -129,6 +159,17 @@ fn main() {
             app.data_mut().buf.clear();
         }
 
+        for request in app.data_mut().requests.drain(..) {
+            match request {
+                TermRequest::CursorRequest((x, y)) => {
+                    eprintln!("Cursor requested at: x:{x}, y:{y}");
+                    write!(write_to, "\x1b[{};{}R", y + 1, x + 1)
+                        .expect("Failed to write to stdio");
+                }
+            }
+        }
+
+        let mut write = |b: &[u8]| write_to.write(b).expect("Failed to write to stdin");
         let mut scroll_lines = 0;
         if let Some(events) = events {
             for event in events.iter().map(|w_eve| w_eve.event()) {
@@ -152,11 +193,45 @@ fn main() {
                                 write(s.as_bytes());
                             } else {
                                 match k_eve.code {
+                                    KeyCode::Down => {
+                                        write(b"\x1b[B");
+                                    }
+                                    KeyCode::Up => {
+                                        write(b"\x1b[A");
+                                    }
+                                    KeyCode::Right
+                                        if k_eve
+                                            .modifiers
+                                            .contains(KeyModifiers::CTRL | KeyModifiers::SHIFT) =>
+                                    {
+                                        write(b"\x1b[A");
+                                    }
+                                    KeyCode::Left
+                                        if k_eve
+                                            .modifiers
+                                            .contains(KeyModifiers::CTRL | KeyModifiers::SHIFT) =>
+                                    {
+                                        write(b"\x1b[B");
+                                    }
                                     KeyCode::Left => {
                                         write(b"\x1b[D");
                                     }
                                     KeyCode::Right => {
-                                        write(b"\x1b[A");
+                                        write(b"\x1b[C");
+                                    }
+                                    KeyCode::Tab
+                                        if k_eve.modifiers.contains(KeyModifiers::SHIFT) =>
+                                    {
+                                        write(b"\x1b[Z");
+                                    }
+                                    KeyCode::Tab => {
+                                        write(b"\t");
+                                    }
+                                    KeyCode::Home => {
+                                        write(b"\x1b[H");
+                                    }
+                                    KeyCode::End => {
+                                        write(b"\x1b[F");
                                     }
                                     KeyCode::Backspace => {
                                         write(&[ERASE_CHAR]);
