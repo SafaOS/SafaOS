@@ -228,10 +228,13 @@ fn main() {
                                         write(b"\t");
                                     }
                                     KeyCode::Home => {
-                                        write(b"\x1b[H");
+                                        write(b"\x1b[1~");
+                                    }
+                                    KeyCode::Delete => {
+                                        write(b"\x1b[3~");
                                     }
                                     KeyCode::End => {
-                                        write(b"\x1b[F");
+                                        write(b"\x1b[4~");
                                     }
                                     KeyCode::Backspace => {
                                         write(&[ERASE_CHAR]);
