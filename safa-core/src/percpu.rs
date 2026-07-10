@@ -136,12 +136,12 @@ impl Iterator for CpuLocalStoragesIter {
             return None;
         }
 
-        let current = CpuLocal::get_for(self.current_id);
+        let current = CpuLocal::maybe_get_for(self.current_id);
         self.current_id.0 += 1;
-        if !current.online.load(Ordering::Relaxed) {
+        if current.is_none_or(|c| !c.online.load(Ordering::Relaxed)) {
             return self.next();
         }
-        Some(current)
+        current
     }
 }
 
@@ -168,6 +168,13 @@ impl CpuLocal {
         let off = section_size() * id.0 as usize;
         let addr = section_start() + off;
         unsafe { (*addr.into_ptr::<PerCpuStorage<CpuLocal>>()).borrow_this() }
+    }
+
+    #[inline]
+    pub fn maybe_get_for(id: CpuID) -> Option<&'static Self> {
+        let off = section_size() * id.0 as usize;
+        let addr = section_start() + off;
+        unsafe { (*addr.into_ptr::<PerCpuStorage<CpuLocal>>()).maybe_borrow_this() }
     }
 
     #[inline]
