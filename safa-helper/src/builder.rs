@@ -97,6 +97,7 @@ pub fn path_crates(path: &Path) -> impl Iterator<Item = PathBuf> {
 
     crates_dir
         .filter_map(|i| i.ok())
+        .filter(|i| i.file_name().to_str().is_none_or(|n| n != "target"))
         .filter(|i| i.file_type().is_ok_and(|t| t.is_dir()))
         .map(|i| i.path())
 }
@@ -164,6 +165,8 @@ impl<'a> Builder<'a> {
         }
 
         let userspace_crates_path = userspace_crates_path(&self.root_repo_path);
+
+        unsafe { std::env::set_var("CARGO_TARGET_DIR", userspace_crates_path.join("target")) };
         let crates: Vec<PathBuf> = path_crates(&userspace_crates_path).collect();
         let mut results = Vec::with_capacity(crates.len());
         for cr in crates {
@@ -171,6 +174,10 @@ impl<'a> Builder<'a> {
             for (path, name) in binaries {
                 results.push((path, format!("bin/{}", name).into()));
             }
+        }
+
+        unsafe {
+            std::env::remove_var("CARGO_TARGET_DIR");
         }
 
         results

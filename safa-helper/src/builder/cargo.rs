@@ -26,14 +26,14 @@ impl RustcTarget {
     }
 }
 
-pub fn cargo_raw<I>(
+pub fn cargo_raw<'a, I>(
     target: Option<(ArchTarget, RustcTarget)>,
     args: I,
     work_dir: impl AsRef<Path>,
     parse_diagnostics: bool,
 ) -> impl Iterator<Item = Message>
 where
-    I: Iterator<Item = &'static str>,
+    I: Iterator<Item = &'a str>,
 {
     let mut command = Command::new("cargo");
     command.args(args);
@@ -68,14 +68,14 @@ where
 /// the build subcommand is not supplied you are expected to give it to args
 ///
 /// panicks if the build fails
-fn cargo_build_and_get_exe<I>(
+fn cargo_build_and_get_exe<'a, I>(
     crate_path: &Path,
     arch: ArchTarget,
     target: RustcTarget,
     args: I,
 ) -> Vec<(PathBuf, String)>
 where
-    I: Iterator<Item = &'static str>,
+    I: Iterator<Item = &'a str>,
 {
     assert!(crate_path.is_absolute() && crate_path.exists());
     let manifest_path = crate_path.join("Cargo.toml");
@@ -143,7 +143,7 @@ pub fn build_safaos(
     arch: ArchTarget,
     args: &[&'static str],
 ) -> Vec<(PathBuf, String)> {
-    let specifier = &*rustc::SAFAOS_RUSTC_SPECIFIER;
+    let specifier = rustc::safaos_rustc_specifier(arch);
 
     log!(
         "Compiling crate at {} (SafaOS) with rust `{}`",
@@ -153,7 +153,10 @@ pub fn build_safaos(
     let args = args.iter();
     let args = args.map(|s| *s);
 
-    let args = [specifier, "build"].into_iter().into_iter().chain(args);
+    let args = [specifier.as_str(), "build"]
+        .into_iter()
+        .into_iter()
+        .chain(args);
     // if specifier is empty it'd be a problem
     let args = args.filter(|x| !x.is_empty());
 

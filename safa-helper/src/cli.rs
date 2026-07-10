@@ -117,6 +117,11 @@ pub enum SubCommand {
         #[arg(short, long, default_value_t = utils::DEFAULT_ARCH)]
         arch: ArchTarget,
     },
+    /// Installs the SafaOS prebuilt toolchain for the current host platform. (for a given SafaOS specific target)
+    InstallToolchain {
+        #[arg(short, long, default_value_t = utils::DEFAULT_ARCH)]
+        arch: ArchTarget,
+    },
     /// Retrieves all the font files.
     GetFonts,
     /// Initializes the Font List.

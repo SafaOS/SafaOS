@@ -39,6 +39,14 @@ impl ArchTarget {
         }
     }
 
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "aarch64" | "arm64" => Some(Self::Arm64),
+            "x86_64" => Some(Self::X86_64),
+            _ => None,
+        }
+    }
+
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::X86_64 => "x86_64",
