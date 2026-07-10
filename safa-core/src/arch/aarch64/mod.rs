@@ -58,6 +58,18 @@ fn switch_to_el1() {
     }
 }
 
+fn enable_user_timer() {
+    unsafe {
+        asm!(
+            "
+            mov x0, #0b1100000011
+            mrs x1, CNTKCTL_EL1
+            orr x0, x0, x1
+            msr CNTKCTL_EL1, x0
+            "
+        );
+    }
+}
 fn enable_fp() {
     unsafe {
         asm!(
@@ -79,6 +91,7 @@ fn setup_cpu_basics() {
     switch_to_el1();
     exceptions::init_exceptions();
     enable_fp();
+    enable_user_timer();
 }
 
 fn setup_cpu_pherphials() {

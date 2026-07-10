@@ -15,6 +15,7 @@ impl SyscallFFI for ArchOp {
 
 #[syscall_handler]
 fn sysarch_ctrl(op: ArchOp, arg: u64) -> Result<(), ErrorStatus> {
+    _ = VirtAddr::from(arg as usize);
     match op {
         ArchOp::None => Ok(()),
         ArchOp::X86SetFS => {
