@@ -57,6 +57,15 @@ pub fn enable_sse() {
 }
 
 #[inline]
+pub fn enable_rdtsc() {
+    let cr4: usize;
+    unsafe {
+        asm!("mov {}, cr4", out(reg) cr4);
+        asm!("mov cr4, {}", in(reg) cr4 & !(1 << 2))
+    }
+}
+
+#[inline]
 fn _enable_avx() {
     unsafe {
         asm!(
@@ -103,6 +112,7 @@ pub(super) fn setup_cpu_generic2() {
 
     info!("enabling sse...");
     enable_sse();
+    enable_rdtsc();
 }
 
 /// Complexer init ran after terminal initialization.
