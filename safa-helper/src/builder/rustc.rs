@@ -162,11 +162,21 @@ pub fn rustup_set_toolchain(arch: ArchTarget, path: impl AsRef<Path>) {
 pub fn reset_userspace() {
     let path = userspace_crates_path(&*ROOT_REPO_PATH);
 
-    unsafe { std::env::set_var("CARGO_TARGET_DIR", path.join("target")) };
     log!("Cleaning crates at: {}", path.display());
     let crates = path_crates(&path);
     let mut count = 0;
     for manifest_path in crates.map(|p| p.join("Cargo.toml")).filter(|p| p.exists()) {
+        // Reset with and without target_dir set.
+        unsafe { std::env::set_var("CARGO_TARGET_DIR", path.join("target")) };
+        _ = cargo_raw(
+            None,
+            ["clean"].into_iter(),
+            manifest_path.parent().unwrap(),
+            false,
+        );
+
+        unsafe { std::env::remove_var("CARGO_TARGET_DIR") };
+
         _ = cargo_raw(
             None,
             ["clean"].into_iter(),
@@ -175,7 +185,6 @@ pub fn reset_userspace() {
         );
         count += 1;
     }
-    unsafe { std::env::remove_var("CARGO_TARGET_DIR") };
     log!("Cleaned {} crates", count);
 }
 
