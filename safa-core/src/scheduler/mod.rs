@@ -71,8 +71,6 @@ pub fn cleanup_thread(tid: Tid, _: &'static ()) -> ! {
     let mut cleanup_vec = ThreadList::new_empty();
 
     with_interrupts(|| {
-        // Unfortunatlly we need interrupts so that x86 TLB invalidation works
-        // The IDLE thread is guaranteed to run on this scheduler.
         loop {
             without_interrupts(|| {
                 for cpu in CpuLocal::get_all() {
@@ -489,18 +487,10 @@ impl Scheduler {
         let mut current_status = current_thread.status_mut();
 
         // We want to schedule the IDLE thread if the current thread is terminating so that it can be cleaned up.
-        let is_terminating = matches!(
-            &*current_status,
-            ContextStatus::Blocked(BlockedReason::Dead)
-                | ContextStatus::Blocking(BlockedReason::Dead)
-        ) || current_thread.should_terminate();
 
-        let results = (!is_terminating)
-            .then(|| {
-                self.get_next_thread(&mut *schd_queues)
-                    .or_else(|| self.try_steal_thread())
-            })
-            .flatten();
+        let results = self
+            .get_next_thread(&mut *schd_queues)
+            .or_else(|| self.try_steal_thread());
 
         // If there are no threads at all we schedule the IDLE thread.
         let next_thread_idle = results.is_none();
