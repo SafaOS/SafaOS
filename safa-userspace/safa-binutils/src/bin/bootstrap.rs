@@ -6,7 +6,10 @@ use std::{
 fn main() {
     println!("Starting DHCP");
     if let Ok(net_dir) = fs::read_dir("dev:/net") {
-        for ent in net_dir.filter_map(|ent| ent.ok()) {
+        for ent in net_dir
+            .filter_map(|ent| ent.ok())
+            .filter(|e| e.file_type().is_ok_and(|f| f.is_file()))
+        {
             let path = ent.path();
             println!("Configuring: {}", path.display());
             Command::new("sys:/bin/dhcpcli")

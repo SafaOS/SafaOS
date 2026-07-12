@@ -6,4 +6,4 @@ description = "A program to read SafaOS's kernel logs"
 
 [dependencies]
 clap = { version = "4.5.40", features = ["derive"] }
-safa-api = { version = "0.3.1", features = ["std"] }
+safa-api = { version = "0.6.0", features = ["std"], git = "https://github.com/SafaOS/safa-api" }

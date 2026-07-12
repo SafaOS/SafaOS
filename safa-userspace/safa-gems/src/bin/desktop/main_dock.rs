@@ -1,4 +1,4 @@
-use libgem::image::{BMPImage, PixelImage};
+use image::DynamicImage;
 use libgems::{
     AppEnv, Data, Padding,
     shards::{Shard, ShardsExt, Stack},
@@ -10,10 +10,8 @@ use crate::task_button::TaskButton;
 
 static FALLBACK_ICON_BMP: &[u8] = include_bytes!("../../../assets/unknown.bmp");
 
-fn fallback_icon() -> PixelImage {
-    BMPImage::from_slice(FALLBACK_ICON_BMP)
-        .expect("Failed to parse fallback image")
-        .into()
+fn fallback_icon() -> DynamicImage {
+    image::load_from_memory(FALLBACK_ICON_BMP).expect("Failed to parse fallback image")
 }
 
 #[derive(Debug)]
@@ -53,7 +51,10 @@ fn build_ui_inner(env: &AppEnv) -> impl Shard<DockData, DockMessage> + 'static {
                             else {
                                 return fallback_icon();
                             };
-                            let bmp = match BMPImage::from_slice(&raw_data) {
+                            let bmp = match image::load_from_memory_with_format(
+                                raw_data,
+                                image::ImageFormat::Bmp,
+                            ) {
                                 Ok(k) => k,
                                 Err(e) => {
                                     println!(

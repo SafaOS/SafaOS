@@ -7,6 +7,7 @@ use std::{
     panic::PanicHookInfo,
     path::PathBuf,
     process::{Command, ExitStatus, Stdio},
+    time::Instant,
 };
 
 const TEST_LOG_PATH: &str = "ram:/test.log";
@@ -21,11 +22,6 @@ macro_rules! log_fail {
     ($($arg:tt)*) => {
         println!("[ \x1B[31m fail \x1B[0m  ]\x1b[90m:\x1B[0m {}", format_args!($($arg)*))
     };
-}
-
-#[inline(always)]
-fn time() -> u64 {
-    safa_api::syscalls::uptime()
 }
 
 use safa_api::errors::ErrorStatus;
@@ -192,7 +188,7 @@ impl Test {
 
     fn execute(&self) {
         log!("running test \x1b[90m{}\x1b[0m...", self.name);
-        let start_time = time();
+        let start_time = Instant::now();
 
         match self.inner {
             TestInner::Typical {
@@ -207,8 +203,7 @@ impl Test {
             TestInner::Special(f) => f(),
         }
 
-        let end_time = time();
-        let delta = end_time - start_time;
+        let delta = start_time.elapsed().as_millis();
         println!("[ \x1B[92m OK   \x1B[0m  ]: delta {}ms", delta);
     }
 }

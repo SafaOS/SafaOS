@@ -10,6 +10,7 @@ use crate::thread::{self, Tid};
 use crate::{VirtAddr, process, scheduler, warn};
 
 pub fn exit(code: isize) -> ! {
+    // kill_children(crate::thread::current_pid());
     without_interrupts(|| {
         // current process should be dropped after this
         unsafe {
@@ -20,6 +21,33 @@ pub fn exit(code: isize) -> ! {
         unreachable!("process didn't exit")
     })
 }
+
+// pub fn kill_children(pid: Pid) {
+//     let current_pid = crate::thread::current_pid();
+
+//     while let Some(found_proc) =
+//         scheduler::process_list::find(|process| process.ppid() == pid, |process| process.clone())
+//     {
+//         kill_children(found_proc.pid());
+
+//         if found_proc.is_alive() && found_proc.pid() != current_pid {
+//             unsafe {
+//                 Process::kill(
+//                     &found_proc,
+//                     -(ErrorStatus::ForceTerminated as isize),
+//                     Some(pid),
+//                 );
+//             }
+//         }
+
+//         if !found_proc.is_alive() {
+//             let Some(_) = scheduler::process_list::remove(|p| p.pid() == found_proc.pid()) else {
+//                 warn!("process with `{pid}` was already cleaned up by another operation");
+//                 continue;
+//             };
+//         }
+//     }
+// }
 
 /// Spawns a userspace function in a new thread in the current process.
 ///

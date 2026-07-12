@@ -4,17 +4,16 @@ version = 4
 
 [[package]]
 name = "safa-abi"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "617b641b6bb77bea88fd0b0eec72d76297085c4d4649274ade76ff82a0972b75"
+version = "0.6.0"
+source = "git+https://github.com/SafaOS/safa-abi#ebc673e03122494f0ee50cc1810a7f80c9a58c78"
 
 [[package]]
 name = "safa-api"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f761f038782581046242e25d938859f953a290d0e4c51490e2aaf61d1cf3c269"
+version = "0.6.1"
+source = "git+https://github.com/SafaOS/safa-api#957455c55d4da2c8fbb6df89c25e317532e99daf"
 dependencies = [
  "safa-abi",
+ "simpldns",
 ]
 
 [[package]]
@@ -23,3 +22,8 @@ version = "0.1.0"
 dependencies = [
  "safa-api",
 ]
+
+[[package]]
+name = "simpldns"
+version = "0.1.0"
+source = "git+https://github.com/safiworks/simpldns#58d381cda22c2f2a045776b966a12d2e0d3868b7"

@@ -94,7 +94,7 @@ pub fn cleanup_thread(tid: Tid, _: &'static ()) -> ! {
             }
 
             // FIXME: Block until we get a new thread?
-            crate::thread::current::sleep_for_ms(250).expect("Failed to thread sleep");
+            crate::thread::current::sleep_for_ms(50).expect("Failed to thread sleep");
         }
     })
 }

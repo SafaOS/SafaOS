@@ -16,7 +16,7 @@ macro_rules! tri {
     ($expr: expr) => {
         match $expr {
             Ok(data) => data,
-            Err(e) => return safa_api::errors::SysResult::Error(e),
+            Err(e) => return safa_api::errors::SysResult::err(e),
         }
     };
 }
@@ -68,5 +68,5 @@ fn majala() -> io::Result<()> {
 }
 fn main() -> SysResult {
     tri_io!(majala());
-    SysResult::Success
+    SysResult::ok(0)
 }

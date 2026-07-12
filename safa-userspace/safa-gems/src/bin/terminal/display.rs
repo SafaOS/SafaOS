@@ -320,7 +320,7 @@ impl TermDisplay {
         (self.cursor.x, self.cursor.y)
     }
 
-    pub fn collect_requests(&mut self) -> std::vec::Drain<TermRequest> {
+    pub fn collect_requests<'s>(&'s mut self) -> std::vec::Drain<'s, TermRequest> {
         self.requests.drain(..)
     }
 

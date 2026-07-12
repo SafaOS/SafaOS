@@ -123,7 +123,7 @@ fn expr_screen(env: &AppEnv) -> impl Shard<Calculator, Message> + 'static {
         .with(
             Label::from_str("0000")
                 .with_metrics(Metrics::relative(17., 1.0))
-                .with_wrap(libgem::cosmic_text::Wrap::None)
+                .with_wrap(libgems::cosmic_text::Wrap::None)
                 .fix_height(17.)
                 .on_update(|ctx: &Data<Calculator, Message>, this| {
                     if !ctx.current.is_empty() {

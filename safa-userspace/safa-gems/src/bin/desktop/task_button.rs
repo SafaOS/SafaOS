@@ -1,4 +1,4 @@
-use libgem::image::{PixelImage, ScaleType};
+use image::{DynamicImage, imageops};
 use libgems::{
     BoundingRect, Color, Data, EventCtx, Point, ShardEvent,
     render::shapes::Circle,
@@ -21,33 +21,28 @@ pub struct TaskButton {
 }
 
 impl TaskButton {
-    pub fn new(win_id: u16, mut icon: PixelImage) -> Self {
-        icon.scale(BTN_SIZE, BTN_SIZE, ScaleType::Triangle);
+    pub fn new(win_id: u16, icon: DynamicImage) -> Self {
+        let icon = icon.resize_to_fill(BTN_SIZE, BTN_SIZE, imageops::FilterType::Triangle);
         let mut pixmap = tiny_skia::Pixmap::new(BTN_SIZE, BTN_SIZE)
             .expect("Failed to construct pixmap for an icon");
         let mut pixmap_hovering = pixmap.clone();
-        let width = pixmap.width();
 
-        for (y, row) in icon.iter_rows_from(0).enumerate() {
-            let px_row = &mut pixmap.pixels_mut()[(y as u32 * width) as usize..];
-            let masked_px_row = &mut pixmap_hovering.pixels_mut()[(y as u32 * width) as usize..];
-            for ((px, h_px), a) in px_row
-                .iter_mut()
-                .zip(masked_px_row.iter_mut())
-                .zip(row.iter())
-            {
-                *px = ColorU8::from_rgba(a.red(), a.green(), a.blue(), a.alpha()).premultiply();
+        for ((a, px), h_px) in icon
+            .into_rgba8()
+            .pixels()
+            .zip(pixmap.pixels_mut().iter_mut())
+            .zip(pixmap_hovering.pixels_mut().iter_mut())
+        {
+            let r = a.0[0];
+            let g = a.0[1];
+            let b = a.0[2];
+            let a = a.0[3];
 
-                // Preserves old dock behaviour by applying a mask for overlay
-                // TODO: change?
-                *h_px = ColorU8::from_rgba(
-                    a.red() | MASK,
-                    a.green() | MASK,
-                    a.blue() | MASK,
-                    a.alpha(),
-                )
-                .premultiply();
-            }
+            *px = ColorU8::from_rgba(r, g, b, a).premultiply();
+
+            // Preserves old dock behaviour by applying a mask for overlay
+            // TODO: change?
+            *h_px = ColorU8::from_rgba(r | MASK, g | MASK, b | MASK, a).premultiply();
         }
         Self {
             icon: pixmap,
