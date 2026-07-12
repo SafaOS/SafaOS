@@ -38,6 +38,7 @@ const fn ascii_is_ctrl(c: u8) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WaitReason {
     CanonicalRead,
+    RawRead,
 }
 
 #[derive(Debug)]
@@ -183,9 +184,13 @@ impl VirtualTTY {
         }
 
         if flags.contains(TTYFlags::CANONICAL) && stdin.newlines_count > 0 {
-            self.wait_queue
-                .lock()
-                .wake_equals(&WaitReason::CanonicalRead);
+            self.wait_queue.lock().wake_on_condition(|r| {
+                *r == WaitReason::CanonicalRead || *r == WaitReason::RawRead
+            });
+        } else if !stdin.inner.is_empty() && !flags.contains(TTYFlags::CANONICAL) {
+            self.wait_queue.lock().wake_on_condition(|r| {
+                *r == WaitReason::CanonicalRead || *r == WaitReason::RawRead
+            });
         }
 
         if (flags.contains(TTYFlags::CANONICAL)
@@ -238,6 +243,12 @@ impl VirtualTTY {
 
                 return self.read_stdin(buf);
             }
+        } else if stdin.inner.is_empty() && !buf.is_empty() {
+            let pending = self.wait_queue.prepare_wait();
+            drop(stdin);
+            pending.enter_wait(WaitReason::CanonicalRead, None)?;
+
+            return self.read_stdin(buf);
         }
 
         let max_read = if is_canonical {
