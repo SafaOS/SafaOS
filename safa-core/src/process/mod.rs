@@ -351,10 +351,6 @@ impl Process {
         self.threads_manager.lock()
     }
 
-    pub fn try_threads_manager<'s>(&'s self) -> Option<MutexGuard<'s, ThreadsManager>> {
-        self.threads_manager.try_lock()
-    }
-
     /// Called after the last thread in a process is killed successfully.
     unsafe fn finalize_kill(
         this: &Arc<Process>,

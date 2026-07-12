@@ -1,4 +1,4 @@
-use safa_api::syscalls::misc::uptime;
+use std::time::Duration;
 
 pub fn main() {
     let mut args = std::env::args();
@@ -13,9 +13,5 @@ pub fn main() {
         std::process::exit(1);
     });
 
-    let start_time = uptime();
-    let end_time = start_time + amount;
-    while uptime() < end_time {
-        core::hint::spin_loop();
-    }
+    std::thread::sleep(Duration::from_millis(amount));
 }

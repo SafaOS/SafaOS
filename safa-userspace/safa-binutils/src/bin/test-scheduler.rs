@@ -9,14 +9,18 @@ fn time() -> u64 {
 
 const SLEEP_TIME: u64 = 1000;
 
-pub fn test_scheduler(proc_num: u64) {
+pub fn test_scheduler(proc_num: u64, thread_per_proc: u64) {
+    let sleep_time = SLEEP_TIME.to_string();
+    let thread_per_proc = thread_per_proc.to_string();
+
     println!("Spawn {proc_num} processes test");
 
     let start_spawn_time = time();
     let mut children = Vec::with_capacity(proc_num as usize);
     for _ in 0..proc_num {
-        let child = Command::new("sys:/bin/sleep")
-            .arg(SLEEP_TIME.to_string())
+        let child = Command::new("sys:/bin/sched_test")
+            .arg(&sleep_time)
+            .arg(&thread_per_proc)
             .spawn()
             .expect("failed to spawn `sleep`");
         children.push(child);
@@ -62,9 +66,9 @@ pub fn test_thread_spawning(thread_num: u64) {
     }
     let end_wait_time = time();
 
-    println!("Spawn time: {}ms", end_spawn_time - start_spawn_time);
-    println!("Wait time: {}ms", end_wait_time - start_wait_time);
-    println!("Overall time: {}ms", end_wait_time - start_spawn_time);
+    eprintln!("Spawn time: {}ms", end_spawn_time - start_spawn_time);
+    eprintln!("Wait time: {}ms", end_wait_time - start_wait_time);
+    eprintln!("Overall time: {}ms", end_wait_time - start_spawn_time);
 }
 
 pub fn main() {
@@ -76,6 +80,8 @@ pub fn main() {
         .parse::<u64>()
         .expect("invalid process number");
 
-    test_scheduler(proc_num);
+    test_scheduler(proc_num, 1);
     test_thread_spawning(proc_num);
+
+    test_scheduler(proc_num / 3, 6);
 }

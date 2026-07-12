@@ -98,6 +98,7 @@ pub fn init_generic_timer() {
         IntGroup::NonSecure,
     )
     .expect("Failed to register timer interrupt");
+    crate::debug!("Registered timer irq");
     unsafe { *timer_irq_ptr = Some(timer_irq) };
 }
 

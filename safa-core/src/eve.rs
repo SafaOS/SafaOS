@@ -2,6 +2,7 @@
 //! it is responsible for managing a few things related to it's children
 
 use crate::memory::paging::PAGE_SIZE;
+use crate::process::current::kernel_thread_spawn;
 use crate::scheduler::SCHEDULER;
 use crate::thread::Tid;
 use crate::utils::alloc::PageString;
@@ -32,6 +33,8 @@ pub fn main() -> ! {
 
     serial!("Hello, world!, running tests...\n",);
 
+    kernel_thread_spawn(crate::scheduler::cleanup_thread, &(), None, None)
+        .expect("Failed to summon clean-up thread");
     #[cfg(not(test))]
     {
         use crate::process::spawn::{SpawnFlags, pspawn};

@@ -10,7 +10,9 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use crate::memory::vmm::VirtualMemoryManager;
 use crate::percpu::{CpuID, CpuLocal};
 use crate::smp::{self, INIT_PROCESS};
-use crate::thread::{ArcThread, BlockedReason, ContextPriority, ContextStatus, Thread, ThreadList};
+use crate::thread::{
+    ArcThread, BlockedReason, ContextPriority, ContextStatus, Thread, ThreadList, Tid,
+};
 use crate::timer::time_since_boot_ms;
 use crate::utils::path::make_path;
 use alloc::sync::Arc;
@@ -63,6 +65,41 @@ const QUANTUM_INCREMENT: u32 = 1;
 
 const PRIORITY_BOOST_QUANTUM: u32 = 100;
 const PRIORITY_BOOST_TIME: u32 = PRIORITY_BOOST_QUANTUM * TIME_PER_QUANTUM;
+
+pub fn cleanup_thread(tid: Tid, _: &'static ()) -> ! {
+    crate::info!("Clean-up thread: {tid}");
+    let mut cleanup_vec = ThreadList::new_empty();
+
+    with_interrupts(|| {
+        // Unfortunatlly we need interrupts so that x86 TLB invalidation works
+        // The IDLE thread is guaranteed to run on this scheduler.
+        loop {
+            without_interrupts(|| {
+                for cpu in CpuLocal::get_all() {
+                    let schd = SCHEDULER.borrow_for(cpu);
+                    // Ensures post_swtch_cleanup was called before doing anything so that we know everything is in sync.
+                    let _queues = schd.ready_queues.lock();
+
+                    let mut waiting_cleanup = schd.awaiting_cleanup.lock();
+                    cleanup_vec.append(&mut *waiting_cleanup);
+                }
+            });
+
+            let len = cleanup_vec.len();
+            for _ in 0..len {
+                if let Some(thread) = cleanup_vec.pop_front() {
+                    let clean_up = unsafe { thread.try_cleanup() };
+                    if !clean_up {
+                        unsafe { cleanup_vec.push_back(thread) };
+                    }
+                }
+            }
+
+            // FIXME: Block until we get a new thread?
+            crate::thread::current::sleep_for_ms(250).expect("Failed to thread sleep");
+        }
+    })
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SchedulePriority {
@@ -156,8 +193,6 @@ impl Scheduler {
 
     /// The Scheduler's IDLE loop
     pub fn idle(&'static self) -> ! {
-        let mut cleanup_vec = ThreadList::new_empty();
-
         let cycles_per_ns = crate::arch::utils::cpu_timer_freq_mhz()
             .get()
             .div_ceil(1000);
@@ -170,26 +205,6 @@ impl Scheduler {
             // The IDLE thread is guaranteed to run on this scheduler.
             loop {
                 without_interrupts(|| {
-                    let mut waiting_cleanup = self.awaiting_cleanup.lock();
-                    while let Some(thread) = waiting_cleanup.pop_front() {
-                        // Avoids anything from the cleanup-routine causing deadlocks because the lock wasn't dropped.
-                        //
-                        // FIXME: This shouldn't be a problem.
-                        unsafe { cleanup_vec.push_back(thread) };
-                    }
-                    drop(waiting_cleanup);
-
-                    let len = cleanup_vec.len();
-                    for _ in 0..len {
-                        if let Some(thread) = cleanup_vec.pop_front() {
-                            // FIXME: Some kind of a hidden Drop impl may thread yield here, so I had to come up with this temporarily.
-                            if !unsafe { thread.try_cleanup() } {
-                                // TODO: ??
-                                unsafe { cleanup_vec.push_back(thread) };
-                            }
-                        }
-                    }
-
                     if self.try_pop_waiting_thread() || self.try_escape_idle() {
                         crate::thread::current::yield_now();
                     }
@@ -478,7 +493,7 @@ impl Scheduler {
             &*current_status,
             ContextStatus::Blocked(BlockedReason::Dead)
                 | ContextStatus::Blocking(BlockedReason::Dead)
-        );
+        ) || current_thread.should_terminate();
 
         let results = (!is_terminating)
             .then(|| {
@@ -492,25 +507,47 @@ impl Scheduler {
 
         match &*current_status {
             ContextStatus::Runnable | ContextStatus::Running => {
-                *current_status = ContextStatus::Runnable;
-                drop(current_status);
-                if let Some(push_to) = push_to {
-                    self.add_single_thread_to(
-                        &mut *schd_queues,
-                        current_thread.clone(),
-                        push_to as usize,
-                        false,
-                    );
+                if unsafe { current_context.cpu_status().as_ref() }
+                    .at()
+                    .is_in_lower_half()
+                    && current_thread.should_terminate()
+                {
+                    *current_status = ContextStatus::Blocked(BlockedReason::Dead);
+                    drop(current_status);
+                    unsafe {
+                        self.schedule_thread(current_thread.clone(), ThreadScheduleReason::Cleanup)
+                    };
+                } else {
+                    *current_status = ContextStatus::Runnable;
+                    if let Some(push_to) = push_to {
+                        self.add_single_thread_to(
+                            &mut *schd_queues,
+                            current_thread.clone(),
+                            push_to as usize,
+                            false,
+                        );
+                    }
+
+                    drop(current_status);
                 }
             }
+            ContextStatus::Blocked(BlockedReason::Dead) => unreachable!(),
             ContextStatus::Blocked(_) => {
                 drop(current_status);
             }
             // The reason why we do that is to prevent anyone to wake up the thread before this causing it to be double scheduled.
             // Do nothing, its going to add itself once it is unblocked
             ContextStatus::Blocking(r) => {
-                *current_status = ContextStatus::Blocked(*r);
+                let r = *r;
+
+                *current_status = ContextStatus::Blocked(r);
                 drop(current_status);
+
+                if r == BlockedReason::Dead {
+                    unsafe {
+                        self.schedule_thread(current_thread.clone(), ThreadScheduleReason::Cleanup)
+                    };
+                }
             }
         }
 

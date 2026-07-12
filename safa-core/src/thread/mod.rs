@@ -218,6 +218,7 @@ impl ThreadList {
                 .expect("push back should make head some")
                 .next_slot_ptr = other_head.next_slot_ptr;
             self.len += other.len - 1;
+            other.len = 0;
         }
     }
 }
@@ -250,21 +251,12 @@ impl ArcThread {
     /// # Safety
     /// If the thread is the current thread, this function must be called without interrupts on
     unsafe fn remove_self(&self) {
-        let schd_guard = self.scheduler.lock();
-        let Some(scheduler) = *schd_guard else {
-            panic!("Attempted to remove a thread that isn't associated with a scheduler")
-        };
-        let scheduler = unsafe { scheduler.as_ref() };
-
         let is_current = thread::is_current(self);
+
         if !is_current {
             self.block_dead();
-        }
-
-        unsafe {
-            scheduler.schedule_thread(self.clone(), ThreadScheduleReason::Cleanup);
-        };
-        if is_current {
+        } else {
+            self.should_terminate.store(true, Ordering::Relaxed);
             self.set_status(ContextStatus::Blocking(BlockedReason::Dead));
         }
 
@@ -285,7 +277,7 @@ impl ArcThread {
     /// If this was called from the current thread, the caller must run it without interrupts.
     /// If this was the last thread in the process, the process must be killed by the caller.
     ///
-    /// Returns wether the thread was successfully killed by the caller.
+    /// Returns whether the thread was successfully killed by the caller.
     pub unsafe fn soft_kill(&self, process_dead: bool) -> bool {
         if self
             .is_dying
@@ -474,37 +466,15 @@ impl ArcThread {
     /// Blocks the current thread forever, making sure it is not running first
     fn block_dead(&self) {
         crate::debug!(Thread, "blocking: {}", self.tid());
-        // Safety:
-        // - Only block_dead muttates this
-        // - Its only goes from false to true and not backwards, the time threads read this after it is true doesn't matter.
-        unsafe { *self.should_terminate.get() = true };
-        loop {
-            let mut status = self.status.lock();
-
-            match *status {
-                // Safety: we hold a lock on status, and context shall not be accessed before holding a lock on status, perhaps this can be expressed better?
-                ContextStatus::Running | ContextStatus::Runnable
-                    if unsafe { self.context_unchecked().cpu_status.at().is_in_lower_half() } =>
-                {
-                    // The scheduler should acknowledge the block first.
-                    *status = ContextStatus::Blocking(BlockedReason::Dead);
-                }
-                ContextStatus::Runnable
-                | ContextStatus::Running
-                | ContextStatus::Blocking(BlockedReason::Dead) => {}
-                ContextStatus::Blocked(BlockedReason::Dead) => {
-                    break;
-                }
-                ContextStatus::Blocked(_) | ContextStatus::Blocking(_) => {
-                    drop(status);
-                    self.wake_up(true);
-                    current::yield_now();
-                    continue;
-                }
+        let status = self.status.lock();
+        self.should_terminate.store(true, Ordering::Relaxed);
+        match *status {
+            ContextStatus::Blocked(BlockedReason::Dead) => {}
+            ContextStatus::Blocked(_) | ContextStatus::Blocking(_) => {
+                drop(status);
+                self.wake_up(true);
             }
-
-            drop(status);
-            current::yield_now()
+            _ => {}
         }
 
         crate::debug!(Thread, "blocked: {}", self.tid());
@@ -542,7 +512,7 @@ pub struct Thread {
 
     is_dying: AtomicBool,
     pub timeouted: UnsafeCell<bool>,
-    should_terminate: UnsafeCell<bool>,
+    should_terminate: AtomicBool,
     is_dead: AtomicBool,
     parent_process: Arc<Process>,
     /// Kernel stack memory mapping, so that it can be freed when the thread is killed.
@@ -619,7 +589,7 @@ impl Thread {
             parent_process: parent_process.clone(),
             scheduler: SpinLock::new(None),
             next: UnsafeCell::new(None),
-            should_terminate: UnsafeCell::new(false),
+            should_terminate: AtomicBool::new(false),
             kernel_stack: UnsafeCell::new(ManuallyDrop::new(kernel_stack)),
             thread_tls: UnsafeCell::new(ManuallyDrop::new(thread_tls)),
             thread_mem: UnsafeCell::new(ManuallyDrop::new(thread_mem)),
@@ -628,7 +598,7 @@ impl Thread {
 
     /// Returns true if the thread should terminate
     pub fn should_terminate(&self) -> bool {
-        unsafe { *self.should_terminate.get() }
+        self.should_terminate.load(Ordering::Relaxed)
     }
 
     /// Returns true if the thread operation timed out
@@ -667,15 +637,12 @@ impl Thread {
     /// modify the thread's Context. It is the caller's responsibility to ensure that
     /// the thread is not currently running, and that the thread wasn't already cleaned up.
     pub unsafe fn try_cleanup(&self) -> bool {
-        if let Some(mut manager) = self.parent_process.try_threads_manager() {
-            unsafe { ManuallyDrop::drop(&mut *self.kernel_stack.get()) };
-            unsafe { ManuallyDrop::drop(&mut *self.thread_mem.get()) };
-            unsafe { ManuallyDrop::drop(&mut *self.thread_tls.get()) };
-            manager.remove(self.tid());
-            true
-        } else {
-            false
-        }
+        let mut manager = self.parent_process.threads_manager();
+        unsafe { ManuallyDrop::drop(&mut *self.kernel_stack.get()) };
+        unsafe { ManuallyDrop::drop(&mut *self.thread_mem.get()) };
+        unsafe { ManuallyDrop::drop(&mut *self.thread_tls.get()) };
+        manager.remove(self.tid());
+        true
     }
 
     pub fn status_mut<'a>(&'a self) -> SpinLockGuard<'a, ContextStatus> {
@@ -726,9 +693,11 @@ impl Thread {
                     )))
                 || (matches!(status, ContextStatus::Blocking(BlockedReason::Dead))
                     && status == *guard),
-            "Cannot switch status from {:?} to {:?}",
+            "Cannot switch status from {:?} to {:?}, thread id: {}:{}",
             *guard,
-            status
+            status,
+            self.process().pid(),
+            self.id
         );
         *guard = status;
     }
