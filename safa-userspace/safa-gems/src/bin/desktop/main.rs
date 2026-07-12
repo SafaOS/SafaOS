@@ -1,7 +1,10 @@
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use image::imageops;
-use libgems::{AppEnv, Color, WindowBuilder};
+use libgems::{
+    AppEnv, Color, WindowBuilder,
+    shards::{Label, Shard, ShardsExt, Stack},
+};
 use libopal::{
     WindowEvent,
     window::{Window, WindowFlags},
@@ -53,6 +56,15 @@ fn init_wallpaper(wallpath: Option<&Path>) -> Option<Window> {
     Some(wall_window)
 }
 
+fn build_top_dock_ui() -> impl Shard<DockData, DockMessage> {
+    Stack::column()
+        .justify(libgems::shards::Justify::SpaceAround)
+        .align(libgems::shards::AxisAlign::Center)
+        .with(Label::from_str("").on_update(|_data, this| {
+            this.set_text(chrono::Utc::now().format("%Y %b %d, %H:%M UTC").to_string());
+        }))
+}
+
 fn main() {
     let env = AppEnv::sys_theme();
     let _win = init_wallpaper(
@@ -69,25 +81,41 @@ fn main() {
     let (screen_width, screen_height) = libopal::get_screen_dimensions();
 
     let height = 64;
-    let window = WindowBuilder::new(screen_width, height)
+
+    let dock_window = WindowBuilder::new(screen_width, height)
         .y(Some((screen_height - (40 * 2) - 16) as i32))
         .flags(WindowFlags::OVERLAY_WINDOW | WindowFlags::NO_DECORATIONS)
         .title("")
         .background(Color::NONE)
         .build(main_dock::build_ui(&env, screen_width, height));
-    let mut app = libgems::App::new(data).with_env(env);
-    let win_id = app.add_window(window);
+
+    let top_dock_window = WindowBuilder::new(screen_width, 24)
+        .flags(WindowFlags::OVERLAY_WINDOW | WindowFlags::NO_DECORATIONS)
+        .title("")
+        .y(Some(0))
+        .build(
+            build_top_dock_ui()
+                .fix_width(screen_width as f32)
+                .fix_height(24.),
+        );
+
+    let mut app = libgems::App::new(data)
+        .with_env(env)
+        .window(top_dock_window);
+    let d_win_id = app.add_window(dock_window);
 
     loop {
-        // app.redraw_needed();
-        let events = app.wait_for_events();
+        let Some(events) = app.try_wait_for_events_timeout(Some(Duration::from_secs(1))) else {
+            app.update();
+            continue;
+        };
         if REALLY_VERBOSE {
             println!("taskbar events: {events:?}");
         }
 
         for win_even in (&*events)
             .iter()
-            .filter(|win_eve| win_eve.receiver() == win_id)
+            .filter(|win_eve| win_eve.receiver() == d_win_id)
         {
             let event = win_even.event();
             match event {

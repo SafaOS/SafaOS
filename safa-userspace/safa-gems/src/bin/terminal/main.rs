@@ -7,7 +7,6 @@ use std::{
     process::Command,
     str,
     sync::{LazyLock, Mutex},
-    time::Instant,
 };
 
 use libartemis::audio::AudioPlayer;
@@ -57,16 +56,8 @@ fn build_ui() -> impl Shard<TerminalData, Message> + 'static {
                 Message::NewData => {
                     let data = &mut **data;
 
-                    let instant = Instant::now();
                     data.statemachine.advance(this, &data.buf);
                     data.requests.extend(this.collect_requests());
-
-                    let elapsed = instant.elapsed();
-                    println!(
-                        "elapsed: {}ms, parsing {}",
-                        elapsed.as_millis(),
-                        data.buf.len()
-                    );
                 }
                 Message::ScrollView(amoun) => this.move_view_by(*amoun),
             },
