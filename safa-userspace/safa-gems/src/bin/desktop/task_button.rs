@@ -80,9 +80,9 @@ impl<S, M> Shard<S, M> for TaskButton {
         let width = ctx.layout().bounds.width();
 
         if is_hovering {
-            ctx.fill_with_pixmap(self.icon_hovering.as_ref());
+            ctx.fill_with_pixmap(self.icon_hovering.as_ref(), &Default::default());
         } else {
-            ctx.fill_with_pixmap(self.icon.as_ref());
+            ctx.fill_with_pixmap(self.icon.as_ref(), &Default::default());
         }
 
         ctx.move_to(Point::new(width / 2., (BTN_SIZE + 4) as f32))

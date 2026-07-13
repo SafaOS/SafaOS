@@ -6,6 +6,8 @@ use libgems::{
 };
 
 use crate::logic::LexerData;
+
+static ICON: &[u8] = include_bytes!("../../../assets/calc.bmp");
 mod logic;
 
 const WIDTH: u32 = 230;
@@ -183,6 +185,7 @@ fn main() {
 
     let window = WindowBuilder::new(WIDTH, HEIGHT)
         .title("Calculator")
+        .icon(ICON)
         .build(build_ui(env));
     app = app.window(window);
 

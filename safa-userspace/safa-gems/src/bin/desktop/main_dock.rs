@@ -51,10 +51,7 @@ fn build_ui_inner(env: &AppEnv) -> impl Shard<DockData, DockMessage> + 'static {
                             else {
                                 return fallback_icon();
                             };
-                            let bmp = match image::load_from_memory_with_format(
-                                raw_data,
-                                image::ImageFormat::Bmp,
-                            ) {
+                            let bmp = match image::load_from_memory(raw_data) {
                                 Ok(k) => k,
                                 Err(e) => {
                                     println!(

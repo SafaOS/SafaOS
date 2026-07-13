@@ -25,18 +25,17 @@ struct SysVer;
 fn build_ui() -> impl Shard<SysVer> {
     Stack::row()
         .justify(libgems::shards::Justify::SpaceBetween)
+        .align(libgems::shards::AxisAlign::Center)
         .with(
             Image::from_image(
                 image::load_from_memory(LOGO)
                     .expect("Failed to load logo")
                     .resize_exact(76, 76, image::imageops::FilterType::Triangle),
             )
-            .align(libgems::shards::AxisAlign::Center)
             .pad(Padding::equal(20.)),
         )
         .with(
             Label::from_str("SafaOS")
-                .with_align(libgems::cosmic_text::Align::Center)
                 .with_metrics(Metrics::new(16., 16.))
                 .with_attrs(Attrs::new().weight(Weight::SEMIBOLD)),
         )
