@@ -9,7 +9,9 @@
 
 ![Running ping screenshot](https://safiworks.github.io/imgs/screenshots/SafaOS-v0.6.0-140726.png)
 ![aarch64](https://safiworks.github.io/imgs/screenshots/SafaOS-v0.6.0-aarch64-140726.png)
-![audio](https://safiworks.github.io/imgs/screenshots/SafaOS-doom-140726.mp4)
+
+https://github.com/user-attachments/assets/4ce0ae55-b17b-42f5-9a1e-3b9653f758f0
+
 ![CLI Screenshot](https://safiworks.github.io/imgs/screenshots/SafaOS070525.png)
 
 An open-source non-Unix-like OS, written from scratch in Rust for fun.
@@ -80,17 +82,23 @@ and then connect to port 1234 with a gdb client i recommend using `rust-lldb`.
 
 ### Additional Information
 ```
-$ ./helper.sh help
+❯ ./helper.sh --help
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running `/home/aler/Documents/SafaOS/safa-helper/target/debug/safa-helper --help`
 The SafaOS's build system and helper tools
 
 Usage: safa-helper [OPTIONS] [COMMAND]
 
 Commands:
-  init   Initializes the submodules and installs the SafaOS's toolchain (rustc target)
-  build  Builds a SafaOS iso
-  run    Builds and Runs a normal SafaOS iso, requires qemu (default)
-  test   Builds and runs a test SafaOS iso, requires qemu
-  help   Print this message or the help of the given subcommand(s)
+  init               Initializes the submodules and installs the SafaOS's toolchain (rustc target)
+  install-toolchain  Installs the SafaOS prebuilt toolchain for the current host platform. (for a given SafaOS specific target)
+  get-fonts          Retrieves all the font files
+  init-fonts         Initializes the Font List
+  reset              `cargo clean`s all crates in the userspace directory. (eg. safa-userspace)
+  build              Builds a SafaOS iso
+  run                Builds and Runs a normal SafaOS iso, requires qemu (default)
+  test               Builds and runs a test SafaOS iso, requires qemu
+  help               Print this message or the help of the given subcommand(s)
 
 Options:
       --no-kvm                 runs with kvm disabled
