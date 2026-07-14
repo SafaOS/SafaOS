@@ -1,0 +1,91 @@
+//! Eve is the kernel's main loop (PID 0)
+//! it is responsible for managing a few things related to it's children
+
+use crate::memory::paging::PAGE_SIZE;
+use crate::process::current::kernel_thread_spawn;
+use crate::scheduler::SCHEDULER;
+use crate::thread::Tid;
+use crate::utils::alloc::PageString;
+use crate::utils::path::make_path;
+use crate::{fs, logging};
+use crate::{serial, thread};
+use safa_abi::fs::OpenOptions;
+use safa_abi::process::ProcessStdio;
+use spin::Lazy;
+
+pub(super) static KERNEL_STDIO: Lazy<ProcessStdio> = Lazy::new(|| {
+    let stdin =
+        fs::FileRef::open_with_options(make_path!("dev", "tty"), OpenOptions::READ).unwrap();
+    let stdout =
+        fs::FileRef::open_with_options(make_path!("dev", "tty"), OpenOptions::WRITE).unwrap();
+    let stderr = stdout.dup();
+    ProcessStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stderr.fd()))
+});
+
+pub fn main() -> ! {
+    *logging::SERIAL_LOG.write() = Some(PageString::with_capacity(&"Journal", PAGE_SIZE * 16));
+    crate::info!("eve has been awaken ...");
+
+    crate::drivers::pci::init();
+
+    // NOTE: May deadlock because the journal could request memory while lock is held (this is why we allocate 4 pages).
+    crate::memory::vmm::with_root(|vmm| vmm.debug_regions());
+
+    serial!("Hello, world!, running tests...\n",);
+
+    kernel_thread_spawn(crate::scheduler::cleanup_thread, &(), None, None)
+        .expect("Failed to summon clean-up thread");
+    #[cfg(not(test))]
+    {
+        use crate::process::spawn::{SpawnFlags, pspawn};
+        use crate::thread::ContextPriority;
+        use crate::utils::types::Name;
+
+        let use_threads_var = alloc::format!(
+            "OPAL_USE_THREADS={}",
+            crate::percpu::CpuLocal::get_all().len_hint()
+        );
+        // Start the UI
+        pspawn(
+            Name::try_from("Bootstrap").unwrap(),
+            // Maybe we can make a const function or a macro for this
+            make_path!("sys", "bin/bootstrap"),
+            &["sys:/bin/bootstrap"],
+            &[
+                b"PATH=sys:/bin",
+                b"SHELL=sys:/bin/safa",
+                use_threads_var.as_bytes(),
+            ],
+            SpawnFlags::empty(),
+            ContextPriority::Medium,
+            *KERNEL_STDIO,
+            None,
+        )
+        .unwrap();
+    }
+
+    #[cfg(test)]
+    {
+        use crate::thread::{ContextPriority, Tid};
+
+        fn run_tests(_tid: Tid, _arg: &()) -> ! {
+            crate::kernel_testmain();
+            unreachable!()
+        }
+
+        crate::process::current::kernel_thread_spawn(
+            run_tests,
+            &(),
+            Some(ContextPriority::Medium),
+            None,
+        )
+        .expect("failed to spawn Test Thread");
+    }
+
+    thread::current::exit(0)
+}
+pub fn idle_function(tid: Tid) -> ! {
+    crate::serial!("entered idle, tid: {}\n", tid);
+    let scheduler = SCHEDULER.borrow();
+    scheduler.idle()
+}

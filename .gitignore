@@ -21,9 +21,11 @@ target
 iso_root
 safaos.iso
 safaos-tests.iso
-test.txt
+test*.txt
 .vscode
 
+ramdisk\-inculde/fonts/
+ramdisk\-include/bin/
 
 # Added by cargo
 

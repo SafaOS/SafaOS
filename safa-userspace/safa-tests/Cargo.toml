@@ -1,0 +1,7 @@
+[package]
+name = "safa-tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+safa-api = { version = "0.6.0", features = ["std"], git = "https://github.com/SafaOS/safa-api" }

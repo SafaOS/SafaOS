@@ -1,0 +1,143 @@
+use core::any::type_name;
+
+use crate::process::spawn::{SpawnFlags, pspawn};
+use crate::thread::ContextPriority;
+use crate::timer::{DurationFmt, SystemInstant};
+use crate::utils::{path::make_path, types::Name};
+use crate::{
+    arch::{power::shutdown, without_interrupts},
+    eve::KERNEL_STDIO,
+    info, sleep,
+};
+use safa_abi::fs::OpenOptions;
+use safa_abi::process::ProcessStdio;
+
+#[macro_export]
+macro_rules! test_log {
+    ($($arg:tt)*) => {
+        $crate::logln_ext!("test", "92", $($arg)*)
+    };
+}
+
+macro_rules! ok {
+    ($instant: expr_2021) => {{
+        let elapsed = $instant.elapsed();
+        $crate::logln!(
+            "[ \x1B[92m OK   \x1B[0m  ]\x1b[90m:\x1B[0m delta {}",
+            $crate::timer::DurationFmt::new(elapsed)
+        );
+    }};
+}
+
+pub trait Testable {
+    fn run(&self);
+    #[inline(always)]
+    fn name(&self) -> &'static str {
+        type_name::<Self>()
+    }
+    #[inline(always)]
+    fn piritory(&self) -> TestPiritory {
+        get_test_piritory::<Self>()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Represents the priority of a test.
+pub enum TestPiritory {
+    // crate::arch tests must be ran before other tests to ensure fail order
+    Highest,
+    // memory tests
+    High,
+    Medium,
+    // tests that run last, given to this module tests
+    Lowest,
+}
+
+const fn get_test_piritory<T: ?Sized>() -> TestPiritory {
+    const {
+        let name = type_name::<T>();
+        if const_str::contains!(name, "test::") {
+            TestPiritory::Lowest
+        } else if const_str::contains!(name, "arch::") {
+            TestPiritory::Highest
+        } else if const_str::contains!(name, "memory::") {
+            TestPiritory::High
+        } else {
+            TestPiritory::Medium
+        }
+    }
+}
+
+impl<T: Fn()> Testable for T {
+    fn run(&self) {
+        self();
+    }
+}
+
+pub fn test_runner(tests: &[&dyn Testable]) -> ! {
+    test_log!("sleeping for 5 second(s) until kernel finishes startup...");
+    sleep!(5000 ms);
+    _ = *KERNEL_STDIO;
+
+    let tests_iter = tests
+        .iter()
+        .filter(|x| x.piritory() == TestPiritory::Highest);
+    let tests_iter = tests_iter.chain(tests.iter().filter(|x| x.piritory() == TestPiritory::High));
+    let tests_iter = tests_iter.chain(
+        tests
+            .iter()
+            .filter(|x| x.piritory() == TestPiritory::Medium),
+    );
+    let tests_iter = tests_iter.chain(
+        tests
+            .iter()
+            .filter(|x| x.piritory() == TestPiritory::Lowest),
+    );
+
+    test_log!("running {} tests", tests.len());
+    let first_log_instant = SystemInstant::now();
+
+    for test in tests_iter {
+        without_interrupts(|| {
+            test_log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
+            let instant = SystemInstant::now();
+            test.run();
+            ok!(instant);
+        })
+    }
+
+    let elapsed = first_log_instant.elapsed();
+    info!("finished running tests in {}", DurationFmt::new(elapsed));
+
+    // printing 'PLEASE EXIT' to the serial makes `safa-helper test` know that the kernel tests were successful
+    info!("PLEASE EXIT, automatically attempting exiting after 1000ms, PLEASE EXIT");
+    sleep!(1000 ms);
+    shutdown()
+}
+
+// runs the userspace test script
+// always runs last because it is given the lowest priority (`[TestPiritory::Lowest`] because it is in this module)
+#[test_case]
+fn userspace_test_script() {
+    use crate::fs::File;
+
+    let stdin = File::open_with_options(make_path!("dev", "/ss"), OpenOptions::READ).unwrap();
+    let stdout = File::open_with_options(make_path!("dev", "/ss"), OpenOptions::WRITE).unwrap();
+
+    let stdio = ProcessStdio::new(Some(stdout.fd()), Some(stdin.fd()), Some(stdout.fd()));
+
+    let pid = pspawn(
+        Name::try_from("Tester").unwrap(),
+        make_path!("sys", "bin/safa-tests"),
+        &[],
+        &[],
+        SpawnFlags::empty(),
+        ContextPriority::Medium,
+        stdio,
+        None,
+    )
+    .unwrap();
+    // thread yields, so works even when interrupts are disabled
+    let ret = crate::thread::current::wait_for_process(pid);
+    assert_eq!(ret, Ok(Some(0)));
+}

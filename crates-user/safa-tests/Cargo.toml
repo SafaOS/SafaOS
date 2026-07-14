@@ -1,7 +1,0 @@
-[package]
-name = "safa-tests"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-safa-api = { version = "0.3.1", features = ["std"] }

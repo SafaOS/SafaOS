@@ -1,0 +1,16 @@
+[package]
+name = "safa-gems"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+safa-api = { version = "0.6.0", features = ["std"], git = "https://github.com/SafaOS/safa-api" }
+image = { version = "0.25.10" }
+libgems = { path = "../OpalWM/libgems", features=["image"] }
+libopal = { path = "../OpalWM/libopal" }
+libartemis = { path = "../OpalWM/libartemis" }
+uopal-desktop = { path = "../OpalWM/uopal-desktop" }
+vte = "0.15.0"
+arrayvec = "0.7.6"
+unicode-segmentation = "1.12.0"
+chrono = "0.4.45"

@@ -23,7 +23,10 @@ Overview of what processes can currently do:
 - [X] ELF-loader
 - [X] Environment variables
 - [X] Arguments
-- [ ] IPC
+- [X] IPC
+  - [X] Unix Domain Sockets
+  - [X] Shared memory
+  - [X] VTTYs (similar to PTYs but worse and the design is unfinished...)
 - [ ] Signals
 - [X] Threads with priorities (no load balancing for now)
 - [X] ELF Thread Local Storage
@@ -44,7 +47,7 @@ Overview of what the VFS can currently do & ported file systems:
 - [X] USB Keyboard Driver
 - [X] Serial Device: `dev:/ss`
 - [X] TTY Emulator: `dev:/tty` (to be removed)
-- [ ] Framebuffer Device: `dev:/fb`
+- [X] Memory mappable Framebuffer Device: `dev:/fb`
 
 # Bootloaders
 - [X] UEFI Limine
