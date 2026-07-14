@@ -9,6 +9,7 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::memory::vmm::VirtualMemoryManager;
 use crate::percpu::{CpuID, CpuLocal};
+use crate::scheduler::wait_queue::WaitQueue;
 use crate::smp::{self, INIT_PROCESS};
 use crate::thread::{
     ArcThread, BlockedReason, ContextPriority, ContextStatus, Thread, ThreadList, Tid,
@@ -20,7 +21,7 @@ use alloc::vec::Vec;
 
 use crate::arch::{with_interrupts, without_interrupts};
 use crate::process::Process;
-use crate::utils::locks::{Mutex, TrackedSpinLock, TrackedSpinLockGuard};
+use crate::utils::locks::{Mutex, SpinLock, TrackedSpinLock, TrackedSpinLockGuard};
 use crate::utils::types::Name;
 use crate::{VirtAddr, eve, percpu};
 use alloc::boxed::Box;
@@ -66,6 +67,7 @@ const QUANTUM_INCREMENT: u32 = 1;
 const PRIORITY_BOOST_QUANTUM: u32 = 100;
 const PRIORITY_BOOST_TIME: u32 = PRIORITY_BOOST_QUANTUM * TIME_PER_QUANTUM;
 
+static CLEANUP_THREADS: SpinLock<WaitQueue> = SpinLock::new(WaitQueue::new());
 pub fn cleanup_thread(tid: Tid, _: &'static ()) -> ! {
     crate::info!("Clean-up thread: {tid}");
     let mut cleanup_vec = ThreadList::new_empty();
@@ -84,6 +86,7 @@ pub fn cleanup_thread(tid: Tid, _: &'static ()) -> ! {
             });
 
             let len = cleanup_vec.len();
+            debug!("Cleaning up: {len} threads");
             for _ in 0..len {
                 if let Some(thread) = cleanup_vec.pop_front() {
                     let clean_up = unsafe { thread.try_cleanup() };
@@ -93,8 +96,20 @@ pub fn cleanup_thread(tid: Tid, _: &'static ()) -> ! {
                 }
             }
 
-            // FIXME: Block until we get a new thread?
-            crate::thread::current::sleep_for_ms(50).expect("Failed to thread sleep");
+            without_interrupts(|| {
+                let prepared = unsafe { CLEANUP_THREADS.prepare_wait() };
+                for cpu in CpuLocal::get_all() {
+                    let schd = SCHEDULER.borrow_for(cpu);
+                    let waiting_cleanup = schd.awaiting_cleanup.lock();
+                    if waiting_cleanup.len() != 0 {
+                        return;
+                    }
+                }
+
+                prepared
+                    .enter_wait((), None)
+                    .expect("Failed to wait for clean-up")
+            })
         }
     })
 }
@@ -171,6 +186,7 @@ pub struct Scheduler {
     next_wake_time: AtomicU64,
     waiting_threads: Mutex<Vec<(ArcThread, NonZero<u64>)>>,
     awaiting_cleanup: TrackedSpinLock<ThreadList>,
+    awaited_cleanup: UnsafeCell<bool>,
     pub ready_queues: TrackedSpinLock<[ThreadList; PRIORITIES_COUNT]>,
     idle_thread: ArcThread,
     current_thread: UnsafeCell<ArcThread>,
@@ -366,6 +382,8 @@ impl Scheduler {
                 without_interrupts(|| {
                     let mut awaiting_cleanup = self.awaiting_cleanup.lock();
                     unsafe { awaiting_cleanup.push_back(thread) };
+
+                    unsafe { *self.awaited_cleanup.get() = true };
                 });
                 self.sub_thread_count();
             }
@@ -585,6 +603,7 @@ impl Scheduler {
             threads_count: AtomicUsize::new(0),
             context_switch_count: AtomicUsize::new(0),
             preemption_disabled: UnsafeCell::new(false),
+            awaited_cleanup: UnsafeCell::new(false),
             stack: UnsafeCell::new([0; 1024]),
         }
     }
@@ -644,8 +663,14 @@ where
 
 #[unsafe(no_mangle)]
 extern "C" fn post_swtch_cleanup(schd: &'static Scheduler) {
+    // Safety: Was locked by previous code.
     debug_assert!(schd.ready_queues.is_locked());
     unsafe { schd.ready_queues.force_unlock() };
+
+    // Safety: Only the scheduler access this, was set by previous code.
+    if core::mem::take(unsafe { &mut *schd.awaited_cleanup.get() }) {
+        CLEANUP_THREADS.lock().wake_n_on_condition(|_| true, 1);
+    }
 }
 
 #[inline(always)]
