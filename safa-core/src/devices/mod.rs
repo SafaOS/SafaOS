@@ -7,9 +7,11 @@ pub mod tty;
 use alloc::boxed::Box;
 
 use crate::{
-    arch::serial::SERIAL,
     debug,
-    devices::input::{keyboard::KEYBOARD_EVENT_QUEUE, mouse::MICE_EVENT_QUEUE},
+    devices::{
+        input::{keyboard::KEYBOARD_EVENT_QUEUE, mouse::MICE_EVENT_QUEUE},
+        serial::SerialDevice,
+    },
     drivers::{
         framebuffer::FRAMEBUFFER_DRIVER,
         vfs::{self, FSError, FSResult, SeekOffset, VFS},
@@ -56,7 +58,7 @@ pub fn init(vfs: &mut VFS) {
     )
     .expect("failed to mount `dev:/`");
     add_static_device(vfs, &*FRAMEBUFFER_TERMINAL);
-    add_static_device(vfs, &SERIAL);
+    add_static_device(vfs, &SerialDevice);
     add_static_device(vfs, &*FRAMEBUFFER_DRIVER);
     add_static_device(vfs, &KEYBOARD_EVENT_QUEUE);
     add_static_device(vfs, &MICE_EVENT_QUEUE);

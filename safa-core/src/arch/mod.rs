@@ -34,7 +34,7 @@ pub mod power {
 }
 
 pub mod serial {
-    pub use super::arch::serial::{_serial, SERIAL, Serial};
+    pub use super::arch::serial::{_serial, SERIAL};
 }
 
 pub mod utils {

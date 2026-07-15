@@ -1,14 +1,12 @@
-use core::fmt::Write;
-
 use crate::{
-    arch::serial::Serial,
     drivers::vfs::{FSError, FSResult},
-    utils::locks::SpinLock,
+    serial_log,
 };
 
 use super::CharDevice;
+pub struct SerialDevice;
 
-impl CharDevice for SpinLock<Serial> {
+impl CharDevice for SerialDevice {
     fn name(&self) -> &'static str {
         "ss"
     }
@@ -19,9 +17,7 @@ impl CharDevice for SpinLock<Serial> {
 
     fn write(&self, buffer: &[u8]) -> FSResult<usize> {
         let str = unsafe { core::str::from_utf8_unchecked(buffer) };
-        self.lock()
-            .write_str(str)
-            .expect("failed to write to serial");
+        serial_log!("{}", str.trim_end_matches('\n'));
         Ok(buffer.len())
     }
 }
