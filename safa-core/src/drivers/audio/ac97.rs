@@ -390,6 +390,7 @@ impl InterruptReceiver for AC97 {
 
 impl PCIDevice for AC97 {
     const CLASS_SUBCLASS: (u8, u8) = (0x04, 0x01);
+    const VENDOR_ID: Option<&[u16]> = Some(&[0x8086]);
     fn create(mut info: crate::drivers::pci::PCIDeviceInfo) -> Self
     where
         Self: Sized,
