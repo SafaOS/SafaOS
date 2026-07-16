@@ -4,11 +4,7 @@ use core::{
     ptr::NonNull,
 };
 
-use crate::{
-    debug,
-    memory::AlignToPage,
-    utils::locks::{Mutex, MutexGuard},
-};
+use crate::{arch::without_interrupts, debug, memory::AlignToPage, utils::locks::SpinLock};
 use lazy_static::lazy_static;
 use limine::memory_map::EntryType;
 
@@ -473,110 +469,111 @@ impl RegionListAllocator {
 }
 
 lazy_static! {
-    pub static ref REGION_ALLOCATOR: Mutex<RegionListAllocator> =
-        Mutex::new(RegionListAllocator::create());
-}
-
-#[allow(unused)]
-fn allocator() -> MutexGuard<'static, RegionListAllocator> {
-    REGION_ALLOCATOR.lock()
+    static ref REGION_ALLOCATOR: SpinLock<RegionListAllocator> =
+        SpinLock::new(RegionListAllocator::create());
 }
 
 #[inline(always)]
 pub fn allocate_frame() -> Option<Frame> {
-    REGION_ALLOCATOR.lock().allocate_frame()
+    without_interrupts(|| REGION_ALLOCATOR.lock().allocate_frame())
 }
 
 #[allow(unused)]
 #[inline(always)]
 pub fn allocate_aligned(align_pages: usize) -> Option<Frame> {
-    REGION_ALLOCATOR.lock().allocate_aligned(align_pages)
+    without_interrupts(|| REGION_ALLOCATOR.lock().allocate_aligned(align_pages))
 }
 
 #[allow(unused)]
 #[inline(always)]
 pub fn allocate_contiguous(align_pages: usize, num_pages: usize) -> Option<(Frame, Frame)> {
-    REGION_ALLOCATOR
-        .lock()
-        .allocate_contiguous(align_pages, num_pages)
+    without_interrupts(|| {
+        REGION_ALLOCATOR
+            .lock()
+            .allocate_contiguous(align_pages, num_pages)
+    })
 }
 
 #[inline(always)]
 pub fn deallocate_frame(frame: Frame) {
-    REGION_ALLOCATOR.lock().deallocate_frame(frame)
+    without_interrupts(|| REGION_ALLOCATOR.lock().deallocate_frame(frame))
 }
 
 /// returns the number of mapped frames
 #[inline(always)]
 pub fn mapped_frames() -> usize {
-    REGION_ALLOCATOR.lock().mapped_frames()
+    without_interrupts(|| REGION_ALLOCATOR.lock().mapped_frames())
 }
 
 #[inline(always)]
 pub fn usable_frames() -> usize {
-    REGION_ALLOCATOR.lock().usable_frames()
+    without_interrupts(|| REGION_ALLOCATOR.lock().usable_frames())
 }
 
 #[test_case]
 fn allocate_many_test() {
-    let mut allocator = REGION_ALLOCATOR.lock();
-    let mut frames = heapless::Vec::<_, 1024>::new();
-    for _ in 0..frames.capacity() {
-        frames.push(allocator.allocate_frame().unwrap()).unwrap();
-    }
+    without_interrupts(|| {
+        let mut allocator = REGION_ALLOCATOR.lock();
+        let mut frames = heapless::Vec::<_, 1024>::new();
+        for _ in 0..frames.capacity() {
+            frames.push(allocator.allocate_frame().unwrap()).unwrap();
+        }
 
-    for i in 1..frames.capacity() {
-        assert_ne!(frames[i - 1].start_address(), frames[i].start_address());
-    }
+        for i in 1..frames.capacity() {
+            assert_ne!(frames[i - 1].start_address(), frames[i].start_address());
+        }
 
-    let last_frame = frames[frames.len() - 1];
-    for frame in frames.iter() {
-        allocator.deallocate_frame(*frame);
-    }
-    let allocated = allocator.allocate_frame().unwrap();
-    assert_eq!(allocated, last_frame);
+        let last_frame = frames[frames.len() - 1];
+        for frame in frames.iter() {
+            allocator.deallocate_frame(*frame);
+        }
+        let allocated = allocator.allocate_frame().unwrap();
+        assert_eq!(allocated, last_frame);
 
-    allocator.deallocate_frame(allocated);
+        allocator.deallocate_frame(allocated);
+    });
 }
 
 #[test_case]
 fn allocate_aligned_test() {
-    let mut allocator = REGION_ALLOCATOR.lock();
-    let frame = allocator
-        .allocate_aligned(SIZE_64K_PAGES)
-        .unwrap_or_else(|| {
-            panic!(
-                "failed to find a Frame with alignment {:#x}",
-                SIZE_64K_PAGES * PAGE_SIZE
-            )
-        });
+    without_interrupts(|| {
+        let mut allocator = REGION_ALLOCATOR.lock();
+        let frame = allocator
+            .allocate_aligned(SIZE_64K_PAGES)
+            .unwrap_or_else(|| {
+                panic!(
+                    "failed to find a Frame with alignment {:#x}",
+                    SIZE_64K_PAGES * PAGE_SIZE
+                )
+            });
 
-    assert!(frame.start_address().is_multiple_of(SIZE_64K));
-    allocator.deallocate_frame(frame);
+        assert!(frame.start_address().is_multiple_of(SIZE_64K));
+        allocator.deallocate_frame(frame);
 
-    let other_frame = allocator
-        .allocate_aligned(SIZE_64K_PAGES)
-        .unwrap_or_else(|| {
-            panic!(
-                "failed to reallocate a Frame with alignment {:#x}",
-                SIZE_64K_PAGES * PAGE_SIZE
-            )
-        });
+        let other_frame = allocator
+            .allocate_aligned(SIZE_64K_PAGES)
+            .unwrap_or_else(|| {
+                panic!(
+                    "failed to reallocate a Frame with alignment {:#x}",
+                    SIZE_64K_PAGES * PAGE_SIZE
+                )
+            });
 
-    assert_eq!(other_frame, frame);
-    allocator.deallocate_frame(other_frame);
-    // 3 allocations to be extra sure nothing gets messed up
-    let other_frame = allocator
-        .allocate_aligned(SIZE_64K_PAGES)
-        .unwrap_or_else(|| {
-            panic!(
-                "failed to reallocate a Frame with alignment {:#x}",
-                SIZE_64K_PAGES * PAGE_SIZE
-            )
-        });
+        assert_eq!(other_frame, frame);
+        allocator.deallocate_frame(other_frame);
+        // 3 allocations to be extra sure nothing gets messed up
+        let other_frame = allocator
+            .allocate_aligned(SIZE_64K_PAGES)
+            .unwrap_or_else(|| {
+                panic!(
+                    "failed to reallocate a Frame with alignment {:#x}",
+                    SIZE_64K_PAGES * PAGE_SIZE
+                )
+            });
 
-    assert_eq!(other_frame, frame);
-    allocator.deallocate_frame(other_frame);
+        assert_eq!(other_frame, frame);
+        allocator.deallocate_frame(other_frame);
+    });
 }
 
 #[allow(unused)]
@@ -614,28 +611,32 @@ fn allocate_contiguous_test_inner<const N: usize>(
 
 #[test_case]
 fn allocate_contiguous_test() {
-    let mut allocator = REGION_ALLOCATOR.lock();
-    let used_before = allocator.mapped_frames();
+    without_interrupts(|| {
+        let mut allocator = REGION_ALLOCATOR.lock();
+        let used_before = allocator.mapped_frames();
 
-    let results = allocate_contiguous_test_inner::<0x10>(&mut allocator, SIZE_64K_PAGES);
+        let results = allocate_contiguous_test_inner::<0x10>(&mut allocator, SIZE_64K_PAGES);
 
-    let other_results = allocate_contiguous_test_inner::<0x30>(&mut allocator, SIZE_64K_PAGES);
-    for res in results {
-        // as they were freed, they should be pushed to the top of the list. and allocate_contiguous starts from the tail of the list
-        assert!(!other_results.contains(&res));
-    }
+        let other_results = allocate_contiguous_test_inner::<0x30>(&mut allocator, SIZE_64K_PAGES);
+        for res in results {
+            // as they were freed, they should be pushed to the top of the list. and allocate_contiguous starts from the tail of the list
+            assert!(!other_results.contains(&res));
+        }
 
-    assert_eq!(used_before, allocator.mapped_frames());
+        assert_eq!(used_before, allocator.mapped_frames());
+    });
 }
 
 // Thanks to the fact tests are executed alphabetically this test is executed last, maybe this shouldn't be relied upon....
 // makes sure all the previous tests didn't mess up something with the linked list
 #[test_case]
 fn frame_count_verification_test() {
-    let allocator = REGION_ALLOCATOR.lock();
-    let actual_frame_count = allocator.count_frames_expensive();
-    assert_eq!(
-        allocator.usable_frames() - allocator.mapped_frames(),
-        actual_frame_count
-    );
+    without_interrupts(|| {
+        let allocator = REGION_ALLOCATOR.lock();
+        let actual_frame_count = allocator.count_frames_expensive();
+        assert_eq!(
+            allocator.usable_frames() - allocator.mapped_frames(),
+            actual_frame_count
+        );
+    });
 }
