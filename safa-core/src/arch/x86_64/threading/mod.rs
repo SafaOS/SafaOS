@@ -4,10 +4,11 @@ use crate::{
     PhysAddr,
     arch::x86_64::{
         gdt::{get_kernel_tss_stack, set_kernel_tss_stack},
-        interrupts::handlers::InterruptCpuFrame,
+        interrupts::{apic::APIC, handlers::InterruptCpuFrame},
         registers::{RFLAGS, rdfsbase, wrfsbase},
     },
     globals::KERNEL_ELF,
+    scheduler::TIME_PER_QUANTUM,
     thread::Tid,
 };
 use core::{arch::global_asm, fmt::Display};
@@ -238,8 +239,13 @@ pub(super) extern "C" fn context_switch_on_int(switch_frame: &mut InterruptCpuFr
     unsafe {
         context_switch_and_return_inner(
             capture,
-            || {
+            |time| {
                 super::interrupts::apic::send_eoi();
+                APIC.schedule_interrupt_after_ms(if time != 0 {
+                    time
+                } else {
+                    TIME_PER_QUANTUM as u64
+                });
             },
             false,
         )
@@ -249,10 +255,10 @@ pub(super) extern "C" fn context_switch_on_int(switch_frame: &mut InterruptCpuFr
 #[inline(always)]
 unsafe fn context_switch_and_return_inner(
     capture: &mut CPUStatus,
-    before_switch: impl FnOnce(),
+    before_switch: impl FnOnce(u64),
     is_thread_yielding: bool,
 ) {
-    let Err(before_switch) = {
+    let Err((before_switch, time)) = {
         unsafe {
             capture.ring0_rsp = get_kernel_tss_stack();
             capture.fs_base = rdfsbase();
@@ -261,12 +267,24 @@ unsafe fn context_switch_and_return_inner(
     };
 
     core::hint::cold_path();
-    before_switch();
+    before_switch(time);
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn context_switch_and_return(capture: &mut CPUStatus) -> ! {
-    unsafe { context_switch_and_return_inner(capture, || {}, true) }
+    unsafe {
+        context_switch_and_return_inner(
+            capture,
+            |time| {
+                APIC.schedule_interrupt_after_ms(if time != 0 {
+                    time
+                } else {
+                    TIME_PER_QUANTUM as u64
+                });
+            },
+            true,
+        )
+    }
     unsafe { restore_cpu_status_partial(capture) }
 }
 

@@ -692,7 +692,7 @@ impl<'s> PCIDevice for XHCI<'s> {
     const CLASS_SUBCLASS: (u8, u8) = (0xc, 0x3);
     const PROG_IF: Option<u8> = Some(0x30);
 
-    fn create(mut info: super::pci::PCIDeviceInfo) -> Self {
+    fn create(mut info: super::pci::PCIDeviceInfo) -> Result<Self, &'static str> {
         // Collect extended captability information
         let mut pci_caps = info.caps_list();
         let mut usb3_ports = Vec::new();
@@ -767,7 +767,8 @@ impl<'s> PCIDevice for XHCI<'s> {
                 this.usb3_ports
             );
         }
-        this
+        // FIXME: More errors.
+        Ok(this)
     }
 
     fn start(&'static self) -> bool {

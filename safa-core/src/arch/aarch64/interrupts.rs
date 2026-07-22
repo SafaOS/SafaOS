@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use crate::arch::aarch64::gic::its::commands::{GITS_COMMAND_QUEUE, ITSCommand};
 use crate::arch::aarch64::gic::{LPI_MANAGER, its};
 use crate::arch::aarch64::pci;
-use crate::drivers::interrupts::IRQInfo;
+use crate::drivers::interrupts::{IRQInfo, IntTrigger};
 use crate::drivers::pci::msi::MSIXInfo;
 use crate::info;
 use crate::utils::locks::{Mutex, SpinLock};
@@ -119,7 +119,7 @@ fn register_msix(int_id: u32, msix: &MSIXInfo) {
     command_queue.poll();
 }
 
-pub unsafe fn register_irq_handler(info: &IRQInfo) -> u32 {
+pub unsafe fn register_irq_handler(info: &IRQInfo, _triggering: IntTrigger) -> u32 {
     match info {
         IRQInfo::MSIX(msix) => {
             let int_id = NEXT_LPI_IRQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed);

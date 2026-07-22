@@ -115,33 +115,43 @@ pub fn cleanup_thread(tid: Tid, _: &'static ()) -> ! {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SchedulePriority {
+pub struct SchedulePolicy {
     queue_index: u32,
-    time_used: Option<NonZero<u64>>,
+    time_left: Option<NonZero<u64>>,
     last_scheduled: Option<NonZero<u64>>,
 }
 
-impl SchedulePriority {
+impl SchedulePolicy {
     pub const fn new() -> Self {
         Self {
             queue_index: 0,
-            time_used: None,
+            time_left: NonZero::new((INITIAL_QUANTUM * TIME_PER_QUANTUM) as u64),
             last_scheduled: None,
         }
     }
 
-    pub fn has_time(&self) -> bool {
-        self.time_used.is_none_or(|t| {
-            let time_for_queue = ((self.queue_index as u32 * QUANTUM_INCREMENT) + INITIAL_QUANTUM)
-                * TIME_PER_QUANTUM;
-            t.get() < time_for_queue as u64
-        })
+    #[inline]
+    pub fn time_left(&self) -> u64 {
+        self.time_left.map(|u| u.get()).unwrap_or(0)
     }
 
+    #[inline]
+    pub fn has_time(&self) -> bool {
+        self.time_left.is_some()
+    }
+
+    #[inline]
+    pub fn reset_time(&mut self) {
+        let time_for_queue =
+            ((self.queue_index as u32 * QUANTUM_INCREMENT) + INITIAL_QUANTUM) * TIME_PER_QUANTUM;
+        self.time_left = NonZero::new(time_for_queue as u64);
+    }
+
+    #[inline]
     pub fn get_next_priority_queue(&mut self) -> u32 {
         if !self.has_time() {
-            self.time_used = None;
             self.queue_index = (self.queue_index + 1).min(MAX_PRIORITY as u32);
+            self.reset_time();
         }
         self.queue_index
     }
@@ -155,11 +165,9 @@ impl SchedulePriority {
                 return;
             };
 
-            self.time_used = Some(
-                self.time_used
-                    .map(|u| u.saturating_add(diff.get()))
-                    .unwrap_or(diff),
-            );
+            self.time_left = self
+                .time_left
+                .and_then(|u| NonZero::new(u.get().saturating_sub(diff.get())));
         }
     }
 }
@@ -215,21 +223,9 @@ impl Scheduler {
         crate::serial!("cycles per 500ns are: {cycles_per_500ns}\n");
 
         with_interrupts(|| {
-            // Unfortunatlly we need interrupts so that x86 TLB invalidation works
-            // The IDLE thread is guaranteed to run on this scheduler.
             loop {
-                without_interrupts(|| {
-                    if self.try_pop_waiting_thread() || self.try_escape_idle() {
-                        crate::thread::current::yield_now();
-                    }
-                });
-
-                // nano-sleep for 500ns
-                let now = crate::arch::utils::cpu_cycles();
-                let wait_for = now + cycles_per_500ns;
-                while crate::arch::utils::cpu_cycles() < wait_for {
-                    core::hint::spin_loop();
-                }
+                unsafe { crate::arch::hlt() };
+                crate::thread::current::yield_now();
             }
         })
     }
@@ -290,49 +286,50 @@ impl Scheduler {
         self.add_single_thread_to(queues, thread, queue, add_front)
     }
 
-    #[inline]
-    pub fn try_pop_waiting_thread(&'static self) -> bool {
-        let mut popped = false;
-        let mut waiting_threads = self.waiting_threads.lock();
-        if waiting_threads.is_empty() {
-            return false;
-        }
+    // #[inline]
+    // pub fn try_pop_waiting_thread(&'static self) -> bool {
+    //     let mut popped = false;
+    //     let mut waiting_threads = self.waiting_threads.lock();
+    //     if waiting_threads.is_empty() {
+    //         return false;
+    //     }
 
-        let time_now = time_since_boot_ms();
+    //     let time_now = time_since_boot_ms();
 
-        let mut next_add_time: NonZero<u64> = NonZero::<u64>::MAX;
+    //     let mut next_add_time: NonZero<u64> = NonZero::<u64>::MAX;
 
-        let mut i = 0;
-        while i < waiting_threads.len() {
-            let (_, time) = &waiting_threads[i];
+    //     let mut i = 0;
+    //     while i < waiting_threads.len() {
+    //         let (_, time) = &waiting_threads[i];
 
-            if time.get() <= time_now {
-                let (thread, _) = waiting_threads.swap_remove(i);
-                unsafe { thread.before_sleep_wakeup() };
-                unsafe { self.schedule_thread(thread, ThreadScheduleReason::Unblocked) };
-                popped = true;
-            } else {
-                next_add_time = next_add_time.min(*time);
-                i += 1;
-            }
-        }
+    //         if time.get() <= time_now {
+    //             let (thread, _) = waiting_threads.swap_remove(i);
+    //             unsafe { thread.before_sleep_wakeup() };
+    //             unsafe { self.schedule_thread(thread, ThreadScheduleReason::Unblocked) };
+    //             popped = true;
+    //         } else {
+    //             next_add_time = next_add_time.min(*time);
+    //             i += 1;
+    //         }
+    //     }
 
-        self.next_wake_time
-            .fetch_min(next_add_time.get(), Ordering::Relaxed);
-        popped
-    }
-
+    //     self.next_wake_time
+    //         .fetch_min(next_add_time.get(), Ordering::Relaxed);
+    //     popped
+    // }
     #[inline]
     fn try_wake_waiting_threads(
         &'static self,
         queues: &mut [ThreadList],
         time_now: NonZero<u64>,
         current_thread: Option<&ArcThread>,
-    ) {
+    ) -> Option<u64> {
         const MAX_TIME: NonZero<u64> = NonZero::new(u64::MAX).expect("Is zero??????!??");
 
-        if likely(self.next_wake_time.load(Ordering::Relaxed) > time_now.get()) {
-            return;
+        let next_wake_time = self.next_wake_time.load(Ordering::Relaxed);
+        let diff = next_wake_time.saturating_sub(time_now.get());
+        if likely(diff > 0) {
+            return (next_wake_time != u64::MAX).then_some(diff);
         }
 
         if let Some(mut waiting_threads) = self.waiting_threads.try_lock() {
@@ -354,8 +351,17 @@ impl Scheduler {
             }
 
             self.next_wake_time
-                .fetch_min(next_add_time.get(), Ordering::Relaxed);
+                .store(next_add_time.get(), Ordering::Relaxed);
         }
+
+        let next_wake_time = self.next_wake_time.load(Ordering::Relaxed);
+
+        if next_wake_time == u64::MAX {
+            return None;
+        }
+
+        let diff = next_wake_time.saturating_sub(time_now.get());
+        Some(diff)
     }
 
     /// Schedules a thread for execution on this scheduler.
@@ -442,19 +448,19 @@ impl Scheduler {
         None
     }
 
-    fn try_escape_idle(&'static self) -> bool {
-        let mut queues = self.ready_queues.lock();
-        if queues.iter().any(|q| !q.is_empty()) {
-            return true;
-        }
+    // fn try_escape_idle(&'static self) -> bool {
+    //     let mut queues = self.ready_queues.lock();
+    //     if queues.iter().any(|q| !q.is_empty()) {
+    //         return true;
+    //     }
 
-        // Queue is empty, try to steal a thread from another scheduler
-        self.try_steal_thread()
-            .map(|(t, p)| {
-                self.add_single_thread_to(&mut *queues, t, p, false);
-            })
-            .is_some()
-    }
+    //     // Queue is empty, try to steal a thread from another scheduler
+    //     self.try_steal_thread()
+    //         .map(|(t, p)| {
+    //             self.add_single_thread_to(&mut *queues, t, p, false);
+    //         })
+    //         .is_some()
+    // }
 
     /// Try to swap the given CPU context with the next thread's context effectively doing a context switch / thread yield.
     ///
@@ -465,22 +471,37 @@ impl Scheduler {
     /// # Returns
     /// * `Some((NonNull<CPUStatus>, bool, TrackedSpinLockGuard<[ThreadList; PRIORITIES_COUNT]>))` - The new CPU status, whether the swap was successful, and the locked schedule queues, the schedule queues shall be dropped once the kernel thread stack is swapped.
     /// * `None` - If no swap was performed.
-    #[inline]
+    #[inline(always)]
     fn try_swap_contexts(
         &'static self,
         current_cpu_status: &CPUStatus,
         swap_if_has_time: bool,
-    ) -> Option<(
-        NonNull<CPUStatus>,
-        bool,
-        TrackedSpinLockGuard<'static, [ThreadList; PRIORITIES_COUNT]>,
-    )> {
+    ) -> Result<
+        (
+            NonNull<CPUStatus>,
+            bool,
+            TrackedSpinLockGuard<'static, [ThreadList; PRIORITIES_COUNT]>,
+            u64,
+        ),
+        u64,
+    > {
         let current_thread = unsafe { &mut *self.current_thread.get() };
         let curr_pid = current_thread.process().pid();
 
         let time_now = time_since_boot_ms();
         let Some(time_now) = NonZero::new(time_now) else {
-            return None;
+            return Err(0);
+        };
+
+        let mut schd_queues = self.ready_queues.lock();
+        let wake_time =
+            self.try_wake_waiting_threads(&mut *schd_queues, time_now, Some(&current_thread));
+        let calculate_time_left = |time: u64| {
+            if let Some(wake) = wake_time {
+                time.min(wake)
+            } else {
+                time
+            }
         };
 
         let was_idle_thread = *current_thread == self.idle_thread;
@@ -488,16 +509,13 @@ impl Scheduler {
             let curr_schd = unsafe { &mut *current_thread.schedule_priority.get() };
             curr_schd.update_time(time_now);
             if !swap_if_has_time && curr_schd.has_time() {
-                return None;
+                return Err(calculate_time_left(curr_schd.time_left()));
             }
             Some(curr_schd.get_next_priority_queue())
         } else {
             None
         };
 
-        let mut schd_queues = self.ready_queues.lock();
-
-        self.try_wake_waiting_threads(&mut *schd_queues, time_now, Some(&current_thread));
         self.try_boost_threads(&mut *schd_queues, time_now);
 
         let current_context = unsafe { current_thread.context_unchecked() };
@@ -559,13 +577,16 @@ impl Scheduler {
             }
         }
 
-        let (new_thread, queue_index) = results.unwrap_or_else(|| (self.idle_thread.clone(), 0));
+        let (new_thread, queue_index) = results.unwrap_or_else(|| (self.idle_thread.clone(), 1));
 
         new_thread.set_status(ContextStatus::Running);
 
         let schd = unsafe { &mut *new_thread.schedule_priority.get() };
         schd.queue_index = queue_index as u32;
         schd.last_scheduled = NonZero::new(time_since_boot_ms());
+        schd.reset_time();
+
+        let time_left = schd.time_left();
 
         let process_pid = new_thread.process().pid();
         let address_space_changed = curr_pid != process_pid;
@@ -581,7 +602,12 @@ impl Scheduler {
 
             let cpu_status = context.cpu_status();
             *self.current_thread.get() = new_thread;
-            Some((cpu_status, address_space_changed, schd_queues))
+            Ok((
+                cpu_status,
+                address_space_changed,
+                schd_queues,
+                calculate_time_left(time_left),
+            ))
         }
     }
 
@@ -682,29 +708,29 @@ extern "C" fn post_swtch_cleanup(schd: &'static Scheduler) {
 /// returns None if the scheduler is not yet initialized or nothing is supposed to be switched to
 pub fn swtch(
     context: &CPUStatus,
-    before_switch: impl FnOnce(),
+    before_switch: impl FnOnce(u64),
     is_thread_yielding: bool,
-) -> Result<!, impl FnOnce()> {
+) -> Result<!, (impl FnOnce(u64), u64)> {
     let Some(scheduler) = SCHEDULER.maybe_borrow() else {
-        return Err(before_switch);
+        return Err((before_switch, 0));
     };
     if unsafe { *scheduler.preemption_disabled.get() } {
-        return Err(before_switch);
+        return Err((before_switch, 0));
     }
 
     scheduler
         .context_switch_count
         .fetch_add(1, Ordering::Release);
 
-    let Some((new_context, address_space_changed, guard)) =
-        scheduler.try_swap_contexts(context, is_thread_yielding)
-    else {
-        return Err(before_switch);
+    let results = scheduler.try_swap_contexts(context, is_thread_yielding);
+    let Ok((new_context, address_space_changed, guard, time)) = results else {
+        let e = results.unwrap_err();
+        return Err((before_switch, e));
     };
 
     core::mem::forget(guard);
 
-    before_switch();
+    before_switch(time);
     let kernel_stack = scheduler.stack_end();
     unsafe {
         #[cfg(target_arch = "aarch64")]

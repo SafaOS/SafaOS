@@ -21,6 +21,7 @@
 #![feature(unsafe_cell_access)]
 #![feature(macro_metavar_expr_concat)]
 #![feature(set_ptr_value)]
+#![feature(maybe_uninit_slice)]
 #![feature(debug_closure_helpers)]
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ mod test;
 mod arch;
 mod audio;
 mod devices;
+mod dma;
 mod drivers;
 mod eve;
 mod fs;

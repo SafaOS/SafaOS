@@ -1272,7 +1272,7 @@ impl PCIDevice for E1000NetCard {
         0x153A, /* Intel I217 */
         0x10EA, /* Intel 82577LM */
     ]);
-    fn create(mut info: crate::drivers::pci::PCIDeviceInfo) -> Self
+    fn create(mut info: crate::drivers::pci::PCIDeviceInfo) -> Result<Self, &'static str>
     where
         Self: Sized,
     {
@@ -1302,7 +1302,8 @@ impl PCIDevice for E1000NetCard {
             }
         }
 
-        E1000NetCard {
+        // FIXME: More errors.
+        Ok(E1000NetCard {
             irq_info,
             base: base_bar,
             mac: OnceCell::new(),
@@ -1310,7 +1311,7 @@ impl PCIDevice for E1000NetCard {
             com: OnceCell::new(),
             addr_info: RwLock::new(NicAddrInfoV4::default()),
             wait_queue: Mutex::new(WaitQueue::new()),
-        }
+        })
     }
 
     fn start(&'static self) -> bool {

@@ -15,7 +15,7 @@ use crate::{
     arch::{threading::CPUStatus, without_interrupts},
     debug,
     process::{Pid, Process, mem::TrackedMemoryAllocation},
-    scheduler::{SCHEDULER, SchedulePriority, Scheduler, ThreadScheduleReason},
+    scheduler::{SCHEDULER, SchedulePolicy, Scheduler, ThreadScheduleReason},
     thread,
     timer::time_since_boot_ms,
     utils::locks::{SPIN_AMOUNT, SpinLock, SpinLockGuard},
@@ -127,11 +127,6 @@ impl ThreadList {
 
     pub const fn len(&self) -> usize {
         self.len
-    }
-
-    /// Returns whether the list is empty
-    pub fn is_empty(&self) -> bool {
-        self.head.is_none()
     }
 
     /// Push a thread to the back of the list
@@ -505,7 +500,7 @@ impl Deref for ArcThread {
 
 pub struct Thread {
     id: Tid,
-    pub schedule_priority: UnsafeCell<SchedulePriority>,
+    pub schedule_priority: UnsafeCell<SchedulePolicy>,
     priority: ContextPriority,
     status: SpinLock<ContextStatus>,
     context: UnsafeCell<Context>,
@@ -578,7 +573,7 @@ impl Thread {
         thread_tls: Option<TrackedMemoryAllocation>,
     ) -> Self {
         Self {
-            schedule_priority: UnsafeCell::new(SchedulePriority::new()),
+            schedule_priority: UnsafeCell::new(SchedulePolicy::new()),
             timeouted: UnsafeCell::new(false),
             id: cid,
             priority,

@@ -11,7 +11,7 @@ pub trait InterruptReceiver: Send + Sync + Debug {
     fn handle_interrupt(&'static self) -> bool;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntTrigger {
     Edge,
     #[allow(unused)]
@@ -85,7 +85,7 @@ impl IRQManager {
         handler: &'static dyn InterruptReceiver,
     ) {
         unsafe {
-            let irq_num = crate::arch::interrupts::register_irq_handler(&irq_info);
+            let irq_num = crate::arch::interrupts::register_irq_handler(&irq_info, triggering);
             let mut irq = IRQ::new(irq_info, triggering, handler, irq_num);
             irq.setup(irq_num);
 

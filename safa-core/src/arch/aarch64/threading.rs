@@ -178,7 +178,17 @@ unsafe extern "C" {
 
 #[unsafe(no_mangle)]
 extern "C" fn context_switch_now(context: &CPUStatus) -> ! {
-    match scheduler::swtch(context, || {}, true) {
+    match scheduler::swtch(
+        context,
+        |time| unsafe {
+            super::timer::reset_timer(if time == 0 {
+                super::timer::TIMER_TICK_PER_MS
+            } else {
+                time as usize
+            })
+        },
+        true,
+    ) {
         Ok(a) => a,
         Err(_) => {
             core::hint::cold_path();
@@ -188,12 +198,12 @@ extern "C" fn context_switch_now(context: &CPUStatus) -> ! {
 }
 
 #[inline]
-pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce()) {
+pub(super) unsafe fn context_switch(frame: &mut InterruptFrame, before_switch: impl FnOnce(u64)) {
     let context = unsafe { CPUStatus::from_current(frame) };
-    let Err(before_switch) = scheduler::swtch(&context, before_switch, false);
+    let Err((before_switch, time)) = scheduler::swtch(&context, before_switch, false);
 
     core::hint::cold_path();
-    before_switch();
+    before_switch(time);
 }
 
 #[inline]

@@ -11,6 +11,7 @@ use crate::{
     drivers::{
         interrupts::{self, IRQInfo, InterruptReceiver},
         pci::{Bar, PCICommandReg, PCIDevice},
+        vfs::FSResult,
     },
     error,
     memory::{
@@ -391,7 +392,7 @@ impl InterruptReceiver for AC97 {
 impl PCIDevice for AC97 {
     const CLASS_SUBCLASS: (u8, u8) = (0x04, 0x01);
     const VENDOR_ID: Option<&[u16]> = Some(&[0x8086]);
-    fn create(mut info: crate::drivers::pci::PCIDeviceInfo) -> Self
+    fn create(mut info: crate::drivers::pci::PCIDeviceInfo) -> Result<Self, &'static str>
     where
         Self: Sized,
     {
@@ -406,13 +407,14 @@ impl PCIDevice for AC97 {
         let registers = AC97Registers::from_bars(&bars);
         let irq_info = info
             .get_best_irq_info(&[] /* FIXME: We currently don't allocate the BARs */)
-            .expect("AC97 must support interrupts");
+            .ok_or("Failed to allocate an IRQ")?;
 
-        Self {
+        // FIXME: More errors here.
+        Ok(Self {
             registers,
             irq_info,
             queue: AC97Queue::create().expect("Failed to create AC97 queue"),
-        }
+        })
     }
 
     fn start(&'static self) -> bool {
@@ -439,7 +441,7 @@ impl PCIDevice for AC97 {
 
 impl AudioCard for AC97 {
     fn info(&self) -> crate::audio::interface::AudioInfo {
-        AudioInfo::new(48000, 16, 2)
+        AudioInfo::new(48000, 16, 16, 2)
     }
     fn name(&self) -> &'static str {
         "ac97"
@@ -453,7 +455,7 @@ impl AudioCard for AC97 {
         without_interrupts(|| self.queue.queued_samples.lock().len()) / BYTES_PER_SAMPLE
     }
 
-    fn transfer_data(&self, data: &[u8]) -> Result<usize, ()> {
-        self.transfer_data(data)
+    fn transfer_data(&self, data: &[u8]) -> FSResult<usize> {
+        Ok(self.transfer_data(data).unwrap_or(0))
     }
 }

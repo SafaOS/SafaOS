@@ -13,7 +13,7 @@ use crate::arch::x86_64::registers::RFLAGS;
 use crate::utils::locks::Mutex;
 use crate::{KERNEL_ELF, VirtAddr};
 
-use crate::drivers::interrupts::IRQInfo;
+use crate::drivers::interrupts::{IRQInfo, IntTrigger};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -146,7 +146,7 @@ fn allocate_next_irq() -> u32 {
 static REGISTERED_PCI_IRQS: Mutex<Vec<(u8, u32)>> = Mutex::new(Vec::new());
 
 /// Registers the handler function `handler` to irq `irq_num`
-pub unsafe fn register_irq_handler(info: &IRQInfo) -> u32 {
+pub unsafe fn register_irq_handler(info: &IRQInfo, triggering: IntTrigger) -> u32 {
     let (irq_num, is_new) = match info {
         // No additional setup needed.
         IRQInfo::MSIX(_) => (allocate_next_irq(), true),
@@ -172,6 +172,10 @@ pub unsafe fn register_irq_handler(info: &IRQInfo) -> u32 {
                 let irq_num = allocate_next_irq();
                 let redirection = IOREDTBL::new()
                     .with_vector(irq_num as u8)
+                    .with_level_triggered(
+                        triggering == IntTrigger::LevelAssert
+                            || triggering == IntTrigger::LevelDeassert,
+                    )
                     .with_masked(false);
 
                 APIC.write_ioapic_irq(*interrupt_line, redirection);

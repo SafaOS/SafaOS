@@ -13,7 +13,7 @@ use crate::{
 
 use super::exceptions::InterruptFrame;
 
-const TIMER_TICK_PER_MS: usize = crate::scheduler::TIME_PER_QUANTUM as usize;
+pub const TIMER_TICK_PER_MS: usize = crate::scheduler::TIME_PER_QUANTUM as usize;
 
 struct Timer {
     _secure_int: Cells<'static>,
@@ -50,7 +50,7 @@ pub fn irq_num() -> u32 {
 
 #[inline(always)]
 /// Resets the timer to count Nms again before tiggring interrupt
-unsafe fn reset_timer(n: usize) {
+pub unsafe fn reset_timer(n: usize) {
     unsafe {
         let freq: usize;
         asm!("mrs {}, cntfrq_el0", out(reg) freq);
@@ -104,9 +104,13 @@ pub fn init_generic_timer() {
 
 pub fn on_interrupt(ctx: &mut InterruptFrame, is_fiq: bool) {
     unsafe {
-        super::threading::context_switch(ctx, || {
+        super::threading::context_switch(ctx, |time| {
             (&*TIMER_IRQ.get()).as_ref().unwrap().send_eoi(is_fiq);
-            reset_timer(TIMER_TICK_PER_MS)
+            reset_timer(if time == 0 {
+                TIMER_TICK_PER_MS
+            } else {
+                time as usize
+            })
         });
     }
 }

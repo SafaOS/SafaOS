@@ -7,10 +7,12 @@ use msi::{MSIXCap, MSIXInfo};
 use crate::{
     PhysAddr, VirtAddr, arch,
     drivers::{
-        audio::ac97::AC97, interrupts::IRQInfo, net::e1000::E1000NetCard,
+        audio::{ac97::AC97, ihda::IntelHDA},
+        interrupts::IRQInfo,
+        net::e1000::E1000NetCard,
         pci::extended_caps::CaptabilitiesIter,
     },
-    info,
+    error, info,
     memory::{
         AlignToPage,
         frame_allocator::Frame,
@@ -33,7 +35,7 @@ pub trait PCIDevice: Send + Sync + Debug {
     /// PCI lookup filter by vendor-device ID tuples
     const VENDOR_ID_DEVICE_ID: Option<&[(u16, u16)]> = None;
 
-    fn create(info: PCIDeviceInfo) -> Self
+    fn create(info: PCIDeviceInfo) -> Result<Self, &'static str>
     where
         Self: Sized;
     /// Starts the PCI Device returning true if successful
@@ -500,7 +502,7 @@ impl PCI {
         }
     }
 
-    fn create_device<T: PCIDevice + Sized>(&self) -> Option<T> {
+    fn create_device<T: PCIDevice + Sized>(&self) -> Option<Result<T, &'static str>> {
         let (class, subclass) = T::CLASS_SUBCLASS;
         let header = self.lookup(
             class,
@@ -625,20 +627,33 @@ impl PCI {
     }
 }
 
+fn create_pci_device<T: PCIDevice>() -> Option<T> {
+    let host_pci = HOST_PCI.as_ref()?;
+    host_pci
+        .create_device()
+        .map(|r| {
+            if let Err(e) = r {
+                error!(PCI, "Failed to create a device: {e}")
+            }
+            r.ok()
+        })
+        .flatten()
+}
+
 lazy_static! {
     pub static ref HOST_PCI: Option<PCI> = crate::arch::pci::init();
     // No complicated device management necessary for now.
     pub static ref XHCI_DEVICE: Option<XHCI<'static>> = {
-        let host_pci = HOST_PCI.as_ref()?;
-        host_pci.create_device::<XHCI>()
+       create_pci_device::<XHCI<'static>>()
     };
     pub static ref E1000_DEVICE: Option<E1000NetCard> = {
-        let host_pci = HOST_PCI.as_ref()?;
-        host_pci.create_device()
+        create_pci_device::<E1000NetCard>()
     };
     pub static ref AC97_DEVICE: Option<AC97> = {
-        let host_pci = HOST_PCI.as_ref()?;
-        host_pci.create_device()
+        create_pci_device::<AC97>()
+    };
+    pub static ref IHDA_DEVICE: Option<IntelHDA> = {
+        create_pci_device::<IntelHDA>()
     };
 }
 
@@ -651,4 +666,5 @@ pub fn init() {
     AC97_DEVICE.as_ref().map(|device| device.start());
     XHCI_DEVICE.as_ref().map(|device| device.start());
     E1000_DEVICE.as_ref().map(|device| device.start());
+    IHDA_DEVICE.as_ref().map(|device| device.start());
 }

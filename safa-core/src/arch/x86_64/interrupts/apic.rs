@@ -12,12 +12,15 @@ use crate::{
     },
     info,
     memory::vmm::{VMMAllocError, VMMMFlags, VirtualMemoryManager},
-    serial,
+    percpu, serial,
     utils::locks::{LazyLock, SpinLock},
 };
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
-use core::{cell::UnsafeCell, num::NonZero};
+use core::{
+    cell::{SyncUnsafeCell, UnsafeCell},
+    num::NonZero,
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -117,6 +120,9 @@ pub struct APICICReg {
     destination_field: u8,
 }
 
+percpu::define! {
+    pub static LAPIC_TICKS_PER_US: SyncUnsafeCell<u64> = const { SyncUnsafeCell::new(0) };
+}
 /// The APIC driver
 pub struct Apic {
     lapic_phys_addr: PhysAddr,
@@ -321,6 +327,21 @@ impl Apic {
         }
     }
 
+    pub fn schedule_interrupt_after(&self, time_us: u64) {
+        unsafe {
+            let addr = self.get_lapic_reg(0x320);
+            let init = self.get_lapic_reg(0x380);
+            let timer = LVTEntry::new(0x20, LVTEntryFlags::empty());
+
+            core::ptr::write_volatile(addr, timer.encode_u32());
+            core::ptr::write_volatile(init, time_us as u32 * *LAPIC_TICKS_PER_US.get() as u32);
+        }
+    }
+
+    pub fn schedule_interrupt_after_ms(&self, time_ms: u64) {
+        self.schedule_interrupt_after(time_ms * 1000)
+    }
+
     pub fn enable_apic_timer(&self, tsc_frequency: NonZero<u64>) {
         let lapic_id = self.lapic_id();
 
@@ -359,16 +380,13 @@ impl Apic {
             info!("APIC Timer calibrated with {} ticks in 1us", ticks_per_us);
         }
 
+        unsafe {
+            *LAPIC_TICKS_PER_US.get() = ticks_per_us;
+        }
         // enable the timer
         unsafe {
-            let timer = LVTEntry::new(0x20, LVTEntryFlags::TIMER_PERIODIC);
-            core::ptr::write_volatile(addr, timer.encode_u32());
             core::ptr::write_volatile(divide, 0x3);
-
-            core::ptr::write_volatile(
-                init,
-                (crate::scheduler::TIME_PER_QUANTUM * 1000) * ticks_per_us as u32,
-            );
+            self.schedule_interrupt_after_ms(crate::scheduler::TIME_PER_QUANTUM as u64);
         }
     }
 
@@ -499,7 +517,7 @@ pub struct IOREDTBL {
     pin_polarity_active_low: bool,
     remote_irr: bool,
     /// Otherwise edge triggered
-    level_triggered: bool,
+    pub(super) level_triggered: bool,
     pub(super) masked: bool,
 
     timer_periodic: bool,

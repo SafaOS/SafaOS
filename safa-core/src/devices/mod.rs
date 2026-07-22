@@ -34,11 +34,16 @@ pub fn add_device(vfs: &VFS, device: Box<dyn Device>) {
     vfs.mount_device(path, device).unwrap();
 }
 
-pub fn add_device_at(vfs: &VFS, device: Box<dyn Device>, subpath: &str) {
+pub fn add_device_at_with_name(
+    vfs: &VFS,
+    device: Box<dyn Device>,
+    subpath: &str,
+    name: Option<&str>,
+) {
     let dir_path = make_path!("dev", subpath);
     vfs.createdir(dir_path).expect("Failed to create root dir");
 
-    let dev_path = PathParts::new(device.name());
+    let dev_path = PathParts::new(name.unwrap_or(device.name()));
 
     let mut full_path = dir_path.into_owned().expect("Failed to convert into owned");
     full_path
@@ -46,6 +51,10 @@ pub fn add_device_at(vfs: &VFS, device: Box<dyn Device>, subpath: &str) {
         .expect("Failed to append");
 
     vfs.mount_device(full_path.as_path(), device).unwrap();
+}
+
+pub fn add_device_at(vfs: &VFS, device: Box<dyn Device>, subpath: &str) {
+    add_device_at_with_name(vfs, device, subpath, None)
 }
 
 /// Mounts devices to the `dev:/` file system in the VFS

@@ -9,6 +9,7 @@ use crate::{
         paging::PAGE_SIZE,
     },
     process::{self, mem::MemMappedInterface, poll::PollID, resources::Resource},
+    scheduler::wait_queue::WaitError,
     timer::{DurationFmt, SystemInstant},
     utils::{
         locks::Mutex,
@@ -82,6 +83,13 @@ pub enum FSError {
     MMapError,
     OutOfMemory,
     InvalidSize,
+    WaitError(WaitError),
+}
+
+impl From<WaitError> for FSError {
+    fn from(value: WaitError) -> Self {
+        Self::WaitError(value)
+    }
 }
 
 impl Display for FSError {
@@ -111,6 +119,7 @@ impl IntoErr for FSError {
             Self::MMapError => ErrorStatus::MMapError,
             Self::OutOfMemory => ErrorStatus::OutOfMemory,
             Self::InvalidSize => ErrorStatus::InvalidSize,
+            Self::WaitError(w) => w.into_err(),
         }
     }
 }
