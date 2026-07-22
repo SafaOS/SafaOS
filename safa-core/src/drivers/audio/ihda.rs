@@ -1395,15 +1395,12 @@ impl Stream {
         let (queued_data, queued_periods) = &mut *queue_guard;
 
         let Some(len) = queued_periods.pop_front() else {
-            crate::serial!("underrun\n");
             self.fill_next(0, self.period_bytes());
             return false;
         };
 
         self.write_data(&queued_data.drain(..len).as_slice()[..len]);
         if self.period_bytes() > len {
-            crate::serial!("PERIOD not full!\n");
-
             // self.fill_next(0, self.period_bytes() - len);
             return true;
         }
