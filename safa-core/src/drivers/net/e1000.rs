@@ -1315,7 +1315,7 @@ impl PCIDevice for E1000NetCard {
     }
 
     fn start(&'static self) -> bool {
-        interrupts::register_irq(self.irq_info.clone(), IntTrigger::Edge, self);
+        interrupts::register_irq(self.irq_info.clone(), IntTrigger::LevelDeassert, self);
 
         if let Err(err) = self.init() {
             error!(E1000NetCard, "Init failed with err: {:?}", err);

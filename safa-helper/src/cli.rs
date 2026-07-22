@@ -224,7 +224,9 @@ pub fn run(opts: RunOpts, iso_path: &Path) {
         .arg("--device")
         .arg("hda-duplex,audiodev=snd0")
         .arg("--netdev")
-        .arg("user,id=netdev0");
+        .arg("user,id=netdev0")
+        .arg("--device")
+        .arg("e1000,netdev=netdev0");
     let arch_args: &[&str] = match opts.arch {
         // FIXME: unefficent and can be written better
         ArchTarget::Arm64 => &[
