@@ -6,7 +6,6 @@ use crate::arch::aarch64::gic::its::commands::{GITS_COMMAND_QUEUE, ITSCommand};
 use crate::arch::aarch64::gic::{LPI_MANAGER, its};
 use crate::arch::aarch64::pci;
 use crate::drivers::interrupts::{IRQInfo, IntTrigger};
-use crate::drivers::pci::msi::MSIXInfo;
 use crate::info;
 use crate::utils::locks::{Mutex, SpinLock};
 use lazy_static::lazy_static;
@@ -85,8 +84,8 @@ pub fn register_device_irq(
     })
 }
 
-fn register_msix(int_id: u32, msix: &MSIXInfo) {
-    let device_id = msix.requester_id();
+fn register_msi(int_id: u32, requester: u32) {
+    let device_id = requester;
     let event_id = int_id;
 
     let mut mapped_device_ids = MAPPED_DEVICE_IDS.lock();
@@ -123,7 +122,12 @@ pub unsafe fn register_irq_handler(info: &IRQInfo, _triggering: IntTrigger) -> u
     match info {
         IRQInfo::MSIX(msix) => {
             let int_id = NEXT_LPI_IRQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            register_msix(int_id, msix);
+            register_msi(int_id, msix.requester_id());
+            int_id
+        }
+        IRQInfo::MSI(msi) => {
+            let int_id = NEXT_LPI_IRQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            register_msi(int_id, msi.requester_id());
             int_id
         }
         IRQInfo::PCIInt {

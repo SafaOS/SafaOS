@@ -54,9 +54,10 @@ pub fn build_msi_data(irq_num: u32, trigger: IntTrigger) -> u32 {
     let results = irq_num | /* TODO: Delivery */ 0 | assert << 14 | trigger << 15;
     results
 }
-pub fn build_msi_addr() -> PhysAddr {
+pub fn build_msi_addr(target_cpu: crate::percpu::CpuID) -> PhysAddr {
+    let cpu = crate::percpu::CpuLocal::get_for(target_cpu);
     let lapic_base = APIC.lapic_base().into_raw();
-    let lapic_id = APIC.lapic_id();
+    let lapic_id = cpu.cpu_arch_id.lapic_id();
     let msi_addr = lapic_base | ((lapic_id as usize) << 12);
     PhysAddr::from(msi_addr)
 }

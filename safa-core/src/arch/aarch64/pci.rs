@@ -1,14 +1,14 @@
 use crate::{
-    PhysAddr,
     arch::aarch64::cpu::CPUDevice,
     drivers::{interrupts::IntTrigger, pci::PCI},
     info,
     memory::{
-        AlignToPage,
         paging::PAGE_SIZE,
         vmm::{self, VMMMFlags},
+        AlignToPage,
     },
     utils::locks::LazyLock,
+    PhysAddr,
 };
 
 use hfdt_rs::{self as dtb, Cells};
@@ -142,6 +142,6 @@ pub fn build_msi_data(vector: u32, trigger: IntTrigger) -> u32 {
     _ = trigger;
     vector
 }
-pub fn build_msi_addr() -> PhysAddr {
+pub fn build_msi_addr(_for_cpu: crate::percpu::CpuID) -> PhysAddr {
     super::gic::its::gits_translater_phys()
 }

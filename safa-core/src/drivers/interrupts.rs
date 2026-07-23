@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::utils::locks::RwLock;
+use crate::{drivers::pci::msi::MSIInfo, utils::locks::RwLock};
 
 use super::pci::msi::MSIXInfo;
 
@@ -23,6 +23,7 @@ pub enum IntTrigger {
 #[derive(Debug, Clone)]
 pub enum IRQInfo {
     MSIX(MSIXInfo),
+    MSI(MSIInfo),
     PCIInt {
         bus: u8,
         device: u8,
@@ -39,6 +40,7 @@ impl IRQInfo {
     fn setup(&mut self, irq_num: u32, trigger: IntTrigger) {
         match self {
             IRQInfo::MSIX(msix) => msix.setup(irq_num, trigger),
+            IRQInfo::MSI(msi) => msi.setup(irq_num, trigger),
             IRQInfo::PCIInt { .. } => {}
         }
     }
@@ -72,7 +74,7 @@ impl IRQ {
     }
 }
 
-/// An abstraction layer over the architecture's IRQ mangament
+/// An abstraction layer over the architecture's IRQ management
 pub struct IRQManager {
     pub irqs: Vec<IRQ>,
 }

@@ -124,10 +124,10 @@ macro_rules! irq_list {
 }
 
 irq_list!(
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A
+    0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A
 );
 
-static NEXT_IRQ_NUM: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x10);
+static NEXT_IRQ_NUM: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x90);
 
 fn irq_num_to_index(irq_num: u32) -> usize {
     IRQS.iter()
@@ -149,7 +149,7 @@ static REGISTERED_PCI_IRQS: Mutex<Vec<(u8, u32)>> = Mutex::new(Vec::new());
 pub unsafe fn register_irq_handler(info: &IRQInfo, triggering: IntTrigger) -> u32 {
     let (irq_num, is_new) = match info {
         // No additional setup needed.
-        IRQInfo::MSIX(_) => (allocate_next_irq(), true),
+        IRQInfo::MSIX(_) | IRQInfo::MSI(_) => (allocate_next_irq(), true),
         IRQInfo::PCIInt {
             interrupt_line,
             interrupt_pin,
@@ -178,7 +178,9 @@ pub unsafe fn register_irq_handler(info: &IRQInfo, triggering: IntTrigger) -> u3
                     )
                     .with_masked(false);
 
+                crate::serial!("Registering: {irq_num}, tbl: {redirection:#?}\n");
                 APIC.write_ioapic_irq(*interrupt_line, redirection);
+                crate::serial!("Wrote!\n");
                 registered_pci_irq.push((*interrupt_line, irq_num));
                 (irq_num, true)
             }
