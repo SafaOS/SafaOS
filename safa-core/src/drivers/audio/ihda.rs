@@ -23,7 +23,7 @@ use crate::{
     scheduler::wait_queue::{WaitError, WaitQueue, WaitQueueWithTimeout},
     thread::Tid,
     utils::locks::SpinLock,
-    write_ref,
+    warn, write_ref,
 };
 
 mod param {
@@ -937,6 +937,12 @@ fn create_buffers(regs: &mut HDARegs) -> Result<(DMABuffer<u32>, DMABuffer<u64>)
             | (1 << 0/* interrupt on memory error */)
             | (1 << 1/* enable */),
     );
+
+    crate::serial!(
+        "CORBCTL: {:#x}, RIRBCTL: {:#x}\n",
+        regs.get_ctrl(TargetRing::CommandRing),
+        regs.get_ctrl(TargetRing::ResponseRing)
+    );
     Ok((corb, rirb))
 }
 
@@ -1315,7 +1321,6 @@ impl Stream {
             .to_previous_multiple_of(self.format.bytes_per_frame());
 
         if space == 0 {
-            // crate::serial!("space == 0\n");
             return 0;
         }
 
@@ -1616,6 +1621,7 @@ impl PCIDevice for IntelHDA {
         let regs = unsafe { &mut *self.regs.get() };
         regs.set_intctl(u32::MAX);
 
+        debug!(IntelHDA, "SATESTS: {:#x}", regs.statests());
         let Ok(codecs) = Codec::enumarate(self, regs.statests()) else {
             error!(IntelHDA, "Timeout enumarating Codecs");
             return false;
@@ -1630,6 +1636,7 @@ impl PCIDevice for IntelHDA {
 
             true
         } else {
+            warn!(IntelHDA, "No output found");
             false
         }
     }
