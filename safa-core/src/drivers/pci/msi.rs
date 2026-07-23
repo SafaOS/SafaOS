@@ -1,16 +1,32 @@
+use core::sync::atomic::AtomicU16;
+
 use crate::{
     PhysAddr, VirtAddr,
     arch::pci::{build_msi_addr, build_msi_data},
     debug,
     drivers::{
         interrupts::{IRQInfo, IntTrigger},
-        pci::{AllocatedBar, extended_caps::ExtendedCaptability},
+        pci::{AllocatedBar, extended_caps::ExtendedCapability},
     },
+    percpu::{CpuID, CpuLocal},
     write_ref,
 };
 
-use super::extended_caps::GenericCaptability;
+use super::extended_caps::GenericCapability;
 use bitfield_struct::bitfield;
+
+#[bitfield(u16)]
+struct MSIMsgCtrl {
+    enable: bool,
+    #[bits(3)]
+    multiple_message_capable: u8,
+    #[bits(3)]
+    multiple_message_enable: u8,
+    bit64: bool,
+    per_vector_masking: bool,
+    #[bits(7)]
+    __rsvd: u8,
+}
 
 #[bitfield(u16)]
 struct MSIXMsgCtrl {
@@ -34,19 +50,97 @@ struct Reg {
 
 #[repr(C)]
 #[derive(Debug)]
+pub struct MSICap {
+    header: GenericCapability,
+    msg_ctrl: MSIMsgCtrl,
+    addr_low: u32,
+    addr_high: u32,
+    data: u16,
+    __rsvd: u16,
+    mask: u32,
+    pending: u32,
+}
+
+impl MSICap {
+    pub unsafe fn write_addr_data(&mut self, addr: PhysAddr, data: u16) {
+        write_ref!(self.addr_low, addr.into_raw() as u32);
+        write_ref!(self.addr_high, (addr.into_raw() as u64 >> 32) as u32);
+        write_ref!(self.data, data);
+    }
+}
+
+impl ExtendedCapability for MSICap {
+    fn id() -> u8 {
+        0x5
+    }
+    fn header(&self) -> &GenericCapability {
+        &self.header
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
 pub struct MSIXCap {
-    header: GenericCaptability,
+    header: GenericCapability,
     msg_ctrl: MSIXMsgCtrl,
     table: Reg,
     pending_bit: Reg,
 }
 
-impl ExtendedCaptability for MSIXCap {
+impl ExtendedCapability for MSIXCap {
     fn id() -> u8 {
         0x11
     }
-    fn header(&self) -> &GenericCaptability {
+    fn header(&self) -> &GenericCapability {
         &self.header
+    }
+}
+
+static NEXT_CPU: AtomicU16 = AtomicU16::new(0);
+fn next_cpu_for_msi() -> CpuID {
+    let id = NEXT_CPU.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+        % CpuLocal::get_all().len_hint() as u16;
+    CpuID::from_u16(id).expect("CpuLocal::get_all returned invalid length")
+}
+#[derive(Debug, Clone, Copy)]
+pub struct MSIInfo {
+    cap_ptr: *mut MSICap,
+    requester_id: u32,
+}
+
+impl MSIInfo {
+    #[allow(unused)]
+    pub const fn requester_id(&self) -> u32 {
+        self.requester_id
+    }
+
+    pub unsafe fn new(cap_ptr: *mut MSICap, requester_id: u32) -> Self {
+        Self {
+            cap_ptr,
+            requester_id,
+        }
+    }
+
+    /// Setups and enables MSI
+    pub fn setup(&mut self, irq_num: u32, trigger: IntTrigger) {
+        let cpu = next_cpu_for_msi();
+        let addr = build_msi_addr(cpu);
+        let data = build_msi_data(irq_num, trigger);
+        assert!(
+            data <= u16::MAX as u32,
+            "MSI data: {data:#x} is too big for basic MSI, irq: {irq_num}"
+        );
+
+        let cap = unsafe { &mut *self.cap_ptr };
+        write_ref!(
+            cap.msg_ctrl,
+            MSIMsgCtrl::new().with_bit64(true).with_enable(true)
+        );
+        unsafe { cap.write_addr_data(addr, data as u16) };
+    }
+
+    pub const fn into_irq_info(self) -> IRQInfo {
+        IRQInfo::MSI(self)
     }
 }
 
@@ -175,7 +269,7 @@ impl MSIXInfo {
         let msg = msix_cap.msg_ctrl;
         write_ref!(msix_cap.msg_ctrl, msg.with_enable(false));
 
-        let msi_msg_addr = build_msi_addr();
+        let msi_msg_addr = build_msi_addr(next_cpu_for_msi());
         let msi_msg_data = build_msi_data(irq_num, trigger);
         let msi_table_entry = MSIXTableEntry {
             msg_addr: msi_msg_addr,
