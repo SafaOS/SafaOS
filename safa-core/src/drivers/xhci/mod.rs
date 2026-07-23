@@ -688,6 +688,9 @@ impl<'s> XHCI<'s> {
         Ok(())
     }
 }
+
+// TODO: Fix XHCI Driver and actual USB stack
+pub static STARTED_XHCIS: Mutex<Vec<&'static XHCI>> = Mutex::new(Vec::new());
 impl<'s> PCIDevice for XHCI<'s> {
     const CLASS_SUBCLASS: (u8, u8) = (0xc, 0x3);
     const PROG_IF: Option<u8> = Some(0x30);
@@ -813,7 +816,10 @@ impl<'s> PCIDevice for XHCI<'s> {
             );
         });
 
-        with_interrupts(|| self.prob());
+        with_interrupts(|| {
+            self.prob();
+            STARTED_XHCIS.lock().push(self)
+        });
         true
     }
 }

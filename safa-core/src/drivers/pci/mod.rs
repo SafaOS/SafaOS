@@ -1,4 +1,5 @@
 use super::xhci::XHCI;
+use alloc::boxed::Box;
 use bitflags::bitflags;
 use core::{fmt::Debug, u32, u64};
 use lazy_static::lazy_static;
@@ -10,7 +11,10 @@ use crate::{
         audio::{ac97::AC97, ihda::IntelHDA},
         interrupts::IRQInfo,
         net::e1000::E1000NetCard,
-        pci::extended_caps::CaptabilitiesIter,
+        pci::{
+            extended_caps::CaptabilitiesIter,
+            msi::{MSICap, MSIInfo},
+        },
     },
     error, info,
     memory::{
@@ -35,6 +39,19 @@ pub trait PCIDevice: Send + Sync + Debug {
     /// PCI lookup filter by vendor-device ID tuples
     const VENDOR_ID_DEVICE_ID: Option<&[(u16, u16)]> = None;
 
+    fn lookup_query() -> LookupQuery<'static>
+    where
+        Self: Sized,
+    {
+        LookupQuery {
+            class: Self::CLASS_SUBCLASS.0,
+            subclass: Self::CLASS_SUBCLASS.1,
+            prog_if: Self::PROG_IF,
+            vendor_id: Self::VENDOR_ID,
+            device_id: Self::DEVICE_ID,
+            vendor_device_ids: Self::VENDOR_ID_DEVICE_ID,
+        }
+    }
     fn create(info: PCIDeviceInfo) -> Result<Self, &'static str>
     where
         Self: Sized;
@@ -409,6 +426,15 @@ impl<'a> PCIHeader<'a> {
         (header_type & 0x80) != 0
     }
 
+    fn get_msi_cap(&mut self, bus: u8, slot: u8, function: u8) -> Option<MSIInfo> {
+        let msix_cap_ptr = self.caps_list().find_cast::<MSICap>();
+        msix_cap_ptr.map(|ptr| unsafe {
+            MSIInfo::new(
+                ptr as *mut _,
+                (bus as u32 * 256) + (slot as u32 * 8) + function as u32,
+            )
+        })
+    }
     fn get_msix_cap(
         &mut self,
         bus: u8,
@@ -452,6 +478,11 @@ impl<'a> PCIDeviceInfo<'a> {
         self.header.caps_list()
     }
 
+    pub fn get_msi_cap(&mut self) -> Option<MSIInfo> {
+        self.header
+            .get_msi_cap(self.bus, self.device, self.function)
+    }
+
     pub fn get_msix_cap(&mut self, bars: &[AllocatedBar]) -> Option<MSIXInfo> {
         self.header
             .get_msix_cap(self.bus, self.device, self.function, bars)
@@ -475,6 +506,8 @@ impl<'a> PCIDeviceInfo<'a> {
     pub fn get_best_irq_info(&mut self, bars: &[AllocatedBar]) -> Option<IRQInfo> {
         if let Some(msix) = self.get_msix_cap(bars) {
             Some(msix.into_irq_info())
+        } else if let Some(msi) = self.get_msi_cap() {
+            Some(msi.into_irq_info())
         } else {
             self.get_pci_irq_info()
         }
@@ -502,18 +535,18 @@ impl PCI {
         }
     }
 
-    fn create_device<T: PCIDevice + Sized>(&self) -> Option<Result<T, &'static str>> {
-        let (class, subclass) = T::CLASS_SUBCLASS;
-        let header = self.lookup(
-            class,
-            subclass,
-            T::PROG_IF,
-            T::VENDOR_ID,
-            T::DEVICE_ID,
-            T::VENDOR_ID_DEVICE_ID,
-        );
-        header.map(|header| T::create(header))
-    }
+    // fn create_device<T: PCIDevice + Sized>(&self) -> Option<Result<T, &'static str>> {
+    //     let (class, subclass) = T::CLASS_SUBCLASS;
+    //     let header = self.lookup(
+    //         class,
+    //         subclass,
+    //         T::PROG_IF,
+    //         T::VENDOR_ID,
+    //         T::DEVICE_ID,
+    //         T::VENDOR_ID_DEVICE_ID,
+    //     );
+    //     header.map(|header| T::create(header))
+    // }
 
     fn get_common_header(&self, bus: u8, slot: u8, function: u8) -> &mut CommonPCIHeader {
         let bus = bus as usize;
@@ -540,15 +573,9 @@ impl PCI {
         }
     }
 
-    fn enum_device<'s, F>(
-        &'s self,
-        bus: u8,
-        device: u8,
-        function: u8,
-        f: &F,
-    ) -> Result<Option<PCIDeviceInfo<'s>>, ()>
+    fn enum_device<'s, F>(&'s self, bus: u8, device: u8, function: u8, f: &F) -> Result<(), ()>
     where
-        F: Fn(&PCIDeviceInfo) -> bool,
+        F: Fn(PCIDeviceInfo) -> bool,
     {
         let header = self.get_header(bus, device, function);
         if !header.is_valid() {
@@ -557,59 +584,65 @@ impl PCI {
 
         if function == 0 && header.is_multifunction() {
             for function in 1..8 {
-                if let Ok(Some(info)) = self.enum_device(bus, device, function, f) {
-                    return Ok(Some(info));
-                }
+                _ = self.enum_device(bus, device, function, f);
             }
         }
 
         let info = PCIDeviceInfo::new(header, bus, device, function);
-        if f(&info) {
-            return Ok(Some(info));
-        }
-        Ok(None)
+        f(info);
+        Ok(())
     }
 
-    fn enum_all<'s, F>(&'s self, f: &F) -> Option<PCIDeviceInfo<'s>>
+    fn enum_all<'s, F>(&'s self, f: &F)
     where
-        F: Fn(&PCIDeviceInfo) -> bool,
+        F: Fn(PCIDeviceInfo) -> bool,
     {
         for bus in self.start_bus..self.end_bus {
             for device in 0..32 {
                 match self.enum_device(bus, device, 0, f) {
-                    Ok(Some(info)) => return Some(info),
-                    Ok(None) => (),
                     _ => (),
                 }
             }
         }
-        None
     }
 
-    fn lookup<'s>(
-        &'s self,
+    fn device_matches(
         class: u8,
         subclass: u8,
         prog_if: Option<u8>,
         vendor_id: Option<&[u16]>,
         device_id: Option<&[u16]>,
         vendor_device_ids: Option<&[(u16, u16)]>,
-    ) -> Option<PCIDeviceInfo<'s>> {
-        self.enum_all(&|info| {
-            let common = info.header.common();
-            common.class == class
-                && common.subclass == subclass
-                && prog_if.is_none_or(|i| i == common.prog_if)
-                && vendor_id.is_none_or(|ids| ids.contains(&common.vendor_id))
-                && device_id.is_none_or(|ids| ids.contains(&common.device_id))
-                && vendor_device_ids
-                    .is_none_or(|ids| ids.contains(&(common.vendor_id, common.device_id)))
-        })
+        info: &PCIDeviceInfo,
+    ) -> bool {
+        let common = info.header.common();
+        common.class == class
+            && common.subclass == subclass
+            && prog_if.is_none_or(|i| i == common.prog_if)
+            && vendor_id.is_none_or(|ids| ids.contains(&common.vendor_id))
+            && device_id.is_none_or(|ids| ids.contains(&common.device_id))
+            && vendor_device_ids
+                .is_none_or(|ids| ids.contains(&(common.vendor_id, common.device_id)))
     }
+}
 
-    fn print(&self) {
+lazy_static! {
+    pub static ref HOST_PCI: Option<PCI> = crate::arch::pci::init();
+}
+
+pub struct LookupQuery<'a> {
+    class: u8,
+    subclass: u8,
+    prog_if: Option<u8>,
+    vendor_id: Option<&'a [u16]>,
+    device_id: Option<&'a [u16]>,
+    vendor_device_ids: Option<&'a [(u16, u16)]>,
+}
+
+fn init_devices(queries: &[(LookupQuery, fn(PCIDeviceInfo) -> bool)]) {
+    if let Some(pci) = &*HOST_PCI {
         info!(PCI, "PCI Devices");
-        self.enum_all(&|info| {
+        pci.enum_all(&|info| {
             crate::info!(
                 PCI,
                 "Device {}:{}:{} => {:#x?}",
@@ -622,49 +655,53 @@ impl PCI {
             for cap in info.header.caps_list() {
                 crate::info!(PCI, "Capability => {:#x?}", unsafe { *cap });
             }
+            for (q, create) in queries {
+                if PCI::device_matches(
+                    q.class,
+                    q.subclass,
+                    q.prog_if,
+                    q.vendor_id,
+                    q.device_id,
+                    q.vendor_device_ids,
+                    &info,
+                ) {
+                    create(info);
+                    break;
+                }
+            }
+
             false
         });
     }
 }
-
-fn create_pci_device<T: PCIDevice>() -> Option<T> {
-    let host_pci = HOST_PCI.as_ref()?;
-    host_pci
-        .create_device()
-        .map(|r| {
-            if let Err(e) = r {
-                error!(PCI, "Failed to create a device: {e}")
-            }
-            r.ok()
-        })
-        .flatten()
+fn init_device<T: PCIDevice + 'static>(info: PCIDeviceInfo) -> bool {
+    match PCIDevice::create(info) {
+        Ok(dev) => {
+            let stati: &'static T = Box::leak(Box::new(dev));
+            stati.start()
+        }
+        Err(e) => {
+            error!(PCI, "Device creation failed with error: {e}");
+            false
+        }
+    }
 }
 
-lazy_static! {
-    pub static ref HOST_PCI: Option<PCI> = crate::arch::pci::init();
-    // No complicated device management necessary for now.
-    pub static ref XHCI_DEVICE: Option<XHCI<'static>> = {
-       create_pci_device::<XHCI<'static>>()
-    };
-    pub static ref E1000_DEVICE: Option<E1000NetCard> = {
-        create_pci_device::<E1000NetCard>()
-    };
-    pub static ref AC97_DEVICE: Option<AC97> = {
-        create_pci_device::<AC97>()
-    };
-    pub static ref IHDA_DEVICE: Option<IntelHDA> = {
-        create_pci_device::<IntelHDA>()
+fn make_init_device_f<T: PCIDevice + 'static>() -> fn(PCIDeviceInfo) -> bool {
+    return init_device::<T>;
+}
+
+macro_rules! query_all {
+    ($($t: ty),*) => {
+        &[$((<$t>::lookup_query(), make_init_device_f::<$t>()),)*]
     };
 }
 
 /// Initializes drivers and devices that uses the PCI
 pub fn init() {
-    if let Some(host_pci) = HOST_PCI.as_ref() {
-        host_pci.print();
-    }
-
-    AC97_DEVICE.as_ref().map(|device| device.start());
-    XHCI_DEVICE.as_ref().map(|device| device.start());
-    E1000_DEVICE.as_ref().map(|device| device.start());
-    IHDA_DEVICE.as_ref().map(|device| device.start());
+    // if let Some(host_pci) = HOST_PCI.as_ref() {
+    //     host_pci.print();
+    // }
+    let queries = query_all!(XHCI, E1000NetCard, AC97, IntelHDA);
+    init_devices(queries);
 }

@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use serde::{Serialize, ser::SerializeStruct};
 
 use crate::{
-    drivers::{pci::XHCI_DEVICE, vfs::rodatafs::GenericRodFSFile, xhci::usb_device::USBDevice},
+    drivers::{vfs::rodatafs::GenericRodFSFile, xhci::STARTED_XHCIS, xhci::usb_device::USBDevice},
     utils::{alloc::PageString, locks::RwLockReadGuard},
 };
 
@@ -23,7 +23,11 @@ impl Serialize for USBInfo<'_> {
 
 impl<'a> USBInfo<'a> {
     pub fn fetch() -> Option<Self> {
-        let connected_devices = XHCI_DEVICE.as_ref()?.read_connected_devices();
+        let connected_devices = STARTED_XHCIS
+            .lock()
+            .get(0)
+            .as_ref()?
+            .read_connected_devices();
         Some(Self { connected_devices })
     }
 }
