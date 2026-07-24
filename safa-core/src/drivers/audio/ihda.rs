@@ -1496,12 +1496,19 @@ impl IntelHDA {
             let mut guard = self.corb.lock();
             let (corb, index) = &mut *guard;
 
+            let wp_was = regs.rirb_wp();
+
             corb[*index as usize] = command;
             regs.set_corb_wp((regs.corb_wp() & 0xFF00) | *index);
             *index = (*index + 1) % corb.len() as u16;
 
             drop(guard);
-            wait.enter_wait((), NonZero::new(1000))?;
+
+            if wp_was == regs.rirb_wp() {
+                if let Err(e) = wait.enter_wait((), NonZero::new(500)) {
+                    return Err(e);
+                }
+            }
 
             let guard = self.corb.lock();
             // FIXME: Naive implementation that can RC
