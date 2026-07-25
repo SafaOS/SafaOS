@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 
-use crate::{drivers::pci::msi::MSIInfo, utils::locks::RwLock};
+use crate::{arch::without_interrupts, drivers::pci::msi::MSIInfo, utils::locks::RwLock};
 
 use super::pci::msi::MSIXInfo;
 
@@ -110,7 +110,9 @@ pub fn register_irq(
     triggering: IntTrigger,
     handler: &'static dyn InterruptReceiver,
 ) {
-    IRQ_MANAGER
-        .write()
-        .register_irq(irq_info, triggering, handler);
+    without_interrupts(|| {
+        IRQ_MANAGER
+            .write()
+            .register_irq(irq_info, triggering, handler);
+    });
 }
