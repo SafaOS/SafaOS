@@ -711,12 +711,8 @@ impl<'a, T: Readable> Elf<'a, T> {
             }
 
             if header.ptype == ProgramType::TLS {
-                if alignment_in_mem < 8 {
-                    error!(
-                        "ELF TLS alignment is {alignment_in_mem:#x}, expected at least 0x8, returning Err(ElfError::Corrupted) because I don't know how to handle it yet"
-                    );
-                    return Err(ElfError::Corrupted);
-                }
+                let alignment_in_mem = alignment_in_mem.next_multiple_of(8);
+
                 master_tls = Some(TLSInfo {
                     addr: vaddr,
                     memsize: size_in_mem,
