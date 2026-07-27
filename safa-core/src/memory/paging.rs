@@ -168,6 +168,16 @@ pub struct PageTableContext<Ops: PageTableOps> {
 }
 pub type PageTable = PageTableContext<arch::paging::ArchPageTable>;
 
+impl PageTable {
+    pub unsafe fn current() -> FramePtr<Self> {
+        unsafe {
+            let inner = current_lower_root_table();
+
+            inner.cast_sized()
+        }
+    }
+}
+
 impl<Ops: PageTableOps> PageTableContext<Ops> {
     pub fn inner_mut(&mut self) -> &mut Ops {
         &mut self.ops
