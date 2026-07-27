@@ -21,7 +21,7 @@ use crate::{
 use hashbrown::HashMap;
 use safa_abi::{
     errors::{ErrorStatus, IntoErr},
-    fs::{DirEntry, FileAttr},
+    fs::{DirEntry, FileAttr, SeekWrench},
 };
 use thiserror::Error;
 
@@ -143,10 +143,58 @@ pub type FSObjectID = usize;
 /// A descriptor for a currently open file system object, that is a combination of a [`VFSObjectID`] and the open options.
 pub struct FSObjectDescriptor {
     inner: VFSObjectID,
+    // FIXME: This is to deal with unix write and read which stupid me didn't implement I did read2 and write2 instead.
+    seekoffset: Arc<Mutex<usize>>,
     options: OpenOptions,
 }
 
 impl FSObjectDescriptor {
+    pub fn tell(&self) -> usize {
+        *self.seekoffset.lock()
+    }
+
+    pub fn seek(&self, seek: SeekWrench) -> FSResult<usize> {
+        let mut off = self.seekoffset.lock();
+        let filesz = self.attrs().size;
+
+        match seek {
+            SeekWrench::Start(am) => {
+                if am > filesz {
+                    return Err(FSError::InvalidOffset);
+                }
+
+                *off = am;
+            }
+            SeekWrench::End(am) => {
+                if am > filesz {
+                    return Err(FSError::InvalidOffset);
+                }
+
+                *off = filesz - am;
+            }
+            SeekWrench::Current(am) => {
+                *off = (*off).saturating_add(am).min(filesz);
+            }
+        }
+
+        Ok(*off)
+    }
+    pub fn write_next(&self, data: &[u8]) -> FSResult<usize> {
+        let mut off = self.seekoffset.lock();
+
+        let am = self.write(SeekOffset::Start(*off), data)?;
+        *off += am;
+        Ok(am)
+    }
+
+    pub fn read_next(&self, buf: &mut [u8]) -> FSResult<usize> {
+        let mut off = self.seekoffset.lock();
+
+        let am = self.read(SeekOffset::Start(*off), buf)?;
+        *off += am;
+        Ok(am)
+    }
+
     pub fn write(&self, offset: SeekOffset, data: &[u8]) -> FSResult<usize> {
         if !self.options.is_write() {
             return Err(FSError::MissingPermission);
@@ -212,6 +260,22 @@ impl Resource for FSObjectDescriptor {
     fn write(&self, off: SeekOffset, buf: &[u8]) -> Result<usize, ErrorStatus> {
         let am = self.write(off, buf)?;
         Ok(am)
+    }
+    fn read_next(&self, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
+        let am = self.read_next(buf)?;
+        Ok(am)
+    }
+
+    fn write_next(&self, buf: &[u8]) -> Result<usize, ErrorStatus> {
+        let am = self.write_next(buf)?;
+        Ok(am)
+    }
+    fn seek(&self, off: SeekWrench) -> Result<usize, ErrorStatus> {
+        let o = self.seek(off)?;
+        Ok(o)
+    }
+    fn tell(&self) -> Result<usize, ErrorStatus> {
+        Ok(self.tell())
     }
     fn sync(&self) -> Result<(), ErrorStatus> {
         self.sync()?;
@@ -724,6 +788,7 @@ impl VFS {
     pub fn open(&self, path: Path, options: OpenOptions) -> FSResult<FSObjectDescriptor> {
         let raw_inner = self.open_raw(path, options.create_file(), options.create_dir())?;
         let descriptor = FSObjectDescriptor {
+            seekoffset: Arc::new(Mutex::new(0)),
             inner: raw_inner,
             options,
         };

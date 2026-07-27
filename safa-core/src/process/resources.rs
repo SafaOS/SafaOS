@@ -7,7 +7,7 @@ use crate::{
 };
 use alloc::{boxed::Box, sync::Arc};
 use hashbrown::HashMap;
-use safa_abi::errors::ErrorStatus;
+use safa_abi::{errors::ErrorStatus, fs::SeekWrench};
 
 /// A resource ID
 pub type Ri = u32;
@@ -24,6 +24,23 @@ pub trait Resource: Any {
         _ = off;
         _ = buf;
         Err(ErrorStatus::UnsupportedResource)
+    }
+    /// Performs a write next operation on the resource.
+    fn write_next(&self, buf: &[u8]) -> Result<usize, ErrorStatus> {
+        self.write(SeekOffset::End(0), buf)
+    }
+    /// Performs a read next operation on the resource.
+    fn read_next(&self, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
+        self.read(SeekOffset::End(buf.len()), buf)
+    }
+    /// Returns the current offset in bytes after applying seek. for [`Self::write_next`] and [`Self::read_next`].
+    fn seek(&self, off: SeekWrench) -> Result<usize, ErrorStatus> {
+        _ = off;
+        Err(ErrorStatus::OperationNotSupported)
+    }
+    /// Returns the current offset in bytes of [`Self::write_next`] and [`Self::read_next`].
+    fn tell(&self) -> Result<usize, ErrorStatus> {
+        Err(ErrorStatus::OperationNotSupported)
     }
     /// Performs a synchronization operation on the resource.
     fn sync(&self) -> Result<(), ErrorStatus> {

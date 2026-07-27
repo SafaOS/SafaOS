@@ -1,5 +1,6 @@
 use crate::drivers::vfs::SeekOffset;
 use crate::memory::paging::MapToError;
+use crate::memory::paging::PAGE_SIZE;
 use crate::memory::vmm;
 use crate::memory::vmm::Location;
 use crate::memory::vmm::VMMMFlags;
@@ -11,9 +12,14 @@ use crate::shared_mem::ShmKey;
 use crate::syscalls::ErrorStatus;
 use crate::syscalls::SyscallFFI;
 use crate::syscalls::ffi::ExpectedResource;
+use crate::warn;
 use macros::syscall_handler;
 use safa_abi::mem::MemFlags;
+use safa_abi::mem::MemMap2Flags;
 use safa_abi::mem::MemMapFlags;
+use safa_abi::mem::MemMapOp;
+use safa_abi::mem::MemMapTarget;
+use safa_abi::mem::RawMemMap2Config;
 use safa_abi::mem::RawMemMapConfig;
 use safa_abi::mem::ShmFlags;
 
@@ -24,6 +30,22 @@ impl SyscallFFI for MemMapFlags {
     #[inline(always)]
     fn make(args: Self::Args) -> Result<Self, safa_abi::errors::ErrorStatus> {
         Ok(MemMapFlags::from_bits(args as u8))
+    }
+}
+
+impl SyscallFFI for MemMap2Flags {
+    type Args = usize;
+    #[inline(always)]
+    fn make(args: Self::Args) -> Result<Self, safa_abi::errors::ErrorStatus> {
+        Ok(MemMap2Flags::from_bits(args as u32))
+    }
+}
+
+impl SyscallFFI for MemFlags {
+    type Args = usize;
+    #[inline(always)]
+    fn make(args: Self::Args) -> Result<Self, safa_abi::errors::ErrorStatus> {
+        Ok(MemFlags::from_bits(args as u8))
     }
 }
 
@@ -60,10 +82,6 @@ pub fn sysmem_map(
     flags: MemMapFlags,
     out_res_id: Option<&mut Ri>,
 ) -> Result<*mut u8, ErrorStatus> {
-    if flags.contains(MemMapFlags::FIXED) {
-        todo!("Fixed Mappings are not yet implemented")
-    }
-
     let page_count = mmap_config.page_count;
     // TODO: Implement guard pages
     // let guard_pages_count = mmap_config.guard_pages_count;
@@ -81,6 +99,10 @@ pub fn sysmem_map(
     } else {
         (None, None)
     };
+
+    if associated_resource.is_some() && out_res_id.is_none() {
+        return Err(ErrorStatus::InvalidArgument);
+    }
 
     let resource_off = resource_off.unwrap_or(SeekOffset::Start(0));
 
@@ -121,14 +143,142 @@ pub fn sysmem_map(
         interface,
     )?;
     let start_addr = tracker.start();
-    // TODO: Implement local option
-    let ri = resources::add_global_resource(tracker);
 
     if let Some(p) = out_res_id {
+        let ri = resources::add_global_resource(tracker);
         *p = ri;
+    } else {
+        core::mem::forget(tracker);
     }
 
     Ok(start_addr.into_ptr())
+}
+
+#[syscall_handler]
+pub fn sysmem_map2(
+    mmap_config: &RawMemMap2Config,
+    flags: MemMap2Flags,
+    prot: MemFlags,
+    out_res_id: Option<&mut Ri>,
+) -> Result<*mut u8, ErrorStatus> {
+    let fixed = flags.contains(MemMap2Flags::FIXED);
+
+    let page_count = mmap_config.size_pages(PAGE_SIZE);
+    let addr_location = if mmap_config.addr_hint().is_null() {
+        None
+    } else {
+        let addr = VirtAddr::from_ptr(mmap_config.addr_hint());
+        Some(if fixed {
+            Location::Fixed(addr)
+        } else {
+            Location::Hint(addr)
+        })
+    };
+
+    let (associated_resource, resource_off) = if flags.contains(MemMap2Flags::MAP_RESOURCE) {
+        (
+            Some(mmap_config.resource().0),
+            Some(SeekOffset::from(mmap_config.resource().1)),
+        )
+    } else {
+        (None, None)
+    };
+
+    if associated_resource.is_some() && out_res_id.is_none() {
+        return Err(ErrorStatus::InvalidArgument);
+    }
+
+    let resource_off = resource_off.unwrap_or(SeekOffset::Start(0));
+
+    let interface = associated_resource.map(|ri| {
+        resources::get_ref(ri, |res| {
+            res.data().open_mmap_interface(resource_off, page_count)
+        })
+        .ok_or(ErrorStatus::UnknownResource)
+        .flatten()
+    });
+
+    let interface = match interface {
+        Some(s) => Some(s?), /* ?????? */
+        None => None,
+    };
+
+    let mut mem_flags = VMMMFlags::empty();
+    if prot.contains(MemFlags::WRITE) {
+        mem_flags |= VMMMFlags::WRITEABLE;
+    }
+
+    if prot.contains(MemFlags::EXEC) {
+        mem_flags |= VMMMFlags::EXECUTABLE;
+    }
+
+    let tracker = process::mem::mem_map(
+        addr_location,
+        page_count,
+        mem_flags,
+        flags.contains(MemMap2Flags::POPULATE),
+        interface,
+    )?;
+    let start_addr = tracker.start();
+
+    if let Some(p) = out_res_id {
+        let ri = resources::add_global_resource(tracker);
+        *p = ri;
+    } else {
+        core::mem::forget(tracker);
+    }
+
+    Ok(start_addr.into_ptr())
+}
+
+#[syscall_handler]
+pub fn sysmem_op(target: &MemMapTarget, op: &MemMapOp) -> Result<(), ErrorStatus> {
+    let addr = match target {
+        MemMapTarget::Resource(ri) => {
+            ExpectedResource::<TrackedMemoryAllocation>::make(*ri)?.start()
+        }
+        MemMapTarget::Direct(addr, _size) => {
+            warn!("MemOp called on {addr:?}, {_size:#x} => not properly implemented");
+            VirtAddr::from_ptr(*addr)
+        }
+    };
+
+    match op {
+        MemMapOp::Protect(prot) => {
+            let mut vmm_flags = VMMMFlags::USER_ACCESSIBLE;
+            if prot.contains(MemFlags::WRITE) {
+                vmm_flags |= VMMMFlags::WRITEABLE;
+            }
+
+            if prot.contains(MemFlags::EXEC) {
+                vmm_flags |= VMMMFlags::EXECUTABLE;
+            }
+
+            vmm::with_user_vmm(|vmm| {
+                if !vmm.set_page_flags(addr, vmm_flags) {
+                    return Err(ErrorStatus::MMapError);
+                }
+                Ok(())
+            })?;
+
+            Ok(())
+        }
+    }
+}
+
+#[syscall_handler]
+pub fn sysmem_unmap(addr: usize, _size: usize) -> Result<(), ErrorStatus> {
+    // FIXME: unmap given size bytes...
+    warn!("Unmap called on {addr:#x}, {_size:#x} => not properly implemented");
+    let addr = VirtAddr::from(addr);
+
+    vmm::with_user_vmm(|vmm| {
+        if !vmm.unmap(addr) {
+            Err(ErrorStatus::MMapError)
+        } else {
+            Ok(())
+        }
+    })
 }
 
 impl SyscallFFI for ShmFlags {

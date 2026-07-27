@@ -8,7 +8,7 @@ use crate::{
 };
 
 use crate::utils::path::Path;
-use safa_abi::errors::ErrorStatus;
+use safa_abi::{errors::ErrorStatus, fs::SeekWrench};
 
 /// Safely converts FFI [`Self::Args`] into [`Self`] for being passed to a syscall
 pub trait SyscallFFI: Sized {
@@ -214,6 +214,13 @@ impl SyscallFFI for SeekOffset {
     type Args = isize;
     fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
         Ok(SeekOffset::from(args))
+    }
+}
+
+impl SyscallFFI for SeekWrench {
+    type Args = (u8, usize);
+    fn make(args: Self::Args) -> Result<Self, ErrorStatus> {
+        SeekWrench::try_from(args).map_err(|()| ErrorStatus::InvalidArgument)
     }
 }
 

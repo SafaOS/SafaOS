@@ -16,7 +16,7 @@ use crate::{
         vmm::{self, Location, VMMAllocError, VMMMFlags, VirtualMemoryManager, with_user_vmm},
     },
     process::resources::Resource,
-    thread,
+    thread, warn,
 };
 
 /// A process memory allocation that is tracked, to be freed by the VMM when dropped.
@@ -80,10 +80,12 @@ impl TrackedMemoryAllocation {
 impl Drop for TrackedMemoryAllocation {
     fn drop(&mut self) {
         let unmap_func = |vmm: &VirtualMemoryManager, addr: VirtAddr| {
-            assert!(
-                vmm.unmap(addr),
-                "Tracked Memory Allocation points to nowhere"
-            )
+            if !vmm.unmap(addr) {
+                warn!(
+                    TrackedMemoryAllocation,
+                    "Failed to drop: {addr:?}, not mapped"
+                );
+            }
         };
 
         let unmap_addr = |addr: VirtAddr| {

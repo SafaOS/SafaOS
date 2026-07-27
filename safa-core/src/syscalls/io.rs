@@ -13,7 +13,7 @@ use crate::{
 use macros::syscall_handler;
 use safa_abi::{
     errors::ErrorStatus,
-    fs::{DirEntry, FileAttr},
+    fs::{DirEntry, FileAttr, SeekWrench},
 };
 
 #[syscall_handler]
@@ -28,6 +28,26 @@ fn sysread(
     buf: &mut [u8],
 ) -> Result<usize, ErrorStatus> {
     resource.read(offset, buf)
+}
+
+#[syscall_handler]
+fn syswrite_next(resource: ResourceDesc, buf: &[u8]) -> Result<usize, ErrorStatus> {
+    resource.write_next(buf)
+}
+
+#[syscall_handler]
+fn sysread_next(resource: ResourceDesc, buf: &mut [u8]) -> Result<usize, ErrorStatus> {
+    resource.read_next(buf)
+}
+
+#[syscall_handler]
+fn sysseek(resource: ResourceDesc, seek: SeekWrench) -> Result<usize, ErrorStatus> {
+    resource.seek(seek)
+}
+
+#[syscall_handler]
+fn systell(resource: ResourceDesc) -> Result<usize, ErrorStatus> {
+    resource.tell()
 }
 
 #[syscall_handler]
