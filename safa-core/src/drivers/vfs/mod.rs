@@ -173,7 +173,7 @@ impl FSObjectDescriptor {
                 *off = filesz - am;
             }
             SeekWrench::Current(am) => {
-                *off = (*off).saturating_add(am).min(filesz);
+                *off = (*off).saturating_add_signed(am).min(filesz);
             }
         }
 
