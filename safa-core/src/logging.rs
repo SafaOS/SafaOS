@@ -245,6 +245,7 @@ macro_rules! syscall_exit_trace {
 pub struct StackTrace<'a>(&'a StackFrame);
 
 impl<'a> StackTrace<'a> {
+    #[allow(unused)]
     #[inline(always)]
     pub unsafe fn get_from_fp(fp: *const u8) -> Option<Self> {
         unsafe { StackFrame::from_fp(fp).map(|s| Self(s)) }

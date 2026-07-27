@@ -4,6 +4,10 @@ use core::{
     ops::Deref,
 };
 
+use crate::memory::{
+    VirtAddr,
+    paging::{Page, PageTable},
+};
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
 use int_enum::IntEnum;
@@ -135,6 +139,22 @@ pub struct StackFrame {
 }
 
 impl StackFrame {
+    pub unsafe fn from_fp<'a>(ptr: *const u8) -> Option<&'a Self> {
+        unsafe {
+            let fp: *mut Self = ptr.cast::<Self>().cast_mut();
+
+            if PageTable::current()
+                .get_frame_of(Page::containing(VirtAddr::from_ptr(fp)))
+                .is_none()
+                || !fp.is_aligned()
+            {
+                return None;
+            } else {
+                Some(&*fp)
+            }
+        }
+    }
+
     /// Gets the current Frame Pointer from the fp register
     pub unsafe fn get_current<'a>() -> &'a Self {
         unsafe {
@@ -154,6 +174,14 @@ impl StackFrame {
         let prev = self.prev.0;
 
         if prev.is_null() || !prev.is_aligned() || (prev as usize) < 0x1000 {
+            return None;
+        }
+
+        if unsafe {
+            PageTable::current()
+                .get_frame_of(Page::containing(VirtAddr::from_ptr(prev)))
+                .is_none()
+        } {
             return None;
         }
         unsafe { Some(&*prev) }

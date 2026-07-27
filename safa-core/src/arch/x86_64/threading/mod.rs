@@ -43,7 +43,7 @@ pub struct CPUStatus {
     r9: u64,
     r8: u64,
 
-    rbp: u64,
+    pub(super) rbp: u64,
     rdi: u64,
     rsi: u64,
 

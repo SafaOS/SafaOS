@@ -15,6 +15,7 @@ use crate::arch::x86_64::interrupts::apic::send_eoi;
 use crate::arch::x86_64::interrupts::ps2::{self};
 use crate::arch::x86_64::tlb::flush_range;
 use crate::arch::x86_64::{threading, tlb};
+use crate::logging::StackTrace;
 use crate::memory::AlignToPage;
 use crate::memory::paging::{PAGE_SIZE, Page};
 use crate::memory::vmm::{self};
@@ -233,12 +234,18 @@ extern "C" fn page_fault(frame: &mut InterruptCpuFrame) {
                 let t = unsafe { current_lower_root_table() };
                 let ent = t.get_entry(Page::containing(addr));
                 let process = process::current();
+
+                let stackframe = unsafe { StackTrace::get_from_fp(frame.capture.rbp as *const u8) };
                 debug!(
                     "---- PID: {} Page Fault ----\naddress: {:#x}, ent: {ent:?}\n{}",
                     process.pid(),
                     cr2,
-                    frame
+                    frame,
                 );
+
+                if let Some(stackframe) = stackframe {
+                    debug!("--- PID: {} Stack Frame ---\n{}", process.pid(), stackframe);
+                }
                 crate::process::current::exit(-(ErrorStatus::MMapError as isize))
             } else {
                 let t = unsafe { current_lower_root_table() };
