@@ -65,6 +65,7 @@ pub struct Builder<'a> {
     ramdisk: Vec<(PathBuf, PathBuf)>,
     is_tests: bool,
     verbose: bool,
+    trace_syscall: bool,
     arch: ArchTarget,
 }
 
@@ -108,6 +109,7 @@ impl<'a> Builder<'a> {
         Self {
             is_tests: false,
             verbose: false,
+            trace_syscall: false,
             root_repo_path,
             build_root_path: root_repo_path.join("out/iso_root"),
             out_path: root_repo_path.join(iso_name),
@@ -142,6 +144,11 @@ impl<'a> Builder<'a> {
 
     pub fn set_verbose(mut self, value: bool) -> Self {
         self.verbose = value;
+        self
+    }
+
+    pub fn set_trace_syscall(mut self, value: bool) -> Self {
+        self.trace_syscall = value;
         self
     }
 
@@ -251,7 +258,16 @@ impl<'a> Builder<'a> {
         fs::create_dir_all(boot_build_path).expect("failed to create boot build dir");
 
         let kernel_crate_path = self.root_repo_path.join(KERNEL_PATH);
-        let mut kernel_elf = build_function(&kernel_crate_path, self.arch, &[]).into_iter();
+        let mut kernel_elf = build_function(
+            &kernel_crate_path,
+            self.arch,
+            if self.trace_syscall {
+                &["--features", "trace_syscall"]
+            } else {
+                &[]
+            },
+        )
+        .into_iter();
         assert_eq!(
             kernel_elf.len(),
             1,

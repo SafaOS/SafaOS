@@ -8,10 +8,6 @@ pub fn convert_input_to_raw(
     name: &str,
     ty: &syn::Type,
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
-    // the SyscallFFI trait defines the interface for converting between raw and high-level types.
-    // SyscallFFI::Args is the type of the arguments, either a single argument or a tuple of arguments.
-    // assumes every argument implements the SyscallFFI trait.
-    // due to proc macro limitations, we cannot inspect the SyscallFFI so...
     let name = syn::Ident::new(name, Span::call_site());
     let raw_arg = quote! { #name: <#ty as SyscallFFI>::Args };
     let conversion_code = quote! {
@@ -28,9 +24,6 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
 
     let func_name = func.sig.ident.to_string();
     let func_return = func.sig.output.clone();
-    // let returns_nothing = matches!(func_return, syn::ReturnType::Default);
-    // let never_returns =
-    //     matches!(func_return, syn::ReturnType::Type(_, ty) if matches!(&*ty, syn::Type::Never(_)));
 
     let generated_name = format!("{}_raw", func_name);
     let generated_name = syn::Ident::new(&generated_name, Span::mixed_site());
@@ -60,23 +53,41 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
         }
     }
 
+    // Build a format string like "arg0={:?}, arg1={:?}" against the *raw* (pre-conversion) idents.
+    let trace_args_fmt = input_idents
+        .iter()
+        .map(|id| format!("{}={{:?}}", id))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Emitted before `generated_body` runs, so `input_idents` still refer to the raw SyscallFFI::Args values.
+    let trace_entry = quote! {
+        #[cfg(feature = "trace_syscall")]
+        crate::syscall_trace!(#func_name, #trace_args_fmt, #(#input_idents),*);
+    };
+
     match func_return {
         syn::ReturnType::Default => quote! {
                 #func
 
                 /// Returns nothing
                 pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                    #trace_entry
                     #(#generated_body)*
                     #func_name(#(#input_idents),*);
+                    #[cfg(feature = "trace_syscall")]
+                    crate::syscall_exit_trace!(#func_name, 0usize, "");
                     Ok(0)
                 }
         },
         syn::ReturnType::Type(_, ty) => match &*ty {
             syn::Type::Never(_) => {
+                // Diverges, so there is no exit point to trace from.
                 quote! {
                         #func
                         /// Never returns
                         pub fn #generated_name(#(#generated_inputs),*) -> ! {
+                            #trace_entry
                             #(#generated_body)*
                             #func_name(#(#input_idents),*)
                         }
@@ -101,8 +112,12 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
                                     #func
                                     /// Returns nothing on Ok
                                     pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                                        #trace_entry
                                         #(#generated_body)*
-                                        #func_name(#(#input_idents),*).map_err(|err| err.into()).map(|()| 0)
+                                        let __ret = #func_name(#(#input_idents),*).map_err(|err| err.into()).map(|()| 0);
+                                        #[cfg(feature = "trace_syscall")]
+                                        crate::syscall_exit_trace!(#func_name, __ret, "");
+                                        __ret
                                     }
                                 }
                             } else {
@@ -114,8 +129,12 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
 
                                     #[doc = #doc_comment]
                                     pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                                        #trace_entry
                                         #(#generated_body)*
-                                        #func_name(#(#input_idents),*).map_err(|err| err.into()).map(|ok| ok as usize)
+                                        let __ret = #func_name(#(#input_idents),*).map_err(|err| err.into()).map(|ok| ok as usize);
+                                        #[cfg(feature = "trace_syscall")]
+                                        crate::syscall_exit_trace!(#func_name, __ret, "");
+                                        __ret
                                     }
                                 }
                             }
@@ -124,8 +143,12 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
                                 #func
 
                                 pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                                    #trace_entry
                                     #(#generated_body)*
-                                    Ok(#func_name(#(#input_idents),*).into())
+                                    let __ret = #func_name(#(#input_idents),*).into();
+                                    #[cfg(feature = "trace_syscall")]
+                                    crate::syscall_exit_trace!(#func_name, __ret, "");
+                                    Ok(__ret)
                                 }
                             },
                         }
@@ -137,8 +160,12 @@ pub fn syscall_handler(func: ItemFn) -> TokenStream {
                     #func
 
                     pub fn #generated_name(#(#generated_inputs),*) -> Result<usize, ErrorStatus> {
+                        #trace_entry
                         #(#generated_body)*
-                        Ok(#func_name(#(#input_idents),*).into())
+                        let __ret = #func_name(#(#input_idents),*).into();
+                        #[cfg(feature = "trace_syscall")]
+                        syscall_exit_trace!(#func_name, __ret, "");
+                        Ok(__ret)
                     }
             },
         },

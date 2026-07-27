@@ -59,6 +59,9 @@ pub struct BuildArgs {
     pub verbose: bool,
     #[arg(short, long, default_value_t = utils::DEFAULT_ARCH)]
     pub arch: ArchTarget,
+    #[arg(long, default_value = "false")]
+    /// syscall tracing to debugcon
+    pub trace_syscall: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +69,7 @@ pub struct BuildOpts<'a> {
     pub output: &'a str,
     pub verbose: bool,
     pub tests: bool,
+    pub trace_syscall: bool,
     pub target_arch: ArchTarget,
 }
 
@@ -79,6 +83,7 @@ impl<'a> BuildOpts<'a> {
             }),
             verbose: value.verbose,
             tests,
+            trace_syscall: value.trace_syscall,
             target_arch: value.arch,
         }
     }
@@ -141,6 +146,7 @@ pub fn build(opts: BuildOpts) -> PathBuf {
     Builder::create(opts.output, opts.target_arch)
         .set_testing(opts.tests)
         .set_verbose(opts.verbose)
+        .set_trace_syscall(opts.trace_syscall)
         .build()
         .expect("build failed")
 }

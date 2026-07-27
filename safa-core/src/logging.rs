@@ -7,7 +7,10 @@ use crate::{
     VirtAddr,
     arch::registers::StackFrame,
     globals::KERNEL_ELF,
-    utils::{alloc::PageString, locks::RwLock},
+    utils::{
+        alloc::PageString,
+        locks::{RwLock, SpinLock},
+    },
 };
 
 pub static SERIAL_LOG: RwLock<Option<PageString>> = RwLock::new(None);
@@ -191,10 +194,62 @@ macro_rules! error {
     ($($arg:tt)*) => ($crate::loglnboot_ext!("error", 91, $($arg)*));
 }
 
+struct SyscallTracePort;
+static SYSCALL_TRACE_INT: SpinLock<SyscallTracePort> = SpinLock::new(SyscallTracePort);
+impl core::fmt::Write for SyscallTracePort {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for b in s.as_bytes() {
+            unsafe { crate::arch::io::outb(0xe9, *b) };
+        }
+
+        Ok(())
+    }
+}
+
+#[doc(hidden)]
+pub(crate) fn _spdebug_write(args: core::fmt::Arguments) {
+    SYSCALL_TRACE_INT
+        .lock()
+        .write_fmt(args)
+        .expect("Failed to write to debug lock")
+}
+
+#[macro_export]
+macro_rules! spdebug {
+    ($($arg:tt)*) => {
+        $crate::logging::_spdebug_write(format_args!($($arg)*))
+    };
+}
+
+#[doc(hidden)]
+pub(crate) fn _syscall_p() -> (u32, u32) {
+    unsafe { crate::thread::with_current_unsafe(|t| ((*t).process().pid(), (*t).tid())) }
+}
+#[macro_export]
+macro_rules! syscall_trace {
+    ($f: ident, $($arg:tt)*) => {
+        let (pid, tid) = $crate::logging::_syscall_p();
+        $crate::spdebug!("\x1b[92msyscall {}\x1b[0m T{pid}.{tid}: {}\n", stringify!($f), format_args!($($arg)*));
+    };
+}
+
+#[macro_export]
+macro_rules! syscall_exit_trace {
+    ($f: ident, $return:expr, $($arg:tt)*) => {
+        let (pid, tid) = $crate::logging::_syscall_p();
+        $crate::spdebug!("\x1b[92mexit syscall {}\x1b[0m T{pid}.{tid}: {} => {:?}\n", stringify!($f), format_args!($($arg)*), $return);
+    };
+}
+
 #[derive(Clone, Copy)]
 pub struct StackTrace<'a>(&'a StackFrame);
 
 impl<'a> StackTrace<'a> {
+    #[inline(always)]
+    pub unsafe fn get_from_fp(fp: *const u8) -> Option<Self> {
+        unsafe { StackFrame::from_fp(fp).map(|s| Self(s)) }
+    }
+
     /// Gets the current Stack Trace, unsafe because the StackTrace may be corrupted
     #[inline(always)]
     pub unsafe fn current() -> Self {

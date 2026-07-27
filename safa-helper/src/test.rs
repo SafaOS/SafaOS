@@ -24,6 +24,7 @@ fn arch_test_args(arch: ArchTarget) -> RunArgs {
         build_args: BuildArgs {
             output: Some(format!("out/safaos-tests-{}.iso", arch.as_str())),
             verbose: true,
+            trace_syscall: false,
             arch,
         },
     }
