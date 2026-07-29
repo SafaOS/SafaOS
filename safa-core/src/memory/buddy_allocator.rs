@@ -6,14 +6,15 @@ use core::{
 use alloc::vec::Vec;
 
 use crate::{
+    arch::without_interrupts,
     debug,
     memory::{AlignTo, AlignToPage, vmm::VMMAlloc},
-    utils::locks::{LazyLock, Mutex},
+    utils::locks::{LazyLock, Mutex, SpinLock},
 };
 
 use super::VirtAddr;
 
-pub const INIT_HEAP_SIZE: usize = (1024 * 1024) / 2;
+pub const INIT_HEAP_SIZE: usize = (1024 * 1024) * 5;
 
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -295,18 +296,22 @@ impl BuddyAllocator {
     }
 }
 
-unsafe impl GlobalAlloc for LazyLock<Mutex<BuddyAllocator>> {
+unsafe impl GlobalAlloc for LazyLock<SpinLock<BuddyAllocator>> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.lock()
-            .allocmut(layout)
-            .map(|s| s.as_ptr() as *mut u8)
-            .unwrap_or(core::ptr::null_mut())
+        without_interrupts(|| {
+            self.lock()
+                .allocmut(layout)
+                .map(|s| s.as_ptr() as *mut u8)
+                .unwrap_or(core::ptr::null_mut())
+        })
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         unsafe {
             _ = layout;
-            self.lock().deallocmut(ptr);
+            without_interrupts(|| {
+                self.lock().deallocmut(ptr);
+            });
         }
     }
 }
@@ -315,8 +320,8 @@ unsafe impl Sync for BuddyAllocator {}
 unsafe impl Send for BuddyAllocator {}
 
 #[global_allocator]
-static GLOBAL_ALLOCATOR: LazyLock<Mutex<BuddyAllocator>> =
-    LazyLock::new(|| Mutex::new(BuddyAllocator::create()));
+static GLOBAL_ALLOCATOR: LazyLock<SpinLock<BuddyAllocator>> =
+    LazyLock::new(|| SpinLock::new(BuddyAllocator::create()));
 
 #[test_case]
 fn buddy_allocator_test() {

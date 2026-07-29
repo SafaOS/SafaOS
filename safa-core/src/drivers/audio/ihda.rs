@@ -22,7 +22,7 @@ use crate::{
     memory::{AlignTo, paging::PAGE_SIZE},
     scheduler::wait_queue::{WaitError, WaitQueue, WaitQueueWithTimeout},
     thread::Tid,
-    utils::locks::SpinLock,
+    utils::{alloc::PageVec, locks::SpinLock},
     warn, write_ref,
 };
 
@@ -1178,7 +1178,7 @@ fn init_next_out(
     );
     let stream = Arc::new(Stream {
         queued_periods: SpinLock::new((
-            Vec::with_capacity(total_bytes),
+            PageVec::with_capacity(&"iHDAQueue", total_bytes),
             VecDeque::with_capacity(PERIODS_COUNT as usize),
         )),
         tag: stream_tag,
@@ -1263,7 +1263,7 @@ struct Stream {
     regs: SyncUnsafeCell<StreamRegs>,
     _bdl: DMABuffer<BD>,
     audio_buf: SyncUnsafeCell<DMABuffer<u8>>,
-    queued_periods: SpinLock<(Vec<u8>, VecDeque<usize>)>,
+    queued_periods: SpinLock<(PageVec<u8>, VecDeque<usize>)>,
     write_pointer: SyncUnsafeCell<usize>,
     writers: SpinLock<WaitQueue<1>>,
 
