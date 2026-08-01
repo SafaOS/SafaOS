@@ -106,8 +106,8 @@ pub fn syscall(
             SyscallTable::SysPCHDir => process::syschdir_raw((a as *const u8, b)),
             SyscallTable::SysPSpawn => process::syspspawn_raw((a as *const u8, b), c as *const _),
             SyscallTable::SysTSpawn => thread::sys_tspawn_raw(a, b as *const _),
-            SyscallTable::SysPExit => crate::process::current::exit(a as isize),
-            SyscallTable::SysTExit => crate::thread::current::exit(a as isize),
+            SyscallTable::SysPExit => process::sysp_exit_raw(a as isize),
+            SyscallTable::SysTExit => thread::syst_exit_raw(a as isize),
             SyscallTable::SysTYield => {
                 crate::thread::current::yield_now();
                 Ok(0)

@@ -2,7 +2,11 @@
 pub mod tests;
 
 mod objects;
-use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
+use core::{
+    cell::SyncUnsafeCell,
+    mem::{ManuallyDrop, MaybeUninit},
+    ptr::NonNull,
+};
 
 use alloc::alloc::{AllocError, Allocator};
 use safa_abi::errors::IntoErr;
@@ -409,6 +413,149 @@ impl VMMInner {
 
         unreachable!("Should find the address because it is within the VMM range")
     }
+
+    /// Safe muttable version of [`Self::lookup_contiugous`].
+    fn lookup_contiugous_mut<'s>(
+        &'s mut self,
+        start_addr: VirtAddr,
+        size: usize,
+    ) -> Option<impl Iterator<Item = &'s mut VMMObject> + use<'s>> {
+        unsafe { self.lookup_contiugous(start_addr, size) }
+            .map(|i| i.map(|mut obj| unsafe { obj.as_mut() }))
+    }
+
+    #[inline]
+    /// lookups regions of memory that are allocated and that start at `start_addr`, and end at `start_addr`+size.
+    ///
+    /// # Safety:
+    /// Returned objects live as long as Self.
+    ///
+    /// The reason why this doesn't hold a lifetime requirement to `self` is because it is supposed to be wrapped by other functions which may need to hold a muttable reference on self at the same time.
+    unsafe fn lookup_contiugous<'s, 'b>(
+        &'s self,
+        start_addr: VirtAddr,
+        size: usize,
+    ) -> Option<impl Iterator<Item = NonNull<VMMObject>> + use<'b>> {
+        let end_addr: VirtAddr = start_addr.checked_add(size)?.into();
+
+        if self.start_addr > start_addr || self.start_addr + self.size <= start_addr {
+            return None;
+        }
+        if end_addr > self.start_addr + self.size {
+            return None;
+        }
+
+        let mut current = Some(self.head());
+
+        let mut lookup_next = None;
+        let mut found_head = None;
+        while let Some(obj) = current.take() {
+            match lookup_next {
+                None => {
+                    if obj.addr() == start_addr {
+                        if !obj.allocated() {
+                            return None;
+                        }
+
+                        found_head = Some(obj.as_non_null());
+
+                        if obj.region_end() == end_addr {
+                            break;
+                        } else {
+                            lookup_next = Some(obj.region_end());
+                        }
+                    }
+                }
+                // Lookup next didn't match
+                Some(addr) if addr != obj.addr() || !obj.allocated() => {
+                    return None;
+                }
+                // this object marks the end of the long awaited search
+                Some(addr) if obj.addr() == addr && obj.region_end() == end_addr => {
+                    break;
+                }
+                // still more to verify...
+                Some(_) => {
+                    assert!(obj.region_end() < end_addr);
+                    lookup_next = Some(obj.region_end());
+                }
+            }
+
+            assert!(
+                !(obj.addr() > start_addr && obj.region_end() > start_addr),
+                "Attempt to free memory inside of the object's range and not at the start, addr: {:#x}, obj: {:#x}-{:#x}, {:?}",
+                start_addr,
+                obj.addr(),
+                obj.region_end(),
+                { self.debug_regions() }
+            );
+
+            current = obj.next();
+        }
+
+        struct LookupIter {
+            current: Option<NonNull<VMMObject>>,
+            end_addr: VirtAddr,
+        }
+
+        impl Iterator for LookupIter {
+            type Item = NonNull<VMMObject>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                let obj = unsafe { self.current?.as_mut() };
+                self.current = obj
+                    .next_mut()
+                    .filter(|obj| obj.region_end() <= self.end_addr)
+                    .map(|o| o.as_non_null());
+                return Some(obj.as_non_null());
+            }
+        }
+
+        Some(
+            found_head
+                .map(|h| LookupIter {
+                    end_addr,
+                    current: Some(h),
+                })
+                .expect("Should find the address because it is within the VMM range"),
+        )
+    }
+
+    fn deallocate_contiugous<'a>(
+        &'a mut self,
+        start_addr: VirtAddr,
+        size: usize,
+    ) -> Option<impl Iterator<Item = (VirtAddr, ObjectState, usize)> + 'a> {
+        unsafe { self.lookup_contiugous(start_addr, size) }.map(|i| {
+            i.map(|mut obj| {
+                let obj = unsafe { obj.as_mut() };
+                let addr_was = obj.addr();
+                let old_state = core::mem::replace(&mut obj.state, ObjectState::Free);
+                let size = obj.size();
+
+                let (new_right, right_removed) = obj.try_absorb_right();
+                let (new_left, left_removed) = obj.try_absorb_left();
+                let obj_ptr = obj.as_non_null();
+
+                if right_removed {
+                    self.len -= 1;
+                    if new_right.is_none() {
+                        // We absorbed the tail
+                        self.tail = obj_ptr;
+                    }
+                }
+                if left_removed {
+                    self.len -= 1;
+                    if new_left.is_none() {
+                        // We absorbed the head
+                        self.head = obj_ptr;
+                    }
+                }
+
+                (addr_was, old_state, size)
+            })
+        })
+    }
 }
 
 impl Drop for VMMInner {
@@ -511,6 +658,45 @@ impl VirtualMemoryManager {
     }
 
     #[must_use = "Returns whether or not a region was found and unmapped"]
+    /// Unmaps the neighbor regions starting at `start_addr` and ending at `start_addr+size`, if no such contiuguos regions were found returns false.
+    ///
+    /// size and start_addr has to be a multiple of `PAGE_SIZE`, or else it panicks.
+    pub fn unmap_contiugous(&self, start_addr: VirtAddr, size: usize) -> bool {
+        assert!(
+            size.is_multiple_of(PAGE_SIZE),
+            "Invalid size passed to unmap"
+        );
+        assert!(
+            start_addr.into_raw().is_multiple_of(PAGE_SIZE),
+            "Invalid start address passed to unmap"
+        );
+
+        let mut inner = self.inner.lock();
+        let Some(deallocs) = inner.deallocate_contiugous(start_addr, size) else {
+            return false;
+        };
+
+        // We don't want to drop on panick.
+        let mut op = ManuallyDrop::new(self.page_table.begin());
+        for (obj_addr, deallocated, del_size) in deallocs {
+            match deallocated {
+                ObjectState::Free => unreachable!("Attempt to deallocate an unallocated object."),
+                ObjectState::Allocated(_) | ObjectState::LazyAllocated(_) /* TODO: Proper Lazy Allocation implementation */ => unsafe {
+                    op.unmap_dealloc(obj_addr, del_size.div_ceil(PAGE_SIZE), matches!(deallocated, ObjectState::LazyAllocated(_))).expect("Failed to unmap VMM Allocated memory");
+                },
+                /* DMA is responsible for itself */
+                ObjectState::DMAAllocated(_) => {
+                    unsafe { op.unmap(obj_addr, del_size.div_ceil(PAGE_SIZE), false).expect("Failed to unmap VMM Allocated memory") };
+                },
+            }
+        }
+
+        drop(inner);
+        drop(ManuallyDrop::into_inner(op));
+        true
+    }
+
+    #[must_use = "Returns whether or not a region was found and unmapped"]
     /// Unmaps the region starting at `start_addr`, returning whether or not it was found, if it wasn't it is likely a kernel bug.
     pub fn unmap(&self, start_addr: VirtAddr) -> bool {
         let mut inner = self.inner.lock();
@@ -566,6 +752,60 @@ impl VirtualMemoryManager {
             },
         }
 
+        true
+    }
+
+    #[must_use = "Returns whether or not a region was found"]
+    pub fn set_page_flags_contiguous(
+        &self,
+        start_addr: VirtAddr,
+        size: usize,
+        flags: VMMMFlags,
+    ) -> bool {
+        assert!(
+            size.is_multiple_of(PAGE_SIZE),
+            "Invalid size passed to set page flags"
+        );
+        assert!(
+            start_addr.into_raw().is_multiple_of(PAGE_SIZE),
+            "Invalid start address passed to set page flags"
+        );
+
+        let mut inner = self.inner.lock();
+        let Some(objects) = inner.lookup_contiugous_mut(start_addr, size) else {
+            return false;
+        };
+
+        // ManuallyDrop so that it doesn't drop on panick...
+        let mut op = ManuallyDrop::new(self.page_table.begin());
+        for obj in objects {
+            let size = obj.size();
+            let addr = obj.addr();
+            let state = &mut obj.state;
+
+            match state {
+                ObjectState::Free => {
+                    unreachable!("Lookup contiguous mut should return all allocated memory ")
+                }
+                ObjectState::Allocated(old_flags)
+                | ObjectState::LazyAllocated(old_flags)
+                | ObjectState::DMAAllocated(old_flags) => unsafe {
+                    *old_flags = flags;
+
+                    let mut new_page_flags = flags.to_entry_flags();
+                    if matches!(state, ObjectState::LazyAllocated(_)) {
+                        new_page_flags |= PageEntryFlags::IS_LAZY;
+                    }
+
+                    op.set_flags(addr, size.div_ceil(PAGE_SIZE), new_page_flags)
+                        .expect("VMM failed to change the flags of a page, should never happen")
+                },
+            }
+        }
+
+        drop(inner);
+        // No SpinLocks should be in scope when op is dropped.
+        drop(ManuallyDrop::into_inner(op));
         true
     }
     /// Attempts to map the given `addr` on demand returning wheither it was successful.

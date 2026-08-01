@@ -131,3 +131,8 @@ fn sysgetcwd(path: &mut [u8]) -> Result<usize, ErrorStatus> {
     write!(&mut cursor, "{cwd}").map_err(|_| ErrorStatus::Generic)?;
     Ok(len)
 }
+
+#[syscall_handler]
+fn sysp_exit(code: isize) {
+    crate::process::current::exit(code)
+}

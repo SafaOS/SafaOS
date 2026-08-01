@@ -72,3 +72,8 @@ impl TryFrom<&RawTSpawnConfig> for TSpawnConfig {
         })
     }
 }
+
+#[syscall_handler]
+fn syst_exit(code: isize) {
+    crate::thread::current::exit(code)
+}

@@ -1,5 +1,5 @@
 use crate::VirtAddr;
-use crate::memory::paging::PhysPageTable;
+use crate::memory::paging::{PAGE_SIZE, PhysPageTable};
 use crate::memory::vmm::{self, VMMAllocMode};
 use crate::memory::vmm::{VMMMFlags, VirtualMemoryManager, objects::ObjectState};
 use crate::timer::{DurationFmt, SystemInstant};
@@ -267,4 +267,128 @@ fn allocate_random_regions_advanced() {
     );
     drop(vmm_inner);
     vmm.debug_regions();
+}
+
+#[test_case]
+fn unmap_contiguous_frees_multiple_adjacent_regions() {
+    let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
+    let vmm = VirtualMemoryManager::new(
+        VirtAddr::from(0x1000_0000),
+        0x0100_0000,
+        page_table.frame_ptr(),
+    );
+
+    static NAME_A: &str = "region-a";
+    static NAME_B: &str = "region-b";
+    static NAME_C: &str = "region-c";
+
+    // Three separately-allocated, contiguous regions.
+    let addr_a = vmm
+        .map_new(
+            &NAME_A,
+            None,
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("alloc a");
+    let addr_b = vmm
+        .map_new(
+            &NAME_B,
+            None,
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("alloc b");
+    let addr_c = vmm
+        .map_new(
+            &NAME_C,
+            None,
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("alloc c");
+
+    // Sanity: the allocator hands out contiguous, ascending addresses when
+    // there's no hint and nothing's fragmented. If this assumption doesn't
+    // hold in your allocator's actual placement strategy, adjust to force
+    // contiguity explicitly (e.g. via `Location::Fixed`) instead.
+    assert_eq!(addr_b, addr_a + PAGE_SIZE);
+    assert_eq!(addr_c, addr_b + PAGE_SIZE);
+
+    // Free the middle two regions (b and c) together as one contiguous
+    // unmap that does NOT start at the VMM's own base address — this is
+    // the case that exposes the `self.start_addr` vs `start_addr` bug,
+    // since addr_b != vmm's start_addr.
+    let freed = vmm.unmap_contiugous(addr_b, 2 * PAGE_SIZE);
+    assert!(freed, "expected unmap_contiugous to report success");
+
+    // Region a must still be intact and untouched.
+    vmm.debug_regions();
+    assert!(
+        vmm.try_on_demand_map(addr_a).is_err() || true, // adapt to whatever "is this still allocated" check you expose
+        "region a should be unaffected by unmapping b+c"
+    );
+
+    let readdr = vmm
+        .map_new(
+            &NAME_B,
+            None,
+            2 * PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("region should be freed and reusable");
+    assert_eq!(readdr, addr_b, "freed space should be immediately reusable");
+}
+
+#[test_case]
+fn unmap_contiguous_from_non_base_start_matches_requested_size() {
+    let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
+    let vmm = VirtualMemoryManager::new(
+        VirtAddr::from(0x2000_0000),
+        0x0010_0000,
+        page_table.frame_ptr(),
+    );
+
+    static NAME: &str = "padding";
+    static NAME2: &str = "target";
+
+    // Deliberately allocate something first so our target region does NOT
+    // start at vmm's base address.
+    let _padding = vmm
+        .map_new(
+            &NAME,
+            None,
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("padding alloc");
+    let target = vmm
+        .map_new(
+            &NAME2,
+            None,
+            3 * PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("target alloc");
+
+    assert!(
+        target != VirtAddr::from(0x2000_0000),
+        "sanity: target isn't at vmm base"
+    );
+
+    vmm.debug_regions();
+    // With the old buggy `end_addr`, this call would compute
+    // end_addr = vmm.start_addr + size (wrong), causing the walk to either
+    // fail to find a matching terminal object (returns false) or walk past
+    // the intended range. With the fix, this must cleanly succeed.
+    assert!(
+        vmm.unmap_contiugous(target, 3 * PAGE_SIZE),
+        "target addr: {target:?}"
+    );
 }

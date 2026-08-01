@@ -9,7 +9,7 @@ use crate::{
     arch::without_interrupts,
     debug,
     memory::{AlignTo, AlignToPage, vmm::VMMAlloc},
-    utils::locks::{LazyLock, Mutex, SpinLock},
+    utils::locks::{LazyLock, SpinLock},
 };
 
 use super::VirtAddr;

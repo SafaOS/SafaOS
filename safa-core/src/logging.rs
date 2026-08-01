@@ -195,6 +195,7 @@ macro_rules! error {
 }
 
 struct SyscallTracePort;
+#[allow(unused)]
 static SYSCALL_TRACE_INT: SpinLock<SyscallTracePort> = SpinLock::new(SyscallTracePort);
 impl core::fmt::Write for SyscallTracePort {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {

@@ -12,7 +12,6 @@ use crate::shared_mem::ShmKey;
 use crate::syscalls::ErrorStatus;
 use crate::syscalls::SyscallFFI;
 use crate::syscalls::ffi::ExpectedResource;
-use crate::warn;
 use macros::syscall_handler;
 use safa_abi::mem::MemFlags;
 use safa_abi::mem::MemMap2Flags;
@@ -233,13 +232,17 @@ pub fn sysmem_map2(
 
 #[syscall_handler]
 pub fn sysmem_op(target: &MemMapTarget, op: &MemMapOp) -> Result<(), ErrorStatus> {
-    let addr = match target {
-        MemMapTarget::Resource(ri) => {
-            ExpectedResource::<TrackedMemoryAllocation>::make(*ri)?.start()
-        }
-        MemMapTarget::Direct(addr, _size) => {
-            warn!("MemOp called on {addr:?}, {_size:#x} => not properly implemented");
-            VirtAddr::from_ptr(*addr)
+    let (addr, size) = match target {
+        MemMapTarget::Resource(ri) => (
+            ExpectedResource::<TrackedMemoryAllocation>::make(*ri)?.start(),
+            None,
+        ),
+        MemMapTarget::Direct(addr, size) => {
+            if !(*addr as usize).is_multiple_of(PAGE_SIZE) || !size.is_multiple_of(PAGE_SIZE) {
+                return Err(ErrorStatus::InvalidArgument);
+            }
+
+            (VirtAddr::from_ptr(*addr), Some(size))
         }
     };
 
@@ -255,8 +258,14 @@ pub fn sysmem_op(target: &MemMapTarget, op: &MemMapOp) -> Result<(), ErrorStatus
             }
 
             vmm::with_user_vmm(|vmm| {
-                if !vmm.set_page_flags(addr, vmm_flags) {
-                    return Err(ErrorStatus::MMapError);
+                if let Some(size) = size {
+                    if !vmm.set_page_flags_contiguous(addr, *size, vmm_flags) {
+                        return Err(ErrorStatus::MMapError);
+                    }
+                } else {
+                    if !vmm.set_page_flags(addr, vmm_flags) {
+                        return Err(ErrorStatus::MMapError);
+                    }
                 }
                 Ok(())
             })?;
@@ -267,13 +276,15 @@ pub fn sysmem_op(target: &MemMapTarget, op: &MemMapOp) -> Result<(), ErrorStatus
 }
 
 #[syscall_handler]
-pub fn sysmem_unmap(addr: usize, _size: usize) -> Result<(), ErrorStatus> {
-    // FIXME: unmap given size bytes...
-    warn!("Unmap called on {addr:#x}, {_size:#x} => not properly implemented");
+pub fn sysmem_unmap(addr: usize, size: usize) -> Result<(), ErrorStatus> {
+    if !addr.is_multiple_of(PAGE_SIZE) || !size.is_multiple_of(PAGE_SIZE) {
+        return Err(ErrorStatus::InvalidArgument);
+    }
+
     let addr = VirtAddr::from(addr);
 
     vmm::with_user_vmm(|vmm| {
-        if !vmm.unmap(addr) {
+        if !vmm.unmap_contiugous(addr, size) {
             Err(ErrorStatus::MMapError)
         } else {
             Ok(())
