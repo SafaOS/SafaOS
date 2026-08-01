@@ -1,6 +1,6 @@
 use crate::VirtAddr;
 use crate::memory::paging::{PAGE_SIZE, PhysPageTable};
-use crate::memory::vmm::{self, VMMAllocMode};
+use crate::memory::vmm::{self, Location, VMMAllocMode};
 use crate::memory::vmm::{VMMMFlags, VirtualMemoryManager, objects::ObjectState};
 use crate::timer::{DurationFmt, SystemInstant};
 
@@ -390,5 +390,241 @@ fn unmap_contiguous_from_non_base_start_matches_requested_size() {
     assert!(
         vmm.unmap_contiugous(target, 3 * PAGE_SIZE),
         "target addr: {target:?}"
+    );
+}
+
+#[test_case]
+fn unmap_partial_head_splits_and_keeps_remainder_allocated() {
+    let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
+    let vmm = VirtualMemoryManager::new(
+        VirtAddr::from(0x1000_0000),
+        0x0100_0000,
+        page_table.frame_ptr(),
+    );
+
+    static NAME: &str = "region";
+    let addr = vmm
+        .map_new(
+            &NAME,
+            None,
+            3 * PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("alloc 3 pages");
+
+    // Free only the last page, leaving the first two pages of the same
+    // original object still allocated. addr + PAGE_SIZE lands mid-object.
+    let freed = vmm.unmap_contiugous(addr + 2 * PAGE_SIZE, PAGE_SIZE);
+    assert!(freed);
+
+    // The untouched head portion must still be usable/allocated: attempting
+    // to allocate right at `addr` again should fail (still in use), while
+    // the freed tail page should be immediately reusable.
+    static NAME2: &str = "collide";
+    let collide = vmm.map_new(
+        &NAME2,
+        Some(Location::Fixed(addr)),
+        PAGE_SIZE,
+        VMMMFlags::WRITEABLE,
+        VMMAllocMode::Normal,
+    );
+    assert!(
+        collide.is_err(),
+        "head of the original object should still be allocated"
+    );
+
+    static NAME3: &str = "reuse-tail";
+    let reused = vmm
+        .map_new(
+            &NAME3,
+            Some(Location::Fixed(addr + 2 * PAGE_SIZE)),
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("freed tail page should be reusable");
+    assert_eq!(reused, addr + 2 * PAGE_SIZE);
+}
+
+#[test_case]
+fn unmap_partial_tail_splits_and_keeps_remainder_allocated() {
+    let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
+    let vmm = VirtualMemoryManager::new(
+        VirtAddr::from(0x1000_0000),
+        0x0100_0000,
+        page_table.frame_ptr(),
+    );
+
+    static NAME: &str = "region";
+    let addr = vmm
+        .map_new(
+            &NAME,
+            None,
+            3 * PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("alloc 3 pages");
+
+    // Free only the first page. end_addr (addr + PAGE_SIZE) lands mid-object,
+    // exercising the tail-split path specifically.
+    let freed = vmm.unmap_contiugous(addr, PAGE_SIZE);
+    assert!(freed);
+
+    static NAME2: &str = "reuse-head";
+    let reused = vmm
+        .map_new(
+            &NAME2,
+            Some(Location::Fixed(addr)),
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("freed head page should be reusable");
+    assert_eq!(reused, addr);
+
+    static NAME3: &str = "collide-tail";
+    let collide = vmm.map_new(
+        &NAME3,
+        Some(Location::Fixed(addr + PAGE_SIZE)),
+        2 * PAGE_SIZE,
+        VMMMFlags::WRITEABLE,
+        VMMAllocMode::Normal,
+    );
+    assert!(
+        collide.is_err(),
+        "remaining 2 pages should still be allocated"
+    );
+}
+
+#[test_case]
+fn unmap_partial_fully_interior_range_splits_both_ends() {
+    let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
+
+    let vmm = VirtualMemoryManager::new(
+        VirtAddr::from(0x1000_0000),
+        0x0100_0000,
+        page_table.frame_ptr(),
+    );
+
+    static NAME: &str = "region";
+    let addr = vmm
+        .map_new(
+            &NAME,
+            None,
+            4 * PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("alloc 4 pages");
+
+    // Free only the two middle pages — both start and end fall strictly
+    // inside the original single object, exercising head split + tail split
+    // together (the head_ptr == tail_ptr branch).
+    let freed = vmm.unmap_contiugous(addr + PAGE_SIZE, 2 * PAGE_SIZE);
+    assert!(freed);
+
+    // Both the leading page and the trailing page must still be allocated
+    // and independently addressable, while the middle is free.
+    static NAME2: &str = "collide-head";
+    assert!(
+        vmm.map_new(
+            &NAME2,
+            Some(Location::Fixed(addr)),
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal
+        )
+        .is_err(),
+        "leading page should still be allocated"
+    );
+
+    static NAME3: &str = "collide-tail";
+    assert!(
+        vmm.map_new(
+            &NAME3,
+            Some(Location::Fixed(addr + 3 * PAGE_SIZE)),
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal
+        )
+        .is_err(),
+        "trailing page should still be allocated"
+    );
+
+    static NAME4: &str = "reuse-middle";
+    let reused = vmm
+        .map_new(
+            &NAME4,
+            Some(Location::Fixed(addr + PAGE_SIZE)),
+            2 * PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("freed middle should be reusable");
+    assert_eq!(reused, addr + PAGE_SIZE);
+}
+
+#[test_case]
+fn unmap_contiguous_across_multiple_objects_with_partial_ends() {
+    let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
+    let vmm = VirtualMemoryManager::new(
+        VirtAddr::from(0x1000_0000),
+        0x0100_0000,
+        page_table.frame_ptr(),
+    );
+
+    static NAME_A: &str = "a";
+    static NAME_B: &str = "b";
+
+    // Two separately-allocated, adjacent 2-page objects.
+    let addr_a = vmm
+        .map_new(
+            &NAME_A,
+            None,
+            2 * PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("alloc a");
+    let addr_b = vmm
+        .map_new(
+            &NAME_B,
+            None,
+            2 * PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal,
+        )
+        .expect("alloc b");
+    assert_eq!(addr_b, addr_a + 2 * PAGE_SIZE, "sanity: contiguous");
+
+    // Free from the second page of `a` through the first page of `b` —
+    // crosses the object boundary AND both endpoints are mid-object.
+    let freed = vmm.unmap_contiugous(addr_a + PAGE_SIZE, 2 * PAGE_SIZE);
+    assert!(freed);
+
+    // First page of a, and second page of b, must remain allocated.
+    static NAME2: &str = "collide-a-head";
+    assert!(
+        vmm.map_new(
+            &NAME2,
+            Some(Location::Fixed(addr_a)),
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal
+        )
+        .is_err()
+    );
+    static NAME3: &str = "collide-b-tail";
+    assert!(
+        vmm.map_new(
+            &NAME3,
+            Some(Location::Fixed(addr_b + PAGE_SIZE)),
+            PAGE_SIZE,
+            VMMMFlags::WRITEABLE,
+            VMMAllocMode::Normal
+        )
+        .is_err()
     );
 }
