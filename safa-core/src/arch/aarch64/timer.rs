@@ -76,6 +76,8 @@ pub fn setup_generic_timer() {
         msr cntp_ctl_el0, x2
         ",
             flags = const 0b001,
+            out("x1") _,
+            out("x2") _,
         );
     }
 

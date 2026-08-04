@@ -66,7 +66,9 @@ fn enable_user_timer() {
             mrs x1, CNTKCTL_EL1
             orr x0, x0, x1
             msr CNTKCTL_EL1, x0
-            "
+            ",
+            out("x1") _,
+            out("x0") _,
         );
     }
 }
@@ -79,7 +81,9 @@ fn enable_fp() {
             mrs x1, CPACR_EL1
             orr x0, x0, x1
             msr CPACR_EL1, X0
-            "
+            ",
+            out("x1") _,
+            out("x0") _,
         )
     }
 }
