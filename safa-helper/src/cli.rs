@@ -251,16 +251,7 @@ pub fn run(opts: RunOpts, iso_path: &Path) {
             "-device",
             "ramfb",
         ],
-        ArchTarget::X86_64 => &[
-            "-machine",
-            "q35",
-            "-device",
-            "qemu-xhci",
-            "-device",
-            "usb-kbd",
-            "-smp",
-            "4",
-        ],
+        ArchTarget::X86_64 => &["-machine", "q35", "-device", "qemu-xhci", "-smp", "4"],
     };
 
     cmd.args(arch_args);
