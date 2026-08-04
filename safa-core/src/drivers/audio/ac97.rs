@@ -23,7 +23,7 @@ use crate::{
         alloc::PageVec,
         locks::{SpinLock, SpinLockGuard},
     },
-    warn, write_ref,
+    warn,
 };
 
 const BYTES_PER_ENTRY: usize = PAGE_SIZE;
@@ -397,10 +397,9 @@ impl PCIDevice for AC97 {
         Self: Sized,
     {
         let general_header = info.unwrap_general();
-        write_ref!(
-            general_header.common.command,
-            PCICommandReg::BUS_MASTER | PCICommandReg::IO_SPACE
-        );
+        general_header
+            .common()
+            .write_command(PCICommandReg::BUS_MASTER | PCICommandReg::IO_SPACE);
         let bars = general_header.get_bars();
         debug!(AC97, "info: {info:#?}, bars: {bars:#?}");
 

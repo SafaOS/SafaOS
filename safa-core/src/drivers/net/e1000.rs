@@ -1288,17 +1288,15 @@ impl PCIDevice for E1000NetCard {
         match base_bar {
             AllocatedBar::Memory(base_virt, _) => {
                 info!(E1000NetCard, "Mapped starting at {base_virt:?} ");
-                crate::write_ref!(
-                    general_header.common.command,
-                    PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE
-                );
+                general_header
+                    .common()
+                    .write_command(PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE);
             }
             AllocatedBar::IO(port, size) => {
                 info!(E1000NetCard, "Using IO with base {port} and size {size}");
-                crate::write_ref!(
-                    general_header.common.command,
-                    PCICommandReg::BUS_MASTER | PCICommandReg::IO_SPACE
-                );
+                general_header
+                    .common()
+                    .write_command(PCICommandReg::BUS_MASTER | PCICommandReg::IO_SPACE);
             }
         }
 

@@ -260,7 +260,7 @@ fn allocate_user_stuff(
         size.to_next_page(),
         VMMMFlags::USER_ACCESSIBLE
             | VMMMFlags::ZEROED
-            | VMMMFlags::WRITEABLE
+            | VMMMFlags::WRITABLE
             | VMMMFlags::EXECUTABLE,
         vmm::VMMAllocMode::Normal,
     )
@@ -295,7 +295,7 @@ pub fn allocate_kernel_stack(
                 &"thread.ke_stack",
                 None,
                 size,
-                VMMMFlags::ZEROED | VMMMFlags::WRITEABLE,
+                VMMMFlags::ZEROED | VMMMFlags::WRITABLE,
                 vmm::VMMAllocMode::Normal,
             )
             .map_err(|e| match e {

@@ -22,7 +22,7 @@ fn map_random_regions() {
             let mode = mode_choices[curr_j % mode_choices.len()];
 
             let addr = vmm
-                .map_new(&"TEST_CASE", None, size, VMMMFlags::WRITEABLE, mode)
+                .map_new(&"TEST_CASE", None, size, VMMMFlags::WRITABLE, mode)
                 .expect("Allocations ran out of memory");
             results.push(addr).expect("Failed to push address");
 
@@ -288,7 +288,7 @@ fn unmap_contiguous_frees_multiple_adjacent_regions() {
             &NAME_A,
             None,
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("alloc a");
@@ -297,7 +297,7 @@ fn unmap_contiguous_frees_multiple_adjacent_regions() {
             &NAME_B,
             None,
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("alloc b");
@@ -306,7 +306,7 @@ fn unmap_contiguous_frees_multiple_adjacent_regions() {
             &NAME_C,
             None,
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("alloc c");
@@ -337,7 +337,7 @@ fn unmap_contiguous_frees_multiple_adjacent_regions() {
             &NAME_B,
             None,
             2 * PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("region should be freed and reusable");
@@ -363,7 +363,7 @@ fn unmap_contiguous_from_non_base_start_matches_requested_size() {
             &NAME,
             None,
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("padding alloc");
@@ -372,7 +372,7 @@ fn unmap_contiguous_from_non_base_start_matches_requested_size() {
             &NAME2,
             None,
             3 * PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("target alloc");
@@ -408,7 +408,7 @@ fn unmap_partial_head_splits_and_keeps_remainder_allocated() {
             &NAME,
             None,
             3 * PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("alloc 3 pages");
@@ -426,7 +426,7 @@ fn unmap_partial_head_splits_and_keeps_remainder_allocated() {
         &NAME2,
         Some(Location::Fixed(addr)),
         PAGE_SIZE,
-        VMMMFlags::WRITEABLE,
+        VMMMFlags::WRITABLE,
         VMMAllocMode::Normal,
     );
     assert!(
@@ -440,7 +440,7 @@ fn unmap_partial_head_splits_and_keeps_remainder_allocated() {
             &NAME3,
             Some(Location::Fixed(addr + 2 * PAGE_SIZE)),
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("freed tail page should be reusable");
@@ -462,7 +462,7 @@ fn unmap_partial_tail_splits_and_keeps_remainder_allocated() {
             &NAME,
             None,
             3 * PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("alloc 3 pages");
@@ -478,7 +478,7 @@ fn unmap_partial_tail_splits_and_keeps_remainder_allocated() {
             &NAME2,
             Some(Location::Fixed(addr)),
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("freed head page should be reusable");
@@ -489,7 +489,7 @@ fn unmap_partial_tail_splits_and_keeps_remainder_allocated() {
         &NAME3,
         Some(Location::Fixed(addr + PAGE_SIZE)),
         2 * PAGE_SIZE,
-        VMMMFlags::WRITEABLE,
+        VMMMFlags::WRITABLE,
         VMMAllocMode::Normal,
     );
     assert!(
@@ -514,7 +514,7 @@ fn unmap_partial_fully_interior_range_splits_both_ends() {
             &NAME,
             None,
             4 * PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("alloc 4 pages");
@@ -533,7 +533,7 @@ fn unmap_partial_fully_interior_range_splits_both_ends() {
             &NAME2,
             Some(Location::Fixed(addr)),
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal
         )
         .is_err(),
@@ -546,7 +546,7 @@ fn unmap_partial_fully_interior_range_splits_both_ends() {
             &NAME3,
             Some(Location::Fixed(addr + 3 * PAGE_SIZE)),
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal
         )
         .is_err(),
@@ -559,7 +559,7 @@ fn unmap_partial_fully_interior_range_splits_both_ends() {
             &NAME4,
             Some(Location::Fixed(addr + PAGE_SIZE)),
             2 * PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("freed middle should be reusable");
@@ -584,7 +584,7 @@ fn unmap_contiguous_across_multiple_objects_with_partial_ends() {
             &NAME_A,
             None,
             2 * PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("alloc a");
@@ -593,7 +593,7 @@ fn unmap_contiguous_across_multiple_objects_with_partial_ends() {
             &NAME_B,
             None,
             2 * PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal,
         )
         .expect("alloc b");
@@ -611,7 +611,7 @@ fn unmap_contiguous_across_multiple_objects_with_partial_ends() {
             &NAME2,
             Some(Location::Fixed(addr_a)),
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal
         )
         .is_err()
@@ -622,7 +622,7 @@ fn unmap_contiguous_across_multiple_objects_with_partial_ends() {
             &NAME3,
             Some(Location::Fixed(addr_b + PAGE_SIZE)),
             PAGE_SIZE,
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
             VMMAllocMode::Normal
         )
         .is_err()

@@ -707,7 +707,7 @@ impl<'s> XHCIRegisters<'s> {
         }
     }
 
-    pub unsafe fn captabilities(&self) -> &'static CapsReg {
+    pub unsafe fn capabilities(&self) -> &'static CapsReg {
         unsafe { &*self.caps_regs }
     }
 
@@ -816,7 +816,7 @@ impl<'s> XHCIRegisters<'s> {
         let op_regs = unsafe { self.operational_regs() };
         write_ref!(
             op_regs.config,
-            self.captabilities().max_device_slots() as u32
+            self.capabilities().max_device_slots() as u32
         );
         // Enable device notifications
         write_ref!(op_regs.dnctrl, 0xFFFF);
@@ -835,7 +835,7 @@ impl<'s> XHCIRegisters<'s> {
     }
 
     fn configure_dcbaa(&mut self) {
-        let caps = unsafe { self.captabilities() };
+        let caps = unsafe { self.capabilities() };
         let op_regs = unsafe { self.operational_regs() };
 
         // Allocates and sets the dcbaa

@@ -156,7 +156,7 @@ impl Apic {
     /// # Safety:
     /// Must be called only once per APIC Driver
     pub fn map(&self, dest: &mut VirtualMemoryManager) -> Result<(), VMMAllocError> {
-        let flags = VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE;
+        let flags = VMMMFlags::WRITABLE | VMMMFlags::UNCACHABLE;
 
         let lapic_addr =
             dest.map_direct_phys(&"LOCAL APIC", None, self.lapic_phys_addr, 1, flags)?;

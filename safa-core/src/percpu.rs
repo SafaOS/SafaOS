@@ -31,7 +31,7 @@ pub fn init_memory(vmm: &mut vmm::VirtualMemoryManager) {
         &".percpu.ap",
         Some(Location::Fixed(start)),
         size,
-        VMMMFlags::ZEROED | VMMMFlags::WRITEABLE,
+        VMMMFlags::ZEROED | VMMMFlags::WRITABLE,
         vmm::VMMAllocMode::Normal,
     )
     .expect("Failed to allocate space for percpus");

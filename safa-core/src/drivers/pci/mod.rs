@@ -12,7 +12,7 @@ use crate::{
         interrupts::IRQInfo,
         net::e1000::E1000NetCard,
         pci::{
-            extended_caps::CaptabilitiesIter,
+            extended_caps::CapabilitiesIter,
             msi::{MSICap, MSIInfo},
         },
     },
@@ -183,7 +183,7 @@ impl AllocatedBar {
                     memory_base_name,
                     None,
                     total_size.to_next_page(),
-                    VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE,
+                    VMMMFlags::WRITABLE | VMMMFlags::UNCACHABLE,
                     mem_bars
                         .map(|(base, size)| {
                             (0..size.div_ceil(PAGE_SIZE))
@@ -236,30 +236,39 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_mmio::Mmio)]
 #[repr(C)]
 pub struct CommonPCIHeader {
+    #[mmio(Read)]
     vendor_id: u16,
+    #[mmio(Read)]
     device_id: u16,
     // reg 1
     pub command: PCICommandReg,
     status: PCIStatusReg,
     // reg 2
     revision: u8,
+    #[mmio(Read)]
     prog_if: u8,
+    #[mmio(Read)]
     subclass: u8,
+    #[mmio(Read)]
     class: u8,
     // reg 3
+    #[mmio(Read)]
     cache_line_sz: u8,
+    #[mmio(Read)]
     latency_timer: u8,
+    #[mmio(Read)]
     header_type: u8,
+    #[mmio(Read)]
     bist: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_mmio::Mmio)]
 #[repr(C)]
 pub struct GeneralPCIHeader {
-    pub common: CommonPCIHeader,
+    common: CommonPCIHeader,
     bar0: u32,
     bar1: u32,
     bar2: u32,
@@ -279,17 +288,21 @@ pub struct GeneralPCIHeader {
     max_latency: u8,
 }
 
-impl GeneralPCIHeader {
+impl<'a> MmioGeneralPCIHeader<'a> {
+    pub fn common<'s>(&'s mut self) -> MmioCommonPCIHeader<'s> {
+        unsafe { CommonPCIHeader::new_mmio(self.pointer_to_common()) }
+    }
+
     /// Gets at most 6 base address registers addresses from the header and their sizes
     pub fn get_bars(&self) -> heapless::Vec<Bar, 6> {
         let mut results = heapless::Vec::new();
         let bars_raw = [
-            &raw const self.bar0,
-            &raw const self.bar1,
-            &raw const self.bar2,
-            &raw const self.bar3,
-            &raw const self.bar4,
-            &raw const self.bar5,
+            self.pointer_to_bar0(),
+            self.pointer_to_bar1(),
+            self.pointer_to_bar2(),
+            self.pointer_to_bar3(),
+            self.pointer_to_bar4(),
+            self.pointer_to_bar5(),
         ];
 
         let mut raw_bars_iter = bars_raw.into_iter();
@@ -373,35 +386,35 @@ impl GeneralPCIHeader {
 
 #[derive(Debug)]
 pub enum PCIHeader<'a> {
-    General(&'a mut GeneralPCIHeader),
-    Other(&'a mut CommonPCIHeader),
+    General(MmioGeneralPCIHeader<'a>),
+    Other(MmioCommonPCIHeader<'a>),
 }
 
 impl<'a> PCIHeader<'a> {
-    fn caps_list(&self) -> CaptabilitiesIter {
+    fn caps_list(&self) -> CapabilitiesIter {
         let common = self.common();
-        if common.status.contains(PCIStatusReg::CAPS_LIST) {
-            let base_ptr = common as *const CommonPCIHeader as *const ();
+        if common.read_status().contains(PCIStatusReg::CAPS_LIST) {
             unsafe {
+                let base_ptr = common.ptr().cast::<()>();
                 let cap_off_ptr = base_ptr.byte_add(0x34) as *const u8;
                 let cap_off = *cap_off_ptr;
-                CaptabilitiesIter::new(base_ptr, cap_off)
+                CapabilitiesIter::new(base_ptr, cap_off)
             }
         } else {
-            CaptabilitiesIter::empty()
+            CapabilitiesIter::empty()
         }
     }
 
-    fn common(&self) -> &CommonPCIHeader {
+    fn common<'s>(&'s self) -> MmioCommonPCIHeader<'s> {
         match self {
-            Self::Other(c) => c,
-            Self::General(g) => &g.common,
+            Self::Other(c) => unsafe { c.clone() },
+            Self::General(g) => unsafe { CommonPCIHeader::new_mmio(g.pointer_to_common()) },
         }
     }
 
     /// Unwraps into GeneralPCIHeader, panciks if it isn't a GeneralPCIHeader
-    pub fn unwrap_general(&mut self) -> &mut GeneralPCIHeader {
-        let header_type = self.common().header_type & 0x0F;
+    pub fn unwrap_general(&mut self) -> &mut MmioGeneralPCIHeader<'a> {
+        let header_type = self.common().read_header_type() & 0x0F;
         match self {
             Self::General(g) => g,
             _ => panic!("expected GeneralPCIHeader with header_type: 0x0, got {header_type:#x}"),
@@ -417,12 +430,12 @@ impl<'a> PCIHeader<'a> {
     }
 
     fn is_valid(&self) -> bool {
-        let vendor_id = self.common().vendor_id;
+        let vendor_id = self.common().read_vendor_id();
         vendor_id != 0xFFFF
     }
 
     fn is_multifunction(&self) -> bool {
-        let header_type = self.common().header_type;
+        let header_type = self.common().read_header_type();
         (header_type & 0x80) != 0
     }
 
@@ -444,11 +457,11 @@ impl<'a> PCIHeader<'a> {
     ) -> Option<MSIXInfo> {
         let msix_cap_ptr = self.caps_list().find_cast::<MSIXCap>();
         msix_cap_ptr.map(|ptr| {
-            let common = self.common();
+            let mut common = self.common();
             MSIXInfo::new(
                 ptr as *mut _,
-                common.device_id,
-                common.vendor_id,
+                common.read_device_id(),
+                common.read_vendor_id(),
                 (bus as u32 * 256) + (slot as u32 * 8) + function as u32,
                 bars,
             )
@@ -474,7 +487,7 @@ impl<'a> PCIDeviceInfo<'a> {
         }
     }
 
-    pub fn caps_list(&self) -> CaptabilitiesIter {
+    pub fn caps_list(&self) -> CapabilitiesIter {
         self.header.caps_list()
     }
 
@@ -490,8 +503,9 @@ impl<'a> PCIDeviceInfo<'a> {
 
     pub fn get_pci_irq_info(&mut self) -> Option<IRQInfo> {
         let general = self.header.unwrap_general();
-        let interrupt_pin = (general.interrupt_pin != 0).then_some(general.interrupt_pin)?;
-        let interrupt_line = general.interrupt_line;
+        let interrupt_pin =
+            (general.read_interrupt_pin() != 0).then_some(general.read_interrupt_pin())?;
+        let interrupt_line = general.read_interrupt_line();
 
         Some(IRQInfo::PCIInt {
             bus: self.bus,
@@ -519,7 +533,7 @@ impl<'a> PCIDeviceInfo<'a> {
     }
 
     /// Unwraps into GeneralPCIHeader, panciks if it isn't a GeneralPCIHeader
-    pub fn unwrap_general(&mut self) -> &mut GeneralPCIHeader {
+    pub fn unwrap_general(&mut self) -> &mut MmioGeneralPCIHeader<'a> {
         self.header.unwrap_general()
     }
 }
@@ -548,7 +562,7 @@ impl PCI {
     //     header.map(|header| T::create(header))
     // }
 
-    fn get_common_header(&self, bus: u8, slot: u8, function: u8) -> &mut CommonPCIHeader {
+    fn get_common_header<'s>(&'s self, bus: u8, slot: u8, function: u8) -> MmioCommonPCIHeader<'s> {
         let bus = bus as usize;
         let slot = slot as usize;
         let function = function as usize;
@@ -558,16 +572,17 @@ impl PCI {
         unsafe {
             let ptr = ptr.add(offset);
             let ptr = ptr as *mut CommonPCIHeader;
-            &mut *ptr
+
+            CommonPCIHeader::new_mmio(ptr)
         }
     }
 
     fn get_header<'s>(&'s self, bus: u8, slot: u8, function: u8) -> PCIHeader<'s> {
-        let common = self.get_common_header(bus, slot, function);
-        let ty = common.header_type & 0xF;
+        let mut common = self.get_common_header(bus, slot, function);
+        let ty = common.read_header_type() & 0xF;
         unsafe {
             match ty {
-                0 => PCIHeader::General(&mut *(common as *mut _ as *mut GeneralPCIHeader)),
+                0 => PCIHeader::General(GeneralPCIHeader::new_mmio(common.ptr().cast())),
                 _ => PCIHeader::Other(common),
             }
         }
@@ -615,14 +630,15 @@ impl PCI {
         vendor_device_ids: Option<&[(u16, u16)]>,
         info: &PCIDeviceInfo,
     ) -> bool {
-        let common = info.header.common();
-        common.class == class
-            && common.subclass == subclass
-            && prog_if.is_none_or(|i| i == common.prog_if)
-            && vendor_id.is_none_or(|ids| ids.contains(&common.vendor_id))
-            && device_id.is_none_or(|ids| ids.contains(&common.device_id))
+        let mut common = info.header.common();
+
+        common.read_class() == class
+            && common.read_subclass() == subclass
+            && prog_if.is_none_or(|i| i == common.read_prog_if())
+            && vendor_id.is_none_or(|ids| ids.contains(&common.read_vendor_id()))
+            && device_id.is_none_or(|ids| ids.contains(&common.read_device_id()))
             && vendor_device_ids
-                .is_none_or(|ids| ids.contains(&(common.vendor_id, common.device_id)))
+                .is_none_or(|ids| ids.contains(&(common.read_vendor_id(), common.read_device_id())))
     }
 }
 
@@ -677,8 +693,8 @@ fn init_devices(queries: &[(LookupQuery, fn(PCIDeviceInfo) -> bool)]) {
 fn init_device<T: PCIDevice + 'static>(info: PCIDeviceInfo) -> bool {
     match PCIDevice::create(info) {
         Ok(dev) => {
-            let stati: &'static T = Box::leak(Box::new(dev));
-            stati.start()
+            let static_int: &'static T = Box::leak(Box::new(dev));
+            static_int.start()
         }
         Err(e) => {
             error!(PCI, "Device creation failed with error: {e}");

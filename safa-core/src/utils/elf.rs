@@ -607,7 +607,7 @@ impl<'a, T: Readable> Elf<'a, T> {
             }
 
             if header.flags.contains(ProgramFlags::WRITE) {
-                alloc_flags |= VMMMFlags::WRITEABLE;
+                alloc_flags |= VMMMFlags::WRITABLE;
             }
 
             if header.flags.contains(ProgramFlags::EXEC) {
@@ -660,10 +660,10 @@ impl<'a, T: Readable> Elf<'a, T> {
 
                         // Update flags if we have more prems.
                         let mut flags_or = VMMMFlags::empty();
-                        if !r_flags.contains(VMMMFlags::WRITEABLE)
-                            && alloc_flags.contains(VMMMFlags::WRITEABLE)
+                        if !r_flags.contains(VMMMFlags::WRITABLE)
+                            && alloc_flags.contains(VMMMFlags::WRITABLE)
                         {
-                            flags_or |= VMMMFlags::WRITEABLE;
+                            flags_or |= VMMMFlags::WRITABLE;
                         }
 
                         if !r_flags.contains(VMMMFlags::EXECUTABLE)

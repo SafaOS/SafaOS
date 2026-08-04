@@ -3,10 +3,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use super::{
-    interrupts::IRQInfo,
-    utils::{read_ref, write_ref},
-};
+use super::{interrupts::IRQInfo, utils::read_ref};
 use alloc::{collections::vec_deque::VecDeque, vec::Vec};
 use regs::{CapsReg, XHCIDoorbellManager};
 use rings::{command::XHCICommandRing, event::XHCIEventRing};
@@ -495,7 +492,7 @@ impl<'s> XHCI<'s> {
     /// Checks all root hub ports for connected ports and handles them.
     pub fn prob(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
-        let caps = unsafe { regs.captabilities() };
+        let caps = unsafe { regs.capabilities() };
         let op_regs = unsafe { regs.operational_regs() };
         // Resettng all the root hub ports
         // TODO: detect connections
@@ -513,7 +510,7 @@ impl<'s> XHCI<'s> {
     /// you can find the steps done here at 4.3 of the XHCI Specification
     pub fn setup_device(&self, port_index: u8) -> Result<(), XHCIError> {
         let regs = unsafe { self.regs.as_mut_unchecked() };
-        let cap_regs = unsafe { regs.captabilities() };
+        let cap_regs = unsafe { regs.capabilities() };
         let op_regs = unsafe { regs.operational_regs() };
         let port_regs = unsafe { op_regs.port_registers(port_index) };
         let context_sz_64bytes = cap_regs.context_sz_64bytes();
@@ -696,7 +693,7 @@ impl<'s> PCIDevice for XHCI<'s> {
     const PROG_IF: Option<u8> = Some(0x30);
 
     fn create(mut info: super::pci::PCIDeviceInfo) -> Result<Self, &'static str> {
-        // Collect extended captability information
+        // Collect extended capability information
         let mut pci_caps = info.caps_list();
         let mut usb3_ports = Vec::new();
 
@@ -714,10 +711,9 @@ impl<'s> PCIDevice for XHCI<'s> {
 
         // Map and enable the XHCI PCI Device
         let general_header = info.unwrap_general();
-        write_ref!(
-            general_header.common.command,
-            PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE
-        );
+        general_header
+            .common()
+            .write_command(PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE);
 
         let bars = info.get_bars();
         let (allocated_bars, virt_base_addr, _) = AllocatedBar::allocate_bars::<6>(&"XHCI", &*bars);
@@ -765,7 +761,7 @@ impl<'s> PCIDevice for XHCI<'s> {
             debug!(
                 XHCI,
                 "Created\n{}\n{}\nUSB 3 ports: {:?}",
-                this.regs.as_ref_unchecked().captabilities(),
+                this.regs.as_ref_unchecked().capabilities(),
                 this.regs.as_mut_unchecked().operational_regs(),
                 this.usb3_ports
             );

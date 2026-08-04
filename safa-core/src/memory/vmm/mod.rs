@@ -29,7 +29,7 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct VMMMFlags: u8 {
         /// By default the region is read-only.
-        const WRITEABLE = 1 << 0;
+        const WRITABLE = 1 << 0;
         /// By default the region is not executable.
         const EXECUTABLE = 1 << 1;
         const USER_ACCESSIBLE = 1 << 2;
@@ -43,7 +43,7 @@ impl VMMMFlags {
     pub fn to_entry_flags(self) -> PageEntryFlags {
         let mut map_flags = PageEntryFlags::empty();
 
-        if self.contains(VMMMFlags::WRITEABLE) {
+        if self.contains(VMMMFlags::WRITABLE) {
             map_flags.insert(PageEntryFlags::WRITE);
         }
 
@@ -1062,7 +1062,7 @@ pub struct VMMAlloc(&'static &'static str, Option<VirtAddr>, VMMMFlags);
 impl VMMAlloc {
     #[inline]
     pub const fn new(name: &'static &'static str) -> Self {
-        Self(name, None, VMMMFlags::WRITEABLE)
+        Self(name, None, VMMMFlags::WRITABLE)
     }
 
     #[inline]

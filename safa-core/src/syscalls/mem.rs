@@ -58,7 +58,7 @@ pub fn sysmem_protect(
 
     let mut vmm_flags = VMMMFlags::USER_ACCESSIBLE;
     if flags.contains(MemFlags::WRITE) {
-        vmm_flags |= VMMMFlags::WRITEABLE;
+        vmm_flags |= VMMMFlags::WRITABLE;
     }
 
     if flags.contains(MemFlags::EXEC) {
@@ -120,7 +120,7 @@ pub fn sysmem_map(
 
     let mut mem_flags = VMMMFlags::empty();
     if flags.contains(MemMapFlags::WRITE) {
-        mem_flags |= VMMMFlags::WRITEABLE;
+        mem_flags |= VMMMFlags::WRITABLE;
     }
 
     if !flags.contains(MemMapFlags::DISABLE_EXEC) {
@@ -204,7 +204,7 @@ pub fn sysmem_map2(
 
     let mut mem_flags = VMMMFlags::empty();
     if prot.contains(MemFlags::WRITE) {
-        mem_flags |= VMMMFlags::WRITEABLE;
+        mem_flags |= VMMMFlags::WRITABLE;
     }
 
     if prot.contains(MemFlags::EXEC) {
@@ -250,7 +250,7 @@ pub fn sysmem_op(target: &MemMapTarget, op: &MemMapOp) -> Result<(), ErrorStatus
         MemMapOp::Protect(prot) => {
             let mut vmm_flags = VMMMFlags::USER_ACCESSIBLE;
             if prot.contains(MemFlags::WRITE) {
-                vmm_flags |= VMMMFlags::WRITEABLE;
+                vmm_flags |= VMMMFlags::WRITABLE;
             }
 
             if prot.contains(MemFlags::EXEC) {

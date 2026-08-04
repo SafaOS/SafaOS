@@ -18,12 +18,12 @@ pub struct GenericCapability {
     next_off: u8,
 }
 
-pub struct CaptabilitiesIter {
+pub struct CapabilitiesIter {
     base_ptr: *const (),
     current: *const GenericCapability,
 }
 
-impl CaptabilitiesIter {
+impl CapabilitiesIter {
     pub fn new(base_ptr: *const (), cap_off: u8) -> Self {
         let current = unsafe { base_ptr.byte_add(cap_off as usize) as *const GenericCapability };
         Self { base_ptr, current }
@@ -67,7 +67,7 @@ impl CaptabilitiesIter {
     }
 }
 
-impl Iterator for CaptabilitiesIter {
+impl Iterator for CapabilitiesIter {
     type Item = *const GenericCapability;
     fn next(&mut self) -> Option<Self::Item> {
         if self.current.is_null() {

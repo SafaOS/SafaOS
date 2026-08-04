@@ -23,7 +23,7 @@ use crate::{
     scheduler::wait_queue::{WaitError, WaitQueue, WaitQueueWithTimeout},
     thread::Tid,
     utils::{alloc::PageVec, locks::SpinLock},
-    warn, write_ref,
+    warn,
 };
 
 mod param {
@@ -228,7 +228,7 @@ impl Widget {
         let per_resp = if is_long { 2 } else { 4 };
         let mut c = 0;
         // FIXME: This function was translated by claude from Ethereal's iHDA driver
-        // In general connections are 8-bit long but sometimes they are 16-bits, connections come toghether packed in a single u32
+        // In general connections are 8-bit long but sometimes they are 16-bits, connections come together packed in a single u32
         // We may not be handling 16-bit connections correctly.
         while c < conn_len {
             let resp = hda.send_command(
@@ -430,7 +430,7 @@ pub struct Codec {
 }
 
 impl Codec {
-    pub fn enumarate(hda: &IntelHDA, statests: u16) -> Result<Vec<Codec>, WaitError> {
+    pub fn enumerate(hda: &IntelHDA, statests: u16) -> Result<Vec<Codec>, WaitError> {
         let mut codecs = Vec::new();
         for codec in 0..15u8 {
             if (statests >> codec) & 1 != 0 {
@@ -1098,7 +1098,7 @@ fn init_next_out(
     let mut regs =
         unsafe { StreamRegs::at((*hda.regs.get()).port, hda.in_streams, true, stream_idx) };
 
-    debug!(ihda::Stream, "Reseting stream: {stream_idx}");
+    debug!(ihda::Stream, "Resetting stream: {stream_idx}");
     regs.set_ctl(regs.ctl() | 1);
     if !crate::sleep_until!(500 ms, (regs.ctl() & 1) != 0) {
         return Err("Timeout waiting for stream reset set");
@@ -1572,10 +1572,9 @@ impl PCIDevice for IntelHDA {
         Self: Sized,
     {
         let general_header = info.unwrap_general();
-        write_ref!(
-            general_header.common.command,
-            PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE
-        );
+        general_header
+            .common()
+            .write_command(PCICommandReg::BUS_MASTER | PCICommandReg::MEM_SPACE);
         let bars = general_header.get_bars();
         debug!(IntelHDA, "info: {info:#?}, bars: {bars:#?}");
 
@@ -1629,8 +1628,8 @@ impl PCIDevice for IntelHDA {
         regs.set_intctl(u32::MAX);
 
         debug!(IntelHDA, "SATESTS: {:#x}", regs.statests());
-        let Ok(codecs) = Codec::enumarate(self, regs.statests()) else {
-            error!(IntelHDA, "Timeout enumarating Codecs");
+        let Ok(codecs) = Codec::enumerate(self, regs.statests()) else {
+            error!(IntelHDA, "Timeout enumerating Codecs");
             return false;
         };
 

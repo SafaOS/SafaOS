@@ -39,6 +39,7 @@ smallvec = { version = "1.15.1", features = ["union", "const_generics", "const_n
 rustc-hash = { version = "2.1.1", default-features = false }
 hfdt-rs = { version = "0.1.0", git = "https://github.com/safiworks/hfdt-rs" }
 time = { version = "0.3.51", default-features = false }
+derive-mmio = "0.8.0"
 
 [dev-dependencies]
 

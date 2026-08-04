@@ -20,7 +20,7 @@ pub fn init() -> Option<PCI> {
     if let Some(entry) = *PCI_MCFG_ENTRY {
         assert_eq!(entry.pci_sgn, 0);
 
-        let flags = VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE;
+        let flags = VMMMFlags::WRITABLE | VMMMFlags::UNCACHABLE;
 
         let pci_phys = entry.physical_addr;
         // bus count * slot count * 4096 = size

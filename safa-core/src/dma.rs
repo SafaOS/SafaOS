@@ -60,7 +60,7 @@ impl<T> DMABuffer<T> {
                     Some(Location::Hint(VirtAddr::null())),
                     start.phys_addr(),
                     pages,
-                    VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE,
+                    VMMMFlags::WRITABLE | VMMMFlags::UNCACHABLE,
                 )
                 .map_err(|_| {
                     for frame in Frame::iter_frames(

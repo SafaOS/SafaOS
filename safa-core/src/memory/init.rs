@@ -53,7 +53,7 @@ unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAlloc
         limine::get_phy_offset()
     );
 
-    let flags = VMMMFlags::WRITEABLE;
+    let flags = VMMMFlags::WRITABLE;
 
     let mut largest_addr = VirtAddr::null();
     for entry in limine::mmap_request().entries() {
@@ -147,7 +147,7 @@ unsafe fn map_top_2gb(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocErro
             ".data",
             VirtAddr::from_ptr(&section_data_begin),
             VirtAddr::from_ptr(&section_data_end),
-            VMMMFlags::WRITEABLE,
+            VMMMFlags::WRITABLE,
         )?;
 
         percpu::init_memory(vmm);
