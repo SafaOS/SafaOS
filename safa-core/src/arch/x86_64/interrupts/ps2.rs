@@ -190,7 +190,7 @@ fn send_port1_command2(cmd0: u8) -> Result<u8, ()> {
     read_response_inner()
 }
 
-fn disable_controller() {
+fn disable_controller() -> bool {
     const DISABLE_PORT1: u8 = 0xAD;
     const DISABLE_PORT2: u8 = 0xA7;
 
@@ -198,15 +198,22 @@ fn disable_controller() {
     send_command(DISABLE_PORT2);
     // flush output buffer
     unsafe {
-        while inb(PS2_STATUS_PORT) & 1 == 1 {
-            inb(PS2_DATA_PORT);
-        }
+        let success = sleep_until!(50 ms, {
+            if inb(PS2_STATUS_PORT) & 1 != 0 {
+                inb(PS2_DATA_PORT);
+                false
+            }  else {
+                true
+            }
+        });
+
+        success
     }
 }
 
 #[must_use = "Must handle timeout if it returns false"]
 fn wait_for_read() -> bool {
-    let success = sleep_until!(1000 ms, unsafe { inb(PS2_STATUS_PORT) & 1 == 1 });
+    let success = sleep_until!(50 ms, unsafe { inb(PS2_STATUS_PORT) & 1 == 1 });
     if !success {
         error!("PS/2 Controller timeout waiting for read");
     }
@@ -216,7 +223,7 @@ fn wait_for_read() -> bool {
 
 #[must_use = "Must handle timeout if it returns false"]
 fn wait_for_write() -> bool {
-    let success = sleep_until!(1000 ms, unsafe { inb(PS2_STATUS_PORT) & 2 == 0 });
+    let success = sleep_until!(50 ms, unsafe { inb(PS2_STATUS_PORT) & 2 == 0 });
     if !success {
         error!("PS/2 Controller timeout waiting for write");
     }
@@ -398,8 +405,8 @@ fn reset_devices(port0: bool) -> Result<(), ()> {
 pub fn setup_controller() -> Result<(bool, bool), ()> {
     info!("Setting up PS/2 Controller");
 
-    disable_controller();
-    debug!("Disabled PS/2 Controller");
+    let disabled = disable_controller();
+    debug!("Disabled PS/2 Controller: {disabled}");
 
     let conf_byte = read_conf_byte()?
         .with_port0_interrupt_enabled(false)
