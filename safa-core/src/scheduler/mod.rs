@@ -43,7 +43,7 @@ percpu::define! {
             .threads_manager()
             .create_thread(
                 process,
-                VirtAddr::from(eve::idle_function as usize),
+                VirtAddr::from(eve::idle_function as *const () as usize),
                 VirtAddr::null(),
                 Some(ContextPriority::Low),
                 None,

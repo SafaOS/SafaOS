@@ -19,7 +19,7 @@ macros = { path = "macros" }
 int-enum = "1.1"
 heapless = { version = "0.8.0", features = ["serde"] }
 limine = "0.5.0"
-hashbrown = { version = "0.15.2", features = ["nightly"] }
+hashbrown = { version = "0.17.1", features = ["nightly"] }
 
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", git = "https://github.com/safiworks/srede-json-frok", default-features = false, features = [
@@ -32,7 +32,6 @@ thiserror = { version = "2.0.12", default-features = false }
 lock_api = { version = "0.4.12", features = ["serde"] }
 const-str = { version = "0.6.2", default-features = false }
 cfg-if = "1.0.0"
-compiler_builtins = "0.1.158"
 hermit-dtb = "0.1.1"
 bitfield-struct = "0.11.0"
 rustc-demangle = "0.1.25"

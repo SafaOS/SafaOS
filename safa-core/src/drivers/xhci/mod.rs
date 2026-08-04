@@ -778,7 +778,7 @@ impl<'s> PCIDevice for XHCI<'s> {
         without_interrupts(|| {
             let irq_info = self.irq_info.clone();
 
-            interrupts::register_irq(irq_info, IntTrigger::Edge, self);
+            interrupts::register_irq(irq_info, IntTrigger::LevelDeassert, self);
             let int_tid = kernel_thread_spawn(
                 on_interrupt_thread,
                 self,

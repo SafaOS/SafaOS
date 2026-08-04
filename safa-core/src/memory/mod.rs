@@ -91,7 +91,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl const Add<usize> for $ty {
+        const impl Add<usize> for $ty {
             type Output = $ty;
             #[inline(always)]
             fn add(self, rhs: usize) -> Self::Output {
@@ -99,7 +99,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl const Add<$ty> for $ty {
+        const impl Add<$ty> for $ty {
             type Output = $ty;
             #[inline(always)]
             fn add(self, rhs: $ty) -> Self::Output {
@@ -107,14 +107,14 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl AddAssign<usize> for $ty {
+        const impl AddAssign<usize> for $ty {
             #[inline(always)]
             fn add_assign(&mut self, rhs: usize) {
                 *self = *self + rhs
             }
         }
 
-        impl const Sub<$ty> for $ty {
+        const impl Sub<$ty> for $ty {
             type Output = usize;
             #[inline(always)]
             fn sub(self, rhs: $ty) -> Self::Output {
@@ -122,7 +122,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl const Sub<usize> for $ty {
+        const impl Sub<usize> for $ty {
             type Output = Self;
             #[inline(always)]
             fn sub(self, rhs: usize) -> Self::Output {
@@ -130,7 +130,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl SubAssign<usize> for $ty {
+        const impl SubAssign<usize> for $ty {
             #[inline(always)]
             fn sub_assign(&mut self, rhs: usize) {
                 *self = *self - rhs
@@ -150,7 +150,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl const AlignTo<usize> for $ty {
+        const impl AlignTo<usize> for $ty {
             #[inline(always)]
             fn to_next_multiple_of(self, alignment: usize) -> Self {
                 Self::from(self.into_raw().to_next_multiple_of(alignment))
@@ -161,7 +161,7 @@ macro_rules! impl_addr_ty {
             }
         }
 
-        impl const AlignTo<$ty> for $ty {
+        const impl AlignTo<$ty> for $ty {
             #[inline(always)]
             fn to_next_multiple_of(self, alignment: Self) -> Self {
                 self.to_next_multiple_of(alignment.into_raw())
@@ -226,8 +226,7 @@ impl<T> From<*mut T> for VirtAddr {
     }
 }
 
-#[const_trait]
-pub trait AlignTo<Other>: Sized {
+pub const trait AlignTo<Other>: Sized {
     /// Aligns (rounds) `self` to the next multiple of `alignment` aka align up
     ///
     /// for example: 1.to_next_multiple_of(2) == 2
@@ -238,8 +237,7 @@ pub trait AlignTo<Other>: Sized {
     fn to_previous_multiple_of(self, alignment: Other) -> Self;
 }
 
-#[const_trait]
-pub trait AlignToPage: const AlignTo<usize> {
+pub const trait AlignToPage: [const] AlignTo<usize> {
     #[inline(always)]
     /// Aligns (rounds) `self` to the next multiple of [`PAGE_SIZE`]
     ///
@@ -258,7 +256,7 @@ pub trait AlignToPage: const AlignTo<usize> {
 
 macro_rules! impl_align_common {
     ($ty: ty, $from: ty) => {
-        impl const AlignTo<$from> for $ty {
+        const impl AlignTo<$from> for $ty {
             #[inline(always)]
             fn to_next_multiple_of(self, alignment: $from) -> Self {
                 let alignment = alignment as $ty;
@@ -278,7 +276,7 @@ macro_rules! impl_align_common {
 }
 
 impl_align_common!(usize);
-impl<T> const AlignToPage for T where T: const AlignTo<usize> {}
+const impl<T> AlignToPage for T where T: [const] AlignTo<usize> {}
 
 impl_align_common!(usize, u64);
 impl_align_common!(usize, u32);

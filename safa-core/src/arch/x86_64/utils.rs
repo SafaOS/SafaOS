@@ -60,10 +60,8 @@ impl CpuInfo {
     }
 
     fn fetch_address_space() -> (u8, u8) {
-        unsafe {
-            let space = core::arch::x86_64::__cpuid(0x80000008u32).eax;
-            ((space & 0xFF) as u8, ((space >> 8) & 0xFF) as u8)
-        }
+        let space = core::arch::x86_64::__cpuid(0x80000008u32).eax;
+        ((space & 0xFF) as u8, ((space >> 8) & 0xFF) as u8)
     }
 
     fn fetch_easter_egg() -> Option<heapless::String<16>> {
@@ -83,10 +81,8 @@ impl CpuInfo {
     }
 
     fn fetch_core_count() -> u8 {
-        unsafe {
-            let eax = __cpuid(0x4).eax;
-            ((eax >> 26) & 0xFF) as u8 + 1
-        }
+        let eax = __cpuid(0x4).eax;
+        ((eax >> 26) & 0xFF) as u8 + 1
     }
     pub fn fetch() -> Self {
         let (physical_address_space, virtual_address_space) = Self::fetch_address_space();

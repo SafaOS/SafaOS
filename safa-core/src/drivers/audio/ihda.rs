@@ -1087,7 +1087,7 @@ fn init_next_out(
 
     let stream_idx = hda
         .next_out_stream
-        .fetch_update(
+        .try_update(
             core::sync::atomic::Ordering::Relaxed,
             core::sync::atomic::Ordering::Relaxed,
             |i| ((i + 1) < hda.out_streams).then_some(i + 1),

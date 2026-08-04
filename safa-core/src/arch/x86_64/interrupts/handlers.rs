@@ -120,7 +120,7 @@ macro_rules! create_idt {
             let mut table = EMPTY_TABLE;
             $(
                 let index: usize = $indx as usize;
-                let handler: usize = $handler as usize;
+                let handler: usize = $handler as *const () as usize;
                 let attributes: u8 = $attributes;
                 let ist: u8 = {
                     #[allow(unused_variables)]
