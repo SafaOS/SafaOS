@@ -1,5 +1,6 @@
 use crate::{
     PhysAddr, debug,
+    drivers::utils::write_ref,
     drivers::xhci::{
         self, MAX_TRB_COUNT, XHCIResponseQueue,
         devices::{
@@ -19,7 +20,7 @@ use crate::{
         usb_endpoint::USBEndpoint,
         utils::XHCIError,
     },
-    error, write_ref,
+    error,
 };
 
 pub const REQUEST_GET_DESCRIPTOR: u8 = 6;

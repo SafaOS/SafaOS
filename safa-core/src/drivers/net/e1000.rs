@@ -862,7 +862,7 @@ impl E1000Comm {
         }
 
         card.write_command(REG_TDT, self.tx_curr);
-        while crate::read_ref!(curr_tx.status) == 0 {
+        while crate::drivers::utils::read_ref!(curr_tx.status) == 0 {
             core::hint::spin_loop();
         }
         card.clear_status();
