@@ -1,14 +1,14 @@
 use crate::{
+    PhysAddr,
     arch::aarch64::cpu::CPUDevice,
     drivers::{interrupts::IntTrigger, pci::PCI},
     info,
     memory::{
+        AlignToPage,
         paging::PAGE_SIZE,
         vmm::{self, VMMMFlags},
-        AlignToPage,
     },
     utils::locks::LazyLock,
-    PhysAddr,
 };
 
 use hfdt_rs::{self as dtb, Cells};
@@ -128,7 +128,7 @@ pub fn init() -> Option<PCI> {
             None,
             start_phys_addr,
             page_num,
-            VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE,
+            VMMMFlags::WRITABLE | VMMMFlags::UNCACHABLE,
         )
     })
     .expect("Failed to map memory for the PCIE");

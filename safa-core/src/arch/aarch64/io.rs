@@ -19,7 +19,7 @@ pub fn allocate_io_space() -> VirtAddr {
             &"IO_SPACE",
             None,
             IO_SPACE_SIZE,
-            VMMMFlags::UNCACHABLE | VMMMFlags::WRITEABLE,
+            VMMMFlags::UNCACHABLE | VMMMFlags::WRITABLE,
             (0..IO_SPACE_SIZE.div_ceil(PAGE_SIZE))
                 .map(|i| IO_PHYS_BASE + (i * PAGE_SIZE))
                 .map(|p| Frame::containing_address(p)),

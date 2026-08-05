@@ -56,7 +56,7 @@ pub unsafe fn map_serial(vmm: &mut VirtualMemoryManager) {
 
     let phys_addr = pl011.base;
     let virt_addr = vmm
-        .map_direct_phys(&"PL011", None, phys_addr, 1, VMMMFlags::WRITEABLE)
+        .map_direct_phys(&"PL011", None, phys_addr, 1, VMMMFlags::WRITABLE)
         .expect("Failed to map Serial");
 
     unsafe { *PL011_ADDR.get() = Some(virt_addr) }

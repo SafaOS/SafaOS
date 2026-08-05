@@ -132,7 +132,7 @@ static GICITS_BASE: SyncUnsafeCell<VirtAddr> = SyncUnsafeCell::new(VirtAddr::nul
 
 unsafe fn map_gic(vmm: &VirtualMemoryManager) -> Result<(), VMMAllocError> {
     unsafe {
-        let flags = VMMMFlags::WRITEABLE | VMMMFlags::UNCACHABLE;
+        let flags = VMMMFlags::WRITABLE | VMMMFlags::UNCACHABLE;
         let hint = heap0_hint() + (1024 * 1024 * 1024 * 1024);
 
         if let Some((gicc_base, size)) = *GICC {
