@@ -186,7 +186,7 @@ pub struct TransferResponseStatus {
     pub completion_code: CompletionStatusCode,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct TransferResponseTRB {
     pub trb_ptr: PhysAddr,

@@ -1,8 +1,8 @@
-use crate::{PhysAddr, debug, write_ref};
+use crate::{PhysAddr, debug};
 
 use super::{
     super::{
-        regs::{EventRingDequePtr, InterrupterRegs},
+        regs::{EventRingDequePtr, MmioInterrupterRegs},
         utils::allocate_buffers,
     },
     trbs::TRB,
@@ -26,7 +26,7 @@ struct XHCIEventRingEntry {
 
 #[derive(Debug)]
 pub struct XHCIEventRing<'a> {
-    interrupter_registers: &'a mut InterrupterRegs,
+    interrupter_registers: MmioInterrupterRegs<'a>,
 
     trbs: &'a mut [TRB],
     trbs_phys_base: PhysAddr,
@@ -39,7 +39,7 @@ pub struct XHCIEventRing<'a> {
 }
 
 impl<'a> XHCIEventRing<'a> {
-    pub fn create(trb_count: usize, interrupter_registers: &'a mut InterrupterRegs) -> Self {
+    pub fn create(trb_count: usize, interrupter_registers: MmioInterrupterRegs<'a>) -> Self {
         let curr_ring_cycle_bit = 1;
 
         let (trbs, trbs_phys_base) = allocate_buffers::<TRB>(trb_count)
@@ -75,25 +75,19 @@ impl<'a> XHCIEventRing<'a> {
     }
     pub fn reset(&mut self) {
         // Initializes the interrupter must be done in the order given here:
-        write_ref!(
-            self.interrupter_registers.erst_sz,
-            self.ring_segment_table.len() as u32
-        );
+        self.interrupter_registers
+            .write_erst_sz(self.ring_segment_table.len() as u32);
         self.update_edrp();
-        write_ref!(
-            self.interrupter_registers.erst_base,
-            self.segment_table_base
-        );
+        self.interrupter_registers
+            .write_erst_base(self.segment_table_base);
     }
 
     /// Update edrp in the interrupter to sync with the current dequeue pointer
     pub fn update_edrp(&mut self) {
         let offset = self.dequeue_ptr * size_of::<TRB>();
         let dequeue_addr = self.trbs_phys_base + offset;
-        write_ref!(
-            self.interrupter_registers.event_ring_deque,
-            EventRingDequePtr::from_addr(dequeue_addr)
-        );
+        self.interrupter_registers
+            .write_event_ring_deque(EventRingDequePtr::from_addr(dequeue_addr));
     }
 
     pub fn dequeue_events(&mut self, mut on_dequeue: impl FnMut(TRB)) {
@@ -104,9 +98,9 @@ impl<'a> XHCIEventRing<'a> {
         self.update_edrp();
         let edrp = self
             .interrupter_registers
-            .event_ring_deque
+            .read_event_ring_deque()
             .with_handler_busy(true);
-        write_ref!(self.interrupter_registers.event_ring_deque, edrp);
+        self.interrupter_registers.write_event_ring_deque(edrp);
     }
 
     fn dequeue_trb(&mut self) -> Option<&TRB> {

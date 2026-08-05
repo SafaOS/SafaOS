@@ -28,6 +28,7 @@ pub fn main() -> ! {
 
     crate::drivers::pci::init();
 
+    #[cfg(test)]
     // NOTE: May deadlock because the journal could request memory while lock is held (this is why we allocate 4 pages).
     crate::memory::vmm::with_root(|vmm| vmm.debug_regions());
 

@@ -73,9 +73,13 @@ impl XHCITransferRing {
         self.enqueue_ptr += 1;
 
         if self.enqueue_ptr >= self.trbs_len - 1 {
-            // Update the link trb to refelect the current cycle
-            let link_trb = unsafe { &mut *self.get_trb(self.trbs_len - 1) };
-            link_trb.cmd.set_cycle_bit(self.curr_ring_cycle_bit);
+            unsafe {
+                // Update the link trb to reflect the current cycle
+                let link_trb = self.get_trb(self.trbs_len - 1);
+                let mut trb = link_trb.read_volatile();
+                trb.cmd.set_cycle_bit(self.curr_ring_cycle_bit);
+                link_trb.write_volatile(trb);
+            }
 
             // Start a new cycle
             self.enqueue_ptr = 0;

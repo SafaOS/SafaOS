@@ -1,12 +1,9 @@
 use crate::{
     PhysAddr, VirtAddr, debug,
-    drivers::{
-        utils::{read_ref, write_ref},
-        xhci::{
-            devices::XHCIDeviceCtx32,
-            rings::{command::XHCICommandRing, event::XHCIEventRing},
-            utils::allocate_buffers_frame,
-        },
+    drivers::xhci::{
+        devices::XHCIDeviceCtx32,
+        rings::{command::XHCICommandRing, event::XHCIEventRing},
+        utils::allocate_buffers_frame,
     },
     memory::{
         AlignTo,
@@ -18,89 +15,102 @@ use crate::{
 use bitflags::bitflags;
 use core::fmt::Display;
 
+#[derive(derive_mmio::Mmio)]
 #[repr(C)]
 pub struct CapsReg {
+    #[mmio(PureRead)]
     reg_length: u8,
     _reserved0: u8,
+    #[mmio(PureRead)]
     version_number: u8,
+    _reserved1: u8,
+    #[mmio(PureRead)]
     hcsparams_1: u32,
+    #[mmio(PureRead)]
     hcsparams_2: u32,
+    #[mmio(PureRead)]
     hcsparams_3: u32,
+    #[mmio(PureRead)]
     hccparams_1: u32,
+    #[mmio(PureRead)]
     doorbell_off: u32,
+    #[mmio(PureRead)]
     runtime_off: u32,
+    #[mmio(PureRead)]
     hccparams_2: u32,
 }
 
-impl CapsReg {
-    pub fn operational_regs_ptr(&self) -> *mut OperationalRegs {
-        let caps_ptr = self as *const _ as *const u8;
+impl CapsReg {}
+
+impl<'a> MmioCapsReg<'a> {
+    pub fn operational_regs(&self) -> MmioOperationalRegs<'static> {
         unsafe {
-            let ptr = caps_ptr.add(self.reg_length as usize);
-            ptr as *mut OperationalRegs
+            let caps_ptr = self.ptr().cast::<u8>();
+            let ptr = caps_ptr.add(self.read_reg_length() as usize);
+            OperationalRegs::new_mmio(ptr.cast())
         }
     }
 
-    pub fn runtime_regs_ptr(&self) -> *mut RuntimeRegs {
-        let caps_ptr = self as *const _ as *const u8;
+    pub fn runtime_regs(&self) -> MmioRuntimeRegs<'static> {
         unsafe {
-            let ptr = caps_ptr.add(self.runtime_off as usize);
-            ptr as *mut RuntimeRegs
+            let caps_ptr = self.ptr().cast::<u8>();
+            let ptr = caps_ptr.add(self.read_runtime_off() as usize);
+            RuntimeRegs::new_mmio(ptr.cast())
         }
     }
 
-    pub fn doorbells_base(&mut self) -> VirtAddr {
-        let caps_ptr = self as *const _ as *const u8;
+    pub fn doorbells_base(&self) -> *mut DoorbellRegister {
         unsafe {
-            let ptr = caps_ptr.add(self.doorbell_off as usize);
-            let addr = VirtAddr::from_ptr(ptr);
-            addr
+            let caps_ptr = self.ptr().cast::<u8>();
+            caps_ptr
+                .add(self.read_doorbell_off() as usize)
+                .cast::<DoorbellRegister>()
         }
     }
 
-    pub const fn max_device_slots(&self) -> usize {
-        (self.hcsparams_1 & 0xFF) as usize
+    pub fn max_device_slots(&self) -> usize {
+        (self.read_hcsparams_1() & 0xFF) as usize
     }
-    pub const fn max_interrupts(&self) -> u8 {
-        (self.hcsparams_1 >> 8) as u8
+    pub fn max_interrupts(&self) -> u8 {
+        (self.read_hcsparams_1() >> 8) as u8
     }
-    pub const fn max_ports(&self) -> u8 {
-        (self.hcsparams_1 >> 24) as u8
+    pub fn max_ports(&self) -> u8 {
+        (self.read_hcsparams_1() >> 24) as u8
     }
-    pub const fn interrupt_schd_t(&self) -> u8 {
-        (self.hcsparams_2 as u8) & 0xF
+    pub fn interrupt_schd_t(&self) -> u8 {
+        (self.read_hcsparams_2() as u8) & 0xF
     }
-    pub const fn erst_max(&self) -> u8 {
-        ((self.hcsparams_2 >> 4) as u8) & 0xF
+    pub fn erst_max(&self) -> u8 {
+        ((self.read_hcsparams_2() >> 4) as u8) & 0xF
     }
-    pub const fn max_scratchpad_buffers(&self) -> usize {
-        (((self.hcsparams_2 >> 21) as u8) & 0x1F) as usize
+    pub fn max_scratchpad_buffers(&self) -> usize {
+        (((self.read_hcsparams_2() >> 21) as u8) & 0x1F) as usize
     }
-    pub const fn addressing_64bits(&self) -> bool {
-        (self.hccparams_1 & 0x1) != 0
+    pub fn addressing_64bits(&self) -> bool {
+        (self.read_hccparams_1() & 0x1) != 0
     }
-    pub const fn bandwidth_negotiation(&self) -> bool {
-        ((self.hccparams_1 >> 1) & 0x1) != 0
+    pub fn bandwidth_negotiation(&self) -> bool {
+        ((self.read_hccparams_1() >> 1) & 0x1) != 0
     }
-    pub const fn context_sz_64bytes(&self) -> bool {
-        ((self.hccparams_1 >> 2) & 0x1) != 0
+    pub fn context_sz_64bytes(&self) -> bool {
+        ((self.read_hccparams_1() >> 2) & 0x1) != 0
     }
-    pub const fn port_power_ctrl(&self) -> bool {
-        ((self.hccparams_1 >> 3) & 0x1) != 0
+    pub fn port_power_ctrl(&self) -> bool {
+        ((self.read_hccparams_1() >> 3) & 0x1) != 0
     }
-    pub const fn port_indicator_ctrl(&self) -> bool {
-        ((self.hccparams_1 >> 4) & 0x1) != 0
+    pub fn port_indicator_ctrl(&self) -> bool {
+        ((self.read_hccparams_1() >> 4) & 0x1) != 0
     }
-    pub const fn light_reset_support(&self) -> bool {
-        ((self.hccparams_1 >> 5) & 0x1) != 0
+    pub fn light_reset_support(&self) -> bool {
+        ((self.read_hccparams_1() >> 5) & 0x1) != 0
     }
 }
 
-impl Display for CapsReg {
+impl<'a> Display for MmioCapsReg<'a> {
     #[rustfmt::skip]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "XHCI Captabilites Register @{:?}:", VirtAddr::from_ptr(self as *const _))?;
-        writeln!(f, "\tLength                            : {:#x}", self.reg_length)?;
+        writeln!(f, "XHCI Captabilites Register @{:?}:", VirtAddr::from_ptr(unsafe {self.ptr()}))?;
+        writeln!(f, "\tLength                            : {:#x}", self.read_reg_length())?;
         writeln!(f, "\tMax Device Slots                  : {}", self.max_device_slots())?;
         writeln!(f, "\tMax Interrupts                    : {}", self.max_interrupts())?;
         writeln!(f, "\tMax Ports                         : {}", self.max_ports())?;
@@ -260,6 +270,7 @@ bitflags! {
     }
 }
 
+#[derive(Debug, derive_mmio::Mmio)]
 #[repr(C)]
 pub struct OperationalRegs {
     pub usbcmd: USBCmd,
@@ -274,45 +285,45 @@ pub struct OperationalRegs {
     _reserved2: [u32; 49],
 }
 
-impl Display for OperationalRegs {
+impl Display for MmioOperationalRegs<'_> {
     #[rustfmt::skip]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        writeln!(f, "XHCI Operational Registers @{:?}:", VirtAddr::from_ptr(self as *const _))?;
-        writeln!(f, "\tusbcmd    : {:?}", self.usbcmd)?;
-        writeln!(f, "\tusbstatus : {:?}", self.usbstatus)?;
-        writeln!(f, "\tPage Size : {:#x}", self.page_size)?;
-        writeln!(f, "\tdnctrl    : {:#x}", self.dnctrl)?;
-        writeln!(f, "\tcrcr      : {:#x}", self.crcr)?;
-        writeln!(f, "\tdcaap     : {:?}", self.dcbaap)?;
-        write!(f,   "\tconfig    : {:#x}", self.config)?;
+        writeln!(f, "XHCI Operational Registers @{:?}:", VirtAddr::from_ptr(unsafe { self.ptr() }))?;
+        writeln!(f, "\tusbcmd    : {:?}", self.read_usbcmd())?;
+        writeln!(f, "\tusbstatus : {:?}", self.read_usbstatus())?;
+        writeln!(f, "\tPage Size : {:#x}", self.read_page_size())?;
+        writeln!(f, "\tdnctrl    : {:#x}", self.read_dnctrl())?;
+        writeln!(f, "\tcrcr      : {:#x}", self.read_crcr())?;
+        writeln!(f, "\tdcaap     : {:?}", self.read_dcbaap())?;
+        write!(f,   "\tconfig    : {:#x}", self.read_config())?;
         Ok(())
     }
 }
 
-impl OperationalRegs {
-    pub unsafe fn port_registers(&mut self, port_index: u8) -> &'static mut PortRegisters {
-        let ptr = self as *mut Self;
+impl MmioOperationalRegs<'_> {
+    pub unsafe fn port_registers(&mut self, port_index: u8) -> MmioPortRegisters<'static> {
+        let ptr = unsafe { self.ptr() };
         unsafe {
             let port_reg_ptr = ptr
                 .byte_add(0x400usize + (size_of::<PortRegisters>() * port_index as usize))
                 as *mut PortRegisters;
-            &mut *port_reg_ptr
+            PortRegisters::new_mmio(port_reg_ptr)
         }
     }
 
     /// Reset a port at index `port_index`
     pub unsafe fn reset_port(&mut self, is_usb3: bool, port_index: u8) -> bool {
-        let port_regs = unsafe { self.port_registers(port_index) };
-        let mut port_sc = read_ref!(port_regs.port_sc);
+        let mut port_regs = unsafe { self.port_registers(port_index) };
+        let mut port_sc = port_regs.read_port_sc();
 
         if !port_sc.pp() {
             // Power the port up
-            write_ref!(port_regs.port_sc, port_sc.with_pp(true));
+            port_regs.write_port_sc(port_sc.with_pp(true));
 
             // wait 20ms for power to stabilize
             sleep!(20 ms);
 
-            port_sc = read_ref!(port_regs.port_sc);
+            port_sc = port_regs.read_port_sc();
             if !port_sc.pp() {
                 warn!("xHCI port {} didn't power up, stopping reset", port_index);
                 return false;
@@ -320,13 +331,14 @@ impl OperationalRegs {
         }
 
         // Clear any lingering status change bits before initiating the reset
-        port_sc = read_ref!(port_regs.port_sc)
+        port_sc = port_regs
+            .read_port_sc()
             .with_csc(true)
             .with_pec(true)
             .with_prc(true);
 
-        write_ref!(port_regs.port_sc, port_sc);
-        port_sc = read_ref!(port_regs.port_sc);
+        port_regs.write_port_sc(port_sc);
+        port_sc = port_regs.read_port_sc();
 
         if is_usb3 {
             // warm reset for usb3
@@ -336,11 +348,11 @@ impl OperationalRegs {
             port_sc.set_pr(true);
         }
 
-        write_ref!(port_regs.port_sc, port_sc);
+        port_regs.write_port_sc(port_sc);
 
         if !sleep_until!(
             100 ms,
-            (!is_usb3 && read_ref!(port_regs.port_sc).prc()) || (is_usb3 && read_ref!(port_regs.port_sc).wrc())
+            (!is_usb3 && port_regs.read_port_sc().prc()) || (is_usb3 && port_regs.read_port_sc().wrc())
         ) {
             warn!("xHCI port {port_index}: reset timeout after 100ms",);
             return false;
@@ -349,7 +361,7 @@ impl OperationalRegs {
         // wait 5ms for hardware to do it's thing
         sleep!(5 ms);
 
-        port_sc = read_ref!(port_regs.port_sc);
+        port_sc = port_regs.read_port_sc();
         // Clear the reset completion and status change bits
         port_sc = port_sc
             /* clear port reset change */
@@ -362,13 +374,13 @@ impl OperationalRegs {
             .with_pec(true)
             /* leave port unenabled */
             .with_ped(false);
-        write_ref!(port_regs.port_sc, port_sc);
+        port_regs.write_port_sc(port_sc);
 
         // wait 5ms for hardware to do it's thing
         sleep!(5 ms);
 
         // read to check if the port was reset successfully
-        port_sc = read_ref!(port_regs.port_sc);
+        port_sc = port_regs.read_port_sc();
 
         // This case could happen when the port has been reset after
         // a device disconnect event, and no device has connected since.
@@ -551,7 +563,7 @@ pub struct PortSCReg {
     wpr: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_mmio::Mmio)]
 #[repr(C)]
 pub struct PortRegisters {
     pub port_sc: PortSCReg,
@@ -605,7 +617,7 @@ impl EventRingDequePtr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_mmio::Mmio)]
 #[repr(C)]
 pub struct InterrupterRegs {
     /// Interrupt management
@@ -620,18 +632,26 @@ pub struct InterrupterRegs {
     pub event_ring_deque: EventRingDequePtr,
 }
 
+#[derive(Debug, derive_mmio::Mmio)]
 #[repr(C)]
 pub struct RuntimeRegs {
     /// Micro Frame index
     mf_index: u32,
     /// reserved
     __: [u32; 7],
+    #[mmio(Inner)]
     interrupter_registers: [InterrupterRegs; 1024],
 }
 
-impl RuntimeRegs {
-    pub fn interrupter_ptr(&mut self, index: usize) -> *mut InterrupterRegs {
-        &raw mut self.interrupter_registers[index]
+impl<'a> MmioRuntimeRegs<'a> {
+    pub fn interrupter(&mut self, index: usize) -> MmioInterrupterRegs<'a> {
+        unsafe {
+            InterrupterRegs::new_mmio(
+                self.interrupter_registers(index)
+                    .expect("Interrupter out of bounds")
+                    .ptr(),
+            )
+        }
     }
 }
 
@@ -642,22 +662,34 @@ pub struct DoorbellReg {
     db_stream_id: u16,
 }
 
+#[derive(Debug, derive_mmio::Mmio)]
+#[repr(C)]
+pub struct DoorbellRegister {
+    value: DoorbellReg,
+}
+
 #[derive(Debug)]
 pub struct XHCIDoorbellManager<'a> {
-    doorbells: &'a mut [DoorbellReg],
+    doorbells: *mut DoorbellRegister,
+    max_device_slots: usize,
+    _marker: core::marker::PhantomData<&'a mut DoorbellRegister>,
 }
 
 impl<'a> XHCIDoorbellManager<'a> {
-    pub fn new(base: VirtAddr, max_device_slots: usize) -> Self {
-        let doorbells_ptr = base.into_ptr::<DoorbellReg>();
-        let doorbells = unsafe { core::slice::from_raw_parts_mut(doorbells_ptr, max_device_slots) };
-        Self { doorbells }
+    pub fn new(base: *mut DoorbellRegister, max_device_slots: usize) -> Self {
+        Self {
+            doorbells: base,
+            max_device_slots,
+            _marker: core::marker::PhantomData,
+        }
     }
 
     pub fn ring_doorbell(&mut self, doorbell: u8, target: u8) {
-        let doorbell = &mut self.doorbells[doorbell as usize];
+        assert!((doorbell as usize) < self.max_device_slots);
         unsafe {
-            (doorbell as *mut DoorbellReg).write_volatile(doorbell.with_db_target(target));
+            let mut doorbell = DoorbellRegister::new_mmio(self.doorbells.add(doorbell as usize));
+            let value = doorbell.read_value();
+            doorbell.write_value(value.with_db_target(target));
         }
     }
 
@@ -675,11 +707,11 @@ impl<'a> XHCIDoorbellManager<'a> {
 }
 
 #[derive(Debug)]
-/// A general wrapper around XHCI's registers such as captabilities, operationals, and runtime
+/// A general wrapper around XHCI's registers such as capabilities, operationals, and runtime
 pub struct XHCIRegisters<'s> {
-    caps_regs: *mut CapsReg,
-    op_regs: *mut OperationalRegs,
-    runtime_regs: *mut RuntimeRegs,
+    caps_regs: MmioCapsReg<'s>,
+    op_regs: MmioOperationalRegs<'s>,
+    runtime_regs: MmioRuntimeRegs<'s>,
     // TODO: free the frames when this goes out of scope? except that currently it never does
     /// used to store the scratchpad_buffers pointers and the dcbaa (scratchpad_buffers, dcbaa)
     buffers_frame: Frame,
@@ -691,12 +723,12 @@ impl<'s> XHCIRegisters<'s> {
     /// Creates a new XHCI Register manager that owns the XHCI Registers area
     /// resets the XHCI controller to zero status
     /// unsafe because it asseums ownership of the XHCI registers
-    pub unsafe fn new(caps: *mut CapsReg) -> Self {
+    pub unsafe fn new(caps: MmioCapsReg<'s>) -> Self {
         unsafe {
             let mut this = Self {
+                op_regs: caps.operational_regs(),
+                runtime_regs: caps.runtime_regs(),
                 caps_regs: caps,
-                op_regs: (*caps).operational_regs_ptr(),
-                runtime_regs: (*caps).runtime_regs_ptr(),
                 buffers_frame: frame_allocator::allocate_frame()
                     .expect("failed to allocate frame for the XHCI buffers"),
                 scratchpad_buffers: None,
@@ -707,16 +739,16 @@ impl<'s> XHCIRegisters<'s> {
         }
     }
 
-    pub unsafe fn capabilities(&self) -> &'static CapsReg {
-        unsafe { &*self.caps_regs }
+    pub unsafe fn capabilities<'sel>(&'sel self) -> MmioCapsReg<'sel> {
+        unsafe { self.caps_regs.clone() }
     }
 
-    pub unsafe fn operational_regs(&mut self) -> &'static mut OperationalRegs {
-        unsafe { &mut *self.op_regs }
+    pub unsafe fn operational_regs(&mut self) -> &mut MmioOperationalRegs<'s> {
+        &mut self.op_regs
     }
 
-    unsafe fn runtime_regs<'a>(&mut self) -> &'a mut RuntimeRegs {
-        unsafe { &mut *self.runtime_regs }
+    unsafe fn runtime_regs(&mut self) -> &mut MmioRuntimeRegs<'s> {
+        &mut self.runtime_regs
     }
 
     pub unsafe fn set_dcbaa_entry(&mut self, slot_id: u8, entry: PhysAddr) {
@@ -742,31 +774,28 @@ impl<'s> XHCIRegisters<'s> {
     pub unsafe fn acknowledge_irq(&mut self, interrupter: u8) {
         let op_regs = unsafe { self.operational_regs() };
         // Write the USBSts::EINT bit to clear it, it is RW1C meaning write 1 to clear
-        write_ref!(op_regs.usbstatus, USBSts::EINT);
+        op_regs.write_usbstatus(USBSts::EINT);
 
         let runtime_regs = unsafe { self.runtime_regs() };
-        let interrupt_reg = unsafe { &mut *runtime_regs.interrupter_ptr(interrupter as usize) };
+        let mut interrupt_reg = runtime_regs.interrupter(interrupter as usize);
         // Similariy we clear the iman interrupt pending bit by writing 1 to it
-        let iman = interrupt_reg.iman | XHCIIman::INTERRUPT_PENDING;
-        write_ref!(interrupt_reg.iman, iman);
+        let iman = interrupt_reg.read_iman() | XHCIIman::INTERRUPT_PENDING;
+        interrupt_reg.write_iman(iman);
     }
 
     /// Starts the XHCI controller
     pub unsafe fn start(&mut self) {
         let regs = unsafe { self.operational_regs() };
-        write_ref!(
-            regs.usbcmd,
-            regs.usbcmd | USBCmd::RUN | USBCmd::INTERRUPT_ENABLE
-        );
+        regs.write_usbcmd(regs.read_usbcmd() | USBCmd::RUN | USBCmd::INTERRUPT_ENABLE);
 
-        if !sleep_until!(1000 ms, !read_ref!(regs.usbstatus).contains(USBSts::HCHALTED)) {
+        if !sleep_until!(1000 ms, !regs.read_usbstatus().contains(USBSts::HCHALTED)) {
             panic!(
                 "timeout after 1 second while resetting the XHCI, HCHALTED did not clear: {:?}",
-                read_ref!(regs.usbstatus)
+                regs.read_usbstatus()
             )
         }
 
-        assert!(!read_ref!(regs.usbstatus).contains(USBSts::NOT_READY));
+        assert!(!regs.read_usbstatus().contains(USBSts::NOT_READY));
     }
 
     #[allow(unused_unsafe)]
@@ -776,33 +805,33 @@ impl<'s> XHCIRegisters<'s> {
         unsafe {
             let regs = self.operational_regs();
 
-            write_ref!(regs.usbcmd, regs.usbcmd & !USBCmd::RUN);
+            regs.write_usbcmd(regs.read_usbcmd() & !USBCmd::RUN);
 
-            if !sleep_until!(200 ms, read_ref!(regs.usbstatus).contains(USBSts::HCHALTED)) {
+            if !sleep_until!(200 ms, regs.read_usbstatus().contains(USBSts::HCHALTED)) {
                 panic!(
                     "timeout after 200ms while resetting the XHCI, HCHALTED did not set: {:?}",
-                    read_ref!(regs.usbstatus)
+                    regs.read_usbstatus()
                 )
             }
 
             // reset the controller
-            write_ref!(regs.usbcmd, read_ref!(regs.usbcmd) | USBCmd::HCRESET);
+            regs.write_usbcmd(regs.read_usbcmd() | USBCmd::HCRESET);
 
             if !sleep_until!(1000 ms,
-                !read_ref!(regs.usbcmd).contains(USBCmd::HCRESET)
-                                && !read_ref!(regs.usbstatus).contains(USBSts::NOT_READY)
+                !regs.read_usbcmd().contains(USBCmd::HCRESET)
+                                && !regs.read_usbstatus().contains(USBSts::NOT_READY)
             ) {
                 panic!(
                     "timeout after 1000ms while resetting controller, controller was never ready: {:?}",
-                    read_ref!(regs.usbcmd),
+                    regs.read_usbcmd(),
                 )
             }
             // asserts the controller was reset
-            assert_eq!(regs.usbcmd, USBCmd::empty());
-            assert_eq!(regs.dnctrl, 0);
-            assert_eq!(regs.crcr, 0);
-            assert_eq!(regs.dcbaap, PhysAddr::null());
-            assert_eq!(regs.config, 0);
+            assert_eq!(regs.read_usbcmd(), USBCmd::empty());
+            assert_eq!(regs.read_dnctrl(), 0);
+            assert_eq!(regs.read_crcr(), 0);
+            assert_eq!(regs.read_dcbaap(), PhysAddr::null());
+            assert_eq!(regs.read_config(), 0);
             debug!(XHCIRegisters, "XHCI Reset\n{}", regs,);
         }
     }
@@ -813,13 +842,11 @@ impl<'s> XHCIRegisters<'s> {
         event_ring: &mut XHCIEventRing,
         command_ring: &XHCICommandRing,
     ) {
+        let max_device_slots = unsafe { self.capabilities() }.max_device_slots() as u32;
         let op_regs = unsafe { self.operational_regs() };
-        write_ref!(
-            op_regs.config,
-            self.capabilities().max_device_slots() as u32
-        );
+        op_regs.write_config(max_device_slots);
         // Enable device notifications
-        write_ref!(op_regs.dnctrl, 0xFFFF);
+        op_regs.write_dnctrl(0xFFFF);
         self.configure_dcbaa();
         self.configure_crcr(command_ring);
 
@@ -828,24 +855,24 @@ impl<'s> XHCIRegisters<'s> {
 
     fn configure_crcr(&mut self, command_ring: &XHCICommandRing) {
         let op_regs = unsafe { self.operational_regs() };
-        write_ref!(
-            op_regs.crcr,
-            *command_ring.base_phys_addr() | command_ring.current_ring_cycle() as usize
+        op_regs.write_crcr(
+            *command_ring.base_phys_addr() | command_ring.current_ring_cycle() as usize,
         );
     }
 
     fn configure_dcbaa(&mut self) {
         let caps = unsafe { self.capabilities() };
-        let op_regs = unsafe { self.operational_regs() };
+        let max_device_slots = caps.max_device_slots();
+        let max_scratchpad_buffers = caps.max_scratchpad_buffers();
 
         // Allocates and sets the dcbaa
-        assert!(caps.max_device_slots() * size_of::<PhysAddr>() <= PAGE_SIZE);
+        assert!(max_device_slots * size_of::<PhysAddr>() <= PAGE_SIZE);
 
         let (dcbaa_slice, dcbaa_phys_addr) =
-            allocate_buffers_frame::<PhysAddr>(self.buffers_frame, 0, caps.max_device_slots());
+            allocate_buffers_frame::<PhysAddr>(self.buffers_frame, 0, max_device_slots);
 
         // Allocates the scratchpad buffers array if neccassary
-        if caps.max_scratchpad_buffers() > 0 {
+        if max_scratchpad_buffers > 0 {
             // uses the same frame to store the scratchpad_buffers pointers that we used to store dcbaa entries
             // it is safe to do so as the max number of dcbaa entries is 255,
             // and the max numbers of scratchpad_buffers is 15, (255 + 15) * 8 is very much less then the maximum amount of bytes a frame (page) can hold (4096)
@@ -855,7 +882,7 @@ impl<'s> XHCIRegisters<'s> {
                 (dcbaa_phys_addr + dcbaa_slice.len())
                     .to_next_multiple_of(64)
                     .into_raw(),
-                caps.max_scratchpad_buffers(),
+                max_scratchpad_buffers,
             );
 
             for phys_addr in scratchpad_buffers.iter_mut() {
@@ -868,15 +895,16 @@ impl<'s> XHCIRegisters<'s> {
         }
 
         self.dcbaa = dcbaa_slice;
-        write_ref!(op_regs.dcbaap, dcbaa_phys_addr);
+        let op_regs = unsafe { self.operational_regs() };
+        op_regs.write_dcbaap(dcbaa_phys_addr);
     }
 
     fn configure_runtime(&mut self, event_ring: &mut XHCIEventRing) {
         event_ring.reset();
         let runtime_regs = unsafe { self.runtime_regs() };
-        let interrupt_reg = unsafe { &mut *runtime_regs.interrupter_ptr(0) };
+        let mut interrupt_reg = runtime_regs.interrupter(0);
         // Enable interrupts
-        write_ref!(interrupt_reg.iman, XHCIIman::INTERRUPT_ENABLE);
+        interrupt_reg.write_iman(XHCIIman::INTERRUPT_ENABLE);
 
         // Clear any pending interrupts
         unsafe {

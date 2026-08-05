@@ -30,9 +30,10 @@ impl<'s> XHCICommandRing<'s> {
         }
     }
 
-    pub fn enqueue(&mut self, mut trb: TRB) {
+    pub fn enqueue(&mut self, mut trb: TRB) -> PhysAddr {
         trb.cmd.set_cycle_bit(self.curr_ring_cycle_bit);
 
+        let trb_addr = self.trbs_phys_addr + self.enqueue_ptr * size_of::<TRB>();
         self.trbs[self.enqueue_ptr] = trb;
         self.enqueue_ptr += 1;
 
@@ -45,6 +46,8 @@ impl<'s> XHCICommandRing<'s> {
             self.enqueue_ptr = 0;
             self.curr_ring_cycle_bit = (!self.curr_ring_cycle_bit) & 0x1;
         }
+
+        trb_addr
     }
 
     pub fn base_phys_addr(&self) -> PhysAddr {

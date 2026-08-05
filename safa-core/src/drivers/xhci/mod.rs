@@ -1,14 +1,12 @@
-use core::{
-    cell::UnsafeCell,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use core::{cell::UnsafeCell, num::NonZero, ptr::NonNull};
 
-use super::{interrupts::IRQInfo, utils::read_ref};
-use alloc::{collections::vec_deque::VecDeque, vec::Vec};
+use super::interrupts::IRQInfo;
+use alloc::{boxed::Box, collections::vec_deque::VecDeque, vec::Vec};
 use regs::{CapsReg, XHCIDoorbellManager};
 use rings::{command::XHCICommandRing, event::XHCIEventRing};
 
 use crate::{
+    PhysAddr,
     arch::{with_interrupts, without_interrupts},
     debug,
     drivers::{
@@ -39,7 +37,6 @@ use crate::{
     memory::frame_allocator::{self},
     process::current::kernel_thread_spawn,
     scheduler::wait_queue::WaitQueue,
-    sleep_until,
     thread::Tid,
     utils::locks::{Mutex, RwLock, RwLockReadGuard, SpinLock},
     warn,
@@ -85,7 +82,7 @@ fn handle_port_status_change(xhci: &XHCI, event: PortStatusChangeTRB) {
     let op_regs = unsafe { xhci.regs.as_mut_unchecked().operational_regs() };
     let port_index = event.parameter.port_index();
     let port_regs = unsafe { op_regs.port_registers(port_index) };
-    let port_sc = read_ref!(port_regs.port_sc);
+    let port_sc = port_regs.read_port_sc();
 
     let is_connected = port_sc.ccs();
     if port_sc.csc() {
@@ -138,6 +135,8 @@ fn on_interrupt_thread(_: Tid, xhci: &XHCI) -> ! {
                     }
                     EventResponseTRB::TransferResponse(res) => {
                         let slot_id = res.cmd.slot_id();
+                        let endpoint_id = res.cmd.endpoint_id();
+
                         if let Some(mut connected_devices) = xhci.connected_devices.try_write() {
                             let target_device = connected_devices
                                 .iter_mut()
@@ -151,7 +150,7 @@ fn on_interrupt_thread(_: Tid, xhci: &XHCI) -> ! {
                         }
 
                         xhci.responses_manager
-                            .add_transfer_response(&mut events_pool, res)
+                            .add_transfer_response(res, slot_id, endpoint_id)
                     }
                     EventResponseTRB::PortStatusChange(event) => {
                         let code = event.status.completion_code();
@@ -207,7 +206,6 @@ impl<'s> InterruptReceiver for XHCI<'s> {
 
 #[derive(Debug)]
 struct XHCIResponsesPool {
-    transfers: Vec<TransferResponseTRB>,
     commands: Vec<CmdResponseTRB>,
 }
 
@@ -215,8 +213,8 @@ struct XHCIResponsesPool {
 #[derive(Debug)]
 pub struct XHCIResponseQueue<'s> {
     events: Mutex<XHCIResponsesPool>,
-    transfer_events_count: AtomicUsize,
-    command_events_count: AtomicUsize,
+    transfer_wait_queue: Mutex<WaitQueue<2, (u8, u8, NonNull<TransferResponseTRB>)>>,
+    command_wait_queue: Mutex<WaitQueue<2>>,
 
     doorbell_manager: Mutex<XHCIDoorbellManager<'s>>,
     commands_ring: Mutex<XHCICommandRing<'s>>,
@@ -231,46 +229,63 @@ impl<'s> XHCIResponseQueue<'s> {
             commands_ring: Mutex::new(commands_ring),
             doorbell_manager: Mutex::new(doorbell_manager),
             events: Mutex::new(XHCIResponsesPool {
-                transfers: Vec::new(),
                 commands: Vec::new(),
             }),
-            transfer_events_count: AtomicUsize::new(0),
-            command_events_count: AtomicUsize::new(0),
+            transfer_wait_queue: Mutex::new(WaitQueue::new()),
+            command_wait_queue: Mutex::new(WaitQueue::new()),
         }
     }
 
     fn add_command_response(&self, pool: &mut XHCIResponsesPool, response: CmdResponseTRB) {
         pool.commands.push(response);
-        self.command_events_count.fetch_add(1, Ordering::Release);
+        self.command_wait_queue
+            .lock()
+            .wake_n_on_condition(|_| true, 1);
     }
 
-    fn add_transfer_response(&self, pool: &mut XHCIResponsesPool, response: TransferResponseTRB) {
-        pool.transfers.push(response);
-        self.transfer_events_count.fetch_add(1, Ordering::Relaxed);
+    fn add_transfer_response(&self, response: TransferResponseTRB, slot_id: u8, endpoint_id: u8) {
+        self.transfer_wait_queue.lock().wake_n_on_condition(
+            |(slot, endpoint, storage)| {
+                if *slot == slot_id && *endpoint == endpoint_id {
+                    unsafe { *storage.as_mut() = response };
+                    true
+                } else {
+                    false
+                }
+            },
+            1,
+        );
     }
 
-    unsafe fn wait_for_command_response(
-        &self,
-        cmds_len_before: usize,
-    ) -> Result<CmdResponseTRB, XHCIError> {
-        if !sleep_until!(200 ms, self.command_events_count.load(Ordering::Acquire) != cmds_len_before)
-        {
-            return Err(XHCIError::NoCommandResponse);
-        }
-        let response = self.events.lock().commands.drain(..).last().unwrap();
-
-        Ok(response)
+    fn take_command_response(&self, trb_pointer: PhysAddr) -> Option<CmdResponseTRB> {
+        let mut pool = self.events.lock();
+        let index = pool
+            .commands
+            .iter()
+            .position(|response| response.trb_pointer == trb_pointer)?;
+        Some(pool.commands.swap_remove(index))
     }
 
     /// Enqieue a TRB command in the XHCI command ring, and rings the command doorbell, then returns the response TRB
     pub fn send_command(&self, trb: trbs::TRB) -> Result<CmdResponseTRB, XHCIError> {
-        let mut doorbell = self.doorbell_manager.lock();
-        let cmds_len_before = self.command_events_count.load(Ordering::Relaxed);
+        let response = without_interrupts(|| {
+            let wait = self.command_wait_queue.prepare_wait();
+            let mut doorbell = self.doorbell_manager.lock();
 
-        self.commands_ring.lock().enqueue(trb);
-        doorbell.ring_command_doorbell();
+            let trb_pointer = self.commands_ring.lock().enqueue(trb);
+            doorbell.ring_command_doorbell();
+            drop(doorbell);
 
-        let response = unsafe { self.wait_for_command_response(cmds_len_before) }?;
+            if let Some(response) = self.take_command_response(trb_pointer) {
+                drop(wait);
+                return Ok(response);
+            }
+
+            wait.enter_wait((), NonZero::new(200))
+                .map_err(|_| XHCIError::NoCommandResponse)?;
+            self.take_command_response(trb_pointer)
+                .ok_or(XHCIError::NoCommandResponse)
+        })?;
 
         let code = response.status.code();
         if code != CompletionStatusCode::Success {
@@ -284,18 +299,26 @@ impl<'s> XHCIResponseQueue<'s> {
         &self,
         transfer_ring: &XHCITransferRing,
     ) -> Result<TransferResponseTRB, XHCIError> {
+        let slot_id = transfer_ring.doorbell_id();
+        let endpoint_id = 1;
+
+        let wait = self.transfer_wait_queue.prepare_wait();
+        let mut response_storage: Box<TransferResponseTRB> =
+            Box::new(unsafe { core::mem::zeroed() });
+
         let mut doorbell = self.doorbell_manager.lock();
-        let transfer_events_before = self.transfer_events_count.load(Ordering::Acquire);
+        doorbell.ring_control_endpoint_doorbell(slot_id);
 
-        doorbell.ring_control_endpoint_doorbell(transfer_ring.doorbell_id());
+        drop(doorbell);
+        wait.enter_wait(
+            (slot_id, endpoint_id, unsafe {
+                NonNull::new_unchecked(Box::as_mut_ptr(&mut response_storage))
+            }),
+            NonZero::new(400),
+        )
+        .map_err(|_| XHCIError::NoTransferResponse)?;
 
-        if !sleep_until!(400 ms, self.transfer_events_count.load(Ordering::Acquire) != transfer_events_before)
-        {
-            return Err(XHCIError::NoTransferResponse);
-        }
-
-        let response = self.events.lock().transfers.drain(..).last().unwrap();
-        self.transfer_events_count.fetch_sub(1, Ordering::Release);
+        let response = *response_storage;
 
         let code = response.status.completion_code();
         if code != CompletionStatusCode::Success {
@@ -405,8 +428,6 @@ impl<'s> XHCIResponseQueue<'s> {
                 device.slot_id(),
                 device.port_id(),
             );
-            frame_allocator::deallocate_frame(frame);
-            return Err(e);
         }
 
         // copy the output
@@ -493,14 +514,18 @@ impl<'s> XHCI<'s> {
     pub fn prob(&self) {
         let regs = unsafe { self.regs.as_mut_unchecked() };
         let caps = unsafe { regs.capabilities() };
+        let max_ports = caps.max_ports();
+
         let op_regs = unsafe { regs.operational_regs() };
+
         // Resettng all the root hub ports
         // TODO: detect connections
-        for i in 0..caps.max_ports() {
+        for i in 0..max_ports {
             let port_regs = unsafe { op_regs.port_registers(i) };
-            let port_sc = read_ref!(port_regs.port_sc);
+            let port_sc = port_regs.read_port_sc();
 
             if port_sc.ccs() && port_sc.csc() {
+                debug!(XHCI, "prob: {i} {port_sc:?} {}", port_sc.ccs());
                 handle_port_conn(self, i, !port_sc.ccs());
             }
         }
@@ -511,11 +536,12 @@ impl<'s> XHCI<'s> {
     pub fn setup_device(&self, port_index: u8) -> Result<(), XHCIError> {
         let regs = unsafe { self.regs.as_mut_unchecked() };
         let cap_regs = unsafe { regs.capabilities() };
-        let op_regs = unsafe { regs.operational_regs() };
-        let port_regs = unsafe { op_regs.port_registers(port_index) };
         let context_sz_64bytes = cap_regs.context_sz_64bytes();
 
-        let port_sc = read_ref!(port_regs.port_sc);
+        let op_regs = unsafe { regs.operational_regs() };
+        let port_regs = unsafe { op_regs.port_registers(port_index) };
+
+        let port_sc = port_regs.read_port_sc();
         let port_speed = port_sc.port_speed();
         let max_initial_packet_size = port_speed.max_control_transfer_initial_packet_size();
 
@@ -564,7 +590,11 @@ impl<'s> XHCI<'s> {
                 unsafe {
                     let dest_input_device_ctx = device.get_input_device_ctx();
                     let src_out_device_ctx = regs.get_dcbaa_entry_as_ptr(device.slot_id());
-                    dest_input_device_ctx.copy_from(src_out_device_ctx, 1);
+
+                    core::ptr::write_volatile(
+                        dest_input_device_ctx,
+                        core::ptr::read_volatile(src_out_device_ctx),
+                    )
                 }
             };
         }
@@ -723,10 +753,13 @@ impl<'s> PCIDevice for XHCI<'s> {
 
         // Create the XHCI Driver
         let caps_ptr = virt_base_addr.into_ptr::<CapsReg>();
-        let caps_regs = unsafe { &mut *caps_ptr };
+        let caps_regs = unsafe { CapsReg::new_mmio(caps_ptr) };
 
-        let runtime_regs = unsafe { &mut *caps_regs.runtime_regs_ptr() };
-        let interrupter = unsafe { &mut *runtime_regs.interrupter_ptr(0) };
+        let dorbells_base = caps_regs.doorbells_base();
+        let max_device_slots = caps_regs.max_device_slots();
+
+        let mut runtime_regs = caps_regs.runtime_regs();
+        let interrupter = runtime_regs.interrupter(0);
 
         let command_ring = XHCICommandRing::create(MAX_TRB_COUNT);
         let mut event_ring = XHCIEventRing::create(MAX_TRB_COUNT, interrupter);
@@ -736,8 +769,7 @@ impl<'s> PCIDevice for XHCI<'s> {
             xhci_registers.reconfigure(&mut event_ring, &command_ring);
         }
 
-        let doorbell_manager =
-            XHCIDoorbellManager::new(caps_regs.doorbells_base(), caps_regs.max_device_slots());
+        let doorbell_manager = XHCIDoorbellManager::new(dorbells_base, max_device_slots);
 
         let xhci_queue_manager = XHCIResponseQueue::new(doorbell_manager, command_ring);
         // FIXME: switch to MSI if not available
@@ -774,7 +806,7 @@ impl<'s> PCIDevice for XHCI<'s> {
         without_interrupts(|| {
             let irq_info = self.irq_info.clone();
 
-            interrupts::register_irq(irq_info, IntTrigger::LevelDeassert, self);
+            interrupts::register_irq(irq_info, IntTrigger::Edge, self);
             let int_tid = kernel_thread_spawn(
                 on_interrupt_thread,
                 self,
@@ -793,13 +825,14 @@ impl<'s> PCIDevice for XHCI<'s> {
 
             let regs = unsafe { self.regs.as_mut_unchecked() };
             let op_regs = unsafe { regs.operational_regs() };
-            let usbsts_before = read_ref!(op_regs.usbstatus);
-            let usbcmd_before = read_ref!(op_regs.usbcmd);
+            let usbsts_before = op_regs.read_usbstatus();
+            let usbcmd_before = op_regs.read_usbcmd();
             unsafe {
                 regs.start();
             }
-            let usbsts_after = read_ref!(op_regs.usbstatus);
-            let usbcmd_after = read_ref!(op_regs.usbcmd);
+            let op_regs = unsafe { regs.operational_regs() };
+            let usbsts_after = op_regs.read_usbstatus();
+            let usbcmd_after = op_regs.read_usbcmd();
             debug!(
                 XHCI,
                 "Started, usbsts before {:?} => usbsts after {:?}, usbcmd before {:?} => usbcmd after {:?}, interrupt thread: {}, hot-reload thread: {}",

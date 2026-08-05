@@ -1225,7 +1225,9 @@ pub unsafe fn init(vmm: VirtualMemoryManager) {
     let vmm_guard = unsafe { &mut *VMM.get() };
     let vmm = vmm_guard.write(vmm);
     debug!(VirtualMemoryManager, "Initialized");
+    #[cfg(test)]
     vmm.debug_regions();
+    _ = vmm;
 }
 
 /// Attempts to recover from a page fault with addr `addr`.
