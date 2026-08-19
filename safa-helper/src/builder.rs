@@ -41,6 +41,7 @@ fn remove_dir_all_found<P: AsRef<Path>>(path: P) -> io::Result<()> {
     Ok(())
 }
 const KERNEL_PATH: &'static str = "safa-core";
+const AKERNEL_PATH: &'static str = "safa-acore";
 /// A bunch of binary crates which built results are included in the ramdisk in `sys:/bin/`
 const USERSPACE_CRATES_PATH: &'static str = "safa-userspace";
 
@@ -173,7 +174,8 @@ impl<'a> Builder<'a> {
 
         let userspace_crates_path = userspace_crates_path(&self.root_repo_path);
 
-        unsafe { std::env::set_var("CARGO_TARGET_DIR", userspace_crates_path.join("target")) };
+        // TODO: unified target dir?
+        // unsafe { std::env::set_var("CARGO_TARGET_DIR", userspace_crates_path.join("target")) };
         let crates: Vec<PathBuf> = path_crates(&userspace_crates_path).collect();
         let mut results = Vec::with_capacity(crates.len());
         for cr in crates {
@@ -183,9 +185,9 @@ impl<'a> Builder<'a> {
             }
         }
 
-        unsafe {
-            std::env::remove_var("CARGO_TARGET_DIR");
-        }
+        // unsafe {
+        //     std::env::remove_var("CARGO_TARGET_DIR");
+        // }
 
         results
     }
@@ -254,10 +256,12 @@ impl<'a> Builder<'a> {
             ArchTarget,
             &'static [&'static str],
         ) -> Vec<(PathBuf, String)>,
+        kernel_subpath: &str,
+        output_kernel_subpath: &str,
     ) {
         fs::create_dir_all(boot_build_path).expect("failed to create boot build dir");
 
-        let kernel_crate_path = self.root_repo_path.join(KERNEL_PATH);
+        let kernel_crate_path = self.root_repo_path.join(kernel_subpath);
         let mut kernel_elf = build_function(
             &kernel_crate_path,
             self.arch,
@@ -276,7 +280,7 @@ impl<'a> Builder<'a> {
         );
 
         let (kernel_elf, _) = kernel_elf.next().unwrap();
-        let kernel_build_path = boot_build_path.join("kernel");
+        let kernel_build_path = boot_build_path.join(output_kernel_subpath);
 
         log_verbose!(
             self,
@@ -402,7 +406,19 @@ impl<'a> Builder<'a> {
         };
 
         // the kernel
-        self.package_kernel(&boot_build_path, freestanding_build_function);
+        self.package_kernel(
+            &boot_build_path,
+            freestanding_build_function,
+            KERNEL_PATH,
+            "kernel",
+        );
+        // New WIP kernel
+        self.package_kernel(
+            &boot_build_path,
+            freestanding_build_function,
+            AKERNEL_PATH,
+            "akernel",
+        );
         // the ramdisk
         self.package_ramdisk(&boot_build_path)?;
         // the bootloader
