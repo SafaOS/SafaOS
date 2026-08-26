@@ -39,10 +39,17 @@ SECTIONS
     section_rodata_begin = .;
     .rodata : {
         *(.rodata .rodata.*)
+        . = ALIGN(8);
         section_per_cpu_init_begin = .;
         *(.percpu.initializers.base)
         *(.percpu.initializers)
         section_per_cpu_init_end = .;
+
+        . = ALIGN(8);
+        section_oninit_f_begin = .;
+        *(.oninit.initializers.base)
+        *(.oninit.initializers)
+        section_oninit_f_end = .;
         *(.got .got.*)
     } :rodata
     section_rodata_end = .;
@@ -53,6 +60,8 @@ SECTIONS
     section_data_begin = .;
     .data : {
         *(.data .data.*)
+        KEEP(*(.oninit))
+
         /* Place the sections that contain the Limine requests as part of the .data */
         /* output section. */
         KEEP(*(.requests_start_marker))
