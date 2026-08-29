@@ -3,6 +3,11 @@ extern "C" fn bsp_init() {
     unsafe { super::registers::set_cpu_local(bsp) };
 }
 
+pub fn init_phase1() {
+    super::serial::map_qemu_serial();
+    unsafe { super::registers::SYS_MAIR.sync() };
+}
+
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 pub extern "C" fn kboot() -> ! {

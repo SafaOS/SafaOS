@@ -15,11 +15,11 @@ mod logging;
 mod memory;
 mod misc;
 mod oninit;
-#[cfg(test)]
-mod test;
-// mod paging;
+mod paging;
 mod percpu;
 mod sync;
+#[cfg(test)]
+mod test;
 
 use core::panic::PanicInfo;
 
@@ -42,9 +42,15 @@ extern "C" fn kstart() -> ! {
 #[unsafe(no_mangle)]
 extern "C" fn kmain() -> ! {
     unsafe { oninit::init() };
-    logging::init();
-    logging::trace!("akernel", "Hello, world! HHDM={:?}", &*HHDM);
     unsafe { memory::init_pmm() };
+    arch::boot::init_phase1();
+
+    logging::info!("boot", "Phase 1 completed HHDM={:?}", &*HHDM);
+    for mmap in bootloader::memory_map() {
+        logging::debug!("boot", "memory map: {:#?}", mmap);
+    }
+
+    logging::init();
 
     #[cfg(test)]
     crate::kernel_testmain();

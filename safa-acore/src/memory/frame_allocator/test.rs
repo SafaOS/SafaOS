@@ -186,14 +186,15 @@ fn bitmap_lookup_free_cases() {
 
 #[test_case]
 fn allocate_and_deallocate_multiple_real_frames() {
-    let initial_free = super::REGION_ALLOCATOR.lock_no_irq(|alloc| alloc.count_frames_expensive());
+    let (initial_free, initial_mapped) = super::REGION_ALLOCATOR
+        .lock_no_irq(|alloc| (alloc.count_frames_expensive(), alloc.mapped_frames()));
 
     const COUNT: usize = 8;
 
     let base = super::allocate_frames(1, COUNT).expect("failed to allocate contiguous frames");
 
     assert_eq!(
-        super::REGION_ALLOCATOR.lock_no_irq(|alloc| { alloc.mapped_frames() }),
+        super::REGION_ALLOCATOR.lock_no_irq(|alloc| { alloc.mapped_frames() - initial_mapped }),
         COUNT
     );
 
@@ -210,7 +211,7 @@ fn allocate_and_deallocate_multiple_real_frames() {
     super::REGION_ALLOCATOR.lock_no_irq(|alloc| {
         assert_eq!(alloc.count_frames_expensive(), initial_free - COUNT);
 
-        assert_eq!(alloc.mapped_frames(), COUNT);
+        assert_eq!(alloc.mapped_frames() - initial_mapped, COUNT);
 
         // The list must still have valid boundaries.
         if let Some(head) = alloc.head {
@@ -223,10 +224,10 @@ fn allocate_and_deallocate_multiple_real_frames() {
     });
 
     // Return the whole contiguous allocation.
-    unsafe { super::deallocate_frames(base, COUNT) };
+    unsafe { super::deallocate_frames(base, COUNT).unwrap() };
 
     super::REGION_ALLOCATOR.lock_no_irq(|alloc| {
-        assert_eq!(alloc.mapped_frames(), 0);
+        assert_eq!(alloc.mapped_frames(), initial_mapped);
         assert_eq!(alloc.count_frames_expensive(), initial_free);
     });
 }
@@ -235,8 +236,6 @@ fn allocate_and_deallocate_multiple_real_frames() {
 fn allocate_single_frame_real_allocator() {
     let initial = super::REGION_ALLOCATOR
         .lock_no_irq(|alloc| (alloc.mapped_frames(), alloc.count_frames_expensive()));
-
-    assert_eq!(initial.0, 0);
 
     // Allocate several real frames through the public allocator API.
     let a = super::allocate_frame().expect("failed to allocate frame A");
@@ -248,7 +247,7 @@ fn allocate_single_frame_real_allocator() {
     assert_ne!(b.addr(), c.addr());
 
     super::REGION_ALLOCATOR.lock_no_irq(|alloc| {
-        assert_eq!(alloc.mapped_frames(), 3);
+        assert_eq!(alloc.mapped_frames(), initial.0 + 3);
         assert_eq!(alloc.count_frames_expensive(), initial.1 - 3);
 
         assert!(alloc.head.is_some());
@@ -262,13 +261,13 @@ fn allocate_single_frame_real_allocator() {
 
     // Return all three frames.
     unsafe {
-        super::deallocate_frame(a);
-        super::deallocate_frame(b);
-        super::deallocate_frame(c);
+        super::deallocate_frame(a).expect("Failed to deallocate a");
+        super::deallocate_frame(b).unwrap();
+        super::deallocate_frame(c).unwrap();
     }
 
     super::REGION_ALLOCATOR.lock_no_irq(|alloc| {
-        assert_eq!(alloc.mapped_frames(), 0);
+        assert_eq!(alloc.mapped_frames(), initial.0);
         assert_eq!(alloc.count_frames_expensive(), initial.1);
 
         assert!(alloc.head.is_some());
@@ -337,7 +336,7 @@ fn mark_bitmap_used_cases() {
     let mut bitmap = [0u8; 4];
 
     // One page.
-    RegionListAllocator::mark_bitmap_used(PhysAddr::new(0), PhysAddr::new(0), &mut bitmap);
+    RegionListAllocator::mark_bitmap_used(PhysAddr::new(0), PhysAddr::new(0), &mut bitmap, true);
 
     assert_eq!(bitmap[0], 0x80);
 
@@ -346,6 +345,7 @@ fn mark_bitmap_used_cases() {
         PhysAddr::new(PAGE_SIZE),
         PhysAddr::new(PAGE_SIZE * 3),
         &mut bitmap,
+        true,
     );
 
     assert_eq!(bitmap[0], 0xf0);
@@ -355,6 +355,7 @@ fn mark_bitmap_used_cases() {
         PhysAddr::new(PAGE_SIZE * 7),
         PhysAddr::new(PAGE_SIZE * 9),
         &mut bitmap,
+        true,
     );
 
     assert_eq!(bitmap[0], 0xf1);
@@ -367,6 +368,7 @@ fn mark_bitmap_used_cases() {
         PhysAddr::new(PAGE_SIZE),
         PhysAddr::new(PAGE_SIZE * 3),
         &mut bitmap,
+        true,
     );
 
     assert_eq!(bitmap, old);

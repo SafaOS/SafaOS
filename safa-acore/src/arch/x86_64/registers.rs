@@ -124,7 +124,9 @@ pub unsafe fn set_gs(value: VirtAddr) {
 #[inline(always)]
 pub fn cpu_local() -> &'static CpuLocal {
     let v: usize;
-    unsafe { core::arch::asm!("mov {}, gs:0", out(reg) v, options(nostack)) };
+    unsafe {
+        core::arch::asm!("mov {}, gs:0", out(reg) v, options(nostack, readonly, preserves_flags))
+    };
 
     unsafe { &*(v as *const CpuLocal) }
 }

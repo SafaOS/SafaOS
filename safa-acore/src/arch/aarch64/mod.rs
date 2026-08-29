@@ -1,8 +1,9 @@
 use core::arch::asm;
 pub mod boot;
-// pub mod paging;
+pub mod paging;
 pub mod registers;
 pub mod serial;
+pub mod tlb;
 
 #[inline(always)]
 pub fn hlt() {
@@ -12,18 +13,18 @@ pub fn hlt() {
 #[inline(always)]
 pub(super) fn get_daif() -> u64 {
     let results: u64;
-    unsafe { asm!("mrs {:x}, DAIF", out(reg) results) };
+    unsafe { asm!("mrs {:x}, DAIF", out(reg) results, options(nomem, nostack, preserves_flags)) };
     results
 }
 
 #[inline(always)]
 pub(super) fn set_daif(value: u64) {
-    unsafe { asm!("msr DAIF, {:x}", in(reg) value) }
+    unsafe { asm!("msr DAIF, {:x}", in(reg) value, options(nomem, nostack)) }
 }
 
 #[inline(always)]
 pub unsafe fn disable_interrupts() {
-    unsafe { asm!("msr DAIFSet, #0b1111") }
+    unsafe { asm!("msr DAIFSet, #0b1111", options(nomem, nostack)) }
 }
 
 #[inline(always)]
@@ -54,5 +55,5 @@ pub fn with_interrupts<R>(f: impl FnOnce() -> R) -> R {
 
 #[inline(always)]
 pub unsafe fn enable_interrupts() {
-    unsafe { asm!("msr DAIFClr, #0b1111") }
+    unsafe { asm!("msr DAIFClr, #0b1111", options(nomem, nostack)) }
 }

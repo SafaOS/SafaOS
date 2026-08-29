@@ -1,17 +1,40 @@
-use crate::misc::VirtAddr;
+use crate::memory::phys_to_virt;
+use crate::misc::{Frame, Page, PhysAddr, VirtAddr};
+use crate::paging::PageEntryFlags;
 use core::cell::SyncUnsafeCell;
 use core::ptr::NonNull;
 
-static QEMU_SERIAL_ADDR: SyncUnsafeCell<VirtAddr> =
-    SyncUnsafeCell::new(VirtAddr::new(0x9000000 + 0xffff000000000000));
+static QEMU_SERIAL_ADDR: SyncUnsafeCell<VirtAddr> = SyncUnsafeCell::new(VirtAddr::null());
 
 pub type SerialInner = VirtAddr;
 pub const fn new_serial() -> SerialInner {
     VirtAddr::null()
 }
 
+/// Maps the PL011 QEMU Serial for debug prints before the DTB is parsed in QEMU.
+pub fn map_qemu_serial() {
+    let phys = PhysAddr::from(0x09000000);
+    let virt = phys_to_virt(phys);
+    let page = Page::containing(virt);
+    let frame = Frame::containing(phys);
+
+    unsafe {
+        if crate::paging::PageTable::current()
+            .map_to(
+                page,
+                frame,
+                PageEntryFlags::WRITE | PageEntryFlags::DEVICE_UNCACHEABLE,
+            )
+            .is_ok()
+        {
+            (*QEMU_SERIAL_ADDR.get()) = virt;
+
+            write_serial_string(&virt, "\nQEMU Serial initialized\n");
+        }
+    }
+}
 pub fn init_serial(_serial: &mut SerialInner) -> Result<(), &'static str> {
-    todo!("Initialize serial")
+    Ok(())
 }
 
 #[inline(always)]

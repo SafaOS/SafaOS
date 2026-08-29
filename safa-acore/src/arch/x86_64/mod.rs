@@ -49,10 +49,10 @@ pub fn with_interrupts<R>(f: impl FnOnce() -> R) -> R {
 
 #[inline(always)]
 unsafe fn disable_interrupts() {
-    unsafe { core::arch::asm!("cli") }
+    unsafe { core::arch::asm!("cli", options(nomem, nostack)) }
 }
 
 #[inline(always)]
 unsafe fn enable_interrupts() {
-    unsafe { core::arch::asm!("sti") }
+    unsafe { core::arch::asm!("sti", options(nomem, nostack)) }
 }

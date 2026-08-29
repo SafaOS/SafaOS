@@ -1,9 +1,20 @@
 [build]
 target = ["x86_64-unknown-none", "aarch64-unknown-none"]
 
-[unstable]
-bindeps = true
 [target.x86_64-unknown-none]
-rustflags = ["-C", "relocation-model=static"]
+rustflags = [
+    "-C", "relocation-model=static",
+    "-C", "force-frame-pointers"
+]
 [target.aarch64-unknown-none]
-rustflags = ["-C", "relocation-model=static"]
+rustflags = [
+    "-C", "relocation-model=static",
+    "-C", "target-feature=-neon",
+    "-C", "force-frame-pointers"
+]
+
+[unstable]
+# We have to build std to ensure our compiler options are applied over there.
+unstable-options = true
+build-std = ["core", "alloc"]
+panic-abort-tests = true

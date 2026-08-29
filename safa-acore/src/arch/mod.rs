@@ -11,7 +11,7 @@ pub use aarch64 as inner;
 
 pub(crate) mod boot;
 pub mod misc;
-// pub mod paging;
+pub mod paging;
 pub mod registers;
 pub use misc::*;
 

@@ -21,6 +21,11 @@ impl Frame {
         self.0
     }
 
+    /// Returns the frame next to "after" `self`
+    pub const fn next(&self) -> Self {
+        Self(self.0 + PAGE_SIZE)
+    }
+
     #[inline(always)]
     /// Returns an iterator over all the physical frames starting at `start` and ending at `end`
     ///
@@ -52,7 +57,7 @@ impl Iterator for FrameIter {
         if self.start.addr() < self.end.addr() {
             let frame = self.start;
 
-            self.start.0 += PAGE_SIZE;
+            self.start = self.start.next();
             Some(frame)
         } else {
             None

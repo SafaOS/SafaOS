@@ -1,4 +1,7 @@
+use core::{arch::asm, fmt::Debug};
+
 use bitfield_struct::bitfield;
+use int_enum::IntEnum;
 
 /// A unique ID for each CPU
 ///
@@ -137,11 +140,185 @@ impl core::fmt::Display for ArchCpuID {
     }
 }
 
+const MAIR_IIII_MASK: u8 = 0b00001111;
+const MAIR_OOOO_MASK: u8 = 0b11110000;
+const MAIR_DEVICE_MASK: u8 = 0b00001100;
+
+#[derive(Debug, Clone, Copy, IntEnum)]
+#[repr(u8)]
+/// Device memory is encoded as 0b0000xx00 where xx is whatever in this.
+pub enum DeviceMemCfg {
+    /// No gathering no reordering and no early write acknowledgement.
+    NGnRnE = 0b00,
+    /// No gathering, no reordering, but allow early write acknowledgement.
+    NGnRE = 0b01,
+    /// No gathering, but allow reordering, and early write acknowledgement.
+    NGRE = 0b10,
+    /// Allow gathering, reordering and early write acknowledgement.
+    GRE = 0b11,
+}
+
+#[derive(Debug, Clone, Copy, IntEnum)]
+#[repr(u8)]
+/// Normal memory is encoded as 0bxxxxyyyy
+/// where x is outer level and y is the inner level, currently we have inner == outer.
+///
+/// R is the inner/outer read-allocate policy and W is the inner/outer write-allocate policy.
+/// I don't know what these means but you want them both on.
+pub enum NormalMemCfg {
+    /// no caching
+    NonCacheable = 0b0100,
+
+    /// write-though normal memory without transient hint bit set.
+    WriteThroughRW = 0b1011,
+    /// write-back normal memory without transient hint bit set.
+    WriteBackRW = 0b1111,
+    /// write-though normal memory with transient hint bit set.
+    WriteThroughRWT = 0b0011,
+    /// write-back normal memory with transient hint bit set.
+    WriteBackRWT = 0b0111,
+
+    /// write-though normal memory without transient hint bit set.
+    WriteThroughR = 0b1010,
+    /// write-back normal memory without transient hint bit set.
+    WriteBackR = 0b1110,
+    /// write-though normal memory with transient hint bit set.
+    WriteThroughRT = 0b0010,
+    /// write-back normal memory with transient hint bit set.
+    WriteBackRT = 0b0110,
+
+    /// write-though normal memory without transient hint bit set.
+    WriteThroughW = 0b1001,
+    /// write-back normal memory without transient hint bit set.
+    WriteBackW = 0b1101,
+    /// write-though normal memory with transient hint bit set.
+    WriteThroughWT = 0b0001,
+    /// write-back normal memory with transient hint bit set.
+    WriteBackWT = 0b0101,
+
+    /// write-though normal memory without transient hint bit set.
+    ///
+    /// This should be an invalid state
+    WriteThroughNone = 0b1000,
+    /// write-back normal memory without transient hint bit set.
+    ///
+    /// This should be an invalid state,
+    WriteBackNone = 0b1100,
+    /// write-though normal memory with transient hint bit set.
+    ///
+    /// This should be unreachable.
+    WriteThroughNoneT = 0b0000,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MAIRAttr {
+    Device(DeviceMemCfg),
+    Normal {
+        outer: NormalMemCfg,
+        inner: NormalMemCfg,
+    },
+    Other(u8),
+}
+
+impl MAIRAttr {
+    pub const fn new_normal(cfg: NormalMemCfg) -> Self {
+        Self::Normal {
+            outer: cfg,
+            inner: cfg,
+        }
+    }
+
+    pub fn from_raw(value: u8) -> Self {
+        match value {
+            0 => Self::Device(DeviceMemCfg::NGnRnE),
+            x if x & MAIR_OOOO_MASK == 0 && x & (1 << 0) == 0 => {
+                MAIRAttr::Device(DeviceMemCfg::try_from((x >> 2) & MAIR_DEVICE_MASK).unwrap())
+            }
+            x if x & MAIR_OOOO_MASK != 0 && x & MAIR_IIII_MASK != 0 => MAIRAttr::Normal {
+                outer: NormalMemCfg::try_from((x & MAIR_OOOO_MASK) >> 4).unwrap(),
+                inner: NormalMemCfg::try_from(x & MAIR_IIII_MASK).unwrap(),
+            },
+            x => Self::Other(x),
+        }
+    }
+
+    pub const fn to_raw(self) -> u8 {
+        match self {
+            Self::Device(d) => (d as u8) << 2,
+            Self::Normal { outer, inner } => inner as u8 | ((outer as u8) << 4),
+            Self::Other(o) => o,
+        }
+    }
+}
+
+pub const DEVICE_UNCACHEABLE_MAIR_IDX: u8 = 2;
+pub const FRAMEBUFFER_CACHED_MAIR_IDX: u8 = 1;
+
+/// System MAIR Register (memory cache configuration)
+pub const SYS_MAIR: MAIR = {
+    let mut this = MAIR::new();
+    this.set(0, MAIRAttr::new_normal(NormalMemCfg::WriteBackRW));
+    this.set(
+        DEVICE_UNCACHEABLE_MAIR_IDX as usize,
+        MAIRAttr::Device(DeviceMemCfg::NGnRnE),
+    );
+    this.set(
+        FRAMEBUFFER_CACHED_MAIR_IDX as usize,
+        MAIRAttr::new_normal(NormalMemCfg::NonCacheable),
+    );
+    this
+};
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct MAIR {
+    attributes: [u8; 8],
+}
+
+impl MAIR {
+    pub const fn new() -> Self {
+        Self { attributes: [0; 8] }
+    }
+
+    /// Sets an attr at a given index.
+    pub const fn set(&mut self, index: usize, attr: MAIRAttr) {
+        let raw = attr.to_raw();
+        self.attributes[index] = raw;
+    }
+
+    /// Sets MAIR_EL1 register to `self`
+    pub unsafe fn sync(self) {
+        let crr_mair: u64;
+        unsafe {
+            asm!("mrs {}, mair_el1", out(reg) crr_mair);
+        }
+
+        let crr_mair: MAIR = unsafe { core::mem::transmute(crr_mair) };
+        crate::logging::sprintln!("MAIR was {crr_mair:x?}\nnow {self:x?}");
+
+        let mair_el1: u64 = unsafe { core::mem::transmute(self) };
+        unsafe {
+            asm!("msr mair_el1, {}", in(reg) mair_el1);
+        }
+    }
+}
+
+impl Debug for MAIR {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut debug_list = f.debug_list();
+        for attr in self.attributes {
+            debug_list.entry(&MAIRAttr::from_raw(attr));
+        }
+        debug_list.finish()
+    }
+}
 use crate::percpu::CpuLocal;
 #[inline(always)]
 pub fn cpu_local() -> &'static CpuLocal {
     let ptr: *mut CpuLocal;
-    unsafe { core::arch::asm!("mrs {}, tpidr_el1", out(reg) ptr, options(nostack, nomem)) }
+    unsafe {
+        core::arch::asm!("mrs {}, tpidr_el1", out(reg) ptr, options(nostack, nomem, preserves_flags))
+    }
     unsafe { &*ptr }
 }
 

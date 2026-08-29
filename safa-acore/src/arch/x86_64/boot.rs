@@ -19,3 +19,5 @@ pub extern "C" fn kboot() -> ! {
     ", sym bsp_init
     )
 }
+
+pub fn init_phase1() {}

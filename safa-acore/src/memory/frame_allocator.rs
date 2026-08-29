@@ -1,6 +1,8 @@
 use core::fmt::Debug;
 use core::ptr::NonNull;
 
+use thiserror::Error;
+
 use crate::bootloader::MemoryType;
 use crate::memory::phys_to_virt;
 use crate::misc::Frame;
@@ -244,7 +246,7 @@ impl RegionListAllocator {
         Some(((start_bit, end_bit), (start_idx, end_idx)))
     }
 
-    fn mark_bitmap_used(phys_start: PhysAddr, phys_end: PhysAddr, bitmap: &mut [u8]) {
+    fn mark_bitmap_used(phys_start: PhysAddr, phys_end: PhysAddr, bitmap: &mut [u8], used: bool) {
         assert!(
             phys_end >= phys_start,
             "end address must be bigger than or equal to start address"
@@ -254,7 +256,7 @@ impl RegionListAllocator {
         let end_bit = phys_end.page_num();
 
         let Some(((start_bit, end_bit), (start_idx, end_idx))) =
-            Self::bitmap_set_bits_inner(bitmap, start_bit, end_bit - start_bit + 1, true)
+            Self::bitmap_set_bits_inner(bitmap, start_bit, end_bit - start_bit + 1, used)
         else {
             logging::trace!(
                 RegionListAllocator,
@@ -487,8 +489,8 @@ impl RegionListAllocator {
         }
 
         let bitmap: Option<NonNull<[u8]>>;
-        if let Some(mut bitmap_base) = bitmap_base {
-            let mut bitmap_tail = bitmap_tail.unwrap();
+        if let Some(bitmap_base) = bitmap_base {
+            let bitmap_tail = bitmap_tail.unwrap();
 
             let bitmap_phys = unsafe { bitmap_base.as_ref().base };
             let bitmap_end_phys = unsafe { bitmap_tail.as_ref().base };
@@ -506,24 +508,27 @@ impl RegionListAllocator {
             );
 
             // remove bitmap base and tail from free list
-            // and mark bitmap as unusable within itself
             unsafe {
                 // Safety: tail is closer to head.
                 RegionNode::cut_regions(bitmap_tail, bitmap_base, &mut head, &mut tail);
             }
 
-            Self::mark_bitmap_used(bitmap_phys, bitmap_end_phys, unsafe {
-                bitmap_slice.as_mut()
-            });
+            let bitmap_slice_mut = unsafe { bitmap_slice.as_mut() };
+            bitmap_slice_mut.fill(0xFF);
+
             for entry in bootloader::memory_map() {
-                if entry.kind != MemoryType::Usable {
+                if entry.kind == MemoryType::Usable {
                     Self::mark_bitmap_used(
                         entry.base,
                         entry.base + entry.size.saturating_sub(PAGE_SIZE),
-                        unsafe { bitmap_slice.as_mut() },
+                        bitmap_slice_mut,
+                        false,
                     );
                 }
             }
+
+            // and mark bitmap as unusable within itself
+            Self::mark_bitmap_used(bitmap_phys, bitmap_end_phys, bitmap_slice_mut, true);
             bitmap = Some(bitmap_slice);
         } else {
             logging::error!(
@@ -565,23 +570,30 @@ pub fn allocate_frames(align: usize, count: usize) -> Option<Frame> {
     REGION_ALLOCATOR.lock_no_irq(|alloc| alloc.allocate_frames(align, count))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
+pub enum PMMError {
+    #[error("PMM out of memory")]
+    OutOfMemory,
+}
+
 #[inline(always)]
 /// Allocates a single frame.
-pub fn allocate_frame() -> Option<Frame> {
-    allocate_frames(1, 1)
+pub fn allocate_frame() -> Result<Frame, PMMError> {
+    allocate_frames(1, 1).ok_or(PMMError::OutOfMemory)
 }
 
 /// Deallocates `count` contiugous frames starting at `base`.
 ///
 /// Safety: each frame starting at `base` to `base`+count must no longer be used and allocated using this allocator.
-pub unsafe fn deallocate_frames(base: Frame, count: usize) {
-    REGION_ALLOCATOR.lock_no_irq(|alloc| alloc.deallocate_frames(base, count))
+pub unsafe fn deallocate_frames(base: Frame, count: usize) -> Result<(), PMMError> {
+    REGION_ALLOCATOR.lock_no_irq(|alloc| alloc.deallocate_frames(base, count));
+    Ok(())
 }
 
 #[inline(always)]
 /// Deallocates a single frame `frame`.
 ///
 /// Safety: `frame` must no longer be used and allocated using this allocator.
-pub unsafe fn deallocate_frame(frame: Frame) {
+pub unsafe fn deallocate_frame(frame: Frame) -> Result<(), PMMError> {
     unsafe { deallocate_frames(frame, 1) }
 }

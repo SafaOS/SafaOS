@@ -57,7 +57,7 @@ impl Page {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct IterPage {
     start: Page,
     end: Page,
