@@ -11,7 +11,6 @@ use core::cell::SyncUnsafeCell;
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
-use core::time::Duration;
 
 pub use serial::loggingsprint as sprint;
 pub use serial::loggingsprintln as sprintln;
@@ -46,7 +45,7 @@ impl LogLevel {
 
 #[derive(Debug, Clone, Copy)]
 pub struct LogRecord<'a> {
-    pub timestamp: Duration,
+    pub timestamp: DurationFmt,
     pub level: LogLevel,
     pub file: &'static str,
     pub line: u32,
@@ -169,7 +168,7 @@ macro_rules! _generic_log_macro {
     ($level: expr, $subject: expr, $($arg:tt)*) => {
         let (file, line) = (file!(), line!());
         $crate::logging::LogRecord {
-            timestamp: core::time::Duration::ZERO,
+            timestamp: $crate::time::DurationFmt::new($crate::time::time_since_boot()),
             level: $level,
             file,
             line,
@@ -228,3 +227,5 @@ pub use _loggerfatal as fatal;
 pub use _loggerinfo as info;
 pub use _loggertrace as trace;
 pub use _loggerwarn as warn;
+
+use crate::time::DurationFmt;

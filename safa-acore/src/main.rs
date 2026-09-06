@@ -21,6 +21,7 @@ mod percpu;
 mod sync;
 #[cfg(test)]
 mod test;
+mod time;
 
 use core::panic::PanicInfo;
 

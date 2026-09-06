@@ -4,6 +4,7 @@ pub mod interrupts;
 pub mod io;
 pub mod paging;
 pub mod registers;
+pub mod timers;
 pub mod tlb;
 
 pub(crate) mod serial;

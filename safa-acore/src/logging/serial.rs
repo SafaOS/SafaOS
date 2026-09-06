@@ -43,12 +43,15 @@ impl LoggingSink for SpinLockIrq<Serial> {
     fn write_record(&self, record: &super::LogRecord) {
         self.lock_no_irq(|mut this| {
             this.write_fmt(format_args!(
-                "[ {}ms ] [\x1b[{}m {:<5?} \x1b[0m] \x1b[90m{}:\x1b[0m {}\n",
-                record.timestamp.as_millis(),
+                "[ {mins:04}:{secs:02}:{millis:03}:{micros:03} ] [\x1b[{}m {:<5?} \x1b[0m] \x1b[90m{}:\x1b[0m {}\n",
                 record.level.ansii_color(),
                 record.level,
                 record.subject,
                 record.arguments,
+                mins = record.timestamp.minutes(),
+                secs = record.timestamp.subminute_secs(),
+                millis = record.timestamp.subsec_millis(),
+                micros = record.timestamp.submilli_micros(),
             ))
             .expect("Failed to write a log to serial")
         })

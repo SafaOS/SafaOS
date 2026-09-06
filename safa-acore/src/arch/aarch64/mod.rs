@@ -3,6 +3,7 @@ pub mod boot;
 pub mod paging;
 pub mod registers;
 pub mod serial;
+pub mod timers;
 pub mod tlb;
 
 #[inline(always)]
