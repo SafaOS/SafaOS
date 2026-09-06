@@ -165,3 +165,23 @@ pub fn memory_map() -> impl Iterator<Item = MemoryRegion> {
             MemoryRegion { base, size, kind }
         })
 }
+
+#[inline]
+pub fn exe_phys() -> PhysAddr {
+    PhysAddr::new(
+        KERNEL_ADDRESS_REQUEST
+            .response()
+            .expect("Limine didn't provide kernel address")
+            .physical_base as usize,
+    )
+}
+
+#[inline]
+pub fn exe_virt() -> VirtAddr {
+    VirtAddr::new(
+        KERNEL_ADDRESS_REQUEST
+            .response()
+            .expect("Limine didn't provide kernel address")
+            .virtual_base as usize,
+    )
+}

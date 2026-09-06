@@ -5,7 +5,6 @@ mod objects;
 use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
 
 use crate::{
-    arch::without_interrupts,
     logging,
     memory::{
         pmm::{self, PMMError},
@@ -27,6 +26,7 @@ bitflags::bitflags! {
         const UNCACHABLE = 1 << 3;
         const FRAMEBUFFER_CACHED = 1 << 4;
         const ZEROED = 1 << 5;
+        const _GLOBAL_HINT = 1 << 6;
     }
 }
 
@@ -52,6 +52,10 @@ impl VMMMFlags {
 
         if self.contains(VMMMFlags::USER_ACCESSIBLE) {
             map_flags.insert(PageEntryFlags::USER_ACCESSIBLE);
+        }
+
+        if self.contains(VMMMFlags::_GLOBAL_HINT) {
+            map_flags.insert(PageEntryFlags::_GLOBAL_SHARED);
         }
 
         map_flags
@@ -90,6 +94,14 @@ pub enum VMMAllocError {
     },
     Used,
     InvalidSize,
+}
+
+impl From<PMMError> for VMMAllocError {
+    fn from(value: PMMError) -> Self {
+        match value {
+            PMMError::OutOfMemory => Self::OutOfMemory,
+        }
+    }
 }
 
 impl From<MapToError> for VMMAllocError {
@@ -620,8 +632,15 @@ pub struct VirtualMemoryManager {
 }
 
 impl VirtualMemoryManager {
+    #[inline(always)]
     pub fn table_inner(&self) -> &IntSpinLock<PageTable> {
         &self.page_table
+    }
+
+    #[inline]
+    pub fn table_addr(&self) -> PhysAddr {
+        // Safety: This should never change.
+        unsafe { (*self.table_inner().get()).phys_addr() }
     }
 
     pub fn new_user(page_table: PageTable) -> Self {

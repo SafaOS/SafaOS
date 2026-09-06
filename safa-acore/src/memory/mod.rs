@@ -3,6 +3,7 @@ use crate::{
     misc::{PhysAddr, VirtAddr},
 };
 
+pub mod init;
 pub mod pmm;
 pub(super) mod region_list_allocator;
 pub mod slab_allocator;
@@ -21,4 +22,5 @@ pub fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
 /// Initializes the physical memory manager.
 pub unsafe fn init_pmm() {
     pmm::init();
+    init::init_all();
 }

@@ -7,27 +7,32 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU16, Ordering},
 };
 
-use crate::{arch::ArchCpuID, misc::VirtAddr};
+use crate::{
+    arch::ArchCpuID,
+    bootloader,
+    memory::vmm::{self, Location, VMMMFlags},
+    misc::VirtAddr,
+};
 
-// /// Initializes the memory for SMP, should be called by [`crate::memory::init`]
-// pub fn init_memory(vmm: &mut vmm::VirtualMemoryManager) {
-//     let len = MP_RESPONSE.cpus().len();
-//     let size = (len - 1) * section_size();
-//     if size == 0 {
-//         return;
-//     }
+/// Initializes the memory for SMP, should be called by [`crate::memory::init`] once.
+pub fn init_memory(vmm: &mut vmm::VirtualMemoryManager) {
+    let cpu_count = bootloader::cpu_count();
+    let size = (cpu_count - 1) * section_size();
+    if size == 0 {
+        return;
+    }
 
-//     let start = section_end();
+    let start = section_end();
 
-//     vmm.map_new(
-//         &".percpu.ap",
-//         Some(Location::Fixed(start)),
-//         size,
-//         VMMMFlags::ZEROED | VMMMFlags::WRITABLE,
-//         vmm::VMMAllocMode::Normal,
-//     )
-//     .expect("Failed to allocate space for percpus");
-// }
+    vmm.map_new(
+        &".percpu.aps",
+        Some(Location::Fixed(start)),
+        size,
+        VMMMFlags::ZEROED | VMMMFlags::WRITABLE,
+        vmm::VMMAllocMode::Normal,
+    )
+    .expect("Failed to allocate space for percpus");
+}
 
 pub type PerCpuInitializer = fn(&'static CpuLocal);
 

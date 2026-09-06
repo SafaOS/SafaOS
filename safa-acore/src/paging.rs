@@ -1,15 +1,20 @@
-use core::{fmt::Debug, ptr::NonNull};
+use core::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
+};
 
 use bitflags::bitflags;
 use thiserror::Error;
 
 use crate::{
-    arch,
+    arch::{self, paging::ArchPageTable},
     memory::{
         phys_to_virt,
         pmm::{self, PMMError},
+        virt_to_phys,
     },
-    misc::{Frame, FrameIter, IterPage, PAGE_SIZE, Page, VirtAddr},
+    misc::{Frame, FrameIter, IterPage, PAGE_SIZE, Page, PhysAddr, VirtAddr},
 };
 
 /// Address Space identifier.
@@ -105,7 +110,7 @@ pub trait PageTableOps: Debug {
 
 /// Represents a Page Table context includes:
 /// Page Table and ASID.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PageTableContext<T: PageTableOps> {
     inner: NonNull<T>,
 }
@@ -292,5 +297,72 @@ impl PageTable {
 
         unsafe { self.inner.as_mut().set_flags_range(pages, flags)? };
         Ok(())
+    }
+
+    /// Returns the physical address of this page table.
+    pub fn phys_addr(&self) -> PhysAddr {
+        virt_to_phys(VirtAddr::from_ptr(self.inner.as_ptr()))
+    }
+}
+
+#[derive(Debug)]
+/// A page table that is deallocated, alongside all it's entries on drop.
+pub struct OwnedPageTable {
+    table: PageTable,
+}
+
+impl OwnedPageTable {
+    /// Creates an Owned PageTable that is destroyed on Drop.
+    pub fn create() -> Result<Self, PMMError> {
+        let frame = pmm::allocate_frame().expect("Failed to allocate memory for a page table");
+
+        let ptr = phys_to_virt(frame.addr()).into_ptr::<ArchPageTable>();
+        unsafe {
+            (*ptr).zeroize();
+        }
+
+        Ok(Self {
+            table: PageTableContext {
+                inner: NonNull::new(ptr).unwrap(),
+            },
+        })
+    }
+
+    /// Converts self to a plain [`PageTable`] ignoring [`Drop`].
+    #[inline(always)]
+    pub fn into_table(self) -> PageTable {
+        let table_ptr = self.table.inner;
+        core::mem::forget(self);
+
+        PageTableContext { inner: table_ptr }
+    }
+
+    /// Returns the physical address of an owned page table.
+    #[inline(always)]
+    pub fn phys_addr(&self) -> PhysAddr {
+        self.table.phys_addr()
+    }
+}
+
+impl Drop for OwnedPageTable {
+    fn drop(&mut self) {
+        unsafe { self.table.inner.as_mut().deallocate() };
+        unsafe {
+            pmm::deallocate_frame(Frame::containing(self.phys_addr()))
+                .expect("Failed to deallocate an owned page table")
+        }
+    }
+}
+
+impl Deref for OwnedPageTable {
+    type Target = PageTable;
+    fn deref(&self) -> &Self::Target {
+        &self.table
+    }
+}
+
+impl DerefMut for OwnedPageTable {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.table
     }
 }

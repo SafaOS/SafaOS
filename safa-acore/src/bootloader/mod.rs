@@ -9,7 +9,11 @@ use core::num::NonZero;
 
 pub use limine as current;
 
-use crate::{arch::ArchCpuID, misc::VirtAddr, oninit};
+use crate::{
+    arch::ArchCpuID,
+    misc::{PhysAddr, VirtAddr},
+    oninit,
+};
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -57,6 +61,24 @@ pub fn tsc_freq_hz() -> Option<NonZero<u64>> {
 #[inline]
 pub fn hhdm() -> VirtAddr {
     current::hhdm()
+}
+
+#[inline]
+/// Returns the physical address of the kernel executable.
+pub fn exe_phys() -> PhysAddr {
+    current::exe_phys()
+}
+
+#[inline]
+/// Returns the virtual address of the kernel executable.
+pub fn exe_virt() -> VirtAddr {
+    current::exe_virt()
+}
+
+#[inline]
+/// Returns the amount of SMP Cpus.
+pub fn cpu_count() -> usize {
+    CpuInfo::cpus().map(|c| c.count().max(1)).unwrap_or(1)
 }
 
 oninit::define! {
