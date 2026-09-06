@@ -73,7 +73,7 @@ impl SpinLockRaw {
 }
 
 pub struct SpinLockGuard<'a, T> {
-    lock: &'a SpinLockIrq<T>,
+    lock: &'a IntSpinLock<T>,
     data: *mut T,
 }
 
@@ -97,16 +97,18 @@ impl<'a, T> DerefMut for SpinLockGuard<'a, T> {
 }
 
 #[derive(Debug)]
-/// A SpinLock that is guraanteed to `lock()` and to `unlock()` while interrupts are disabled..
-pub struct SpinLockIrq<T> {
+/// A SpinLock that is not guraanteed to `lock()` and to `unlock()` while interrupts are disabled unlike [`SpinLockIrq`].
+///
+/// An interrupt SpinLock may deadlock if it was taken again from an interrupted context.
+pub struct IntSpinLock<T> {
     inner: SpinLockRaw,
     data: UnsafeCell<T>,
 }
 
-unsafe impl<T: Send> Sync for SpinLockIrq<T> {}
-unsafe impl<T: Send> Send for SpinLockIrq<T> {}
+unsafe impl<T: Send> Sync for IntSpinLock<T> {}
+unsafe impl<T: Send> Send for IntSpinLock<T> {}
 
-impl<T> SpinLockIrq<T> {
+impl<T> IntSpinLock<T> {
     pub const fn new(data: T) -> Self {
         Self {
             inner: SpinLockRaw::new(),
@@ -114,23 +116,48 @@ impl<T> SpinLockIrq<T> {
         }
     }
 
-    #[inline(always)]
-    fn lock_inner<'s>(&'s self) -> SpinLockGuard<'s, T> {
-        self.inner.spin_lock();
-        SpinLockGuard {
-            lock: self,
-            data: self.data.get(),
-        }
+    pub const fn get(&self) -> *mut T {
+        self.data.get()
     }
 
     #[inline(always)]
-    /// Locks running a function `f` without interrupts enabled.
-    pub fn lock_no_irq<'s, R>(&'s self, f: impl FnOnce(&mut SpinLockGuard<'s, T>) -> R) -> R {
-        crate::arch::without_interrupts(|| f(&mut self.lock_inner()))
+    pub fn lock<'s>(&'s self) -> SpinLockGuard<'s, T> {
+        self.inner.spin_lock();
+        SpinLockGuard {
+            lock: self,
+            data: self.get(),
+        }
     }
 
     #[inline(always)]
     pub unsafe fn force_unlock(&self) {
         unsafe { self.inner.unlock() };
+    }
+}
+
+#[derive(Debug)]
+/// A SpinLock that is guraanteed to `lock()` and to `unlock()` while interrupts are disabled..
+///
+/// No IRQ SpinLocks may open a door for deadlocks in case of memory ollocations and IPIs inside of it,
+pub struct SpinLockIrq<T> {
+    inner: IntSpinLock<T>,
+}
+
+impl<T> SpinLockIrq<T> {
+    pub const fn new(data: T) -> Self {
+        Self {
+            inner: IntSpinLock::new(data),
+        }
+    }
+
+    #[inline(always)]
+    /// Locks running a function `f` without interrupts enabled.
+    pub fn lock_no_irq<'s, R>(&'s self, f: impl FnOnce(SpinLockGuard<'s, T>) -> R) -> R {
+        crate::arch::without_interrupts(|| f(self.inner.lock()))
+    }
+
+    #[inline(always)]
+    pub unsafe fn force_unlock(&self) {
+        unsafe { self.inner.force_unlock() };
     }
 }

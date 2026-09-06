@@ -1,6 +1,9 @@
 use core::{arch::asm, fmt::Display};
 
-use crate::{misc::VirtAddr, percpu::CpuLocal};
+use crate::{
+    misc::{PhysAddr, VirtAddr},
+    percpu::CpuLocal,
+};
 
 bitflags::bitflags! {
     #[derive(Default, Debug, Clone, Copy)]
@@ -129,4 +132,110 @@ pub fn cpu_local() -> &'static CpuLocal {
     };
 
     unsafe { &*(v as *const CpuLocal) }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct InterruptFrame {
+    rip: VirtAddr,
+    cs: u64,
+    rflags: RFLAGS,
+    rsp: VirtAddr,
+    ss: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C, align(16))]
+pub struct CapturedCpuStatus {
+    rax: u64,
+    rbx: u64,
+    rcx: u64,
+    rdx: u64,
+    rdi: u64,
+    rsi: u64,
+
+    r8: u64,
+    r9: u64,
+    r10: u64,
+    r11: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+
+    cr3: PhysAddr,
+    rbp: u64,
+    error_code: u64,
+    frame: InterruptFrame,
+}
+
+impl CapturedCpuStatus {
+    pub const fn rip(&self) -> VirtAddr {
+        self.frame.rip
+    }
+
+    pub const fn rsp(&self) -> VirtAddr {
+        self.frame.rsp
+    }
+
+    pub const fn rflags(&self) -> RFLAGS {
+        self.frame.rflags
+    }
+
+    pub const fn error_code(&self) -> u64 {
+        self.error_code
+    }
+}
+
+impl Display for CapturedCpuStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "Saved general purpose registers:")?;
+        macro_rules! reg {
+            ($name:ident) => {
+                write!(f, "{:<3}: {:#018x?}    ", stringify!($name), self.$name)?;
+            };
+        }
+
+        reg!(rax);
+        reg!(rbx);
+        reg!(rcx);
+
+        writeln!(f)?;
+
+        reg!(rdx);
+        reg!(rdi);
+        reg!(rsi);
+
+        writeln!(f)?;
+
+        reg!(r8);
+        reg!(r9);
+        reg!(r10);
+
+        writeln!(f)?;
+        reg!(r11);
+        reg!(r12);
+        reg!(r13);
+
+        writeln!(f)?;
+        reg!(r14);
+        reg!(r15);
+
+        write!(f, "\n\n")?;
+        writeln!(f)?;
+        reg!(rbp);
+        writeln!(f)?;
+        reg!(cr3);
+        writeln!(f)?;
+
+        writeln!(
+            f,
+            "rsp: {:?}, at {:?} <{}>",
+            self.rsp(),
+            self.rip(),
+            "UNNAMED"
+        )?;
+        writeln!(f, "rflags: {:#?}", self.rflags())?;
+        Ok(())
+    }
 }

@@ -3,6 +3,7 @@ use crate::{logging, percpu};
 extern "C" fn bsp_init() {
     let bsp = percpu::init_bsp_first();
     super::gdt::init_gdt(bsp);
+    unsafe { super::interrupts::init_idt(true) };
     super::serial::init_serial_inner();
 
     logging::sprintln!("GDT init... Ok\n");
@@ -20,4 +21,8 @@ pub extern "C" fn kboot() -> ! {
     )
 }
 
-pub fn init_phase1() {}
+pub fn init_phase1() {
+    unsafe {
+        core::arch::asm!("int3");
+    }
+}

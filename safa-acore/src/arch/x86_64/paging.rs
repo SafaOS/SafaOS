@@ -1,11 +1,9 @@
-use bitflags::bitflags;
-use core::cell::SyncUnsafeCell;
 use core::fmt::Debug;
 use core::ops::IndexMut;
 use core::ptr::NonNull;
 use core::{arch::asm, ops::Index};
 
-use crate::memory::{frame_allocator, phys_to_virt};
+use crate::memory::{phys_to_virt, pmm};
 use crate::misc::{FrameIter, IterPage, PAGE_SIZE, VirtAddr};
 use crate::paging::{PageEntryFlags, PageTableOps};
 use crate::{
@@ -185,8 +183,7 @@ impl Entry {
             self.set_present(false);
 
             unsafe {
-                frame_allocator::deallocate_frame(frame)
-                    .expect("Failed to deallocate a page table entry")
+                pmm::deallocate_frame(frame).expect("Failed to deallocate a page table entry")
             };
         }
     }
@@ -206,7 +203,7 @@ impl Entry {
 
             Ok(NonNull::new(entry_ptr).expect("PageTable entry mapped to null"))
         } else {
-            let frame = frame_allocator::allocate_frame()?;
+            let frame = pmm::allocate_frame()?;
 
             let addr = frame.addr();
             let virt_addr = phys_to_virt(addr);
@@ -258,10 +255,6 @@ impl PageTableOps for ArchPageTable {
         unsafe { self.free(4) };
     }
 
-    fn finish_ops(&mut self, _pages: IterPage) {
-        todo!("TLB Shootdown")
-    }
-
     fn map_range(
         &mut self,
         pages: IterPage,
@@ -275,24 +268,22 @@ impl PageTableOps for ArchPageTable {
         Ok(())
     }
 
-    unsafe fn unmap_range<F>(
+    unsafe fn unmap_range(
         &mut self,
         pages: IterPage,
-        mut with_each: F,
+        _deallocate: bool,
         lazy: bool,
-    ) -> Result<(), MapToError>
-    where
-        F: FnMut(Page, Frame),
-    {
+    ) -> Result<(), MapToError> {
         for page in pages {
-            let frame = unsafe { self.unmap(page) };
+            let frame = unsafe { self.invalidate(page) };
             match frame {
-                Ok(frame) => with_each(page, frame),
+                Ok(_) => {}
                 Err(MapToError::NotMapped) if lazy => {}
                 Err(err) => return Err(err),
             }
         }
-        Ok(())
+
+        todo!("TLB Shootdown")
     }
 
     unsafe fn set_flags_range(
@@ -410,12 +401,12 @@ impl ArchPageTable {
 
     #[inline]
     /// Unmaps a page without flushing the cache or freeing the frame.
-    unsafe fn unmap(&mut self, page: Page) -> Result<Frame, MapToError> {
+    unsafe fn invalidate(&mut self, page: Page) -> Result<Frame, MapToError> {
         let entry = self.get_entry(page);
         if let Some(mut entry) = entry {
             let entry = unsafe { entry.as_mut() };
             let frame = entry.frame().ok_or(MapToError::NotMapped)?;
-            entry.zeroize();
+            entry.set_present(false);
             Ok(frame)
         } else {
             Err(MapToError::NotMapped)

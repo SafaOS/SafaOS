@@ -13,12 +13,12 @@ impl Write for Serial {
 #[doc(hidden)]
 pub fn _serial(args: Arguments<'_>) {
     SERIAL
-        .lock_no_irq(|guard| guard.write_fmt(args))
+        .lock_no_irq(|mut guard| guard.write_fmt(args))
         .expect("Serial shall never fail")
 }
 
 pub fn init() -> Result<(), &'static str> {
-    SERIAL.lock_no_irq(|guard| guard.init_serial())
+    SERIAL.lock_no_irq(|mut guard| guard.init_serial())
 }
 
 #[macro_export]
@@ -41,7 +41,7 @@ pub use loggingsprintln;
 
 impl LoggingSink for SpinLockIrq<Serial> {
     fn write_record(&self, record: &super::LogRecord) {
-        self.lock_no_irq(|this| {
+        self.lock_no_irq(|mut this| {
             this.write_fmt(format_args!(
                 "[ {}ms ] [\x1b[{}m {:<5?} \x1b[0m] \x1b[90m{}:\x1b[0m {}\n",
                 record.timestamp.as_millis(),

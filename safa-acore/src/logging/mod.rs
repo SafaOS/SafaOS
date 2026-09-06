@@ -214,9 +214,17 @@ macro_rules! _loggerinfo {
     ($subject: literal, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Info, $subject, $($arg)*));
 }
 
+/// Logs a [`LogLevel::Warn`]-level message with the given subject and arguments.
+#[macro_export]
+macro_rules! _loggerwarn {
+    ($subject: ty, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Warn, stringify!($subject), $($arg)*));
+    ($subject: literal, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Warn, $subject, $($arg)*));
+}
+
 pub use _generic_log_macro;
 pub use _loggerdebug as debug;
 pub use _loggererror as error;
 pub use _loggerfatal as fatal;
 pub use _loggerinfo as info;
 pub use _loggertrace as trace;
+pub use _loggerwarn as warn;

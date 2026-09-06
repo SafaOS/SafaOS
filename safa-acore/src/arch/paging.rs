@@ -1,7 +1,7 @@
 use core::ptr::NonNull;
 
 pub use super::inner::paging::ArchPageTable;
-use crate::{misc::PhysAddr, paging::PageTable};
+use crate::misc::PhysAddr;
 
 /// Returns a pointer to the kernel higher half page table.
 ///

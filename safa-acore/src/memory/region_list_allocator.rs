@@ -1,12 +1,9 @@
 use core::fmt::Debug;
 use core::ptr::NonNull;
 
-use thiserror::Error;
-
 use crate::bootloader::MemoryType;
 use crate::memory::phys_to_virt;
 use crate::misc::Frame;
-use crate::sync::SpinLockIrq;
 use crate::{bootloader, logging};
 
 use crate::misc::{PAGE_SIZE, PhysAddr};
@@ -14,10 +11,10 @@ use crate::misc::{PAGE_SIZE, PhysAddr};
 mod test;
 
 #[derive(Debug)]
-struct RegionNode {
-    base: PhysAddr,
-    next: Option<NonNull<RegionNode>>,
-    prev: Option<NonNull<RegionNode>>,
+pub(super) struct RegionNode {
+    pub base: PhysAddr,
+    pub next: Option<NonNull<RegionNode>>,
+    pub prev: Option<NonNull<RegionNode>>,
 }
 
 impl RegionNode {
@@ -88,9 +85,9 @@ impl RegionNode {
 }
 
 #[derive(Debug)]
-pub struct RegionListAllocator {
-    head: Option<NonNull<RegionNode>>,
-    tail: Option<NonNull<RegionNode>>,
+pub(super) struct RegionListAllocator {
+    pub(super) head: Option<NonNull<RegionNode>>,
+    pub(super) tail: Option<NonNull<RegionNode>>,
     bitmap: Option<NonNull<[u8]>>,
     // metadata
     allocations: usize,
@@ -102,6 +99,17 @@ unsafe impl Send for RegionListAllocator {}
 unsafe impl Sync for RegionListAllocator {}
 
 impl RegionListAllocator {
+    pub const fn empty() -> Self {
+        Self {
+            head: None,
+            tail: None,
+            bitmap: None,
+            allocations: 0,
+            usable_regions: 0,
+            unusable_regions: 0,
+        }
+    }
+
     /// Sets a given bit to a given value.
     fn bitmap_set_bit(&mut self, bitnum: usize, value: bool) {
         let idx = bitnum / 8;
@@ -267,10 +275,9 @@ impl RegionListAllocator {
 
         logging::trace!(
             RegionListAllocator,
-            "bitmap marked range: {phys_start:?}..{phys_end:?} start={start_bit:#x}bit end={end_bit:#x}bit, start idx={:#x} end idx={:#x}, start off={start_off} end off={end_off}, bitmap set: {:x?}",
+            "bitmap marked range: {phys_start:?}..{phys_end:?} start={start_bit:#x}bit end={end_bit:#x}bit, start idx={:#x} end idx={:#x}, start off={start_off} end off={end_off}",
             start_idx,
             end_idx,
-            &bitmap[start_idx..=end_idx.min(bitmap.len() - 1)],
             start_off = start_bit % 8,
             end_off = end_bit % 8,
         );
@@ -301,7 +308,7 @@ impl RegionListAllocator {
     #[cfg(test)]
     /// Loops through the list counting the available frames in the list, more expensive than [`usable_frames`] -  [`mapped_frames`], because these are O(1)
     #[inline(always)]
-    fn count_frames_expensive(&self) -> usize {
+    pub fn count_frames_expensive(&self) -> usize {
         let mut current = self.head;
         let mut n = 0;
 
@@ -349,7 +356,7 @@ impl RegionListAllocator {
 
     #[inline(always)]
     /// Allocates `count` frames with `align`-frames alignment.
-    fn allocate_frames(&mut self, align: usize, count: usize) -> Option<Frame> {
+    pub fn allocate_frames(&mut self, align: usize, count: usize) -> Option<Frame> {
         if align == 1 && count == 1 {
             return self.allocate_frame();
         }
@@ -377,7 +384,7 @@ impl RegionListAllocator {
 
     #[inline(always)]
     /// Deallocates `count` contiugous frames starting at `base`.
-    fn deallocate_frames(&mut self, base: Frame, count: usize) {
+    pub fn deallocate_frames(&mut self, base: Frame, count: usize) {
         if count == 1 {
             return self.deallocate_frame(base);
         }
@@ -549,51 +556,4 @@ impl RegionListAllocator {
             unusable_regions,
         }
     }
-}
-
-static REGION_ALLOCATOR: SpinLockIrq<RegionListAllocator> = SpinLockIrq::new(RegionListAllocator {
-    head: None,
-    tail: None,
-    bitmap: None,
-    allocations: 0,
-    usable_regions: 0,
-    unusable_regions: 0,
-});
-
-#[inline]
-pub fn init() {
-    REGION_ALLOCATOR.lock_no_irq(|alloc| **alloc = RegionListAllocator::create())
-}
-
-/// Allocates `count` contiugous frames with `align`-frames alignment.
-pub fn allocate_frames(align: usize, count: usize) -> Option<Frame> {
-    REGION_ALLOCATOR.lock_no_irq(|alloc| alloc.allocate_frames(align, count))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Error)]
-pub enum PMMError {
-    #[error("PMM out of memory")]
-    OutOfMemory,
-}
-
-#[inline(always)]
-/// Allocates a single frame.
-pub fn allocate_frame() -> Result<Frame, PMMError> {
-    allocate_frames(1, 1).ok_or(PMMError::OutOfMemory)
-}
-
-/// Deallocates `count` contiugous frames starting at `base`.
-///
-/// Safety: each frame starting at `base` to `base`+count must no longer be used and allocated using this allocator.
-pub unsafe fn deallocate_frames(base: Frame, count: usize) -> Result<(), PMMError> {
-    REGION_ALLOCATOR.lock_no_irq(|alloc| alloc.deallocate_frames(base, count));
-    Ok(())
-}
-
-#[inline(always)]
-/// Deallocates a single frame `frame`.
-///
-/// Safety: `frame` must no longer be used and allocated using this allocator.
-pub unsafe fn deallocate_frame(frame: Frame) -> Result<(), PMMError> {
-    unsafe { deallocate_frames(frame, 1) }
 }

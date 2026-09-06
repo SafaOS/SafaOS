@@ -1,8 +1,10 @@
 pub mod boot;
 pub mod gdt;
+pub mod interrupts;
 pub mod io;
 pub mod paging;
 pub mod registers;
+pub mod tlb;
 
 pub(crate) mod serial;
 

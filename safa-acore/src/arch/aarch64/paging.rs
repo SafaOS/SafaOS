@@ -1,6 +1,6 @@
 use crate::arch::aarch64::registers::{DEVICE_UNCACHEABLE_MAIR_IDX, FRAMEBUFFER_CACHED_MAIR_IDX};
 use crate::arch::aarch64::tlb;
-use crate::memory::{frame_allocator, phys_to_virt};
+use crate::memory::{phys_to_virt, pmm};
 use crate::misc::{Frame, FrameIter, IterPage, PAGE_SIZE, Page, PhysAddr, VirtAddr};
 use crate::paging::{MapToError, PageEntryFlags, PageTableOps};
 use core::ops::{Index, IndexMut};
@@ -132,11 +132,14 @@ fn translate(addr: VirtAddr) -> (bool, usize, usize, usize, usize) {
 }
 
 impl Entry {
+    #[inline(always)]
+    const fn raw_addr(&self) -> PhysAddr {
+        PhysAddr::new(self.pagenum() as usize * PAGE_SIZE)
+    }
+
+    #[inline(always)]
     fn addr(&self) -> Option<PhysAddr> {
-        if self.present() {
-            return Some(PhysAddr::new(self.pagenum() as usize * PAGE_SIZE));
-        }
-        None
+        self.present().then(|| self.raw_addr())
     }
 
     fn frame(&self) -> Option<Frame> {
@@ -168,7 +171,7 @@ impl Entry {
             Ok(NonNull::new(entry_ptr)
                 .expect("Failed to create a pointer to page table entry addr"))
         } else {
-            let frame = frame_allocator::allocate_frame()?;
+            let frame = pmm::allocate_frame()?;
             let phys_addr = frame.addr();
 
             let virt_addr = phys_to_virt(phys_addr);
@@ -220,7 +223,7 @@ impl Entry {
         if let Some(addr) = self.addr() {
             self.set_present(false);
             unsafe {
-                frame_allocator::deallocate_frame(Frame::containing(addr))
+                pmm::deallocate_frame(Frame::containing(addr))
                     .expect("Failed to deallocate an entry")
             };
         }
@@ -319,7 +322,7 @@ impl ArchPageTable {
             let mut l3 = l2.as_mut()[l2_index].map()?;
             let entry = &mut l3.as_mut()[l3_index];
 
-            if entry.addr().is_some() {
+            if entry.present() {
                 return Err(MapToError::AlreadyMapped);
             }
 
@@ -342,11 +345,28 @@ impl ArchPageTable {
         }
     }
 
-    unsafe fn unmap_single(&mut self, page: Page) -> Option<Frame> {
+    /// Turns a single entry into an invalid entry for a given page by setting it's present to false and keeping the rest of metadata.
+    unsafe fn invalidate_single(&mut self, page: Page) -> Option<Frame> {
         let entry = unsafe { self.get_entry(page)? };
         let frame = entry.frame();
         entry.set_present(false);
+        // already not present
+        // hack to clear out entry if it was invalidated before, so that metadata isn't saved from this invalidate.
+        if frame.is_none() {
+            entry.set_pagenum(0);
+        }
         frame
+    }
+
+    unsafe fn addr_of_invalid(&self, page: Page) -> PhysAddr {
+        let entry = unsafe {
+            self.get_entry(page)
+                .expect("Entry doesn't exist expected the last level entry to be invalid")
+        };
+        let addr = entry.raw_addr();
+        assert!(!entry.present());
+
+        addr
     }
 }
 
@@ -382,20 +402,15 @@ impl PageTableOps for ArchPageTable {
     // Higher half table and lower half's table are different
     unsafe fn sync_higher_half(&mut self) {}
 
-    unsafe fn unmap_range<F>(
+    unsafe fn unmap_range(
         &mut self,
         pages: IterPage,
-        mut with_each: F,
+        deallocate: bool,
         lazy: bool,
-    ) -> Result<(), MapToError>
-    where
-        F: FnMut(Page, Frame),
-    {
+    ) -> Result<(), MapToError> {
         for page in pages {
-            match unsafe { self.unmap_single(page) } {
-                Some(frame) => {
-                    with_each(page, frame);
-                }
+            match unsafe { self.invalidate_single(page) } {
+                Some(_) => {}
                 None if lazy => {}
                 None => return Err(MapToError::NotMapped),
             }
@@ -403,11 +418,19 @@ impl PageTableOps for ArchPageTable {
 
         // Ensure writes are visible.
         tlb::flush_cache_range(pages.current_addr(), pages.end_addr());
-        Ok(())
-    }
 
-    fn finish_ops(&mut self, _pages: crate::misc::IterPage) {
-        // TLB invalidation is done in place by `unmap_range` and `set_flags`.
+        if deallocate {
+            for page in pages {
+                let addr = unsafe { self.addr_of_invalid(page) };
+                if addr != PhysAddr::null() {
+                    unsafe {
+                        pmm::deallocate_frame(Frame::containing(addr))
+                            .expect("Failed to deallocate on unmap()")
+                    };
+                }
+            }
+        }
+        Ok(())
     }
 
     unsafe fn set_flags_range(
@@ -421,9 +444,9 @@ impl PageTableOps for ArchPageTable {
         // break-before-make sequence for correctly modifying entries.
         // break:
         for page in pages {
-            match unsafe { self.get_entry(page) } {
-                Some(ent) if ent.addr().is_some() => ent.set_present(false),
-                _ if lazy => {}
+            match unsafe { self.invalidate_single(page) } {
+                Some(_) => {}
+                _ if lazy => { /* invalidate_single should set pagenum=0 in this case */ }
                 _ => return Err(MapToError::NotMapped),
             }
         }
