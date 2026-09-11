@@ -8,6 +8,7 @@ acpi = "6.1.1"
 bitfield-struct = "0.13.0"
 bitflags = { version = "2.13.1", default-features = false }
 const-str = "1.1.0"
+heapless = "0.9.3"
 int-enum = "1.2.0"
 limine = "0.6.5"
 thiserror = { version = "2.0.20", default-features = false }
