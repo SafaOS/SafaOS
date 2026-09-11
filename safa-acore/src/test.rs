@@ -3,6 +3,7 @@ use core::any::type_name;
 use crate::{
     arch::{self, without_interrupts},
     logging,
+    time::{DurationFmt, SystemInstant},
 };
 
 // use crate::timer::{DurationFmt, SystemInstant};
@@ -16,11 +17,11 @@ macro_rules! test_log {
 
 macro_rules! ok {
     ($instant: expr_2021) => {{
-        // let elapsed = $instant.elapsed();
-        // $crate::logln!(
-        //     "[ \x1B[92m OK   \x1B[0m  ]\x1b[90m:\x1B[0m delta {}",
-        //     $crate::timer::DurationFmt::new(elapsed)
-        // );
+        let elapsed = $instant.elapsed();
+        $crate::logging::sprintln!(
+            "[ \x1B[92m OK   \x1B[0m  ]\x1b[90m:\x1B[0m delta {}",
+            $crate::time::DurationFmt::new(elapsed)
+        );
     }};
 }
 
@@ -88,19 +89,23 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
     );
 
     test_log!("running {} tests", tests.len());
-    // let first_log_instant = SystemInstant::now();
+    let first_log_instant = SystemInstant::now();
 
     for test in tests_iter {
         without_interrupts(|| {
             test_log!("running test \x1B[90m{}\x1B[0m...", test.name(),);
-            // let instant = SystemInstant::now();
+            let instant = SystemInstant::now();
             test.run();
             ok!(instant);
         })
     }
 
-    // let elapsed = first_log_instant.elapsed();
-    // logging::info!("finished running tests in {}", DurationFmt::new(elapsed));
+    let elapsed = first_log_instant.elapsed();
+    logging::info!(
+        "test",
+        "finished running tests in {}",
+        DurationFmt::new(elapsed)
+    );
 
     // printing 'PLEASE EXIT' to the serial makes `safa-helper test` know that the kernel tests were successful
     logging::info!(
