@@ -175,6 +175,7 @@ impl PageTable {
         from: VirtAddr,
         to: VirtAddr,
         flags: PageEntryFlags,
+        zeroize: bool,
     ) -> Result<VirtAddr, MapToError> {
         let end_addr = to.next_page();
 
@@ -188,9 +189,12 @@ impl PageTable {
             let virt_addr = phys_to_virt(frame.addr());
 
             unsafe {
-                core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
+                if zeroize {
+                    core::ptr::write_bytes(virt_addr.into_ptr::<u8>(), 0, PAGE_SIZE);
+                }
                 if let Err(err) = self.map_to(page, frame, flags) {
-                    pmm::deallocate_frame(frame);
+                    pmm::deallocate_frame(frame)
+                        .expect("Failed to deallocate alloc_map memory on failure");
                     return Err(err);
                 }
             }
@@ -335,6 +339,17 @@ impl OwnedPageTable {
         core::mem::forget(self);
 
         PageTableContext { inner: table_ptr }
+    }
+
+    #[cfg(test)]
+    /// Returns the page table inside of this.
+    ///
+    /// Unsafe because the returned PageTable is also a muttable reference to the page table this owns.
+    #[inline(always)]
+    pub unsafe fn get(&self) -> PageTable {
+        PageTableContext {
+            inner: self.table.inner,
+        }
     }
 
     /// Returns the physical address of an owned page table.

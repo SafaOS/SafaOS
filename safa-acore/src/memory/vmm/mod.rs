@@ -683,6 +683,7 @@ impl VirtualMemoryManager {
                     unmapped_addr,
                     unmapped_addr + unmapped_size,
                     s.to_entry_flags(),
+                    s.contains(VMMMFlags::ZEROED),
                 )?;
             }
             ObjectState::LazyAllocated(_) => {}
@@ -1014,8 +1015,12 @@ impl VirtualMemoryManager {
                 // FIXME: alloc_map zeroizes frames by default
                 let mut op = self.page_table.lock();
                 drop(inner);
-                let result =
-                    op.alloc_map(allocated_start_addr, allocated_start_addr + size, map_flags);
+                let result = op.alloc_map(
+                    allocated_start_addr,
+                    allocated_start_addr + size,
+                    map_flags,
+                    flags.contains(VMMMFlags::ZEROED),
+                );
                 result?;
             }
             (VMMAllocMode::Lazy, Some(_)) => unreachable!(),
