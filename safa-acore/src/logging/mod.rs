@@ -32,6 +32,19 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    #[inline]
+    pub const fn display_name(&self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Error => "error",
+            Self::Fatal => "fatal",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Trace => "trace",
+        }
+    }
+
+    #[inline]
     pub const fn ansii_color(&self) -> u8 {
         match self {
             Self::Debug | Self::Error => 91,
