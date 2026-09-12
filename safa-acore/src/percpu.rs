@@ -80,11 +80,23 @@ fn section_size() -> usize {
     section_end() - section_start()
 }
 
+/// Returns a unique index per each CPU depending on the current CPU.
+#[inline]
+pub fn cpu_index() -> usize {
+    CpuLocal::get().cpu_id.as_index()
+}
+
 /// A Special assigned ID to each CPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CpuID(u16);
 
 impl CpuID {
+    #[inline(always)]
+    /// Returns the CPU ID as a usize.
+    pub const fn as_index(&self) -> usize {
+        self.0 as usize
+    }
+
     /// Creates a new [`CpuID`] from a u16.
     ///
     /// Returns `None` if the u16 is greater than or equal to the maximum number of CPUs.

@@ -116,8 +116,14 @@ impl<T> IntSpinLock<T> {
         }
     }
 
+    #[inline(always)]
     pub const fn get(&self) -> *mut T {
         self.data.get()
+    }
+
+    #[inline(always)]
+    pub const fn get_mut(&mut self) -> &mut T {
+        self.data.get_mut()
     }
 
     #[inline(always)]

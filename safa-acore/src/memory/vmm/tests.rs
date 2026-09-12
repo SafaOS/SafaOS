@@ -1,7 +1,12 @@
 // use crate::memory::vmm::{self, Location, VMMAllocMode};
 // use crate::memory::vmm::{VMMMFlags, VirtualMemoryManager, objects::ObjectState};
-// use crate::misc::PAGE_SIZE;
-// use crate::timer::{DurationFmt, SystemInstant};
+// use crate::misc::{PAGE_SIZE, VirtAddr};
+// use crate::paging::OwnedPageTable;
+// use crate::time::{DurationFmt, SystemInstant};
+
+// fn create_temp_page_table() -> OwnedPageTable {
+//     OwnedPageTable::create().expect("Failed to create a page table for tests")
+// }
 
 // #[test_case]
 // fn map_random_regions() {
@@ -55,7 +60,7 @@
 
 //         let start_instant = SystemInstant::now();
 //         for index in 0..RUNS {
-//             let cpu_cycles = crate::arch::utils::cpu_cycles() as usize;
+//             let cpu_cycles = crate::arch::timers::cpu_timer_ticks() as usize;
 //             let random_i = (index + cpu_cycles) % results.len();
 //             let addr = results.swap_remove(random_i);
 //             assert!(vmm.unmap(addr), "Failed to deallocate a region");
@@ -72,12 +77,10 @@
 // #[test_case]
 // fn allocate_random_regions() {
 //     const RUNS: usize = 1000;
-//     let pseudo_page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-//     let vmm = VirtualMemoryManager::new(
-//         VirtAddr::from(0x1000),
-//         0xFFFFFFFFFFF,
-//         pseudo_page_table.frame_ptr(),
-//     );
+//     let pseudo_page_table = create_temp_page_table();
+//     let vmm = VirtualMemoryManager::new(VirtAddr::from(0x1000), 0xFFFFFFFFFFF, unsafe {
+//         pseudo_page_table.get()
+//     });
 //     let mut vmm_inner = vmm.inner.lock();
 
 //     let mut curr_i = 0;
@@ -117,7 +120,7 @@
 
 //     let start_instant = SystemInstant::now();
 //     for index in 0..RUNS {
-//         let cpu_cycles = crate::arch::utils::cpu_cycles() as usize;
+//         let cpu_cycles = crate::arch::timers::cpu_timer_ticks() as usize;
 //         let random_i = (index + cpu_cycles) % results.len();
 //         let addr = results.swap_remove(random_i);
 //         vmm_inner
@@ -149,17 +152,14 @@
 //         NextSpecificAllocation,
 //     }
 
-//     use crate::memory::paging::PhysPageTable;
-//     use crate::timer::{DurationFmt, SystemInstant};
+//     use crate::time::{DurationFmt, SystemInstant};
 
 //     const RUNS: usize = 1000;
 
-//     let pseudo_page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-//     let vmm = VirtualMemoryManager::new(
-//         VirtAddr::from(0x1000),
-//         0xFFFFFFFFFFF,
-//         pseudo_page_table.frame_ptr(),
-//     );
+//     let pseudo_page_table = create_temp_page_table();
+//     let vmm = VirtualMemoryManager::new(VirtAddr::from(0x1000), 0xFFFFFFFFFFF, unsafe {
+//         pseudo_page_table.get()
+//     });
 //     let mut vmm_inner = vmm.inner.lock();
 
 //     let mut curr_i = 0;
@@ -244,7 +244,7 @@
 //     let to_deallocate = results.len();
 //     let start_instant = SystemInstant::now();
 //     for index in 0..to_deallocate {
-//         let cpu_cycles = crate::arch::utils::cpu_cycles() as usize;
+//         let cpu_cycles = crate::arch::timers::cpu_timer_ticks() as usize;
 //         let random_i = (index + cpu_cycles) % results.len();
 //         let addr = results.swap_remove(random_i);
 //         vmm_inner
@@ -270,12 +270,10 @@
 
 // #[test_case]
 // fn unmap_contiguous_frees_multiple_adjacent_regions() {
-//     let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-//     let vmm = VirtualMemoryManager::new(
-//         VirtAddr::from(0x1000_0000),
-//         0x0100_0000,
-//         page_table.frame_ptr(),
-//     );
+//     let page_table = create_temp_page_table();
+//     let vmm = VirtualMemoryManager::new(VirtAddr::from(0x1000_0000), 0x0100_0000, unsafe {
+//         page_table.get()
+//     });
 
 //     static NAME_A: &str = "region-a";
 //     static NAME_B: &str = "region-b";
@@ -345,12 +343,10 @@
 
 // #[test_case]
 // fn unmap_contiguous_from_non_base_start_matches_requested_size() {
-//     let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-//     let vmm = VirtualMemoryManager::new(
-//         VirtAddr::from(0x2000_0000),
-//         0x0010_0000,
-//         page_table.frame_ptr(),
-//     );
+//     let page_table = create_temp_page_table();
+//     let vmm = VirtualMemoryManager::new(VirtAddr::from(0x2000_0000), 0x0010_0000, unsafe {
+//         page_table.get()
+//     });
 
 //     static NAME: &str = "padding";
 //     static NAME2: &str = "target";
@@ -394,12 +390,10 @@
 
 // #[test_case]
 // fn unmap_partial_head_splits_and_keeps_remainder_allocated() {
-//     let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-//     let vmm = VirtualMemoryManager::new(
-//         VirtAddr::from(0x1000_0000),
-//         0x0100_0000,
-//         page_table.frame_ptr(),
-//     );
+//     let page_table = create_temp_page_table();
+//     let vmm = VirtualMemoryManager::new(VirtAddr::from(0x1000_0000), 0x0100_0000, unsafe {
+//         page_table.get()
+//     });
 
 //     static NAME: &str = "region";
 //     let addr = vmm
@@ -448,12 +442,10 @@
 
 // #[test_case]
 // fn unmap_partial_tail_splits_and_keeps_remainder_allocated() {
-//     let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-//     let vmm = VirtualMemoryManager::new(
-//         VirtAddr::from(0x1000_0000),
-//         0x0100_0000,
-//         page_table.frame_ptr(),
-//     );
+//     let page_table = create_temp_page_table();
+//     let vmm = VirtualMemoryManager::new(VirtAddr::from(0x1000_0000), 0x0100_0000, unsafe {
+//         page_table.get()
+//     });
 
 //     static NAME: &str = "region";
 //     let addr = vmm
@@ -499,13 +491,11 @@
 
 // #[test_case]
 // fn unmap_partial_fully_interior_range_splits_both_ends() {
-//     let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
+//     let page_table = create_temp_page_table();
 
-//     let vmm = VirtualMemoryManager::new(
-//         VirtAddr::from(0x1000_0000),
-//         0x0100_0000,
-//         page_table.frame_ptr(),
-//     );
+//     let vmm = VirtualMemoryManager::new(VirtAddr::from(0x1000_0000), 0x0100_0000, unsafe {
+//         page_table.get()
+//     });
 
 //     static NAME: &str = "region";
 //     let addr = vmm
@@ -567,12 +557,10 @@
 
 // #[test_case]
 // fn unmap_contiguous_across_multiple_objects_with_partial_ends() {
-//     let page_table = PhysPageTable::create().expect("Failed to create a pseudo page table");
-//     let vmm = VirtualMemoryManager::new(
-//         VirtAddr::from(0x1000_0000),
-//         0x0100_0000,
-//         page_table.frame_ptr(),
-//     );
+//     let page_table = create_temp_page_table();
+//     let vmm = VirtualMemoryManager::new(VirtAddr::from(0x1000_0000), 0x0100_0000, unsafe {
+//         page_table.get()
+//     });
 
 //     static NAME_A: &str = "a";
 //     static NAME_B: &str = "b";
