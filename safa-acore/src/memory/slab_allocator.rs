@@ -3,17 +3,48 @@
 use core::{alloc::Layout, cell::SyncUnsafeCell, ops::Deref, ptr::NonNull};
 
 use bitflags::bitflags;
+use thiserror::Error;
 
 use crate::{
     bootloader, logging,
     memory::{
-        phys_to_virt, pmm,
+        phys_to_virt,
+        pmm::{self, PMMError},
         vmm::{self, VMMAllocError, VMMMFlags},
     },
     misc::{PAGE_SIZE, VirtAddr},
     percpu,
     sync::{IntSpinLock, SpinLockGuard},
 };
+
+#[derive(Debug, Clone, Copy, Error)]
+/// A slab allocator alloc error.
+pub enum SlabError {
+    #[error("Out Of Memory")]
+    OutOfMemory,
+}
+
+impl From<VMMAllocError> for SlabError {
+    fn from(value: VMMAllocError) -> Self {
+        match value {
+            VMMAllocError::InvalidSize
+            | VMMAllocError::Used
+            | VMMAllocError::UsedBy { .. }
+            | VMMAllocError::OutOfRange => {
+                unreachable!("Unexpected VMM error from slab allocator: {value:?}")
+            }
+            VMMAllocError::OutOfMemory => Self::OutOfMemory,
+        }
+    }
+}
+
+impl From<PMMError> for SlabError {
+    fn from(value: PMMError) -> Self {
+        match value {
+            PMMError::OutOfMemory => Self::OutOfMemory,
+        }
+    }
+}
 
 const MAGAZINE_CACHE_SIZE: usize = 8;
 
@@ -393,7 +424,7 @@ impl SlabCache {
         }
     }
 
-    fn try_init_magazines(&mut self) -> Result<(), VMMAllocError> {
+    fn try_init_magazines(&mut self) -> Result<(), SlabError> {
         let data = percpu_magazine_cache().slab_allocate()?;
 
         let cpu_count = bootloader::cpu_count();
@@ -424,7 +455,7 @@ impl SlabCache {
     }
 
     /// Allocates memory for a new slab (the slab itself, which if in direct mode then it should contain the metadata).
-    fn new_slab_memory(&self) -> Result<NonNull<u8>, VMMAllocError> {
+    fn new_slab_memory(&self) -> Result<NonNull<u8>, SlabError> {
         if self.flags.contains(SCacheFlags::USE_PMM) {
             let frame = pmm::allocate_frames(1, self.slab_sz as usize / PAGE_SIZE)?;
             let addr = phys_to_virt(frame.addr());
@@ -445,12 +476,13 @@ impl SlabCache {
                     );
                     block_header
                 })
+                .map_err(|e| e.into())
             })
         }
     }
 
     /// Allocates a new indirect slab for the cache.
-    fn new_indirect_slab(&self) -> Result<NonNull<IndirectSlab>, VMMAllocError> {
+    fn new_indirect_slab(&self) -> Result<NonNull<IndirectSlab>, SlabError> {
         let mut slab = indirect_cache().allocate()?.cast::<IndirectSlab>();
 
         let drop_guard = DeallocSlab { slab };
@@ -476,7 +508,7 @@ impl SlabCache {
     }
     #[inline]
     /// Allocates a new direct slab for this cache.
-    fn new_direct_slab(&self) -> Result<NonNull<Slab>, VMMAllocError> {
+    fn new_direct_slab(&self) -> Result<NonNull<Slab>, SlabError> {
         self.new_slab_memory().map(|block_header| {
             let slab_header = unsafe {
                 block_header
@@ -492,7 +524,7 @@ impl SlabCache {
 
     #[inline(always)]
     /// Allocates a new slab for this cache, either directly or indirectly depending on the cache's flags.
-    fn new_slab(&self) -> Result<NonNull<Slab>, VMMAllocError> {
+    fn new_slab(&self) -> Result<NonNull<Slab>, SlabError> {
         if self.indirect() {
             self.new_indirect_slab().map(|c| c.cast())
         } else {
@@ -678,7 +710,7 @@ impl SlabCache {
     }
 
     /// Slow allocate operation that doesn't use per-cpus or anything special.
-    fn slab_allocate(&self) -> Result<NonNull<[u8]>, VMMAllocError> {
+    fn slab_allocate(&self) -> Result<NonNull<[u8]>, SlabError> {
         let mut slabs_list_guard = self.lists.lock();
         let slabs_list = &mut *slabs_list_guard;
 
@@ -721,7 +753,7 @@ impl SlabCache {
     /// The main allocation interface.
     ///
     /// May use [`Self::magazine_allocate`] or fallback to [`Self::slab_allocate`].
-    pub fn allocate(&self) -> Result<NonNull<[u8]>, VMMAllocError> {
+    pub fn allocate(&self) -> Result<NonNull<[u8]>, SlabError> {
         if let Some(object) = self.magazine_allocate() {
             return Ok(self.init_object(object));
         }
@@ -867,7 +899,7 @@ fn magazine_cache() -> &'static SlabCache {
 }
 
 #[inline(always)]
-fn allocate_magazine() -> Result<NonNull<Magazine>, VMMAllocError> {
+fn allocate_magazine() -> Result<NonNull<Magazine>, SlabError> {
     magazine_cache().allocate().map(|p| p.cast::<Magazine>())
 }
 
@@ -895,7 +927,7 @@ pub fn slab_cache_create(
     layout: Layout,
     initializer: Option<SlabInitializer>,
     deinitializer: Option<SlabDeinitializer>,
-) -> Result<SlabCacheRef, VMMAllocError> {
+) -> Result<SlabCacheRef, SlabError> {
     let mut cache = root_cache().allocate()?.cast::<SlabCache>();
     unsafe {
         *cache.as_mut() = SlabCache::new(name, layout, initializer, deinitializer);

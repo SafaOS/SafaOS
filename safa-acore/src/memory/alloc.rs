@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     logging,
-    memory::slab_allocator::{SlabCacheRef, slab_cache_create},
+    memory::slab_allocator::{SlabCacheRef, SlabError, slab_cache_create},
     misc::PAGE_SIZE,
 };
 
@@ -71,7 +71,7 @@ pub fn kalloc(layout: Layout) -> Result<NonNull<[u8]>, KAllocError> {
 
     let results = caches()[idx]
         .allocate()
-        .map_err(|_| KAllocError::OutOfMemory)?;
+        .map_err(|SlabError::OutOfMemory| KAllocError::OutOfMemory)?;
 
     debug_assert_eq!(results.len(), *size);
     Ok(results)
