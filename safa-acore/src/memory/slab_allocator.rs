@@ -6,7 +6,10 @@ use bitflags::bitflags;
 
 use crate::{
     bootloader, logging,
-    memory::vmm::{self, VMMAllocError, VMMMFlags},
+    memory::{
+        phys_to_virt, pmm,
+        vmm::{self, VMMAllocError, VMMMFlags},
+    },
     misc::{PAGE_SIZE, VirtAddr},
     percpu,
     sync::{IntSpinLock, SpinLockGuard},
@@ -132,7 +135,10 @@ impl MagazineDepot {
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     struct SCacheFlags: u32 {
+        /// Indirect slabs store metadata away from the slab itself.
         const INDIRECT = 1 << 1;
+        /// Force the usage of the PMM for allocating memory instead of the VMM.
+        const USE_PMM = 1 << 2;
     }
 }
 
@@ -367,6 +373,10 @@ impl SlabCache {
             flags = flags.union(SCacheFlags::INDIRECT);
         }
 
+        if slab_sz == PAGE_SIZE as u32 {
+            flags = flags.union(SCacheFlags::USE_PMM);
+        }
+
         Self {
             lists: IntSpinLock::new(SlabCacheL::new()),
             cpu_cache: SyncUnsafeCell::new(None),
@@ -415,20 +425,28 @@ impl SlabCache {
 
     /// Allocates memory for a new slab (the slab itself, which if in direct mode then it should contain the metadata).
     fn new_slab_memory(&self) -> Result<NonNull<u8>, VMMAllocError> {
-        vmm::with_root(|vmm| {
-            vmm.map_new(
-                self.name,
-                None,
-                self.slab_sz as usize,
-                VMMMFlags::WRITABLE | VMMMFlags::ZEROED,
-                vmm::VMMAllocMode::Normal,
-            )
-            .map(|v| {
-                let block_header = NonNull::new(v.into_ptr::<u8>())
-                    .expect("Failed to make a pointer to a slab header because VMM returned null");
-                block_header
+        if self.flags.contains(SCacheFlags::USE_PMM) {
+            let frame = pmm::allocate_frames(1, self.slab_sz as usize / PAGE_SIZE)?;
+            let addr = phys_to_virt(frame.addr());
+
+            Ok(NonNull::new(addr.into_ptr()).expect("PMM returned null"))
+        } else {
+            vmm::with_root(|vmm| {
+                vmm.map_new(
+                    self.name,
+                    None,
+                    self.slab_sz as usize,
+                    VMMMFlags::WRITABLE | VMMMFlags::ZEROED,
+                    vmm::VMMAllocMode::Normal,
+                )
+                .map(|v| {
+                    let block_header = NonNull::new(v.into_ptr::<u8>()).expect(
+                        "Failed to make a pointer to a slab header because VMM returned null",
+                    );
+                    block_header
+                })
             })
-        })
+        }
     }
 
     /// Allocates a new indirect slab for the cache.

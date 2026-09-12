@@ -14,8 +14,10 @@ pub fn init() {
 }
 
 /// Allocates `count` contiugous frames with `align`-frames alignment.
-pub fn allocate_frames(align: usize, count: usize) -> Option<Frame> {
-    REGION_ALLOCATOR.lock_no_irq(|mut alloc| alloc.allocate_frames(align, count))
+pub fn allocate_frames(align: usize, count: usize) -> Result<Frame, PMMError> {
+    REGION_ALLOCATOR
+        .lock_no_irq(|mut alloc| alloc.allocate_frames(align, count))
+        .ok_or(PMMError::OutOfMemory)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Error)]
@@ -27,7 +29,7 @@ pub enum PMMError {
 #[inline(always)]
 /// Allocates a single frame.
 pub fn allocate_frame() -> Result<Frame, PMMError> {
-    allocate_frames(1, 1).ok_or(PMMError::OutOfMemory)
+    allocate_frames(1, 1)
 }
 
 /// Deallocates `count` contiugous frames starting at `base`.
