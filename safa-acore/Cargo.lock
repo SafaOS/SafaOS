@@ -83,6 +83,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "libkernel"
+version = "0.1.0"
+
+[[package]]
 name = "limine"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -153,6 +157,7 @@ dependencies = [
  "const-str",
  "heapless",
  "int-enum",
+ "libkernel",
  "limine",
  "thiserror",
 ]

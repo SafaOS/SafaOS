@@ -1,5 +1,3 @@
-use core::cmp::Ordering;
-
 use alloc::alloc::{AllocError, Allocator, Global};
 
 use crate::collections::{QueryFor, raw::Direction};

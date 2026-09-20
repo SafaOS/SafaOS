@@ -130,7 +130,7 @@ impl<T> Node<T> {
     }
 
     #[inline(always)]
-    pub const fn color(&self) -> Color {
+    const fn color(&self) -> Color {
         self.colored_parent.color()
     }
 
@@ -140,7 +140,7 @@ impl<T> Node<T> {
     }
 
     #[inline(always)]
-    pub fn set_color(&mut self, color: Color) {
+    fn set_color(&mut self, color: Color) {
         self.colored_parent.set_color(color);
     }
 
@@ -184,6 +184,7 @@ pub struct RawRBTree<T> {
 }
 
 impl<T: core::fmt::Debug> RawRBTree<T> {
+    #[cfg(test)]
     fn balance_check_recursive(
         &self,
         node: Option<NonNull<Node<T>>>,

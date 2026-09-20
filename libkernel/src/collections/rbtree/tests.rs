@@ -7,7 +7,7 @@ struct Spec {
     magic: usize,
 }
 
-#[test_case]
+#[test]
 pub fn a_insert_rbtree() {
     let mut tree = RBTree::<usize, Spec>::new();
     tree.try_insert(6, Spec { magic: 42 })
@@ -15,7 +15,7 @@ pub fn a_insert_rbtree() {
     assert_eq!(tree.len(), 1);
 }
 
-#[test_case]
+#[test]
 pub fn b_insert_and_search() {
     let mut tree = RBTree::<usize, Spec>::new();
     tree.try_insert(6, Spec { magic: 556 })
@@ -26,7 +26,7 @@ pub fn b_insert_and_search() {
     assert_eq!(tree.len(), 0);
 }
 
-#[test_case]
+#[test]
 pub fn c_big_tree() {
     const KEYS: [usize; 20] = [
         1, 3, 2, 5, 4, 6, 9, 8, 7, 10, 12, 13, 17, 11, 15, 16, 14, 18, 19, 42,
@@ -120,7 +120,7 @@ fn ascending(tree: &LinkedRBTree<i32, i32>) -> Vec<i32> {
 
 // ---- construction & basic accessors ------------------------------
 
-#[test_case]
+#[test]
 fn d_a_new_tree_is_empty() {
     let tree: LinkedRBTree<i32, i32> = LinkedRBTree::new();
     assert_eq!(tree.len(), 0);
@@ -129,7 +129,7 @@ fn d_a_new_tree_is_empty() {
     assert!(tree.back_cursor().key_value().is_none());
 }
 
-#[test_case]
+#[test]
 fn d_b_insert_then_get() {
     let mut tree = LinkedRBTree::new();
     assert_eq!(tree.try_insert(1, "one").unwrap(), None);
@@ -137,7 +137,7 @@ fn d_b_insert_then_get() {
     assert_eq!(tree.get(&1), Some(&"one"));
 }
 
-#[test_case]
+#[test]
 fn d_c_reinsert_replaces_value_keeps_len() {
     let mut tree = LinkedRBTree::new();
     tree.try_insert(1, "one").unwrap();
@@ -147,7 +147,7 @@ fn d_c_reinsert_replaces_value_keeps_len() {
     assert_eq!(tree.get(&1), Some(&"uno"));
 }
 
-#[test_case]
+#[test]
 fn d_d_get_mut_mutates_in_place() {
     let mut tree = LinkedRBTree::new();
     tree.try_insert(1, 10).unwrap();
@@ -157,7 +157,7 @@ fn d_d_get_mut_mutates_in_place() {
 
 // ---- removal -------------------------------------------------------
 
-#[test_case]
+#[test]
 fn d_e_remove_existing_shrinks_len() {
     let mut tree = LinkedRBTree::new();
     tree.try_insert(1, "one").unwrap();
@@ -166,7 +166,7 @@ fn d_e_remove_existing_shrinks_len() {
     assert_eq!(tree.get(&1), None);
 }
 
-#[test_case]
+#[test]
 fn d_f_remove_missing_is_none() {
     let mut tree: LinkedRBTree<i32, i32> = LinkedRBTree::new();
     tree.try_insert(1, 1).unwrap();
@@ -176,7 +176,7 @@ fn d_f_remove_missing_is_none() {
 
 // ---- sorted-order invariant ----------------------------------------
 
-#[test_case]
+#[test]
 fn d_g_sorted_order_ascending_inserts() {
     let mut tree = LinkedRBTree::new();
     for k in 0..20 {
@@ -185,7 +185,7 @@ fn d_g_sorted_order_ascending_inserts() {
     assert_eq!(ascending(&tree), (0..20).collect::<Vec<_>>());
 }
 
-#[test_case]
+#[test]
 fn d_h_sorted_order_descending_inserts() {
     let mut tree = LinkedRBTree::new();
     for k in (0..20).rev() {
@@ -194,7 +194,7 @@ fn d_h_sorted_order_descending_inserts() {
     assert_eq!(ascending(&tree), (0..20).collect::<Vec<_>>());
 }
 
-#[test_case]
+#[test]
 fn d_i_sorted_order_shuffled_inserts() {
     let mut keys: Vec<i32> = (0..200).collect();
     let mut seed = 0xC0FFEEu32;
@@ -210,7 +210,7 @@ fn d_i_sorted_order_shuffled_inserts() {
     assert_eq!(ascending(&tree), (0..200).collect::<Vec<_>>());
 }
 
-#[test_case]
+#[test]
 fn d_i_shuffled_insert_reports_first_orphan() {
     let mut keys: Vec<i32> = (0..200).collect();
     let mut seed = 0xC0FFEEu32;
@@ -238,7 +238,7 @@ fn d_i_shuffled_insert_reports_first_orphan() {
 
 // ---- linked-list relinking around removal --------------------------
 
-#[test_case]
+#[test]
 fn d_j_remove_head_advances_head() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -249,7 +249,7 @@ fn d_j_remove_head_advances_head() {
     assert_eq!(ascending(&tree), vec![1, 2, 3, 4]);
 }
 
-#[test_case]
+#[test]
 fn d_k_remove_tail_retreats_tail() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -260,7 +260,7 @@ fn d_k_remove_tail_retreats_tail() {
     assert_eq!(ascending(&tree), vec![0, 1, 2, 3]);
 }
 
-#[test_case]
+#[test]
 fn d_l_remove_middle_relinks_neighbors() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -275,7 +275,7 @@ fn d_l_remove_middle_relinks_neighbors() {
     assert_eq!(cur.peek_prev(), Some((&1, &1)));
 }
 
-#[test_case]
+#[test]
 fn d_m_remove_last_node_clears_ends() {
     let mut tree = LinkedRBTree::new();
     tree.try_insert(1, 1).unwrap();
@@ -287,7 +287,7 @@ fn d_m_remove_last_node_clears_ends() {
 
 // ---- clear -----------------------------------------------------------
 
-#[test_case]
+#[test]
 fn d_n_clear_empties_tree_and_ends() {
     let mut tree = LinkedRBTree::new();
     for k in 0..10 {
@@ -302,7 +302,7 @@ fn d_n_clear_empties_tree_and_ends() {
 
 // ---- cursors -----------------------------------------------------------
 
-#[test_case]
+#[test]
 fn d_o_front_and_back_cursor_match_ends() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -312,7 +312,7 @@ fn d_o_front_and_back_cursor_match_ends() {
     assert_eq!(tree.back_cursor().key_value(), Some((&4, &40)));
 }
 
-#[test_case]
+#[test]
 fn d_p_cursor_to_hits_existing_key() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -321,7 +321,7 @@ fn d_p_cursor_to_hits_existing_key() {
     assert_eq!(tree.cursor_to(&3).key_value(), Some((&3, &3)));
 }
 
-#[test_case]
+#[test]
 fn d_q_cursor_to_missing_key_is_ghost() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -330,7 +330,7 @@ fn d_q_cursor_to_missing_key_is_ghost() {
     assert!(tree.cursor_to(&99).key_value().is_none());
 }
 
-#[test_case]
+#[test]
 fn d_r_move_next_past_tail_wraps_to_head() {
     let mut tree = LinkedRBTree::new();
     for k in 0..3 {
@@ -343,7 +343,7 @@ fn d_r_move_next_past_tail_wraps_to_head() {
     assert_eq!(cur.key_value(), Some((&0, &0)));
 }
 
-#[test_case]
+#[test]
 fn d_s_move_prev_past_head_wraps_to_tail() {
     let mut tree = LinkedRBTree::new();
     for k in 0..3 {
@@ -356,7 +356,7 @@ fn d_s_move_prev_past_head_wraps_to_tail() {
     assert_eq!(cur.key_value(), Some((&2, &2)));
 }
 
-#[test_case]
+#[test]
 fn d_t_ghost_wrap_is_symmetric_round_trip() {
     let mut tree = LinkedRBTree::new();
     for k in 0..4 {
@@ -377,7 +377,7 @@ fn d_t_ghost_wrap_is_symmetric_round_trip() {
     assert_eq!(cur.key_value(), Some((&3, &3)));
 }
 
-#[test_case]
+#[test]
 fn d_u_peek_prev_next_dont_move_cursor() {
     let mut tree = LinkedRBTree::new();
     for k in 0..3 {
@@ -389,7 +389,7 @@ fn d_u_peek_prev_next_dont_move_cursor() {
     assert_eq!(cur.key_value(), Some((&1, &1)));
 }
 
-#[test_case]
+#[test]
 fn d_v_cursor_mut_to_mutates_value_in_place() {
     let mut tree = LinkedRBTree::new();
     for k in 0..3 {
@@ -402,7 +402,7 @@ fn d_v_cursor_mut_to_mutates_value_in_place() {
     assert_eq!(tree.get(&1), Some(&99));
 }
 
-#[test_case]
+#[test]
 fn d_w_front_back_cursor_mut_match_ends() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -421,7 +421,7 @@ impl<'a> Drop for DropCounter<'a> {
     }
 }
 
-#[test_case]
+#[test]
 fn d_x_drop_deallocates_every_value() {
     let count = AtomicUsize::new(0);
     {
@@ -437,7 +437,7 @@ fn d_x_drop_deallocates_every_value() {
 
 // ---- stress ------------------------------------------------------------
 
-#[test_case]
+#[test]
 fn d_y_interleaved_insert_remove_stays_sorted() {
     let mut tree = LinkedRBTree::new();
     let mut present: Vec<i32> = Vec::new();
@@ -462,7 +462,7 @@ fn d_y_interleaved_insert_remove_stays_sorted() {
     assert_eq!(tree.len(), present.len());
 }
 
-#[test_case]
+#[test]
 fn d_ad_overwrite_preserves_list_links() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -481,7 +481,7 @@ fn d_ad_overwrite_preserves_list_links() {
     assert_eq!(ascending(&tree), vec![0, 1, 2, 3, 4]);
 }
 
-#[test_case]
+#[test]
 fn d_ae_overwrite_head_keeps_head_pointer() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -494,7 +494,7 @@ fn d_ae_overwrite_head_keeps_head_pointer() {
     assert_eq!(ascending(&tree), vec![0, 1, 2, 3, 4]);
 }
 
-#[test_case]
+#[test]
 fn d_af_overwrite_tail_keeps_tail_pointer() {
     let mut tree = LinkedRBTree::new();
     for k in 0..5 {
@@ -507,7 +507,7 @@ fn d_af_overwrite_tail_keeps_tail_pointer() {
     assert_eq!(ascending(&tree), vec![0, 1, 2, 3, 4]);
 }
 
-#[test_case]
+#[test]
 fn d_ag_overwrite_sole_node_keeps_head_and_tail() {
     let mut tree = LinkedRBTree::new();
     tree.try_insert(1, "a").unwrap();
@@ -519,7 +519,7 @@ fn d_ag_overwrite_sole_node_keeps_head_and_tail() {
     assert_eq!(tree.back_cursor().key_value(), Some((&1, &"b")));
 }
 
-#[test_case]
+#[test]
 fn d_ah_repeated_overwrite_same_key_never_grows_list() {
     let mut tree = LinkedRBTree::new();
     tree.try_insert(1, 1).unwrap();
