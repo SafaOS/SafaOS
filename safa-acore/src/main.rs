@@ -9,9 +9,10 @@
 #![feature(allocator_api)]
 #![cfg_attr(test, feature(const_type_name))]
 
-// extern crate alloc;
+extern crate alloc;
 mod arch;
 mod bootloader;
+mod collections;
 mod logging;
 mod memory;
 mod misc;
