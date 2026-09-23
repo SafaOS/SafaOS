@@ -104,6 +104,7 @@ macro_rules! impl_addr_ty {
         const impl Add<usize> for $ty {
             type Output = $ty;
             #[inline(always)]
+            #[track_caller]
             fn add(self, rhs: usize) -> Self::Output {
                 Self(self.0 + rhs)
             }
@@ -112,6 +113,7 @@ macro_rules! impl_addr_ty {
         const impl Add<$ty> for $ty {
             type Output = $ty;
             #[inline(always)]
+            #[track_caller]
             fn add(self, rhs: $ty) -> Self::Output {
                 self + rhs.0
             }
@@ -119,6 +121,7 @@ macro_rules! impl_addr_ty {
 
         const impl AddAssign<usize> for $ty {
             #[inline(always)]
+            #[track_caller]
             fn add_assign(&mut self, rhs: usize) {
                 *self = *self + rhs
             }
@@ -127,6 +130,7 @@ macro_rules! impl_addr_ty {
         const impl Sub<$ty> for $ty {
             type Output = usize;
             #[inline(always)]
+            #[track_caller]
             fn sub(self, rhs: $ty) -> Self::Output {
                 self.0 - rhs.0
             }
@@ -135,6 +139,7 @@ macro_rules! impl_addr_ty {
         const impl Sub<usize> for $ty {
             type Output = Self;
             #[inline(always)]
+            #[track_caller]
             fn sub(self, rhs: usize) -> Self::Output {
                 Self(self.0 - rhs)
             }
@@ -142,6 +147,7 @@ macro_rules! impl_addr_ty {
 
         const impl SubAssign<usize> for $ty {
             #[inline(always)]
+            #[track_caller]
             fn sub_assign(&mut self, rhs: usize) {
                 *self = *self - rhs
             }
@@ -149,12 +155,15 @@ macro_rules! impl_addr_ty {
 
         impl Deref for $ty {
             type Target = usize;
+
+            #[inline(always)]
             fn deref(&self) -> &Self::Target {
                 &self.0
             }
         }
 
         impl DerefMut for $ty {
+            #[inline(always)]
             fn deref_mut(&mut self) -> &mut Self::Target {
                 &mut self.0
             }
