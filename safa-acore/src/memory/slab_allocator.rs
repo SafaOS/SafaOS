@@ -915,6 +915,9 @@ impl Deref for SlabCacheRef {
     }
 }
 
+unsafe impl Send for SlabCacheRef {}
+unsafe impl Sync for SlabCacheRef {}
+
 /// Creates a new slab cache and returns a reference to it.
 ///
 /// `name` is the name of the cache.
