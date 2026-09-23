@@ -21,7 +21,7 @@ pub fn b_insert_and_search() {
     tree.try_insert(6, Spec { magic: 556 })
         .expect("Allocation error trying to insert into RBTree");
     assert_eq!(tree.get(&6), Some(&Spec { magic: 556 }));
-    assert_eq!(tree.remove(&6), Some(Spec { magic: 556 }));
+    assert_eq!(tree.remove(&6), Some((6, Spec { magic: 556 })));
     assert_eq!(tree.get(&6), None);
     assert_eq!(tree.len(), 0);
 }
@@ -77,9 +77,12 @@ pub fn c_big_tree() {
         let key = KEYS[i];
         assert_eq!(
             tree.remove(&key),
-            Some(Spec {
-                magic: magic_base + key + 1
-            })
+            Some((
+                key,
+                Spec {
+                    magic: magic_base + key + 1
+                }
+            )),
         );
         tree.raw.balance_check().expect("Tree balance check failed");
 
@@ -161,7 +164,7 @@ fn d_d_get_mut_mutates_in_place() {
 fn d_e_remove_existing_shrinks_len() {
     let mut tree = LinkedRBTree::new();
     tree.try_insert(1, "one").unwrap();
-    assert_eq!(tree.remove(&1), Some("one"));
+    assert_eq!(tree.remove(&1), Some((1, "one")));
     assert_eq!(tree.len(), 0);
     assert_eq!(tree.get(&1), None);
 }
@@ -396,9 +399,7 @@ fn d_v_cursor_mut_to_mutates_value_in_place() {
         tree.try_insert(k, k).unwrap();
     }
     let mut cur = tree.cursor_mut_to(&1);
-    unsafe {
-        *cur.value_mut().unwrap() = 99;
-    }
+    *cur.value_mut().unwrap() = 99;
     assert_eq!(tree.get(&1), Some(&99));
 }
 
@@ -453,7 +454,7 @@ fn d_y_interleaved_insert_remove_stays_sorted() {
         } else if !present.is_empty() {
             let idx = (xorshift(&mut seed) as usize) % present.len();
             let key = present.swap_remove(idx);
-            assert_eq!(tree.remove(&key), Some(key));
+            assert_eq!(tree.remove(&key), Some((key, key)));
         }
     }
 

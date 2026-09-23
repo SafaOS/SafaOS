@@ -10,6 +10,26 @@ struct SortedNode<K, V> {
     prev: Option<SortedNodePtr<K, V>>,
 }
 
+impl<K, V> SortedNode<K, V> {
+    fn unlink<A: Allocator>(&self, tree: &mut LinkedRBTree<K, V, A>) {
+        if let Some(mut prev) = self.prev {
+            unsafe {
+                prev.set_next(self.next);
+            };
+        } else {
+            tree.head = self.next;
+        }
+
+        if let Some(mut next) = self.next {
+            unsafe {
+                next.set_prev(self.prev);
+            };
+        } else {
+            tree.tail = self.prev;
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SortedNodePtr<K, V>(RBNodePtr<K, SortedNode<K, V>>);
 
@@ -108,25 +128,25 @@ pub struct Cursor<'a, K, V, A: Allocator = Global> {
 impl<'a, K, V, A: Allocator> Cursor<'a, K, V, A> {
     #[inline(always)]
     /// Returns the key-value pair of the current node, if it exists.
-    pub fn key_value(&self) -> Option<(&K, &V)> {
+    pub fn key_value(&self) -> Option<(&'a K, &'a V)> {
         unsafe { self.ptr.map(|n| (n.key(), n.value())) }
     }
 
     #[inline]
     /// Returns the key of the current node, if it exists.
-    pub fn key(&self) -> Option<&K> {
+    pub fn key(&self) -> Option<&'a K> {
         self.key_value().map(|(k, _)| k)
     }
 
     #[inline]
     /// Returns the value of the current node, if it exists.
-    pub fn value(&self) -> Option<&V> {
+    pub fn value(&self) -> Option<&'a V> {
         self.key_value().map(|(_, v)| v)
     }
 
     #[inline]
     /// Returns the key-value pair of the previous node, if it exists.
-    pub fn peek_prev(&self) -> Option<(&K, &V)> {
+    pub fn peek_prev(&self) -> Option<(&'a K, &'a V)> {
         unsafe {
             self.ptr
                 .and_then(|n| n.prev().map(|p| (p.key(), p.value())))
@@ -135,7 +155,7 @@ impl<'a, K, V, A: Allocator> Cursor<'a, K, V, A> {
 
     #[inline]
     /// Returns the key-value pair of the next node, if it exists.
-    pub fn peek_next(&self) -> Option<(&K, &V)> {
+    pub fn peek_next(&self) -> Option<(&'a K, &'a V)> {
         unsafe {
             self.ptr
                 .and_then(|n| n.next().map(|n| (n.key(), n.value())))
@@ -195,7 +215,7 @@ pub struct CursorMut<'a, K, V, A: Allocator = Global> {
 impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     #[inline(always)]
     /// Returns the key-value pair of the current node, if it exists.
-    pub fn key_value(&self) -> Option<(&K, &V)> {
+    pub fn key_value(&self) -> Option<(&'a K, &'a V)> {
         unsafe { self.ptr.map(|n| (n.key(), n.value())) }
     }
 
@@ -203,7 +223,7 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     /// Returns the mutable key-value pair of the current node, if it exists.
     ///
     /// # Safety: muttating a key is unsafe because it could break the tree's invariants.
-    pub unsafe fn key_value_mut(&mut self) -> Option<(&mut K, &mut V)> {
+    pub unsafe fn key_value_mut(&mut self) -> Option<(&'a mut K, &'a mut V)> {
         unsafe { self.ptr.as_mut().map(|n| (n.key_mut(), n.value_mut())) }
     }
 
@@ -211,31 +231,31 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     /// Returns the mutable key of the current node, if it exists.
     ///
     /// # Safety: muttating a key is unsafe because it could break the tree's invariants.
-    pub unsafe fn key_mut(&mut self) -> Option<&mut K> {
+    pub unsafe fn key_mut(&mut self) -> Option<&'a mut K> {
         unsafe { self.key_value_mut().map(|(k, _)| k) }
     }
 
     #[inline]
     /// Returns the mutable value of the current node, if it exists.
-    pub unsafe fn value_mut(&mut self) -> Option<&mut V> {
+    pub fn value_mut(&mut self) -> Option<&'a mut V> {
         unsafe { self.key_value_mut().map(|(_, v)| v) }
     }
 
     #[inline]
     /// Returns the key of the current node, if it exists.
-    pub fn key(&self) -> Option<&K> {
+    pub fn key(&self) -> Option<&'a K> {
         self.key_value().map(|(k, _)| k)
     }
 
     #[inline]
     /// Returns the value of the current node, if it exists.
-    pub fn value(&self) -> Option<&V> {
+    pub fn value(&self) -> Option<&'a V> {
         self.key_value().map(|(_, v)| v)
     }
 
     #[inline]
     /// Returns the key-value pair of the previous node, if it exists.
-    pub fn peek_prev(&self) -> Option<(&K, &V)> {
+    pub fn peek_prev(&self) -> Option<(&'a K, &'a V)> {
         unsafe {
             self.ptr
                 .and_then(|n| n.prev().map(|p| (p.key(), p.value())))
@@ -244,10 +264,24 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
 
     #[inline]
     /// Returns the key-value pair of the next node, if it exists.
-    pub fn peek_next(&self) -> Option<(&K, &V)> {
+    pub fn peek_next(&self) -> Option<(&'a K, &'a V)> {
         unsafe {
             self.ptr
                 .and_then(|n| n.next().map(|n| (n.key(), n.value())))
+        }
+    }
+
+    /// Completely removes the current node from the tree and returns its key-value pair.
+    pub fn remove_inplace(&mut self) -> Option<(K, V)> {
+        if let Some(ptr) = self.ptr {
+            unsafe {
+                let (k, v) = self.tree.tree.remove_node(ptr.0);
+                v.unlink(self.tree);
+
+                Some((k, v.value))
+            }
+        } else {
+            None
         }
     }
 
@@ -302,6 +336,8 @@ impl<K, V> LinkedRBTree<K, V> {
 }
 
 impl<K, V, A: Allocator> LinkedRBTree<K, V, A> {
+    pub const SIZE_OF_NODE: usize = RBTree::<K, SortedNode<K, V>, A>::SIZE_OF_NODE;
+
     /// Allocates a new `LinkedRBTree` with the given allocator.
     #[inline(always)]
     pub const fn new_in(alloc: A) -> Self {
@@ -458,24 +494,10 @@ impl<K, V, A: Allocator> LinkedRBTree<K, V, A> {
     }
 
     /// Removes a key-value pair from the tree, returning the value if it existed.
-    pub fn remove<Q: QueryFor<K>>(&mut self, key: &Q) -> Option<V> {
-        self.tree.remove(key).map(|v| {
-            if let Some(mut prev) = v.prev {
-                unsafe {
-                    prev.set_next(v.next);
-                };
-            } else {
-                self.head = v.next;
-            }
-
-            if let Some(mut next) = v.next {
-                unsafe {
-                    next.set_prev(v.prev);
-                };
-            } else {
-                self.tail = v.prev;
-            }
-            v.value
+    pub fn remove<Q: QueryFor<K>>(&mut self, key: &Q) -> Option<(K, V)> {
+        self.tree.remove(key).map(|(k, v)| {
+            v.unlink(self);
+            (k, v.value)
         })
     }
 

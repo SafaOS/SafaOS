@@ -243,7 +243,7 @@ impl<T: core::fmt::Debug> RawRBTree<T> {
 }
 
 impl<T> RawRBTree<T> {
-    const SIZE_OF_NODE: usize = size_of::<Node<T>>();
+    pub const SIZE_OF_NODE: usize = size_of::<Node<T>>();
     pub const fn new() -> Self {
         Self { root: None }
     }

@@ -110,6 +110,8 @@ impl<K, V> RBTree<K, V> {
 }
 
 impl<K, V, A: Allocator> RBTree<K, V, A> {
+    pub const SIZE_OF_NODE: usize = raw::RawRBTree::<KeyValue<K, V>>::SIZE_OF_NODE;
+
     #[inline]
     /// Creates a new `RBTree` with the given allocator.
     pub const fn new_in(alloc: A) -> Self {
@@ -223,17 +225,24 @@ impl<K, V, A: Allocator> RBTree<K, V, A> {
         node.map(|mut n| unsafe { &mut n.as_mut().value_mut().value })
     }
 
+    pub(super) unsafe fn remove_node(
+        &mut self,
+        node: NonNull<raw::Node<KeyValue<K, V>>>,
+    ) -> (K, V) {
+        unsafe {
+            // read the value before the removal
+            let value = core::ptr::read(node.as_ref().value());
+            self.raw.remove_node(node);
+            self.dealloc_node(node);
+            (value.key, value.value)
+        }
+    }
+
     /// Removes a key-value pair from the tree, returning the old value if it existed.
-    pub fn remove<Q: QueryFor<K>>(&mut self, key: &Q) -> Option<V> {
+    pub fn remove<Q: QueryFor<K>>(&mut self, key: &Q) -> Option<(K, V)> {
         let (node, _, _) = self.raw.search(key);
         if let Some(node) = node {
-            unsafe {
-                let value = core::ptr::read(node.as_ref().value());
-                self.raw.remove_node(node);
-                // read the value before the removal
-                self.dealloc_node(node);
-                Some(value.value)
-            }
+            unsafe { Some(self.remove_node(node)) }
         } else {
             None
         }
