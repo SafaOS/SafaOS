@@ -2,6 +2,7 @@
 pub mod tests;
 
 mod objects;
+mod tree;
 use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
 
 use crate::{
@@ -1189,6 +1190,7 @@ where
 
 /// Safety: VMM must not be initialized yet, this function is not thread-safe.
 pub unsafe fn init(vmm: VirtualMemoryManager) {
+    tree::init();
     let vmm_guard = unsafe { &mut *VMM.get() };
     let vmm = vmm_guard.write(vmm);
     logging::debug!(VirtualMemoryManager, "Initialized");

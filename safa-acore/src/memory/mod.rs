@@ -23,11 +23,11 @@ pub fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
 /// Initializes the physical memory manager.
 pub unsafe fn init_pmm() {
     pmm::init();
+    unsafe { slab_allocator::init() };
     init::init_all();
 }
 
 /// Initializes all memory allocators.
 pub unsafe fn init_alloc() {
-    unsafe { slab_allocator::init() };
     unsafe { alloc::init() };
 }
