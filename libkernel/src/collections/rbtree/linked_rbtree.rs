@@ -33,6 +33,9 @@ impl<K, V> SortedNode<K, V> {
 #[derive(Debug)]
 struct SortedNodePtr<K, V>(RBNodePtr<K, SortedNode<K, V>>);
 
+unsafe impl<K: Send, V: Send> Send for SortedNodePtr<K, V> {}
+unsafe impl<K: Sync, V: Sync> Sync for SortedNodePtr<K, V> {}
+
 impl<K, V> Clone for SortedNodePtr<K, V> {
     fn clone(&self) -> Self {
         Self(self.0.clone())

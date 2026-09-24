@@ -82,6 +82,9 @@ pub struct Node<T> {
     pub(super) right: Option<NonNull<Self>>,
 }
 
+unsafe impl<T: Send> Send for Node<T> {}
+unsafe impl<T: Sync> Sync for Node<T> {}
+
 impl<T: Debug> Debug for Node<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Node")
@@ -183,6 +186,8 @@ pub struct RawRBTree<T> {
     root: Option<NonNull<Node<T>>>,
 }
 
+unsafe impl<T: Send> Send for RawRBTree<T> {}
+unsafe impl<T: Sync> Sync for RawRBTree<T> {}
 impl<T: core::fmt::Debug> RawRBTree<T> {
     #[cfg(test)]
     fn balance_check_recursive(
