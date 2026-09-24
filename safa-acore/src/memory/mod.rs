@@ -24,6 +24,7 @@ pub fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
 pub unsafe fn init_pmm() {
     pmm::init();
     unsafe { slab_allocator::init() };
+    vmm::tree::init();
     init::init_all();
 }
 
