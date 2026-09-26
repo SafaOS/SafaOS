@@ -41,7 +41,7 @@ oninit::define! {
 
 oninit::define_routine! {
     /// Initializes the kernel Global allocator.
-    pub unsafe fn INI_ALLOC = with INI_SLAB || {};
+    pub unsafe fn INI_ALLOC = with ALLOC_CACHES || {};
 }
 
 /// Returns all the slab caches the kernel allocator, assumes it is initialized (UB before init).
