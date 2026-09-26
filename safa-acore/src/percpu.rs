@@ -10,7 +10,7 @@ use core::{
 use crate::{
     arch::ArchCpuID,
     bootloader,
-    memory::vmm::{self, Location, VMMMFlags},
+    mem::vmm::{self, Location, VMMMFlags},
     misc::VirtAddr,
 };
 

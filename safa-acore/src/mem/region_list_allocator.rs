@@ -2,7 +2,7 @@ use core::fmt::Debug;
 use core::ptr::NonNull;
 
 use crate::bootloader::MemoryType;
-use crate::memory::phys_to_virt;
+use crate::mem::phys_to_virt;
 use crate::misc::Frame;
 use crate::{bootloader, logging};
 

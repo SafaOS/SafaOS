@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::{
     arch::{self, paging::ArchPageTable},
-    memory::{
+    mem::{
         phys_to_virt,
         pmm::{self, PMMError},
         virt_to_phys,

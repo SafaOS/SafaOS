@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::{
     logging,
-    memory::slab::{INI_SLAB, SlabCacheRef, SlabError, slab_cache_create},
+    mem::slab::{INI_SLAB, SlabCacheRef, SlabError, slab_cache_create},
     misc::PAGE_SIZE,
     oninit,
 };

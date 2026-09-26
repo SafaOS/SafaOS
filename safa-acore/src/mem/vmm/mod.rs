@@ -8,7 +8,7 @@ use alloc::alloc::AllocError;
 
 use crate::{
     logging,
-    memory::{
+    mem::{
         pmm::PMMError,
         vmm::tree::{VMA_SLAB, VMAEntry, VMAState, VMATree},
     },
@@ -341,7 +341,7 @@ impl VirtualMemoryManager {
     ///
     /// And if it wasn't returns whether an Object containing address was found or not.
     pub fn try_on_demand_map(&self, addr: VirtAddr) -> Result<(), Option<(VirtAddr, usize)>> {
-        let mut inner = self.inner.lock();
+        let inner = self.inner.lock();
         let obj = inner.lookup(addr).ok_or(None)?;
         let state = obj.state();
         let start_addr = obj.addr();
@@ -519,7 +519,7 @@ oninit::define_routine! {
     pub unsafe fn INI_VMM_DEPS = with VMA_SLAB || {};
     pub unsafe fn INI_VMM = with INI_VMM_DEPS || {
         // TODO: Maybe a better way to do this?
-        crate::memory::init::init_all();
+        crate::mem::init::init_all();
     };
 }
 

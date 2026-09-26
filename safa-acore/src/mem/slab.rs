@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     bootloader, logging,
-    memory::{
+    mem::{
         phys_to_virt,
         pmm::{self, INI_PMM, PMMError},
         vmm::{self, INI_VMM, VMMAllocError, VMMMFlags},

@@ -4,7 +4,7 @@ use alloc::alloc::{AllocError, Allocator};
 use libkernel::collections::{LinkedRBTree, QueryFor};
 
 use crate::{
-    memory::{
+    mem::{
         slab::{INI_SLAB, SlabCacheRef, slab_cache_create},
         vmm::{Location, VMMAllocError, VMMMFlags},
     },

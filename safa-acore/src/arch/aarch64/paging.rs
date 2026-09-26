@@ -1,6 +1,6 @@
 use crate::arch::aarch64::registers::{DEVICE_UNCACHEABLE_MAIR_IDX, FRAMEBUFFER_CACHED_MAIR_IDX};
 use crate::arch::aarch64::tlb;
-use crate::memory::{phys_to_virt, pmm};
+use crate::mem::{phys_to_virt, pmm};
 use crate::misc::{Frame, FrameIter, IterPage, PAGE_SIZE, Page, PhysAddr, VirtAddr};
 use crate::paging::{MapToError, PageEntryFlags, PageTableOps};
 use core::ops::{Index, IndexMut};

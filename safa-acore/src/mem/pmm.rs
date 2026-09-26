@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{
     bootloader::INI_BOOTLOADER_MEMORY, logging::serial::_REGISTER_LOGGER,
-    memory::region_list_allocator::RegionListAllocator, misc::Frame, oninit, sync::SpinLockIrq,
+    mem::region_list_allocator::RegionListAllocator, misc::Frame, oninit, sync::SpinLockIrq,
 };
 
 #[cfg(test)]

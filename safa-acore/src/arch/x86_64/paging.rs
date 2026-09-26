@@ -3,7 +3,7 @@ use core::ops::IndexMut;
 use core::ptr::NonNull;
 use core::{arch::asm, ops::Index};
 
-use crate::memory::{phys_to_virt, pmm};
+use crate::mem::{phys_to_virt, pmm};
 use crate::misc::{FrameIter, IterPage, PAGE_SIZE, VirtAddr};
 use crate::paging::{PageEntryFlags, PageTableOps};
 use crate::{

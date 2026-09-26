@@ -16,7 +16,7 @@
 //!
 //! where DEP1 and DEP2 are identifiers for other oninit routines/statics so they are initialized before XYZ.
 //!
-//! examples: [`crate::bootloader::INI_BOOTLOADER_MEMORY`], [`crate::memory::slab::INI_SLAB`], [`crate::memory::alloc::INI_ALLOC`].
+//! examples: [`crate::bootloader::INI_BOOTLOADER_MEMORY`], [`crate::mem::slab::INI_SLAB`], [`crate::mem::alloc::INI_ALLOC`].
 use core::{
     cell::{SyncUnsafeCell, UnsafeCell},
     mem::MaybeUninit,

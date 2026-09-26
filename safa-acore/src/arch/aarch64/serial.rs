@@ -1,4 +1,4 @@
-use crate::memory::phys_to_virt;
+use crate::mem::phys_to_virt;
 use crate::misc::{Frame, Page, PhysAddr, VirtAddr};
 use crate::paging::PageEntryFlags;
 use core::cell::SyncUnsafeCell;

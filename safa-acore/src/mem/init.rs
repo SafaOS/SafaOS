@@ -2,7 +2,7 @@ use crate::{
     arch,
     bootloader::{self, HHDM, MemoryType},
     logging,
-    memory::{
+    mem::{
         phys_to_virt,
         vmm::{Location, VMMAllocError, VMMMFlags, VirtualMemoryManager},
     },

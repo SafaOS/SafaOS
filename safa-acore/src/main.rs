@@ -13,7 +13,7 @@ extern crate alloc;
 mod arch;
 mod bootloader;
 mod logging;
-mod memory;
+mod mem;
 mod misc;
 mod oninit;
 mod paging;
