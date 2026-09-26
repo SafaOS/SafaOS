@@ -63,6 +63,9 @@ impl LoggingSink for SpinLockIrq<Serial> {
     }
 }
 
-oninit::define! {
-    pub(self) static _D: () = || { super::register_logger(crate::logging::LogLevel::Trace, &SERIAL); };
+oninit::define_routine! {
+    pub unsafe fn _REGISTER_LOGGER = || {
+        super::register_logger(crate::logging::LogLevel::Trace, &SERIAL);
+        super::debug!(Serial, "Registered logger");
+    };
 }

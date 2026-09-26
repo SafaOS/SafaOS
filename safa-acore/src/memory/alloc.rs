@@ -1,8 +1,6 @@
 //! The general puropse kernel allocator, uses [`super::slab_allocator`] internally.
 use core::{
     alloc::{Allocator, GlobalAllocator, Layout},
-    cell::SyncUnsafeCell,
-    mem::MaybeUninit,
     ptr::NonNull,
 };
 
@@ -10,8 +8,9 @@ use thiserror::Error;
 
 use crate::{
     logging,
-    memory::slab_allocator::{SlabCacheRef, SlabError, slab_cache_create},
+    memory::slab::{INI_SLAB, SlabCacheRef, SlabError, slab_cache_create},
     misc::PAGE_SIZE,
+    oninit,
 };
 
 #[cfg(test)]
@@ -23,21 +22,32 @@ const ALLOC_CACHE_SIZES: [usize; ALLOC_CACHE_COUNT] = [
     8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536,
 ];
 
-struct KMallocAllocator {
-    caches: [MaybeUninit<SlabCacheRef>; ALLOC_CACHE_COUNT],
+oninit::define! {
+    unsafe static ALLOC_CACHES: [SlabCacheRef; ALLOC_CACHE_COUNT] = with INI_SLAB || {
+        core::array::from_fn(|i| {
+            let size = ALLOC_CACHE_SIZES[i];
+            let align = size.next_power_of_two().min(PAGE_SIZE);
+            slab_cache_create(
+                &"KernelAlloc",
+                Layout::from_size_align(size, align)
+                    .expect("failed to construct layout for kernel allocator"),
+                None,
+                None,
+            )
+            .expect("Failed to create a cache for the kernel allocator")
+        })
+    };
 }
 
-unsafe impl Send for KMallocAllocator {}
-unsafe impl Sync for KMallocAllocator {}
-
-static ALLOC_CACHES: SyncUnsafeCell<KMallocAllocator> = SyncUnsafeCell::new(KMallocAllocator {
-    caches: [MaybeUninit::uninit(); ALLOC_CACHE_COUNT],
-});
+oninit::define_routine! {
+    /// Initializes the kernel Global allocator.
+    pub unsafe fn INI_ALLOC = with INI_SLAB || {};
+}
 
 /// Returns all the slab caches the kernel allocator, assumes it is initialized (UB before init).
 #[inline(always)]
 fn caches() -> &'static [SlabCacheRef] {
-    unsafe { (*ALLOC_CACHES.get()).caches.assume_init_ref() }
+    ALLOC_CACHES.borrow()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -107,26 +117,3 @@ unsafe impl Allocator for KAlloc {
 unsafe impl GlobalAllocator for KAlloc {}
 #[global_allocator]
 static GLOBAL_ALLOCATOR: KAlloc = KAlloc;
-
-/// Initializes the allocator.
-///
-/// Using it before this call is UB.
-pub unsafe fn init() {
-    let caches_mut = unsafe { &mut *ALLOC_CACHES.get() };
-
-    for i in 0..ALLOC_CACHE_COUNT {
-        let size = ALLOC_CACHE_SIZES[i];
-        let align = size.next_power_of_two().min(PAGE_SIZE);
-
-        caches_mut.caches[i] = MaybeUninit::new(
-            slab_cache_create(
-                &"KernelAlloc",
-                Layout::from_size_align(size, align)
-                    .expect("failed to construct layout for kernel allocator"),
-                None,
-                None,
-            )
-            .expect("Failed to create a cache for the kernel allocator"),
-        );
-    }
-}

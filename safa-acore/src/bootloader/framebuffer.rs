@@ -1,8 +1,6 @@
 //! Small framebuffer abstraction layer.
 use core::ptr::NonNull;
 
-use crate::oninit;
-
 #[derive(Debug, Clone, Copy)]
 pub struct FramebufferInfo {
     pub base: NonNull<()>,
@@ -25,10 +23,6 @@ pub enum PixelFormat {
     Bgr888,
     /// [0] => red, [1] => green. [2] => blue
     Rgb888,
-}
-
-oninit::define! {
-    pub static FRAMEBUFFER_INFO: Option<FramebufferInfo> = || framebuffer();
 }
 
 /// Returns information about the best framebuffer for direct CPU drawing

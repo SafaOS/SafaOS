@@ -44,8 +44,6 @@ extern "C" fn kstart() -> ! {
 #[unsafe(no_mangle)]
 extern "C" fn kmain() -> ! {
     unsafe { oninit::init() };
-    unsafe { memory::init_pmm() };
-    unsafe { memory::init_alloc() };
     arch::boot::init_phase1();
 
     logging::info!("boot", "Phase 1 completed HHDM={:?}", &*HHDM);

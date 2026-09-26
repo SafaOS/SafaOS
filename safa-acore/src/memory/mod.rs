@@ -7,7 +7,7 @@ pub mod alloc;
 pub mod init;
 pub mod pmm;
 pub(super) mod region_list_allocator;
-pub mod slab_allocator;
+pub mod slab;
 pub mod vmm;
 
 #[inline(always)]
@@ -18,17 +18,4 @@ pub fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
 #[inline(always)]
 pub fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
     PhysAddr::new(virt.raw() - HHDM.raw())
-}
-
-/// Initializes the physical memory manager.
-pub unsafe fn init_pmm() {
-    pmm::init();
-    unsafe { slab_allocator::init() };
-    vmm::tree::init();
-    init::init_all();
-}
-
-/// Initializes all memory allocators.
-pub unsafe fn init_alloc() {
-    unsafe { alloc::init() };
 }

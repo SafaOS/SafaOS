@@ -41,11 +41,6 @@ SECTIONS
         *(.percpu.initializers)
         section_per_cpu_init_end = .;
 
-        . = ALIGN(8);
-        section_oninit_f_begin = .;
-        *(.oninit.initializers.base)
-        *(.oninit.initializers)
-        section_oninit_f_end = .;
         *(.got .got.*)
     } :rodata
     section_rodata_end = .;
@@ -62,6 +57,12 @@ SECTIONS
         KEEP(*(.requests_start_marker))
         KEEP(*(.requests))
         KEEP(*(.requests_end_marker))
+
+        . = ALIGN(8);
+        section_oninit_f_begin = .;
+        *(.oninit.initializers.base)
+        *(.oninit.initializers)
+        section_oninit_f_end = .;
     } :data
 
     .bss : {

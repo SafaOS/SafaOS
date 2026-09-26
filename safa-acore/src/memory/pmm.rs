@@ -1,16 +1,22 @@
 use thiserror::Error;
 
-use crate::{memory::region_list_allocator::RegionListAllocator, misc::Frame, sync::SpinLockIrq};
+use crate::{
+    bootloader::INI_BOOTLOADER_MEMORY, logging::serial::_REGISTER_LOGGER,
+    memory::region_list_allocator::RegionListAllocator, misc::Frame, oninit, sync::SpinLockIrq,
+};
 
 #[cfg(test)]
 mod test;
 
-static REGION_ALLOCATOR: SpinLockIrq<RegionListAllocator> =
-    SpinLockIrq::new(RegionListAllocator::empty());
+oninit::define! {
+    /// The region allocator used for allocating physical memory regions.
+    unsafe static REGION_ALLOCATOR: SpinLockIrq<RegionListAllocator> = with INI_BOOTLOADER_MEMORY, _REGISTER_LOGGER ||
+        SpinLockIrq::new(RegionListAllocator::create());
+}
 
-#[inline]
-pub fn init() {
-    REGION_ALLOCATOR.lock_no_irq(|mut alloc| *alloc = RegionListAllocator::create())
+oninit::define_routine! {
+    /// Initializes the PMM.
+    pub unsafe fn INI_PMM = with REGION_ALLOCATOR || {};
 }
 
 /// Allocates `count` contiugous frames with `align`-frames alignment.

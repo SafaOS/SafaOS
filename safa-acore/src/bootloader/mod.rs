@@ -82,5 +82,10 @@ pub fn cpu_count() -> usize {
 }
 
 oninit::define! {
-    pub static HHDM: VirtAddr = || hhdm();
+    pub unsafe static HHDM: VirtAddr = || hhdm();
+}
+
+oninit::define_routine! {
+    /// Initializes all the memory related bootloader stuff.
+    pub unsafe fn INI_BOOTLOADER_MEMORY = with HHDM || {};
 }

@@ -10,9 +10,10 @@ use crate::{
     logging,
     memory::{
         pmm::PMMError,
-        vmm::tree::{VMAEntry, VMAState, VMATree},
+        vmm::tree::{VMA_SLAB, VMAEntry, VMAState, VMATree},
     },
     misc::{Frame, PAGE_SIZE, Page, PhysAddr, VirtAddr},
+    oninit,
     paging::{MapToError, PageEntryFlags, PageTable},
     sync::IntSpinLock,
 };
@@ -513,6 +514,14 @@ impl VirtualMemoryManager {
 }
 
 unsafe impl Send for VirtualMemoryManager {}
+
+oninit::define_routine! {
+    pub unsafe fn INI_VMM_DEPS = with VMA_SLAB || {};
+    pub unsafe fn INI_VMM = with INI_VMM_DEPS || {
+        // TODO: Maybe a better way to do this?
+        crate::memory::init::init_all();
+    };
+}
 
 static VMM: SyncUnsafeCell<MaybeUninit<VirtualMemoryManager>> =
     SyncUnsafeCell::new(MaybeUninit::uninit());

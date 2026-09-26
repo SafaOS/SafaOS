@@ -1,14 +1,15 @@
-use core::{alloc::Layout, cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
+use core::{alloc::Layout, ptr::NonNull};
 
 use alloc::alloc::{AllocError, Allocator};
 use libkernel::collections::{LinkedRBTree, QueryFor};
 
 use crate::{
     memory::{
-        slab_allocator::{SlabCacheRef, slab_cache_create},
+        slab::{INI_SLAB, SlabCacheRef, slab_cache_create},
         vmm::{Location, VMMAllocError, VMMMFlags},
     },
     misc::VirtAddr,
+    oninit,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -175,23 +176,17 @@ impl VMADescriptor {
     }
 }
 
-static VMA_SLAB: SyncUnsafeCell<MaybeUninit<SlabCacheRef>> =
-    SyncUnsafeCell::new(MaybeUninit::uninit());
-
-/// Initializes the VMA slab cache.
-pub fn init() {
-    let cache = slab_cache_create(
-        &"VMA",
-        Layout::from_size_align(VMATree::SIZE_OF_NODE, 8)
-            .expect("Failed to create layout for VMA node"),
-        None,
-        None,
-    )
-    .expect("Failed to create Slab Cache for VMAs");
-
-    unsafe {
-        VMA_SLAB.get().write(MaybeUninit::new(cache));
-    }
+oninit::define! {
+    pub(super) unsafe static VMA_SLAB: SlabCacheRef = with INI_SLAB || {
+        slab_cache_create(
+                &"VMA",
+                Layout::from_size_align(VMATree::SIZE_OF_NODE, 8)
+                    .expect("Failed to create layout for VMA node"),
+                None,
+                None,
+            )
+            .expect("Failed to create Slab Cache for VMAs")
+    };
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -200,19 +195,12 @@ struct VMAAlloc;
 unsafe impl Allocator for VMAAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         _ = layout;
-        unsafe {
-            (*VMA_SLAB.get())
-                .assume_init_ref()
-                .allocate()
-                .map_err(|_| AllocError)
-        }
+        VMA_SLAB.allocate().map_err(|_| AllocError)
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         assert_eq!(layout.size(), VMATree::SIZE_OF_NODE);
-        unsafe {
-            (*VMA_SLAB.get()).assume_init_ref().free(ptr);
-        }
+        VMA_SLAB.free(ptr);
     }
 }
 

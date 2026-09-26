@@ -9,11 +9,11 @@ use crate::{
     bootloader, logging,
     memory::{
         phys_to_virt,
-        pmm::{self, PMMError},
-        vmm::{self, VMMAllocError, VMMMFlags},
+        pmm::{self, INI_PMM, PMMError},
+        vmm::{self, INI_VMM, VMMAllocError, VMMMFlags},
     },
     misc::{PAGE_SIZE, VirtAddr},
-    percpu,
+    oninit, percpu,
     sync::{IntSpinLock, SpinLockGuard},
 };
 
@@ -425,7 +425,10 @@ impl SlabCache {
     }
 
     fn try_init_magazines(&mut self) -> Result<(), SlabError> {
-        let data = percpu_magazine_cache().slab_allocate()?;
+        let Some(percpu_magazine_cache) = percpu_magazine_cache() else {
+            return Ok(());
+        };
+        let data = percpu_magazine_cache.slab_allocate()?;
 
         let cpu_count = bootloader::cpu_count();
         assert_eq!(
@@ -848,12 +851,7 @@ static INDIRECT_SLAB_CACHE: SyncUnsafeCell<SlabCache> = SyncUnsafeCell::new(Slab
 /// The magazine cache is a cache of N magazine caches, where N is the number of CPUs.
 ///
 /// It isn't really correctly statically initialized.
-static PERCPU_MAGAZINE_CACHE: SyncUnsafeCell<SlabCache> = SyncUnsafeCell::new(SlabCache::new(
-    &"/MagazineCache",
-    Layout::new::<()>(),
-    None,
-    None,
-));
+static PERCPU_MAGAZINE_CACHE: SyncUnsafeCell<Option<SlabCache>> = SyncUnsafeCell::new(None);
 
 static MAGAZINE_CACHE: SyncUnsafeCell<SlabCache> = SyncUnsafeCell::new(SlabCache::new(
     &"/MagazineCache",
@@ -879,8 +877,8 @@ where
 }
 
 #[inline(always)]
-fn percpu_magazine_cache() -> &'static SlabCache {
-    unsafe { &*PERCPU_MAGAZINE_CACHE.get() }
+fn percpu_magazine_cache() -> Option<&'static SlabCache> {
+    unsafe { (&*PERCPU_MAGAZINE_CACHE.get()).as_ref() }
 }
 
 #[inline(always)]
@@ -959,27 +957,31 @@ pub fn slab_cache_create(
     Ok(r)
 }
 
-/// Initializes the Slab Allocator.
-///
-/// Using it before that isn't exactly UB.
-pub unsafe fn init() {
-    unsafe {
-        (*PERCPU_MAGAZINE_CACHE.get()) = SlabCache::new(
-            &"/PerCpuMagazineCache",
-            Layout::array::<PerCpuMagazineCache>(bootloader::cpu_count())
-                .expect("womp womp layout too big blah blah blah"),
-            Some(percpu_magazine_cache_init),
-            None,
-        );
+oninit::define_routine! {
+    /// The essentials required for a slab allocator to function.
+    pub unsafe fn INI_SLAB = with INI_PMM || {};
+    /// Initializes the Slab Allocator.
+    ///
+    /// Using it before that isn't exactly UB.
+   unsafe fn INIT_SLAB_ALLOCATOR = with INI_SLAB, INI_VMM || {
+        unsafe {
+            (*PERCPU_MAGAZINE_CACHE.get()) = Some(SlabCache::new(
+                &"/PerCpuMagazineCache",
+                Layout::array::<PerCpuMagazineCache>(bootloader::cpu_count())
+                    .expect("womp womp layout too big blah blah blah"),
+                Some(percpu_magazine_cache_init),
+                None,
+            ));
 
-        (*INDIRECT_SLAB_CACHE.get())
-            .try_init_magazines()
-            .expect("Failed to initialize magazines for indirect slab cache");
-
-        for_each_linked_cache(|mut c| {
-            c.as_mut()
+            (*INDIRECT_SLAB_CACHE.get())
                 .try_init_magazines()
-                .expect("Failed to init magazines")
-        });
-    }
+                .expect("Failed to initialize magazines for indirect slab cache");
+
+            for_each_linked_cache(|mut c| {
+                c.as_mut()
+                    .try_init_magazines()
+                    .expect("Failed to init magazines")
+            });
+        }
+    };
 }
