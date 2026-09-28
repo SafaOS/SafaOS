@@ -88,9 +88,9 @@ impl<'a, K, V, A: Allocator> RBTreeEntry<'a, K, V, A> {
                 Ok(f(new_node, parent.map(|p| (p, direction)), None))
             },
             Self::Occupied { node } => unsafe {
-                let node_ptr = NonNull::from_mut(node);
                 let old_m = &mut node.value_mut().value;
                 let old = core::mem::replace(old_m, value);
+                let node_ptr = NonNull::from_mut(node);
                 Ok(f(node_ptr, None, Some(old)))
             },
         }

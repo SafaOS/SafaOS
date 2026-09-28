@@ -72,13 +72,14 @@ impl<K, V> SortedNodePtr<K, V> {
     }
 
     #[inline(always)]
-    unsafe fn key_mut<'a>(&mut self) -> &'a mut K
+    unsafe fn key_value_mut<'a>(&mut self) -> (&'a mut K, &'a mut V)
     where
         K: 'a,
         V: 'a,
     {
         let this = unsafe { self.0.as_mut() };
-        unsafe { &mut this.value_mut().key }
+        let inner = unsafe { this.value_mut() };
+        (&mut inner.key, &mut inner.value.value)
     }
 
     #[inline(always)]
@@ -89,16 +90,6 @@ impl<K, V> SortedNodePtr<K, V> {
     {
         let raw: &'a SortedNode<K, V> = unsafe { self.raw() };
         &raw.value
-    }
-
-    #[inline(always)]
-    unsafe fn value_mut<'a>(&mut self) -> &'a mut V
-    where
-        K: 'a,
-        V: 'a,
-    {
-        let raw: &'a mut SortedNode<K, V> = unsafe { self.raw_mut() };
-        &mut raw.value
     }
 
     #[inline(always)]
@@ -227,7 +218,7 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     ///
     /// # Safety: muttating a key is unsafe because it could break the tree's invariants.
     pub unsafe fn key_value_mut(&mut self) -> Option<(&'a mut K, &'a mut V)> {
-        unsafe { self.ptr.as_mut().map(|n| (n.key_mut(), n.value_mut())) }
+        unsafe { self.ptr.as_mut().map(|n| n.key_value_mut()) }
     }
 
     #[inline]
