@@ -38,17 +38,17 @@ impl Direction {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ColoredPtrTag(usize);
+struct ColoredPtrTag(*mut ());
 impl ColoredPtrTag {
     #[inline(always)]
     pub fn set_color(&mut self, color: Color) {
         let v = color as usize;
-        self.0 = (self.0 & !1) | v;
+        self.0 = self.0.map_addr(|a| (a & !1) | v);
     }
 
     #[inline(always)]
-    pub const fn color(&self) -> Color {
-        if self.0 & 1 == 1 {
+    pub fn color(&self) -> Color {
+        if self.0.addr() & 1 == 1 {
             Color::Black
         } else {
             Color::Red
@@ -56,16 +56,16 @@ impl ColoredPtrTag {
     }
 
     #[inline(always)]
-    pub const fn ptr_to<T>(&self) -> Option<NonNull<T>> {
-        NonNull::new((self.0 & !1) as *mut T)
+    pub fn ptr_to<T>(&self) -> Option<NonNull<T>> {
+        NonNull::new(self.0.map_addr(|a| a & !1) as *mut T)
     }
 
     #[inline(always)]
     pub fn set_ptr_to<T>(&mut self, ptr: Option<NonNull<T>>) {
-        let color = self.0 & 1;
+        let color = self.0.addr() & 1;
         self.0 = match ptr {
-            Some(p) => p.as_ptr() as usize | color,
-            None => 0 | color,
+            Some(p) => p.as_ptr().map_addr(|a| a | color).cast::<()>(),
+            None => core::ptr::null_mut::<()>().map_addr(|a| a | color),
         };
     }
 }
@@ -103,7 +103,7 @@ impl<T> Node<T> {
     pub const fn new(value: T) -> Self {
         Self {
             value,
-            colored_parent: ColoredPtrTag(0),
+            colored_parent: ColoredPtrTag(core::ptr::null_mut()),
             left: None,
             right: None,
         }
@@ -128,12 +128,12 @@ impl<T> Node<T> {
 
 impl<T> Node<T> {
     #[inline(always)]
-    pub const fn parent(&self) -> Option<NonNull<Self>> {
+    pub fn parent(&self) -> Option<NonNull<Self>> {
         self.colored_parent.ptr_to::<Self>()
     }
 
     #[inline(always)]
-    const fn color(&self) -> Color {
+    fn color(&self) -> Color {
         self.colored_parent.color()
     }
 
