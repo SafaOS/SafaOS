@@ -1,7 +1,9 @@
+mod llist;
 mod rbtree;
 
 use core::{borrow::Borrow, cmp::Ordering};
 
+pub use llist::*;
 pub use rbtree::*;
 
 /// A query trait for searching a collection by key.
