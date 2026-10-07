@@ -12,6 +12,7 @@
 extern crate alloc;
 mod arch;
 mod bootloader;
+mod io;
 mod logging;
 mod mem;
 mod misc;
