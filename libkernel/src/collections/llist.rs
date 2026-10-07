@@ -67,6 +67,7 @@ impl<T> LList<T> {
             unsafe {
                 tail.as_mut().next = Some(node);
                 node.as_mut().prev = Some(tail);
+                node.as_mut().next = None;
             }
         } else {
             self.head = Some(node);
@@ -80,6 +81,7 @@ impl<T> LList<T> {
             unsafe {
                 head.as_mut().prev = Some(node);
                 node.as_mut().next = Some(head);
+                node.as_mut().prev = None;
             }
         } else {
             self.tail = Some(node);
@@ -97,7 +99,11 @@ impl<T> LList<T> {
                 } else {
                     self.tail = None;
                 }
+
+                head.as_mut().next = None;
+                head.as_mut().prev = None;
             }
+
             Some(head)
         } else {
             None
@@ -136,5 +142,11 @@ impl<T> LList<T> {
     /// Peeks at the tail of the queue and returns its pointer.
     pub const fn peek_tail(&self) -> Option<NonNull<LListNode<T>>> {
         self.tail
+    }
+
+    #[inline(always)]
+    /// Returns whether the list has any values
+    pub const fn is_empty(&self) -> bool {
+        self.peek_head().is_none()
     }
 }
