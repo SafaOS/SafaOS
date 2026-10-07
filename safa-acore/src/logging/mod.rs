@@ -178,7 +178,7 @@ pub unsafe fn panic_mode() {
 
 #[macro_export]
 macro_rules! _generic_log_macro {
-    ($level: expr, $subject: expr, $($arg:tt)*) => {
+    ($level: expr, $subject: expr, $($arg:tt)*) => {{
         let (file, line) = (file!(), line!());
         $crate::logging::LogRecord {
             timestamp: $crate::time::DurationFmt::new($crate::time::time_since_boot()),
@@ -188,7 +188,7 @@ macro_rules! _generic_log_macro {
             subject: $subject,
             arguments: format_args!($($arg)*),
         }.log()
-    };
+    }};
 }
 
 /// Logs a [`LogLevel::Debug`]-level message with the given subject and arguments.

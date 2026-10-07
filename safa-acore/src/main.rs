@@ -12,21 +12,23 @@
 extern crate alloc;
 mod arch;
 mod bootloader;
-mod io;
+mod eve;
 mod logging;
 mod mem;
 mod misc;
 mod oninit;
 mod paging;
 mod percpu;
+mod scheduler;
 mod sync;
+mod task;
 #[cfg(test)]
 mod test;
 mod time;
 
 use core::panic::PanicInfo;
 
-use crate::bootloader::HHDM;
+use crate::{bootloader::HHDM, eve::eve_main};
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -56,5 +58,8 @@ extern "C" fn kmain() -> ! {
 
     #[cfg(test)]
     crate::kernel_testmain();
+
+    task::spawn(eve_main());
+    scheduler::schedule_loop();
     panic!("How did we get here?!")
 }
