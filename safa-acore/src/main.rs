@@ -15,7 +15,7 @@ mod bootloader;
 mod eve;
 mod logging;
 mod mem;
-mod misc;
+pub use libkernel::misc;
 mod oninit;
 mod paging;
 mod percpu;
