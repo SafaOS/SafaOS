@@ -59,7 +59,7 @@ extern "C" fn kmain() -> ! {
     #[cfg(test)]
     crate::kernel_testmain();
 
-    task::spawn(eve_main());
+    task::try_spawn(eve_main()).expect("Failed to spawn eve");
     scheduler::schedule_loop();
     panic!("How did we get here?!")
 }

@@ -5,6 +5,7 @@ use crate::{
 
 pub mod alloc;
 pub mod init;
+pub mod local_arena;
 pub mod pmm;
 pub(super) mod region_list_allocator;
 pub mod slab;
