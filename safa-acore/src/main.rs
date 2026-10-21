@@ -16,12 +16,14 @@ mod eve;
 mod logging;
 mod mem;
 pub use libkernel::misc;
+mod fb;
 mod oninit;
 mod paging;
 mod percpu;
 mod scheduler;
 mod sync;
 mod task;
+mod terminal;
 #[cfg(test)]
 mod test;
 mod time;
@@ -56,6 +58,7 @@ extern "C" fn kmain() -> ! {
 
     logging::init();
 
+    percpu::init_bsp_all();
     #[cfg(test)]
     crate::kernel_testmain();
 

@@ -8,7 +8,10 @@ use thiserror::Error;
 
 use crate::{
     logging,
-    mem::slab::{INI_SLAB, SlabCacheRef, SlabError, slab_cache_create},
+    mem::{
+        slab::{INI_SLAB, SlabCacheRef, SlabError, slab_cache_create},
+        vmm::INI_VMM,
+    },
     misc::PAGE_SIZE,
     oninit,
 };
@@ -41,7 +44,7 @@ oninit::define! {
 
 oninit::define_routine! {
     /// Initializes the kernel Global allocator.
-    pub unsafe fn INI_ALLOC = with ALLOC_CACHES || {};
+    pub unsafe fn INI_ALLOC = with ALLOC_CACHES, INI_VMM || {};
 }
 
 /// Returns all the slab caches the kernel allocator, assumes it is initialized (UB before init).

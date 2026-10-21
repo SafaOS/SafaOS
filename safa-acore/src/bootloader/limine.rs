@@ -77,9 +77,10 @@ pub fn framebuffer() -> Option<FramebufferInfo> {
                 (f.red_mask_shift, f.red_mask_size),
                 (f.green_mask_shift, f.green_mask_size),
                 (f.blue_mask_shift, f.blue_mask_size),
+                f.bpp,
             ) {
-                ((0, 8), (8, 8), (16, 8)) => Some(PixelFormat::Rgb888),
-                ((16, 8), (8, 8), (0, 8)) => Some(PixelFormat::Bgr888),
+                ((0, 8), (8, 8), (16, 8), 32) => Some(PixelFormat::RgbX888),
+                ((16, 8), (8, 8), (0, 8), 32) => Some(PixelFormat::BgrX888),
                 _ => None,
             }?;
 
@@ -89,7 +90,6 @@ pub fn framebuffer() -> Option<FramebufferInfo> {
                 height: f.height as u32,
                 width: f.width as u32,
                 pitch: f.pitch as usize,
-                bpp: f.bpp,
             })
         })
     })

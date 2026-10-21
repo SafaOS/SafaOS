@@ -8,21 +8,29 @@ pub struct FramebufferInfo {
     pub width: u32,
     /// Height in pixels
     pub height: u32,
-    /// Bits per pixel
-    pub bpp: u16,
     /// Bytes per row (width may not be properly aligned).
     pub pitch: usize,
     /// FIXME: Only supports XBGR and XRGB
     pub format: PixelFormat,
 }
 unsafe impl Sync for FramebufferInfo {}
+unsafe impl Send for FramebufferInfo {}
 
 #[derive(Debug, Clone, Copy)]
 pub enum PixelFormat {
     /// [0] => blue, [1] => green. [2] => red
-    Bgr888,
+    BgrX888,
     /// [0] => red, [1] => green. [2] => blue
-    Rgb888,
+    RgbX888,
+}
+
+impl PixelFormat {
+    pub const fn bytes_per_pixel(&self) -> u8 {
+        match self {
+            Self::BgrX888 => 4,
+            Self::RgbX888 => 4,
+        }
+    }
 }
 
 /// Returns information about the best framebuffer for direct CPU drawing

@@ -12,6 +12,11 @@ use core::sync::atomic::AtomicU32;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 
+#[allow(unused)]
+pub use crate::terminal::__tprint as tprint;
+#[allow(unused)]
+pub use crate::terminal::__tprintln as tprintln;
+
 pub use serial::loggingsprint as sprint;
 pub use serial::loggingsprintln as sprintln;
 

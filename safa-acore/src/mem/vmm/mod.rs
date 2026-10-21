@@ -2,9 +2,9 @@
 pub mod tests;
 
 pub mod tree;
-use core::{cell::SyncUnsafeCell, mem::MaybeUninit};
+use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
 
-use alloc::alloc::AllocError;
+use alloc::alloc::{AllocError, Allocator};
 
 use crate::{
     logging,
@@ -560,3 +560,68 @@ pub unsafe fn init(vmm: VirtualMemoryManager) {
 //         with_root(f)
 //     }
 // }
+
+#[derive(Debug, Clone, Copy)]
+/// A Page-Sized Allocator that uses the virtual memory manager.
+///
+/// This works for dynamically sized long-lived allocations, use the SLAB allocator in case of fixed sized chunks
+pub struct VMMAlloc(&'static &'static str);
+
+impl VMMAlloc {
+    #[inline]
+    pub const fn new(name: &'static &'static str) -> Self {
+        Self(name)
+    }
+
+    fn allocate_new(
+        self,
+        vmm: &VirtualMemoryManager,
+        size: usize,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        let addr = vmm
+            .map_new(
+                self.0,
+                None,
+                size,
+                VMMMFlags::WRITABLE,
+                VMMAllocMode::Normal,
+            )
+            .map_err(|e| {
+                logging::error!(VirtualMemoryManager, "VMM map returned error: {e:?}");
+                alloc::alloc::AllocError
+            })?;
+
+        Ok(NonNull::slice_from_raw_parts(
+            NonNull::new(addr.into_ptr::<u8>()).expect("VMM map returned a null VirtAddr"),
+            size,
+        ))
+    }
+}
+
+unsafe impl Allocator for VMMAlloc {
+    fn allocate(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<NonNull<[u8]>, alloc::alloc::AllocError> {
+        debug_assert!(
+            layout.align() <= PAGE_SIZE,
+            "Alignment {} too big for VMM",
+            layout.align()
+        );
+        let size = layout.size().next_multiple_of(PAGE_SIZE);
+
+        with_root(|vmm| self.allocate_new(vmm, size))
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: core::alloc::Layout) {
+        _ = layout;
+        let addr = VirtAddr::from_ptr(ptr.as_ptr());
+
+        with_root(|vmm| {
+            assert!(
+                vmm.unmap(addr),
+                "Attempt to VMM Deallocate an unallocated region."
+            );
+        })
+    }
+}
