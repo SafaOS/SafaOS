@@ -1,5 +1,5 @@
 use crate::{logging, task::try_spawn as spawn};
-use libkernel::rt::DynFut;
+use libkernel::future::DynFut;
 
 pub async fn eve_main() {
     spawn(async {

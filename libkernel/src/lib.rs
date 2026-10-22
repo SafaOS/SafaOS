@@ -5,6 +5,7 @@
 
 extern crate alloc;
 pub mod collections;
+pub mod future;
 pub mod logging;
 pub mod misc;
 pub mod rt;

@@ -1,4 +1,4 @@
-use core::{pin::Pin, ptr::NonNull};
+use core::ptr::NonNull;
 
 use alloc::{
     alloc::{AllocError, Allocator},
@@ -61,6 +61,13 @@ unsafe impl Allocator for KeStackAlloc {
 /// Fake Send impl, if any value was sent to another thread, it is going to be caught by the allocate/deallocate checks (will panic)
 unsafe impl Send for KeStackAlloc {}
 
+const STACK_NEEDED: usize = 0x18;
+const _: () = {
+    assert!(
+        STACK_NEEDED == size_of::<Box<dyn Future<Output = ()> + Send + 'static, KeStackAlloc>>()
+    )
+};
+
 pin_project_lite::pin_project! {
     #[repr(C)]
     /// A dynamic future call.
@@ -71,12 +78,14 @@ pin_project_lite::pin_project! {
     ///
     /// Prefer popping the value off the stack in LILO order this will help with deallocation.
     pub struct DynFut<'a, T> {
-        // FIXME: We want to make that Box not Pin so we could move the future out to a heap allocation or such
-        // And this isn't actually repr(C) too
         #[pin]
-        boxed: Pin<Box<dyn Future<Output = T> + Send + 'a, KeStackAlloc>>,
+        stack: stackfuture::StackFuture<'a, T, { STACK_NEEDED }>,
     }
 }
+
+// Ensures layout didn't change
+// FIXME: make our own FFI safe future, this isn't even actually FFI safe...
+const _: () = assert!(size_of::<DynFut<()>>() == 40);
 
 impl<'a, T> DynFut<'a, T> {
     /// Constructs a new dynamic future.
@@ -95,7 +104,7 @@ impl<'a, T> DynFut<'a, T> {
         F: Future<Output = T> + Send + 'a,
     {
         Box::try_new_in(fut, KeStackAlloc::new()).map(|stack| Self {
-            boxed: Box::into_pin(stack),
+            stack: stackfuture::StackFuture::from(Box::into_pin(stack)),
         })
     }
 }
@@ -106,6 +115,47 @@ impl<'a, T> Future for DynFut<'a, T> {
         self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<Self::Output> {
-        self.project().boxed.poll(cx)
+        self.project().stack.poll(cx)
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[repr(C)]
+    /// Equivalent to [`DynFut`] but can be sent to other threads. (may be costy to create and allocate).
+    pub struct SendDynFut<'a, T> {
+        #[pin]
+        stack: stackfuture::StackFuture<'a, T, { STACK_NEEDED }>,
+    }
+}
+
+impl<'a, T> SendDynFut<'a, T> {
+    /// Constructs a new dynamic future.
+    ///
+    /// Panicks if this fails as opposite to [`Self::try_new`].
+    pub fn new<F>(fut: F) -> Self
+    where
+        F: Future<Output = T> + Send + 'a,
+    {
+        Self::try_new(fut).expect("Failed to allocate for a future (stack overflow)")
+    }
+
+    #[inline]
+    pub fn try_new<F>(fut: F) -> Result<Self, AllocError>
+    where
+        F: Future<Output = T> + Send + 'a,
+    {
+        Box::try_new(fut).map(|boxed| Self {
+            stack: stackfuture::StackFuture::from(Box::into_pin(boxed)),
+        })
+    }
+}
+
+impl<'a, T> Future for SendDynFut<'a, T> {
+    type Output = T;
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        self.project().stack.poll(cx)
     }
 }

@@ -2,8 +2,8 @@ use core::{mem::ManuallyDrop, ptr::NonNull};
 
 use alloc::sync::Arc;
 
+use crate::future::DynFut;
 use crate::rt::abi::*;
-use crate::rt::future::DynFut;
 use macros::vtable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

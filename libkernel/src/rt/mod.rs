@@ -2,13 +2,11 @@
 
 pub mod abi;
 pub mod driver;
-pub mod future;
 pub mod interrupt;
 pub mod io;
 pub mod queue;
 
 pub use abi::*;
-pub use future::*;
 pub use queue::*;
 
 #[cfg(test)]
