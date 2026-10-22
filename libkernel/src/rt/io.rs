@@ -32,7 +32,7 @@ fn not_implemented<'a, T: Send + 'a>() -> DynFut<'a, Result<T>> {
 
 #[vtable]
 /// A handle to an open IO interface.
-pub trait IOHandler {
+pub trait IOHandler: Send + Sync {
     fn size<'a>(&'a self) -> DynFut<'a, Result<usize>> {
         not_implemented()
     }
@@ -142,3 +142,6 @@ impl IOHandle {
         }
     }
 }
+
+unsafe impl Send for IOHandle {}
+unsafe impl Sync for IOHandle {}
