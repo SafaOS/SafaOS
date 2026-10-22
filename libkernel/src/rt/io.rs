@@ -80,7 +80,7 @@ impl IOHandler for IOHandle {
     fn read<'a>(&'a self, offset: usize, buf: &'a mut [u8]) -> DynFut<'a, Result<usize>> {
         let f = self.vtable.read;
 
-        unsafe { (f)(self.this(), offset, CSliceMut::from(buf)) }
+        unsafe { (f)(self.this(), offset, FFISliceMut::from(buf)) }
     }
 }
 

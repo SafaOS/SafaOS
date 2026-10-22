@@ -15,7 +15,7 @@ pub struct OpaqueBusDriver<'a> {
 #[derive(Clone, Copy)]
 /// Generic list of queries for a specific bus.
 pub struct DeviceBusQuery<'a> {
-    bus_name: CSlice<'a, u8>,
+    bus_name: FFISlice<'a, u8>,
     ptr: *const (),
     len: usize,
 }
@@ -25,7 +25,7 @@ impl<'a> DeviceBusQuery<'a> {
     /// Safety: layout of queries must be valid for `bus_name`
     pub const unsafe fn new<T>(bus_name: &'a str, queries: &'a [T]) -> Self {
         Self {
-            bus_name: CSlice::from_slice(bus_name.as_bytes()),
+            bus_name: FFISlice::from_slice(bus_name.as_bytes()),
             ptr: queries.as_ptr().cast(),
             len: queries.len(),
         }

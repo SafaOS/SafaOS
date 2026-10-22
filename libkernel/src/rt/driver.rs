@@ -17,8 +17,8 @@ pub struct GenericDevice<'a> {
 }
 
 pub struct GenericDriver<'a> {
-    name: CSlice<'a, u8>,
-    queries: CSlice<'a, DeviceBusQuery<'a>>,
+    name: FFISlice<'a, u8>,
+    queries: FFISlice<'a, DeviceBusQuery<'a>>,
     prob: extern "C" fn(&mut GenericDevice) -> bool,
     remove: extern "C" fn(&mut GenericDevice),
 }

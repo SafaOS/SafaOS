@@ -1,16 +1,16 @@
-use crate::rt::CSlice;
+use crate::rt::FFISlice;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ACPIQuery<'a> {
-    hid: CSlice<'a, u8>,
+    hid: FFISlice<'a, u8>,
 }
 
 impl<'a> ACPIQuery<'a> {
     #[inline(always)]
     pub const fn new(hardware_id: &'a str) -> Self {
         Self {
-            hid: CSlice::from_slice(hardware_id.as_bytes()),
+            hid: FFISlice::from_slice(hardware_id.as_bytes()),
         }
     }
 
@@ -22,13 +22,13 @@ impl<'a> ACPIQuery<'a> {
 
 #[derive(Clone, Copy)]
 pub struct DeviceTreeQuery<'a> {
-    compatible: CSlice<'a, u8>,
+    compatible: FFISlice<'a, u8>,
 }
 
 impl<'a> DeviceTreeQuery<'a> {
     pub const fn new(compatible: &'a str) -> Self {
         Self {
-            compatible: CSlice::from_slice(compatible.as_bytes()),
+            compatible: FFISlice::from_slice(compatible.as_bytes()),
         }
     }
 

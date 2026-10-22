@@ -129,9 +129,9 @@ fn expand(tr: &ItemTrait) -> syn::Result<TokenStream2> {
                         let elem = &s.elem;
                         let lt = lt_or_elided(&r.lifetime);
                         if r.mutability.is_some() {
-                            (quote!(CSliceMut<#lt, #elem>), ArgKind::SliceMut)
+                            (quote!(FFISliceMut<#lt, #elem>), ArgKind::SliceMut)
                         } else {
-                            (quote!(CSlice<#lt, #elem>), ArgKind::Slice)
+                            (quote!(FFISlice<#lt, #elem>), ArgKind::Slice)
                         }
                     }
                     _ => {

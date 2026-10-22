@@ -17,59 +17,28 @@ pub use crate::terminal::__tprint as tprint;
 #[allow(unused)]
 pub use crate::terminal::__tprintln as tprintln;
 
+pub use libkernel::logging::*;
+
+#[unsafe(no_mangle)]
+extern "C" fn SafaLogger_log(record: &LogRecord) {
+    let mut amount_of_sinks = NEXT_SINK.load(Ordering::Relaxed);
+
+    for (meta, sink) in LOGGING_SINKS.iter() {
+        if amount_of_sinks == 0 {
+            return;
+        }
+
+        let meta = meta.load(Ordering::Acquire);
+        if meta == 0 || meta - 1 > record.level as u32 {
+            continue;
+        }
+
+        unsafe { (*sink.get()).write_record(record) };
+        amount_of_sinks -= 1;
+    }
+}
 pub use serial::loggingsprint as sprint;
 pub use serial::loggingsprintln as sprintln;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LogLevel {
-    /// Very verbose tracing log.
-    Trace = 0,
-    /// a bit verbose debug log.
-    Debug = 1,
-    /// Info log.
-    Info = 2,
-    /// Warning log, something bad could happen.
-    Warn = 3,
-    /// Error that can be recovered from/procced.
-    Error = 4,
-    /// Fatal unrecoverable error.
-    Fatal = 5,
-}
-
-impl LogLevel {
-    #[inline]
-    pub const fn display_name(&self) -> &'static str {
-        match self {
-            Self::Debug => "debug",
-            Self::Error => "error",
-            Self::Fatal => "fatal",
-            Self::Info => "info",
-            Self::Warn => "warn",
-            Self::Trace => "trace",
-        }
-    }
-
-    #[inline]
-    pub const fn ansii_color(&self) -> u8 {
-        match self {
-            Self::Debug | Self::Error => 91,
-            Self::Info => 92,
-            Self::Warn => 93,
-            Self::Fatal => 31,
-            Self::Trace => 94,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct LogRecord<'a> {
-    pub timestamp: DurationFmt,
-    pub level: LogLevel,
-    pub file: &'static str,
-    pub line: u32,
-    pub subject: &'static str,
-    pub arguments: core::fmt::Arguments<'a>,
-}
 
 pub trait LoggingSink: Send + Sync {
     fn write_record(&self, record: &LogRecord);
@@ -139,30 +108,11 @@ pub fn logger_mute(id: OwnedSinkID) {
 }
 
 /// Sets a given logger's min log level.
+#[allow(unused)]
 pub fn logger_set_loglevel(id: OwnedSinkID, loglevel: LogLevel) {
     LOGGING_SINKS[id.0]
         .0
         .store(loglevel as u32 + 1, Ordering::Release);
-}
-
-impl<'a> LogRecord<'a> {
-    pub fn log(&self) {
-        let mut amount_of_sinks = NEXT_SINK.load(Ordering::Relaxed);
-
-        for (meta, sink) in LOGGING_SINKS.iter() {
-            if amount_of_sinks == 0 {
-                return;
-            }
-
-            let meta = meta.load(Ordering::Acquire);
-            if meta == 0 || meta - 1 > self.level as u32 {
-                continue;
-            }
-
-            unsafe { (*sink.get()).write_record(self) };
-            amount_of_sinks -= 1;
-        }
-    }
 }
 
 /// Enters panic mode
@@ -180,70 +130,3 @@ pub unsafe fn panic_mode() {
         }
     }
 }
-
-#[macro_export]
-macro_rules! _generic_log_macro {
-    ($level: expr, $subject: expr, $($arg:tt)*) => {{
-        let (file, line) = (file!(), line!());
-        $crate::logging::LogRecord {
-            timestamp: $crate::time::DurationFmt::new($crate::time::time_since_boot()),
-            level: $level,
-            file,
-            line,
-            subject: $subject,
-            arguments: format_args!($($arg)*),
-        }.log()
-    }};
-}
-
-/// Logs a [`LogLevel::Debug`]-level message with the given subject and arguments.
-#[macro_export]
-macro_rules! _loggerdebug {
-    ($subject: ty, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Debug, stringify!($subject), $($arg)*));
-    ($subject: literal, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Debug, $subject, $($arg)*));
-}
-
-/// Logs a [`LogLevel::Trace`]-level message with the given subject and arguments.
-#[macro_export]
-macro_rules! _loggertrace {
-    ($subject: ty, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Trace, stringify!($subject), $($arg)*));
-    ($subject: literal, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Trace, $subject, $($arg)*));
-}
-
-#[macro_export]
-/// Logs a [`LogLevel::Fatal`]-level message with the given subject and arguments.
-macro_rules! _loggerfatal {
-    ($subject: ty, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Fatal, stringify!($subject), $($arg)*));
-    ($subject: literal, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Fatal, $subject, $($arg)*));
-}
-
-#[macro_export]
-/// Logs a [`LogLevel::Error`]-level message with the given subject and arguments.
-macro_rules! _loggererror {
-    ($subject: ty, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Error, stringify!($subject), $($arg)*));
-    ($subject: literal, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Error, $subject, $($arg)*));
-}
-
-/// Logs a [`LogLevel::Info`]-level message with the given subject and arguments.
-#[macro_export]
-macro_rules! _loggerinfo {
-    ($subject: ty, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Info, stringify!($subject), $($arg)*));
-    ($subject: literal, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Info, $subject, $($arg)*));
-}
-
-/// Logs a [`LogLevel::Warn`]-level message with the given subject and arguments.
-#[macro_export]
-macro_rules! _loggerwarn {
-    ($subject: ty, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Warn, stringify!($subject), $($arg)*));
-    ($subject: literal, $($arg:tt)*) => ($crate::logging::_generic_log_macro!($crate::logging::LogLevel::Warn, $subject, $($arg)*));
-}
-
-pub use _generic_log_macro;
-pub use _loggerdebug as debug;
-pub use _loggererror as error;
-pub use _loggerfatal as fatal;
-pub use _loggerinfo as info;
-pub use _loggertrace as trace;
-pub use _loggerwarn as warn;
-
-use crate::time::DurationFmt;
