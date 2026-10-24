@@ -1,3 +1,4 @@
+//! Wrappers around the SafaOS's virtual memory manager in contrast with [`crate::pmm`].
 use core::ptr::NonNull;
 
 use alloc::alloc::{AllocError, Allocator};

@@ -1,3 +1,6 @@
+//! Provides wrappers around the kernel general puropse `kalloc` functions, And a global allocator.
+//!
+//! Internally uses [`super::slab`], if you have objects of a fixed size and you are going to allocate/deallocate them frequently, use that instead.
 use core::{alloc::Layout, ptr::NonNull};
 
 use alloc::alloc::{AllocError, Allocator, GlobalAllocator};
@@ -5,7 +8,7 @@ use thiserror::Error;
 
 use crate::ffi::FFIResult;
 
-#[repr(C)]
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum KAllocError {
     #[error("Invalid Layout")]
@@ -34,7 +37,7 @@ unsafe extern "C" {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// The general puropse kernel allocator, uses [`super::slab_allocator`] internally.
+/// The general puropse kernel allocator, uses [`super::slab`] internally.
 pub struct KAlloc;
 
 unsafe impl Allocator for KAlloc {

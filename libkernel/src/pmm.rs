@@ -1,3 +1,10 @@
+//! Wrappers around the SafaOS's physical memory manager.
+//!
+//! You can use that to directly allocate physical memory, other ways to allocate and map memory include:
+//!
+//! - [`crate::vmm`]: better for allocating contigous page sized blocks of memory from uncontigous physical pages, should have all you need to map/unmap virtual memory and works with the PMM.
+//! - [`crate::slab`]: best for frequent allocation of a lot of fixed sized long/short lived objects.
+//! - [`crate::kalloc`]: a general puropse global allocator, that uses slab, good enough for small sized long lived objects if allocating isn't frequent.
 use thiserror::Error;
 
 use crate::{

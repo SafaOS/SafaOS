@@ -1,3 +1,5 @@
+//! An implementation of a slab allocator based on Solaris.
+
 use core::{alloc::Layout, cell::SyncUnsafeCell, mem::MaybeUninit, ops::Deref, ptr::NonNull};
 
 use bitflags::bitflags;
@@ -816,7 +818,9 @@ impl SlabCache {
 unsafe impl Send for SlabCache {}
 unsafe impl Sync for SlabCache {}
 
+#[doc(hidden)]
 // Ensures that all indirect slabs are structly valid to avoid some UB.
+/// Used by the kernel
 pub extern "C" fn indirect_slab_init(_cache: &SlabCache, mut data: FFISliceMut<u8>) {
     debug_assert_eq!(data.len(), size_of::<IndirectSlab>());
 
@@ -835,6 +839,7 @@ pub extern "C" fn indirect_slab_init(_cache: &SlabCache, mut data: FFISliceMut<u
     }
 }
 
+#[doc(hidden)]
 /// Used by the kernel.
 pub extern "C" fn magazine_init(_cache: &SlabCache, mut data: FFISliceMut<u8>) {
     debug_assert_eq!(data.len(), size_of::<Magazine>());
@@ -871,6 +876,7 @@ unsafe extern "C" {
     static MAGAZINE_CACHE: SyncUnsafeCell<SlabCache>;
 }
 
+#[doc(hidden)]
 pub fn for_each_linked_cache<F>(f: F)
 where
     F: Fn(NonNull<SlabCache>),
@@ -970,6 +976,7 @@ pub fn slab_cache_create(
 }
 
 /// Should only be called by the kernel
+#[doc(hidden)]
 pub unsafe fn init() {
     unsafe {
         (*PERCPU_MAGAZINE_CACHE.get()) = Some(
