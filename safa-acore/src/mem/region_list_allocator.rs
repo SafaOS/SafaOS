@@ -430,7 +430,7 @@ impl RegionListAllocator {
                 entry.kind
             );
 
-            if entry.kind == MemoryType::Usable {
+            if entry.kind.is_usable() {
                 for frame in Frame::iter_addresses(entry.base, end_addr) {
                     usable_regions += 1;
                     Self::add_region(&mut head, &mut tail, frame);

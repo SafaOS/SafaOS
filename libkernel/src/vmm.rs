@@ -1,8 +1,11 @@
-use alloc::alloc::AllocError;
+use core::ptr::NonNull;
+
+use alloc::alloc::{AllocError, Allocator};
 
 use crate::{
     ffi::{FFIResult, FFIStr},
-    misc::VirtAddr,
+    logging,
+    misc::{PAGE_SIZE, VirtAddr},
     paging::{MapToError, PageEntryFlags},
     pmm::PMMError,
 };
@@ -147,4 +150,63 @@ pub fn map_new(
 /// Attempts to unmap `n` pages starting at `addr`.
 pub unsafe fn unmap(addr: VirtAddr, n: usize) -> Result<(), ()> {
     unsafe { SafaM_vm_unmap(addr, n) }.into_result()
+}
+
+#[derive(Debug, Clone, Copy)]
+/// A Page-Sized Allocator that uses the virtual memory manager.
+///
+/// This works for dynamically sized long-lived allocations, use the SLAB allocator in case of fixed sized chunks
+pub struct VMMAlloc(&'static &'static str);
+
+impl VMMAlloc {
+    #[inline]
+    pub const fn new(name: &'static &'static str) -> Self {
+        Self(name)
+    }
+
+    fn allocate_new(self, size: usize) -> Result<NonNull<[u8]>, AllocError> {
+        let pages = size.div_ceil(PAGE_SIZE);
+        let addr = map_new(
+            self.0,
+            Location::Fit,
+            pages,
+            VMMMFlags::WRITABLE,
+            VMMAllocMode::Normal,
+        )
+        .map_err(|e| {
+            logging::error!(VirtualMemoryManager, "VMM map returned error: {e:?}");
+            alloc::alloc::AllocError
+        })?;
+
+        Ok(NonNull::slice_from_raw_parts(
+            NonNull::new(addr.into_ptr::<u8>()).expect("VMM map returned a null VirtAddr"),
+            pages * PAGE_SIZE,
+        ))
+    }
+}
+
+unsafe impl Allocator for VMMAlloc {
+    fn allocate(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<NonNull<[u8]>, alloc::alloc::AllocError> {
+        debug_assert!(
+            layout.align() <= PAGE_SIZE,
+            "Alignment {} too big for VMM",
+            layout.align()
+        );
+        let size = layout.size().next_multiple_of(PAGE_SIZE);
+
+        self.allocate_new(size)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: core::alloc::Layout) {
+        let pages = layout.size().div_ceil(PAGE_SIZE);
+        let addr = VirtAddr::from_ptr(ptr.as_ptr());
+
+        assert!(
+            unsafe { unmap(addr, pages) }.is_ok(),
+            "Attempt to VMM Deallocate an unallocated region."
+        );
+    }
 }

@@ -10,6 +10,7 @@ pub mod bootloader;
 pub mod collections;
 pub mod ffi;
 pub mod future;
+pub mod kalloc;
 pub mod logging;
 pub mod misc;
 pub mod paging;

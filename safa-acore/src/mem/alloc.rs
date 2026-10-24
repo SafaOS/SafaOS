@@ -1,11 +1,7 @@
 //! The general puropse kernel allocator, uses [`super::slab_allocator`] internally.
-use core::{
-    alloc::{Allocator, GlobalAllocator, Layout},
-    ptr::NonNull,
-};
+use core::{alloc::Layout, ptr::NonNull};
 
-use libkernel::slab::SCacheFlags;
-use thiserror::Error;
+use libkernel::{ffi::FFIResult, slab::SCacheFlags};
 
 use crate::{
     logging,
@@ -19,6 +15,8 @@ use crate::{
 
 #[cfg(test)]
 mod tests;
+
+pub use libkernel::kalloc::*;
 
 const ALLOC_CACHE_COUNT: usize = 14;
 
@@ -55,24 +53,17 @@ fn caches() -> &'static [SlabCacheRef] {
     ALLOC_CACHES.borrow()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum KAllocError {
-    #[error("Out Of Memory")]
-    OutOfMemory,
-    #[error("Layout too big for the allocator to satisfy")]
-    LayoutTooBig,
-}
-
 /// Allocates memory for a given [`layout`].
 ///
 /// May allocate more memory.
+#[inline]
 pub fn kalloc(layout: Layout) -> Result<NonNull<[u8]>, KAllocError> {
     let requested_size = layout.size();
     let (idx, size) = ALLOC_CACHE_SIZES
         .iter()
         .enumerate()
         .find(|(_, p)| **p >= requested_size)
-        .ok_or(KAllocError::LayoutTooBig)?;
+        .ok_or(KAllocError::InvalidLayout)?;
 
     let align = size.next_power_of_two().min(PAGE_SIZE);
     if align < layout.align() {
@@ -81,7 +72,7 @@ pub fn kalloc(layout: Layout) -> Result<NonNull<[u8]>, KAllocError> {
             "requested layout: {layout:?} couldn't satisfy because of alignment"
         );
 
-        return Err(KAllocError::LayoutTooBig);
+        return Err(KAllocError::InvalidLayout);
     }
 
     let results = caches()[idx]
@@ -94,6 +85,7 @@ pub fn kalloc(layout: Layout) -> Result<NonNull<[u8]>, KAllocError> {
 
 /// Frees a given [`ptr`] given it's `layout`.
 /// If the layout isn't the same as the one that was used in [`kalloc`], expect UB.
+#[inline]
 pub unsafe fn kfree(ptr: NonNull<u8>, layout: Layout) {
     let requested_size = layout.size();
     let (idx, _) = ALLOC_CACHE_SIZES
@@ -105,20 +97,18 @@ pub unsafe fn kfree(ptr: NonNull<u8>, layout: Layout) {
     caches()[idx].free(ptr)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// The general puropse kernel allocator, uses [`super::slab_allocator`] internally.
-pub struct KAlloc;
-
-unsafe impl Allocator for KAlloc {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, core::alloc::AllocError> {
-        kalloc(layout).map_err(|_| core::alloc::AllocError)
-    }
-
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { kfree(ptr, layout) }
-    }
+#[unsafe(export_name = "kalloc")]
+extern "C" fn kalloc_impl(align: usize, size: usize) -> FFIResult<NonNull<u8>, KAllocError> {
+    kalloc(Layout::from_size_align(size, align).map_err(|_| KAllocError::InvalidLayout)?)
+        .map(|n| n.cast::<u8>())
+        .into()
 }
-
-unsafe impl GlobalAllocator for KAlloc {}
-#[global_allocator]
-static GLOBAL_ALLOCATOR: KAlloc = KAlloc;
+#[unsafe(export_name = "kfree")]
+unsafe extern "C" fn kfree_impl(align: usize, size: usize, ptr: NonNull<u8>) {
+    unsafe {
+        kfree(
+            ptr,
+            Layout::from_size_align(size, align).expect("Failed to construct a layout for kfree"),
+        )
+    };
+}

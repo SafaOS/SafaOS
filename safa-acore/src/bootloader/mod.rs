@@ -88,7 +88,6 @@ extern "C" fn bootloader_cpu_count() -> usize {
 
 oninit::define! {
     #[unsafe(no_mangle)]
-    #[used]
     pub unsafe static HHDM: VirtAddr = || hhdm();
 }
 

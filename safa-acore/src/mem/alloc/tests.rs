@@ -32,10 +32,10 @@ fn roundtrip() {
 #[test_case]
 fn bad_layout() {
     let too_big = Layout::from_size_align(ALLOC_CACHE_SIZES.last().unwrap() + 1, 1).unwrap();
-    assert_eq!(kalloc(too_big).unwrap_err(), KAllocError::LayoutTooBig);
+    assert_eq!(kalloc(too_big).unwrap_err(), KAllocError::InvalidLayout);
 
     let bad_align = Layout::from_size_align(8, 16).unwrap();
-    assert_eq!(kalloc(bad_align).unwrap_err(), KAllocError::LayoutTooBig);
+    assert_eq!(kalloc(bad_align).unwrap_err(), KAllocError::InvalidLayout);
 }
 
 #[test_case]
