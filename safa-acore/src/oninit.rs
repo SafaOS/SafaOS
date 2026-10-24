@@ -102,6 +102,7 @@ impl OnInitDep for OnInitRoutine {
 /// NOTE: It is important to avoid using allocations or anything blocking.
 ///
 /// Before initialization, the data is zeroed.
+#[repr(C)]
 pub struct OnInitStorage<T: 'static> {
     data: UnsafeCell<MaybeUninit<T>>,
     routine: &'static OnInitRoutine,

@@ -3,7 +3,7 @@ use core::{
     marker::PhantomData,
 };
 
-use crate::{rt::FFIStr, time::DurationFmt};
+use crate::{ffi::FFIStr, time::DurationFmt};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

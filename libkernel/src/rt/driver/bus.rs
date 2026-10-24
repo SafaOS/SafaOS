@@ -1,9 +1,7 @@
 use macros::vtable;
 
-use crate::rt::{
-    abi::*,
-    driver::{GenericDevice, GenericDriver},
-};
+use crate::ffi::*;
+use crate::rt::driver::{GenericDevice, GenericDriver};
 
 #[repr(C)]
 pub struct OpaqueBusDriver<'a> {

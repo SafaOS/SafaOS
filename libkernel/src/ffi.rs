@@ -1,6 +1,8 @@
 use core::{
+    convert,
     marker::PhantomData,
-    ops::{Deref, DerefMut},
+    mem::ManuallyDrop,
+    ops::{self, ControlFlow, Deref, DerefMut},
     ptr::NonNull,
 };
 
@@ -152,6 +154,52 @@ impl<'a, T> FFISliceMut<'a, T> {
     }
 }
 
+#[repr(C)]
+/// Reper(C) NonNull<[T]>.
+pub struct SlicePtr<T> {
+    ptr: NonNull<T>,
+    len: usize,
+    _phantom: PhantomData<NonNull<[T]>>,
+}
+
+impl<T> SlicePtr<T> {
+    #[inline(always)]
+    pub const unsafe fn as_mut<'a>(&mut self) -> &'a mut [T] {
+        unsafe { self.into_non_null().as_mut() }
+    }
+
+    #[inline(always)]
+    pub const unsafe fn as_ref<'a>(&self) -> &'a [T] {
+        unsafe { self.into_non_null().as_ref() }
+    }
+
+    #[inline(always)]
+    pub const fn into_non_null(self) -> NonNull<[T]> {
+        NonNull::slice_from_raw_parts(self.ptr, self.len)
+    }
+
+    #[inline(always)]
+    pub const fn from_non_null(ptr: NonNull<[T]>) -> Self {
+        Self {
+            ptr: ptr.cast(),
+            len: ptr.len(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T> Clone for SlicePtr<T> {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr,
+            len: self.len,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T> Copy for SlicePtr<T> {}
+
 impl<'a, T> Deref for FFISlice<'a, T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
@@ -197,5 +245,127 @@ impl<'a, T> From<&'a mut [T]> for FFISliceMut<'a, T> {
     #[inline(always)]
     fn from(value: &'a mut [T]) -> Self {
         Self::from_slice_mut(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FFIResult<O, E> {
+    Err(E),
+    Ok(O),
+}
+
+impl<O, E> FFIResult<O, E> {
+    #[inline(always)]
+    pub const fn from_result(result: Result<O, E>) -> Self {
+        let result = ManuallyDrop::new(result);
+        // Safety: This is to evade const errors
+        //
+        // Result shouldn't have a custom drop destructor.
+        match unsafe { &*(&raw const result as *const Result<O, E>) } {
+            Ok(o) => Self::Ok(unsafe { core::ptr::read(o) }),
+            Err(e) => Self::Err(unsafe { core::ptr::read(e) }),
+        }
+    }
+
+    #[inline(always)]
+    pub const fn into_result(self) -> Result<O, E> {
+        let this = ManuallyDrop::new(self);
+        // Safety: This is to evade const errors
+        //
+        // We don't have a custom Drop destructor...
+        match unsafe { &*(&raw const this as *const Self) } {
+            Self::Ok(o) => Ok(unsafe { core::ptr::read(o) }),
+            Self::Err(e) => Err(unsafe { core::ptr::read(e) }),
+        }
+    }
+}
+
+impl<O, E> From<Result<O, E>> for FFIResult<O, E> {
+    #[inline(always)]
+    fn from(value: Result<O, E>) -> Self {
+        Self::from_result(value)
+    }
+}
+
+impl<O, E> From<FFIResult<O, E>> for Result<O, E> {
+    #[inline(always)]
+    fn from(value: FFIResult<O, E>) -> Self {
+        FFIResult::into_result(value)
+    }
+}
+
+impl<T, E> ops::Try for FFIResult<T, E> {
+    type Output = T;
+    type Residual = Result<convert::Infallible, E>;
+
+    #[inline]
+    fn from_output(output: Self::Output) -> Self {
+        Self::Ok(output)
+    }
+
+    #[inline]
+    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
+        match self {
+            Self::Ok(v) => ControlFlow::Continue(v),
+            Self::Err(e) => ControlFlow::Break(Err(e)),
+        }
+    }
+}
+
+impl<T, E, F: From<E>> ops::FromResidual<Result<convert::Infallible, E>> for FFIResult<T, F> {
+    #[inline]
+    #[track_caller]
+    fn from_residual(residual: Result<convert::Infallible, E>) -> Self {
+        match residual {
+            Err(e) => Self::Err(From::from(e)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FFIOpt<T> {
+    None,
+    Some(T),
+}
+
+impl<T> FFIOpt<T> {
+    #[inline(always)]
+    pub const fn from_option(option: Option<T>) -> Self {
+        let option = ManuallyDrop::new(option);
+        // Safety: This is to evade const errors
+        //
+        // Result shouldn't have a custom drop destructor.
+        match unsafe { &*(&raw const option as *const Option<T>) } {
+            Some(o) => Self::Some(unsafe { core::ptr::read(o) }),
+            None => Self::None,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn into_option(self) -> Option<T> {
+        let this = ManuallyDrop::new(self);
+        // Safety: This is to evade const errors
+        //
+        // We don't have a custom Drop destructor...
+        match unsafe { &*(&raw const this as *const Self) } {
+            Self::Some(o) => Some(unsafe { core::ptr::read(o) }),
+            Self::None => None,
+        }
+    }
+}
+
+impl<T> From<Option<T>> for FFIOpt<T> {
+    #[inline(always)]
+    fn from(value: Option<T>) -> Self {
+        Self::from_option(value)
+    }
+}
+
+impl<T> From<FFIOpt<T>> for Option<T> {
+    #[inline(always)]
+    fn from(value: FFIOpt<T>) -> Self {
+        value.into_option()
     }
 }

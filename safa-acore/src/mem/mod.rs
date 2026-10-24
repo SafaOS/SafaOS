@@ -1,7 +1,4 @@
-use crate::{
-    bootloader::HHDM,
-    misc::{PhysAddr, VirtAddr},
-};
+use crate::misc::VirtAddr;
 
 pub mod alloc;
 pub mod init;
@@ -11,12 +8,4 @@ pub(super) mod region_list_allocator;
 pub mod slab;
 pub mod vmm;
 
-#[inline(always)]
-pub fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
-    VirtAddr::new(HHDM.raw() | phys.raw())
-}
-
-#[inline(always)]
-pub fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
-    PhysAddr::new(virt.raw() - HHDM.raw())
-}
+pub use libkernel::pmm::{phys_to_virt, virt_to_phys};

@@ -6,7 +6,7 @@ pub use bus::*;
 pub use pci::*;
 pub use platform::*;
 
-use crate::rt::abi::*;
+use crate::ffi::*;
 
 #[repr(C)]
 pub struct GenericDevice<'a> {

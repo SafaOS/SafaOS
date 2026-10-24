@@ -14,6 +14,12 @@ use crate::{
     misc::VirtAddr,
 };
 
+#[unsafe(no_mangle)]
+#[inline]
+extern "C" fn __percpu_cpu_index() -> usize {
+    cpu_index()
+}
+
 /// Initializes the memory for SMP, should be called by [`crate::memory::init`] once.
 pub fn init_memory(vmm: &mut vmm::VirtualMemoryManager) {
     let cpu_count = bootloader::cpu_count();
@@ -26,7 +32,7 @@ pub fn init_memory(vmm: &mut vmm::VirtualMemoryManager) {
 
     vmm.map_new(
         &".percpu.aps",
-        Some(Location::Fixed(start)),
+        Location::Fixed(start),
         size,
         VMMMFlags::ZEROED | VMMMFlags::WRITABLE,
         vmm::VMMAllocMode::Normal,

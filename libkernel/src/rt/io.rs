@@ -2,8 +2,8 @@ use core::{mem::ManuallyDrop, ptr::NonNull};
 
 use alloc::sync::Arc;
 
+use crate::ffi::*;
 use crate::future::DynFut;
-use crate::rt::abi::*;
 use macros::vtable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,14 +20,14 @@ pub enum SeekWhence {
     Current(usize),
 }
 
-type Result<T> = core::result::Result<T, IOError>;
+type Result<T> = FFIResult<T, IOError>;
 
 fn ready<'a, T: Send + 'a>(v: T) -> DynFut<'a, T> {
     DynFut::new(core::future::ready(v))
 }
 
 fn not_implemented<'a, T: Send + 'a>() -> DynFut<'a, Result<T>> {
-    ready(Err(IOError::NotImplemented))
+    ready(Result::Err(IOError::NotImplemented))
 }
 
 #[vtable]

@@ -1,7 +1,10 @@
 use core::{alloc::Layout, ptr::NonNull};
 
 use alloc::alloc::{AllocError, Allocator};
-use libkernel::collections::{LinkedRBTree, QueryFor};
+use libkernel::{
+    collections::{LinkedRBTree, QueryFor},
+    slab::SCacheFlags,
+};
 
 use crate::{
     mem::{
@@ -106,14 +109,14 @@ pub enum VMAState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VMAEntry {
-    name: &'static &'static str,
+    name: &'static str,
     state: VMAState,
     flags: VMMMFlags,
 }
 
 impl VMAEntry {
     #[inline(always)]
-    pub const fn new(name: &'static &'static str, state: VMAState, flags: VMMMFlags) -> Self {
+    pub const fn new(name: &'static str, state: VMAState, flags: VMMMFlags) -> Self {
         Self { name, state, flags }
     }
 
@@ -184,6 +187,7 @@ oninit::define! {
                     .expect("Failed to create layout for VMA node"),
                 None,
                 None,
+                SCacheFlags::empty(),
             )
             .expect("Failed to create Slab Cache for VMAs")
     };
@@ -221,7 +225,7 @@ impl core::fmt::Debug for VMATree {
 
 impl VMATree {
     const SIZE_OF_NODE: usize = LinkedRBTree::<VMAKey, VMAEntry, VMAAlloc>::SIZE_OF_NODE;
-    const _SIZE_ASSERT: () = assert!(VMATree::SIZE_OF_NODE == 72);
+    const _SIZE_ASSERT: () = assert!(VMATree::SIZE_OF_NODE == 80);
 
     #[inline(always)]
     pub const fn new(start_addr: VirtAddr, size: usize) -> Self {
@@ -427,15 +431,15 @@ impl VMATree {
     /// Looks up a gap at least `size` bytes starting at `location` if given.
     fn lookup_gap(
         &self,
-        location: Option<Location>,
+        location: Location,
         size: usize,
     ) -> Result<(VirtAddr, usize), VMMAllocError> {
         let max_addr = self.addr + self.size;
         let mut cursor;
         let mut prev_max_addr = self.addr;
         match location {
-            None => cursor = self.tree.front_cursor(),
-            Some(Location::Fixed(f)) => {
+            Location::Fit => cursor = self.tree.front_cursor(),
+            Location::Fixed(f) => {
                 // We want to lookup from f to f + size, if no address is found we got a gap.
                 return match self.tree.get(&PartialRegionLookup {
                     addr: f,
@@ -445,7 +449,7 @@ impl VMATree {
                     None => Ok((f, size)),
                 };
             }
-            Some(Location::Hint(h)) => {
+            Location::Hint(h) => {
                 cursor = self.tree.cursor_to(&h);
                 if cursor.key().is_none() {
                     // Move to head
@@ -502,7 +506,7 @@ impl VMATree {
     /// The gap is allocated according to [`Location`].
     pub fn allocate_gap(
         &mut self,
-        location: Option<Location>,
+        location: Location,
         size: usize,
         entry: VMAEntry,
     ) -> Result<VirtAddr, VMMAllocError> {
@@ -538,12 +542,8 @@ mod tests {
     fn tree_with(regions: &[(usize, usize)]) -> VMATree {
         let mut tree = VMATree::new(VirtAddr::new(0), 0x1000);
         for &(addr, size) in regions {
-            tree.allocate_gap(
-                Some(Location::Fixed(VirtAddr::new(addr))),
-                size,
-                TEST_VMA_ENTRY,
-            )
-            .expect("Failed to allocate a gap");
+            tree.allocate_gap(Location::Fixed(VirtAddr::new(addr)), size, TEST_VMA_ENTRY)
+                .expect("Failed to allocate a gap");
         }
         tree
     }
@@ -551,19 +551,19 @@ mod tests {
     #[test_case]
     fn a_allocate_gap() {
         let mut tree = VMATree::new(VirtAddr::new(0), 0x1000);
-        let results = tree.allocate_gap(None, 0x100, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0x100, TEST_VMA_ENTRY);
 
         assert_eq!(results, Ok(VirtAddr::new(0)));
 
-        let results = tree.allocate_gap(None, 0x200, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0x200, TEST_VMA_ENTRY);
 
         assert_eq!(results, Ok(VirtAddr::new(0x100)));
 
-        let results = tree.allocate_gap(None, 0x300, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0x300, TEST_VMA_ENTRY);
 
         assert_eq!(results, Ok(VirtAddr::new(0x300)));
 
-        let results = tree.allocate_gap(None, 0xa01, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0xa01, TEST_VMA_ENTRY);
 
         assert_eq!(
             results,
@@ -576,28 +576,22 @@ mod tests {
     fn b_allocate_gap_with_hint() {
         let mut tree = VMATree::new(VirtAddr::new(0), 0x1000);
         // Allocate at a fixed address
-        let results = tree.allocate_gap(
-            Some(Location::Fixed(VirtAddr::new(0x100))),
-            0x100,
-            TEST_VMA_ENTRY,
-        );
+        let results =
+            tree.allocate_gap(Location::Fixed(VirtAddr::new(0x100)), 0x100, TEST_VMA_ENTRY);
 
         assert_eq!(results, Ok(VirtAddr::new(0x100)));
 
         // Allocate without a hint after the fixed address
-        let results = tree.allocate_gap(None, 0x300, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0x300, TEST_VMA_ENTRY);
         assert_eq!(results, Ok(VirtAddr::new(0x200)));
 
         // Allocate with the hint at the location we just allocated.
-        let results = tree.allocate_gap(
-            Some(Location::Hint(VirtAddr::new(0x200))),
-            0x100,
-            TEST_VMA_ENTRY,
-        );
+        let results =
+            tree.allocate_gap(Location::Hint(VirtAddr::new(0x200)), 0x100, TEST_VMA_ENTRY);
         assert_eq!(results, Ok(VirtAddr::new(0x500)));
 
         // Allocate without a hint before all the allocated regions
-        let results = tree.allocate_gap(None, 0x100, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0x100, TEST_VMA_ENTRY);
         assert_eq!(results, Ok(VirtAddr::null()));
 
         assert_eq!(
@@ -617,13 +611,13 @@ mod tests {
 
         // Simple case, region entirely within range.
         assert_eq!(
-            tree.allocate_gap(None, 0x100, TEST_VMA_ENTRY),
+            tree.allocate_gap(Location::Fit, 0x100, TEST_VMA_ENTRY),
             Ok(VirtAddr::null())
         );
         tree.remove_contiguous(VirtAddr::null(), 0x100);
         assert_eq!(ascending(&tree), &[]);
 
-        tree.allocate_gap(None, 0x1000, TEST_VMA_ENTRY)
+        tree.allocate_gap(Location::Fit, 0x1000, TEST_VMA_ENTRY)
             .expect("Failed to allocate a gap");
 
         // Range entirely within region.
@@ -656,49 +650,29 @@ mod tests {
     fn d_allocate_fixed() {
         let mut tree = VMATree::new(VirtAddr::new(0), 0x1000);
         assert_eq!(
-            tree.allocate_gap(
-                Some(Location::Hint(VirtAddr::new(0x300))),
-                0x100,
-                TEST_VMA_ENTRY,
-            ),
+            tree.allocate_gap(Location::Hint(VirtAddr::new(0x300)), 0x100, TEST_VMA_ENTRY,),
             Ok(VirtAddr::new(0x0))
         );
 
         assert_eq!(
-            tree.allocate_gap(
-                Some(Location::Fixed(VirtAddr::new(0x300))),
-                0x100,
-                TEST_VMA_ENTRY
-            ),
+            tree.allocate_gap(Location::Fixed(VirtAddr::new(0x300)), 0x100, TEST_VMA_ENTRY),
             Ok(VirtAddr::new(0x300)),
         );
 
         assert_eq!(
-            tree.allocate_gap(
-                Some(Location::Fixed(VirtAddr::new(0x300))),
-                0x100,
-                TEST_VMA_ENTRY
-            ),
+            tree.allocate_gap(Location::Fixed(VirtAddr::new(0x300)), 0x100, TEST_VMA_ENTRY),
             Err(VMMAllocError::Used),
             "Allocation should fail at existing fixed location"
         );
 
         assert_eq!(
-            tree.allocate_gap(
-                Some(Location::Fixed(VirtAddr::new(0x200))),
-                0x200,
-                TEST_VMA_ENTRY
-            ),
+            tree.allocate_gap(Location::Fixed(VirtAddr::new(0x200)), 0x200, TEST_VMA_ENTRY),
             Err(VMMAllocError::Used),
             "Allocation should fail at existing fixed location"
         );
 
         assert_eq!(
-            tree.allocate_gap(
-                Some(Location::Fixed(VirtAddr::new(0x200))),
-                0x100,
-                TEST_VMA_ENTRY
-            ),
+            tree.allocate_gap(Location::Fixed(VirtAddr::new(0x200)), 0x100, TEST_VMA_ENTRY),
             Ok(VirtAddr::new(0x200)),
             "alloc failed tree: {:?}",
             ascending(&tree),
@@ -814,16 +788,16 @@ mod tests {
     #[test_case]
     fn f_allocate_respects_bounds() {
         let mut tree = VMATree::new(VirtAddr::new(0x230), 0x1000);
-        let results = tree.allocate_gap(None, 0x1000, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0x1000, TEST_VMA_ENTRY);
         assert_eq!(results, Ok(VirtAddr::new(0x230)));
         tree.remove_contiguous(VirtAddr::new(0x230), 0x100);
 
-        let results = tree.allocate_gap(None, 0x100, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0x100, TEST_VMA_ENTRY);
         assert_eq!(results, Ok(VirtAddr::new(0x230)));
 
         tree.remove_contiguous(VirtAddr::new(0x230), 0x1000);
 
-        let results = tree.allocate_gap(None, 0x100, TEST_VMA_ENTRY);
+        let results = tree.allocate_gap(Location::Fit, 0x100, TEST_VMA_ENTRY);
         assert_eq!(results, Ok(VirtAddr::new(0x230)));
     }
 }

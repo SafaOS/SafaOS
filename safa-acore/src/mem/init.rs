@@ -53,13 +53,7 @@ unsafe fn map_hhdm(dest: &mut VirtualMemoryManager) -> Result<VirtAddr, VMMAlloc
             let virt_addr = phys_to_virt(phys_addr);
             let page_num = size / PAGE_SIZE;
 
-            dest.map_direct_phys(
-                name,
-                Some(Location::Fixed(virt_addr)),
-                phys_addr,
-                page_num,
-                flags,
-            )?;
+            dest.map_direct_phys(name, Location::Fixed(virt_addr), phys_addr, page_num, flags)?;
 
             largest_addr = largest_addr.max(virt_addr + size);
         }
@@ -105,7 +99,7 @@ unsafe fn map_top_2gb(vmm: &mut VirtualMemoryManager) -> Result<(), VMMAllocErro
 
             vmm.map_direct_phys(
                 &"KERNEL",
-                Some(Location::Fixed(section_virt_begin)),
+                Location::Fixed(section_virt_begin),
                 section_phys_begin,
                 section_size.div_ceil(PAGE_SIZE),
                 flags | VMMMFlags::_GLOBAL_HINT,

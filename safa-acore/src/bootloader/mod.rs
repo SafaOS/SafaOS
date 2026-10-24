@@ -81,7 +81,14 @@ pub fn cpu_count() -> usize {
     CpuInfo::cpus().map(|c| c.count().max(1)).unwrap_or(1)
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn bootloader_cpu_count() -> usize {
+    cpu_count()
+}
+
 oninit::define! {
+    #[unsafe(no_mangle)]
+    #[used]
     pub unsafe static HHDM: VirtAddr = || hhdm();
 }
 

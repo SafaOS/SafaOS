@@ -1,4 +1,4 @@
-use thiserror::Error;
+use libkernel::ffi::FFIResult;
 
 use crate::{
     bootloader::INI_BOOTLOADER_MEMORY, logging::serial::_REGISTER_LOGGER,
@@ -19,37 +19,21 @@ oninit::define_routine! {
     pub unsafe fn INI_PMM = with REGION_ALLOCATOR || {};
 }
 
+pub use libkernel::pmm::*;
 /// Allocates `count` contiugous frames with `align`-frames alignment.
-pub fn allocate_frames(align: usize, count: usize) -> Result<Frame, PMMError> {
+#[unsafe(no_mangle)]
+extern "C" fn SafaM_allocate_frames(align: usize, count: usize) -> FFIResult<Frame, PMMError> {
     REGION_ALLOCATOR
         .lock_no_irq(|mut alloc| alloc.allocate_frames(align, count))
         .ok_or(PMMError::OutOfMemory)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Error)]
-pub enum PMMError {
-    #[error("PMM out of memory")]
-    OutOfMemory,
-}
-
-#[inline(always)]
-/// Allocates a single frame.
-pub fn allocate_frame() -> Result<Frame, PMMError> {
-    allocate_frames(1, 1)
+        .into()
 }
 
 /// Deallocates `count` contiugous frames starting at `base`.
 ///
 /// Safety: each frame starting at `base` to `base`+count must no longer be used and allocated using this allocator.
-pub unsafe fn deallocate_frames(base: Frame, count: usize) -> Result<(), PMMError> {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn SafaM_deallocate_frames(base: Frame, count: usize) -> FFIResult<(), PMMError> {
     REGION_ALLOCATOR.lock_no_irq(|mut alloc| alloc.deallocate_frames(base, count));
-    Ok(())
-}
-
-#[inline(always)]
-/// Deallocates a single frame `frame`.
-///
-/// Safety: `frame` must no longer be used and allocated using this allocator.
-pub unsafe fn deallocate_frame(frame: Frame) -> Result<(), PMMError> {
-    unsafe { deallocate_frames(frame, 1) }
+    FFIResult::Ok(())
 }

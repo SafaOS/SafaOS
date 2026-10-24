@@ -7,6 +7,7 @@ use core::{
 };
 
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct SpinLockRaw(AtomicBool);
 
 impl SpinLockRaw {
@@ -104,6 +105,7 @@ impl<'a, T> DerefMut for SpinLockGuard<'a, T> {
     }
 }
 
+#[repr(C)]
 #[derive(Debug)]
 /// A SpinLock that is not guraanteed to `lock()` and to `unlock()` while interrupts are disabled unlike [`SpinLockIrq`].
 ///

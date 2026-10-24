@@ -5,124 +5,33 @@ pub mod tree;
 use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::alloc::{AllocError, Allocator};
+use libkernel::ffi::{FFIResult, FFIStr};
 
 use crate::{
     logging,
-    mem::{
-        pmm::PMMError,
-        vmm::tree::{VMA_SLAB, VMAEntry, VMAState, VMATree},
-    },
+    mem::vmm::tree::{VMA_SLAB, VMAEntry, VMAState, VMATree},
     misc::{Frame, PAGE_SIZE, Page, PhysAddr, VirtAddr},
     oninit,
     paging::{MapToError, PageEntryFlags, PageTable},
     sync::IntSpinLock,
 };
 
-bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct VMMMFlags: u8 {
-        /// By default the region is read-only.
-        const WRITABLE = 1 << 0;
-        /// By default the region is not executable.
-        const EXECUTABLE = 1 << 1;
-        const USER_ACCESSIBLE = 1 << 2;
-        const UNCACHABLE = 1 << 3;
-        const FRAMEBUFFER_CACHED = 1 << 4;
-        const ZEROED = 1 << 5;
-        const _GLOBAL_HINT = 1 << 6;
-    }
+pub use libkernel::vmm::*;
+#[unsafe(no_mangle)]
+extern "C" fn SafaM_vm_map_new(
+    name: FFIStr<'static>,
+    location: Location,
+    pages: usize,
+    flags: VMMMFlags,
+    mode: VMMAllocMode,
+) -> FFIResult<VirtAddr, VMMAllocError> {
+    with_root(|vmm| vmm.map_new(name.into_str(), location, pages * PAGE_SIZE, flags, mode)).into()
 }
-
-impl VMMMFlags {
-    pub fn to_entry_flags(self) -> PageEntryFlags {
-        let mut map_flags = PageEntryFlags::empty();
-
-        if self.contains(VMMMFlags::WRITABLE) {
-            map_flags.insert(PageEntryFlags::WRITE);
-        }
-
-        if !self.contains(VMMMFlags::EXECUTABLE) {
-            map_flags.insert(PageEntryFlags::DISABLE_EXEC);
-        }
-
-        if self.contains(VMMMFlags::UNCACHABLE) {
-            map_flags.insert(PageEntryFlags::DEVICE_UNCACHEABLE);
-        }
-
-        if self.contains(VMMMFlags::FRAMEBUFFER_CACHED) {
-            map_flags.insert(PageEntryFlags::FRAMEBUFFER_CACHED);
-        }
-
-        if self.contains(VMMMFlags::USER_ACCESSIBLE) {
-            map_flags.insert(PageEntryFlags::USER_ACCESSIBLE);
-        }
-
-        if self.contains(VMMMFlags::_GLOBAL_HINT) {
-            map_flags.insert(PageEntryFlags::_GLOBAL_SHARED);
-        }
-
-        map_flags
-    }
-}
-
-/// Describes a VMM Location request
-#[derive(Debug, Clone, Copy)]
-pub enum Location {
-    /// Address is just a hint, picked location would be after it or at it.
-    Hint(VirtAddr),
-    /// Address is fixed, the location would be picked at it.
-    Fixed(VirtAddr),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum VMMAllocMode {
-    /// Normal allocation mode
-    ///
-    /// The region is allocated immediately and mapped to the virtual address space, you don't control what it is mapped to.
-    Normal,
-    /// Lazy allocation mode
-    ///
-    /// unlike [`VMMAllocMode::Normal`], the region is allocated as needed on first access.
-    Lazy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VMMAllocError {
-    OutOfMemory,
-    OutOfRange,
-    UsedBy {
-        at: VirtAddr,
-        size: usize,
-        flags: VMMMFlags,
-    },
-    Used,
-    InvalidSize,
-}
-
-impl From<PMMError> for VMMAllocError {
-    fn from(value: PMMError) -> Self {
-        match value {
-            PMMError::OutOfMemory => Self::OutOfMemory,
-        }
-    }
-}
-
-impl From<AllocError> for VMMAllocError {
-    fn from(_: AllocError) -> Self {
-        Self::OutOfMemory
-    }
-}
-
-impl From<MapToError> for VMMAllocError {
-    fn from(value: MapToError) -> Self {
-        match value {
-            MapToError::OutOfMemory => VMMAllocError::OutOfMemory,
-            MapToError::AlreadyMapped => {
-                unreachable!("VMM shouldn't try to map an already mapped region")
-            }
-            MapToError::NotMapped => unreachable!("VMM Shouldn't try to unmap an unmapped region"),
-        }
-    }
+#[unsafe(no_mangle)]
+unsafe extern "C" fn SafaM_vm_unmap(addr: VirtAddr, n: usize) -> FFIResult<(), ()> {
+    with_root(|vmm| vmm.unmap_contiugous(addr, n))
+        .ok_or(())
+        .into()
 }
 
 #[derive(Debug)]
@@ -395,8 +304,8 @@ impl VirtualMemoryManager {
     /// `size` must be a multiple of [`PAGE_SIZE`] or it panicks.
     pub fn map_new(
         &self,
-        name: &'static &'static str,
-        starting_addr: Option<Location>,
+        name: &'static str,
+        starting_addr: Location,
         size: usize,
         flags: VMMMFlags,
         mode: VMMAllocMode,
@@ -410,8 +319,8 @@ impl VirtualMemoryManager {
     /// The provided frames total size must be equal to or more than the requested allocation size or it will return an error [`VMMAllocError::InvalidSize`].
     pub fn map_direct<I: Iterator<Item = Frame> + Clone>(
         &self,
-        name: &'static &'static str,
-        starting_addr: Option<Location>,
+        name: &'static str,
+        location: Location,
         size: usize,
         flags: VMMMFlags,
         frames: I,
@@ -420,7 +329,7 @@ impl VirtualMemoryManager {
 
         self.map_inner(
             name,
-            starting_addr,
+            location,
             size,
             flags,
             VMMAllocMode::Normal,
@@ -431,8 +340,8 @@ impl VirtualMemoryManager {
     /// Variaint of [`Self::map_direct`]
     pub fn map_direct_phys(
         &self,
-        name: &'static &'static str,
-        start_addr: Option<Location>,
+        name: &'static str,
+        location: Location,
         start_phys: PhysAddr,
         page_count: usize,
         flags: VMMMFlags,
@@ -441,13 +350,13 @@ impl VirtualMemoryManager {
         let end_addr = start_phys + size;
         let frames = Frame::iter_addresses(start_phys, end_addr);
 
-        self.map_direct(name, start_addr, size, flags, frames)
+        self.map_direct(name, location, size, flags, frames)
     }
 
     fn map_inner<I: Iterator<Item = Frame> + Clone>(
         &self,
-        name: &'static &'static str,
-        starting_addr: Option<Location>,
+        name: &'static str,
+        starting_addr: Location,
         size: usize,
         flags: VMMMFlags,
         mode: VMMAllocMode,
@@ -581,7 +490,7 @@ impl VMMAlloc {
         let addr = vmm
             .map_new(
                 self.0,
-                None,
+                Location::Fit,
                 size,
                 VMMMFlags::WRITABLE,
                 VMMAllocMode::Normal,

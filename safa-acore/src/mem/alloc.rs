@@ -4,6 +4,7 @@ use core::{
     ptr::NonNull,
 };
 
+use libkernel::slab::SCacheFlags;
 use thiserror::Error;
 
 use crate::{
@@ -36,6 +37,7 @@ oninit::define! {
                     .expect("failed to construct layout for kernel allocator"),
                 None,
                 None,
+                SCacheFlags::empty(),
             )
             .expect("Failed to create a cache for the kernel allocator")
         })

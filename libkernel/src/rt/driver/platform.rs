@@ -1,4 +1,4 @@
-use crate::rt::FFISlice;
+use crate::ffi::FFISlice;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
