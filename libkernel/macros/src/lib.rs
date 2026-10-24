@@ -210,7 +210,6 @@ fn expand(tr: &ItemTrait) -> syn::Result<TokenStream2> {
 
         #[repr(C)]
         #[derive(Clone, Copy)]
-        #[allow(improper_ctypes_definitions, improper_ctypes)]
         #vis struct #vt_ident {
             #(#fields,)*
             /// Clone the erased value into a fresh heap allocation and return an
@@ -223,12 +222,11 @@ fn expand(tr: &ItemTrait) -> syn::Result<TokenStream2> {
         #[doc(hidden)]
         struct #shims_ident<T>(::core::marker::PhantomData<T>);
 
-        #[allow(clippy::missing_safety_doc, improper_ctypes_definitions)]
+        #[allow(clippy::missing_safety_doc)]
         impl<T: #tr_ident + 'static> #shims_ident<T> {
             #(#shims)*
         }
 
-        #[allow(improper_ctypes_definitions)]
         impl #vt_ident {
             /// Build the vtable for a concrete implementor, using the given `drop` and
             /// `clone` functions.

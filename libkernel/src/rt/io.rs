@@ -7,6 +7,7 @@ use crate::future::DynFut;
 use macros::vtable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
 pub enum IOError {
     OffsetOutOfRange,
     OutOfMemory,
