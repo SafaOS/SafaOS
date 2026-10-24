@@ -312,6 +312,7 @@ impl<'a, T, const STACK_SIZE: usize> StackFuture<'a, T, STACK_SIZE> {
 impl<'a, T, const STACK_SIZE: usize> Future for StackFuture<'a, T, { STACK_SIZE }> {
     type Output = T;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: This is doing pin projection. We unpin self so we can
         // access self.poll_fn, and then re-pin self to pass it into poll_in.
@@ -326,6 +327,12 @@ impl<'a, T, const STACK_SIZE: usize> Future for StackFuture<'a, T, { STACK_SIZE 
                 FFIPoll::Ready(r) => Poll::Ready(r),
             }
         }
+    }
+}
+
+impl<'a, T, const STACK_SIZE: usize> Drop for StackFuture<'a, T, { STACK_SIZE }> {
+    fn drop(&mut self) {
+        (self.drop_fn)(self);
     }
 }
 
