@@ -15,7 +15,6 @@ use crate::{
 };
 
 #[unsafe(no_mangle)]
-#[inline]
 extern "C" fn __percpu_cpu_index() -> usize {
     cpu_index()
 }
@@ -103,6 +102,7 @@ impl CpuID {
         self.0 as usize
     }
 
+    #[allow(unused)]
     /// Creates a new [`CpuID`] from a u16.
     ///
     /// Returns `None` if the u16 is greater than or equal to the maximum number of CPUs.

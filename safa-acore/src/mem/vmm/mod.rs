@@ -2,9 +2,8 @@
 pub mod tests;
 
 pub mod tree;
-use core::{cell::SyncUnsafeCell, mem::MaybeUninit, ptr::NonNull};
+use core::{cell::SyncUnsafeCell, mem::MaybeUninit};
 
-use alloc::alloc::{AllocError, Allocator};
 use libkernel::ffi::{FFIResult, FFIStr};
 
 use crate::{

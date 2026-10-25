@@ -2,23 +2,24 @@ use core::{alloc::Layout, cell::UnsafeCell, pin::Pin, ptr::NonNull};
 
 use alloc::{
     alloc::{AllocError, Global},
-    boxed::Box,
     sync::Arc,
 };
 use futures_util::task::{ArcWake, WakerRef};
-use thiserror::Error;
+use libkernel::{ffi::FFIResult, future::SendDynFut};
 
 use crate::{
     mem::local_arena::{self, LocalArena},
     scheduler::{self, current_task_ref},
 };
 
+pub use libkernel::task::*;
+
 pub type KeStackArena = LocalArena<8072>;
 const _: () = assert!(KeStackArena::SIZE_OF_ARENA == 8096);
 
 /// Represents a task
 pub struct Task {
-    pub(crate) future: UnsafeCell<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    pub(crate) future: UnsafeCell<Pin<SendDynFut<'static, ()>>>,
     ke_stack: KeStackArena,
 }
 
@@ -42,20 +43,14 @@ impl ArcWake for Task {
     }
 }
 
-#[derive(Debug, Clone, Copy, Error)]
-pub enum TaskSpawnError {
-    #[error("Resource Allocation failed for summoning a task: {0}")]
-    AllocError(#[from] AllocError),
-}
-
-/// Attempts to spawn a kernel task, the task my immediately run in the background.
-pub fn try_spawn<F: Future<Output = ()> + 'static + Send>(fut: F) -> Result<(), TaskSpawnError> {
+#[unsafe(no_mangle)]
+extern "C" fn SafaRT_task_spawn(fut: SendDynFut<'static, ()>) -> FFIResult<(), TaskSpawnError> {
     scheduler::new_task(Arc::try_new(Task {
-        future: UnsafeCell::new(Box::into_pin(Box::try_new(fut)?)),
+        future: UnsafeCell::new(SendDynFut::into_pin(fut)),
         ke_stack: KeStackArena::try_new_in(Global)?,
     })?);
 
-    Ok(())
+    FFIResult::Ok(())
 }
 
 #[unsafe(no_mangle)]

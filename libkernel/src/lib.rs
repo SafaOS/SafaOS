@@ -19,5 +19,6 @@ pub mod pmm;
 pub mod rt;
 pub mod slab;
 pub mod sync;
+pub mod task;
 pub mod time;
 pub mod vmm;

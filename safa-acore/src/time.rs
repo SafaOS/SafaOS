@@ -1,3 +1,5 @@
+#[allow(unused)]
+// Used by tests and should be used by scheduler in the future.
 pub use libkernel::time::*;
 
 #[unsafe(no_mangle)]

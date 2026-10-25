@@ -154,6 +154,12 @@ impl<'a, T> SendDynFut<'a, T> {
             stack: StackFuture::from(Box::into_pin(boxed)),
         })
     }
+
+    /// Returns self as [`Pin`]
+    pub fn into_pin(self) -> Pin<Self> {
+        // Safety: It is not safe to move stuff out of Self anyways and we store a Pin<Box> inside
+        unsafe { Pin::new_unchecked(self) }
+    }
 }
 
 impl<'a, T> Future for SendDynFut<'a, T> {
@@ -163,6 +169,22 @@ impl<'a, T> Future for SendDynFut<'a, T> {
         cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<Self::Output> {
         self.project().stack.poll(cx)
+    }
+}
+
+impl<'a, T> core::ops::Deref for SendDynFut<'a, T> {
+    // TODO: is that actually sound?
+    //
+    // Deref and DerefMut impls are for [`Pin::new_unchecked`] to work.
+    type Target = StackFuture<'a, T, { STACK_NEEDED }>;
+    fn deref(&self) -> &Self::Target {
+        &self.stack
+    }
+}
+
+impl<'a, T> core::ops::DerefMut for SendDynFut<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stack
     }
 }
 
