@@ -4,12 +4,14 @@
 #![feature(const_ops)]
 #![feature(try_trait_v2)]
 #![feature(sync_unsafe_cell)]
+#![feature(core_io)]
 
 extern crate alloc;
 pub mod bootloader;
 pub mod collections;
 pub mod ffi;
 pub mod future;
+pub mod io;
 pub mod kalloc;
 pub mod logging;
 pub mod misc;

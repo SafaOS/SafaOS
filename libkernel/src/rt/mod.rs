@@ -2,7 +2,6 @@
 
 pub mod driver;
 pub mod interrupt;
-pub mod io;
 pub mod queue;
 
 pub use queue::*;
