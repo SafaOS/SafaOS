@@ -1,18 +1,18 @@
 use core::{alloc::Layout, cell::UnsafeCell, pin::Pin, ptr::NonNull};
 
+use crate::{ffi::FFIResult, future::SendDynFut};
 use alloc::{
     alloc::{AllocError, Global},
     sync::Arc,
 };
 use futures_util::task::{ArcWake, WakerRef};
-use libkernel::{ffi::FFIResult, future::SendDynFut};
 
 use crate::{
     mem::local_arena::{self, LocalArena},
     scheduler::{self, current_task_ref},
 };
 
-pub use libkernel::task::*;
+pub use libakernel::task::*;
 
 pub type KeStackArena = LocalArena<8072>;
 const _: () = assert!(KeStackArena::SIZE_OF_ARENA == 8096);

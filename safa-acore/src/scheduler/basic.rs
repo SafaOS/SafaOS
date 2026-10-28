@@ -1,7 +1,7 @@
 use core::{cell::SyncUnsafeCell, task::Context};
 
+use crate::sync::IntSpinLock;
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
-use libkernel::sync::IntSpinLock;
 
 use crate::{percpu, task::Task};
 

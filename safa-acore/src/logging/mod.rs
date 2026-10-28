@@ -17,7 +17,7 @@ pub use crate::terminal::__tprint as tprint;
 #[allow(unused)]
 pub use crate::terminal::__tprintln as tprintln;
 
-pub use libkernel::logging::*;
+pub use libakernel::logging::*;
 
 #[unsafe(no_mangle)]
 extern "C" fn SafaLogger_log(record: &LogRecord) {

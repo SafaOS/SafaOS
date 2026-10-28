@@ -7,7 +7,7 @@ use crate::{
     oninit,
 };
 
-pub use libkernel::slab::*;
+pub use libakernel::slab::*;
 
 /// The slab cache of slab caches.
 #[unsafe(no_mangle)]

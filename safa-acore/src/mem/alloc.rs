@@ -1,7 +1,7 @@
 //! The general puropse kernel allocator, uses [`super::slab_allocator`] internally.
 use core::{alloc::Layout, ptr::NonNull};
 
-use libkernel::{ffi::FFIResult, slab::SCacheFlags};
+use crate::{ffi::FFIResult, mem::slab::SCacheFlags};
 
 use crate::{
     logging,
@@ -16,7 +16,7 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-pub use libkernel::kalloc::*;
+pub use libakernel::kalloc::*;
 
 const ALLOC_CACHE_COUNT: usize = 14;
 

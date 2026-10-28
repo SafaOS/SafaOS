@@ -1,7 +1,7 @@
 use core::ops::Add;
 
+use crate::sync::IntSpinLock;
 use alloc::{boxed::Box, collections::TryReserveError, vec::Vec};
-use libkernel::sync::IntSpinLock;
 use thiserror::Error;
 
 use crate::{bootloader::PixelFormat, mem::vmm::VMMAlloc, oninit};

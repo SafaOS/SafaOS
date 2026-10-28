@@ -14,7 +14,7 @@ use crate::{
     misc::{Frame, FrameIter, IterPage, PAGE_SIZE, Page, PhysAddr, VirtAddr},
 };
 
-pub use libkernel::paging::*;
+pub use libakernel::paging::*;
 
 /// Describes a Page Table.
 pub trait PageTableOps: Debug {

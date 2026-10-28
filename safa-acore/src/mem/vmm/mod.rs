@@ -4,7 +4,7 @@ pub mod tests;
 pub mod tree;
 use core::{cell::SyncUnsafeCell, mem::MaybeUninit};
 
-use libkernel::ffi::{FFIResult, FFIStr};
+use crate::ffi::{FFIResult, FFIStr};
 
 use crate::{
     logging,
@@ -15,7 +15,7 @@ use crate::{
     sync::IntSpinLock,
 };
 
-pub use libkernel::vmm::*;
+pub use libakernel::vmm::*;
 #[unsafe(no_mangle)]
 extern "C" fn SafaM_vm_map_new(
     name: FFIStr<'static>,

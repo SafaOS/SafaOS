@@ -1,6 +1,6 @@
 #[allow(unused)]
 // Used by tests and should be used by scheduler in the future.
-pub use libkernel::time::*;
+pub use libakernel::time::*;
 
 #[unsafe(no_mangle)]
 extern "C" fn arch_cpu_timer_ticks() -> u64 {

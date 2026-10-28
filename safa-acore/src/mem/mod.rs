@@ -8,4 +8,4 @@ pub(super) mod region_list_allocator;
 pub mod slab;
 pub mod vmm;
 
-pub use libkernel::pmm::{phys_to_virt, virt_to_phys};
+pub use libakernel::pmm::{phys_to_virt, virt_to_phys};

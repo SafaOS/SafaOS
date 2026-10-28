@@ -1,10 +1,10 @@
 use core::{alloc::Layout, ptr::NonNull};
 
-use alloc::alloc::{AllocError, Allocator};
-use libkernel::{
+use crate::{
     collections::{LinkedRBTree, QueryFor},
-    slab::SCacheFlags,
+    mem::slab::SCacheFlags,
 };
+use alloc::alloc::{AllocError, Allocator};
 
 use crate::{
     mem::{

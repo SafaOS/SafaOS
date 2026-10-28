@@ -12,10 +12,11 @@ heapless = "0.9.3"
 int-enum = "1.2.0"
 limine = "0.6.5"
 thiserror = { version = "2.0.20", default-features = false }
-libkernel = { path = "../libkernel" }
+libakernel = { path = "../libakernel" }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 vte = { version = "0.15.0", default-features = false }
 noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = ["size_20", "regular", "unicode-basic-latin", "unicode-specials"] }
+cfg-if = "1.0.5"
 
 
 

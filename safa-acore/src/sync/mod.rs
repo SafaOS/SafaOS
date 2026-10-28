@@ -1,3 +1,3 @@
 mod spin_lock;
-pub use libkernel::sync::*;
+pub use libakernel::sync::*;
 pub use spin_lock::*;

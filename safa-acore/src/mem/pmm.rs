@@ -1,4 +1,4 @@
-use libkernel::ffi::FFIResult;
+use crate::ffi::FFIResult;
 
 use crate::{
     bootloader::INI_BOOTLOADER_MEMORY, logging::serial::_REGISTER_LOGGER,
@@ -19,7 +19,7 @@ oninit::define_routine! {
     pub unsafe fn INI_PMM = with REGION_ALLOCATOR || {};
 }
 
-pub use libkernel::pmm::*;
+pub use libakernel::pmm::*;
 /// Allocates `count` contiugous frames with `align`-frames alignment.
 #[unsafe(no_mangle)]
 extern "C" fn SafaM_allocate_frames(align: usize, count: usize) -> FFIResult<Frame, PMMError> {
