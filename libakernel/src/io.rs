@@ -1,6 +1,7 @@
 use core::{mem::ManuallyDrop, ptr::NonNull};
 
 use alloc::sync::Arc;
+use thiserror::Error;
 
 use crate::ffi::*;
 use crate::future::DynFut;
@@ -54,11 +55,14 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[repr(u16)]
 pub enum IOError {
+    #[error("Offset Out Of Bounds")]
     OutOfBounds,
+    #[error("Out Of Memory")]
     OutOfMemory,
+    #[error("Operation not Implemented")]
     NotImplemented,
 }
 

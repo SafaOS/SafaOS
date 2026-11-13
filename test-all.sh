@@ -1,5 +1,5 @@
 #!/bin/sh
-cd $(pwd)/libkernel
+cd $(pwd)/libakernel
 cargo test
 cd ..
 
