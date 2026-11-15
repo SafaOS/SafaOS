@@ -42,7 +42,11 @@ use crate::{bootloader::HHDM, eve::eve_main};
 fn panic(info: &PanicInfo) -> ! {
     let trace = unsafe { StackTrace::current() };
     unsafe { logging::panic_mode() };
-    logging::fatal!("panic", "{}\n\n{trace}", info);
+    logging::fatal!(
+        "panic",
+        "{}\n================================\n{trace}",
+        info
+    );
     loop {
         arch::halt()
     }

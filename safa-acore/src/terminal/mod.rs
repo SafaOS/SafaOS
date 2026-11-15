@@ -229,6 +229,7 @@ impl Terminal {
             '\n' => {
                 self.line += 1;
                 self.col = 0;
+                self.normalize_cursor_position();
             }
             o => {
                 self.normalize_cursor_position();
