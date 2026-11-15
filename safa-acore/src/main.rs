@@ -15,6 +15,7 @@ mod bootloader;
 mod eve;
 mod logging;
 mod mem;
+mod stacktrace;
 pub use libakernel::collections;
 pub use libakernel::ffi;
 pub use libakernel::future;
@@ -24,6 +25,7 @@ mod oninit;
 mod paging;
 mod percpu;
 mod scheduler;
+mod symbols;
 mod sync;
 mod task;
 mod terminal;
@@ -33,12 +35,14 @@ mod time;
 
 use core::panic::PanicInfo;
 
+use crate::stacktrace::StackTrace;
 use crate::{bootloader::HHDM, eve::eve_main};
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    let trace = unsafe { StackTrace::current() };
     unsafe { logging::panic_mode() };
-    logging::fatal!("panic", "{}", info);
+    logging::fatal!("panic", "{}\n\n{trace}", info);
     loop {
         arch::halt()
     }

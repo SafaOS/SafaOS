@@ -9,9 +9,10 @@ use crate::{
 };
 use limine::{
     BaseRevision,
+    module::{INTERNAL_MODULE_REQUIRED, InternalModule},
     request::{
         DateAtBootRequest, DtbRequest, ExecutableAddressRequest, ExecutableFileRequest,
-        FramebufferRequest, HhdmRequest, MemmapRequest, MpRequest, RsdpRequest,
+        FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest, MpRequest, RsdpRequest,
         TscFrequencyRequest,
     },
 };
@@ -61,6 +62,12 @@ static DATE_REQUEST: DateAtBootRequest = DateAtBootRequest::new();
 #[used]
 #[unsafe(link_section = ".requests")]
 static TSC_FREQ: TscFrequencyRequest = TscFrequencyRequest::new();
+
+const SYM: InternalModule = InternalModule::new(c"akernel.sym", c"", INTERNAL_MODULE_REQUIRED);
+
+#[used]
+#[unsafe(link_section = ".requests")]
+static MODULES_REQUEST: ModulesRequest = ModulesRequest::new_rev1(&[&SYM]);
 
 #[inline]
 pub fn tsc_freq_hz() -> Option<NonZero<u64>> {
@@ -184,4 +191,17 @@ pub fn exe_virt() -> VirtAddr {
             .expect("Limine didn't provide kernel address")
             .virtual_base as usize,
     )
+}
+
+#[inline]
+pub fn symbols_file() -> Option<&'static [u8]> {
+    MODULES_REQUEST
+        .response()
+        .map(|r| {
+            r.modules()
+                .iter()
+                .find(|f| f.path() == "/boot/akernel.sym")
+                .map(|f| f.data())
+        })
+        .flatten()
 }

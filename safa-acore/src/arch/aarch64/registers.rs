@@ -326,3 +326,71 @@ pub fn cpu_local() -> &'static CpuLocal {
 pub unsafe fn set_cpu_local(local: &'static CpuLocal) {
     unsafe { core::arch::asm!("msr tpidr_el1, {}", in(reg) local, options(nostack, nomem)) }
 }
+
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub(super) struct FramePointer(*mut StackFrame);
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct StackFrame {
+    prev: FramePointer,
+    return_addr: *mut u8,
+}
+
+impl StackFrame {
+    pub unsafe fn from_fp<'a>(ptr: *const u8) -> Option<&'a Self> {
+        use crate::misc::{Page, VirtAddr};
+        use crate::paging::PageTable;
+        unsafe {
+            let fp: *mut Self = ptr.cast::<Self>().cast_mut();
+
+            if PageTable::current()
+                .get_frame_of(Page::containing(VirtAddr::from_ptr(fp)))
+                .is_none()
+                || !fp.is_aligned()
+            {
+                return None;
+            } else {
+                Some(&*fp)
+            }
+        }
+    }
+
+    /// Gets the current Frame Pointer from the fp register
+    #[inline(always)]
+    pub unsafe fn get_current<'a>() -> &'a Self {
+        unsafe {
+            let fp: *mut Self;
+            asm!("mov {}, fp", out(reg) fp, options(nomem, preserves_flags));
+            &*fp
+        }
+    }
+
+    /// Gets the return address from the Frame
+    #[inline(always)]
+    pub fn return_ptr(&self) -> *mut u8 {
+        self.return_addr
+    }
+
+    /// Gets the previous Frame Pointer from this one
+    pub unsafe fn prev(&self) -> Option<&Self> {
+        use crate::misc::{Page, VirtAddr};
+        use crate::paging::PageTable;
+
+        let prev = self.prev.0;
+
+        if prev.is_null() || !prev.is_aligned() || (prev as usize) < 0x1000 {
+            return None;
+        }
+
+        if unsafe {
+            PageTable::current()
+                .get_frame_of(Page::containing(VirtAddr::from_ptr(prev)))
+                .is_none()
+        } {
+            return None;
+        }
+        unsafe { Some(&*prev) }
+    }
+}

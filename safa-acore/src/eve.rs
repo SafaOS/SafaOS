@@ -1,6 +1,10 @@
 use crate::{logging, task::try_spawn as spawn};
 use libakernel::future::DynFut;
 
+#[inline(never)]
+fn panics() {
+    panic!("And so she ran")
+}
 pub async fn eve_main() {
     spawn(async {
         DynFut::new(async move { logging::info!("eve", "Hello 2!") }).await;
@@ -18,4 +22,5 @@ pub async fn eve_main() {
     .unwrap();
 
     logging::info!("eve", "Hello!");
+    panics()
 }

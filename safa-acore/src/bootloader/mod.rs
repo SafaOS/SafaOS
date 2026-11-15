@@ -86,6 +86,11 @@ extern "C" fn bootloader_cpu_count() -> usize {
     cpu_count()
 }
 
+#[inline]
+pub fn symbols_file() -> Option<&'static [u8]> {
+    limine::symbols_file()
+}
+
 oninit::define! {
     #[unsafe(no_mangle)]
     pub unsafe static HHDM: VirtAddr = || hhdm();

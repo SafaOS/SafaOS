@@ -6,9 +6,13 @@ use std::{
     sync::LazyLock,
 };
 
+use thiserror::Error;
 use utils::ArchTarget;
 
-use crate::initrd::RAMDISK_INCLUDE_DIR;
+use crate::{
+    initrd::RAMDISK_INCLUDE_DIR,
+    symbols::{create_symbol_file, strip_symbols},
+};
 
 pub static ROOT_REPO_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -17,6 +21,7 @@ pub static ROOT_REPO_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
         .to_path_buf()
 });
 
+// The [path] stuff are necessary for the tests to pass
 #[path = "builder/cargo.rs"]
 mod cargo;
 
@@ -28,6 +33,21 @@ pub mod initrd;
 
 #[path = "builder/utils.rs"]
 pub mod utils;
+
+#[path = "builder/symbols.rs"]
+pub mod symbols;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("elf parsing error: {0}")]
+    ElfParse(#[from] elf::ParseError),
+    #[error("elf object building error: {0}")]
+    Object(#[from] object::build::Error),
+    #[error("{0}")]
+    Io(#[from] io::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Will only remove a directory if it is found
 fn remove_dir_all_found<P: AsRef<Path>>(path: P) -> io::Result<()> {
@@ -258,7 +278,7 @@ impl<'a> Builder<'a> {
         ) -> Vec<(PathBuf, String)>,
         kernel_subpath: &str,
         output_kernel_subpath: &str,
-    ) {
+    ) -> PathBuf {
         fs::create_dir_all(boot_build_path).expect("failed to create boot build dir");
 
         let kernel_crate_path = self.root_repo_path.join(kernel_subpath);
@@ -280,6 +300,7 @@ impl<'a> Builder<'a> {
         );
 
         let (kernel_elf, _) = kernel_elf.next().unwrap();
+
         let kernel_build_path = boot_build_path.join(output_kernel_subpath);
 
         log_verbose!(
@@ -289,8 +310,10 @@ impl<'a> Builder<'a> {
             kernel_build_path.display()
         );
 
-        fs::copy(kernel_elf, kernel_build_path)
+        fs::copy(kernel_elf, &kernel_build_path)
             .expect("failed to copy the kernel elf to iso build dir");
+
+        kernel_build_path
     }
 
     const fn boot_efi_files(&self) -> &'static [&'static str] {
@@ -389,7 +412,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Builds the iso, returning the path to the iso file.
-    pub fn build(self) -> std::io::Result<PathBuf> {
+    pub fn build(self) -> Result<PathBuf> {
         clear_env();
         remove_dir_all_found(&self.build_root_path)?;
         // the iso is structured like this:
@@ -413,12 +436,19 @@ impl<'a> Builder<'a> {
             "kernel",
         );
         // New WIP kernel
-        self.package_kernel(
+        let akernel_path = self.package_kernel(
             &boot_build_path,
             freestanding_build_function,
             AKERNEL_PATH,
             "akernel",
         );
+
+        create_symbol_file(&akernel_path, boot_build_path.join("akernel.sym"))?;
+        let old_size = std::fs::metadata(&akernel_path).map_or(0, |m| m.len());
+        strip_symbols(&akernel_path, &akernel_path)?;
+        let new_size = std::fs::metadata(akernel_path).map_or(0, |m| m.len());
+
+        log!("Stripped kernel from symbols: old size={old_size}b => new size={new_size}b");
         // the ramdisk
         self.package_ramdisk(&boot_build_path)?;
         // the bootloader

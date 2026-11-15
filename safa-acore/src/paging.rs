@@ -80,6 +80,11 @@ impl PageTable {
         Self { inner: page_table }
     }
 
+    /// Given a page, return the frame it is mapped to.
+    pub unsafe fn get_frame_of(&self, page: Page) -> Option<Frame> {
+        unsafe { self.inner.as_ref().get_frame_of(page) }
+    }
+
     /// Maps a single virtual `page` directly to a single physical `frame` with given `flags`.
     ///
     /// shouldn't shootdown the TLB or do any IPIs.

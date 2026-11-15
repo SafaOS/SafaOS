@@ -1,5 +1,6 @@
 use crate::ffi::FFIResult;
 
+use crate::symbols::KERNEL_SYMS;
 use crate::{
     bootloader::INI_BOOTLOADER_MEMORY, logging::serial::_REGISTER_LOGGER,
     mem::region_list_allocator::RegionListAllocator, misc::Frame, oninit, sync::SpinLockIrq,
@@ -10,7 +11,7 @@ mod test;
 
 oninit::define! {
     /// The region allocator used for allocating physical memory regions.
-    unsafe static REGION_ALLOCATOR: SpinLockIrq<RegionListAllocator> = with INI_BOOTLOADER_MEMORY, _REGISTER_LOGGER ||
+    unsafe static REGION_ALLOCATOR: SpinLockIrq<RegionListAllocator> = with INI_BOOTLOADER_MEMORY, KERNEL_SYMS, _REGISTER_LOGGER ||
         SpinLockIrq::new(RegionListAllocator::create());
 }
 
