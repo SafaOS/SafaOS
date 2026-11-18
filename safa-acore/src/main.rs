@@ -6,7 +6,7 @@
 #![feature(const_ops)]
 #![feature(const_trait_impl)]
 #![feature(sync_unsafe_cell)]
-#![feature(allocator_api)]
+#![feature(allocator_ext)]
 #![cfg_attr(test, feature(const_type_name))]
 
 extern crate alloc;

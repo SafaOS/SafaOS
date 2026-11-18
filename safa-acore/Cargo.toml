@@ -17,6 +17,10 @@ futures-util = { version = "0.3.34", default-features = false, features = ["allo
 vte = { version = "0.15.0", default-features = false }
 noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = ["size_20", "regular", "unicode-basic-latin", "unicode-specials"] }
 cfg-if = "1.0.5"
+strum = { version = "0.28.0", default-features = false, features = ["derive"] }
+open-enum = "0.5.3"
+elf = { version = "0.8.0", default-features = false, features = ["alloc"] }
+
 
 
 

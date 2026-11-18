@@ -7,7 +7,7 @@ use core::{
 };
 
 use alloc::{
-    alloc::{AllocError, Allocator},
+    alloc::{AllocError, Allocator, StaticAllocator},
     boxed::Box,
 };
 
@@ -46,6 +46,7 @@ impl KeStackAlloc {
     }
 }
 
+unsafe impl StaticAllocator for KeStackAlloc {}
 unsafe impl Allocator for KeStackAlloc {
     #[inline(always)]
     fn allocate(&self, layout: core::alloc::Layout) -> Result<NonNull<[u8]>, AllocError> {

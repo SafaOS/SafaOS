@@ -3,7 +3,7 @@
 //! Internally uses [`super::slab`], if you have objects of a fixed size and you are going to allocate/deallocate them frequently, use that instead.
 use core::{alloc::Layout, ptr::NonNull};
 
-use alloc::alloc::{AllocError, Allocator, GlobalAllocator};
+use alloc::alloc::{AllocError, Allocator, GlobalAllocator, StaticAllocator};
 use thiserror::Error;
 
 use crate::ffi::FFIResult;
@@ -40,6 +40,7 @@ unsafe extern "C" {
 /// The general puropse kernel allocator, uses [`super::slab`] internally.
 pub struct KAlloc;
 
+unsafe impl StaticAllocator for KAlloc {}
 unsafe impl Allocator for KAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, core::alloc::AllocError> {
         unsafe {

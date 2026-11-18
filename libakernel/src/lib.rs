@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(allocator_api)]
+#![feature(allocator_ext)]
 #![feature(const_trait_impl)]
 #![feature(const_ops)]
 #![feature(try_trait_v2)]
