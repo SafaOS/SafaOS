@@ -1,20 +1,14 @@
 [build]
-target = ["aarch64-unknown-none", "x86_64-unknown-none"]
+target = ["aarch64-unknown-none-softfloat", "x86_64-unknown-none"]
+
+[target.aarch64-unknown-none-softfloat]
+rustflags = ["-C", "relocation-model=static", "-C", "force-frame-pointers=yes"]
 
 [target.x86_64-unknown-none]
-rustflags = [
-    "-C", "relocation-model=static",
-    "-C", "force-frame-pointers=yes"
-]
-[target.aarch64-unknown-none]
-rustflags = [
-    "-C", "relocation-model=static",
-    "-C", "target-feature=-neon",
-    "-C", "force-frame-pointers=yes"
-]
+rustflags = ["-C", "relocation-model=static", "-C", "force-frame-pointers=yes"]
 
 [unstable]
-# We have to build std to ensure our compiler options are applied over there.
-unstable-options = true
 build-std = ["core", "alloc"]
 panic-abort-tests = true
+# We have to build std to ensure our compiler options are applied over there.
+unstable-options = true

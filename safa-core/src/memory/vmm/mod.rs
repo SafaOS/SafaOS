@@ -1096,6 +1096,8 @@ impl VMMAlloc {
     }
 }
 
+use core::alloc::AllocatorNightly;
+impl AllocatorNightly for VMMAlloc {}
 unsafe impl Allocator for VMMAlloc {
     fn allocate(
         &self,

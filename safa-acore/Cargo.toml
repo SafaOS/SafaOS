@@ -7,28 +7,21 @@ edition = "2024"
 acpi = "6.1.1"
 bitfield-struct = "0.13.0"
 bitflags = { version = "2.13.1", default-features = false }
-const-str = "1.1.0"
-heapless = "0.9.3"
-int-enum = "1.2.0"
-limine = "0.6.5"
-thiserror = { version = "2.0.20", default-features = false }
-libakernel = { path = "../libakernel" }
-futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
-vte = { version = "0.15.0", default-features = false }
-noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = ["size_20", "regular", "unicode-basic-latin", "unicode-specials"] }
-cfg-if = "1.0.5"
-strum = { version = "0.28.0", default-features = false, features = ["derive"] }
-open-enum = "0.5.3"
 elf = { version = "0.8.0", default-features = false, features = ["alloc"] }
-
-
-
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+heapless = "0.9.3"
+int-enum = "1.3.0"
+libakernel = { path = "../libakernel" }
+limine = "0.6.5"
+noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = ["regular", "size_20", "unicode-basic-latin", "unicode-specials"] }
+thiserror = { version = "2.0.20", default-features = false }
+vte = { version = "0.15.0", default-features = false }
 
 [profile.dev]
-panic = "abort"
 opt-level = 2
+panic = "abort"
 
 [profile.release]
-panic = "abort"
 debug = 1
 overflow-checks = true
+panic = "abort"

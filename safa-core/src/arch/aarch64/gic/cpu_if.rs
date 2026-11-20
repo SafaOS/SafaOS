@@ -1,5 +1,5 @@
 //! A wrapper around the GIC cpu interface registers, whether it is the GICC Memory Mapped registers or raw system registers
-use core::{arch::asm, u16};
+use core::arch::asm;
 
 use bitfield_struct::bitfield;
 

@@ -281,6 +281,12 @@ impl StackFrame {
         self.return_addr
     }
 
+    #[inline(always)]
+    /// Like [`Self::return_ptr`] but returns a pointer to the calling instruction instead (or an aproximation)
+    pub fn call_ptr(&self) -> *mut u8 {
+        self.return_ptr()
+    }
+
     /// Gets the previous Frame Pointer from this one
     pub unsafe fn prev(&self) -> Option<&Self> {
         use crate::misc::Page;

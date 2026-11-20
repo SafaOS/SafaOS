@@ -35,7 +35,7 @@ SECTIONS
     section_rodata_begin = .;
     .rodata : {
         *(.rodata .rodata.*)
-        . = ALIGN(8);
+        . = ALIGN(16);
         section_per_cpu_init_begin = .;
         *(.percpu.initializers.base)
         *(.percpu.initializers)
@@ -58,7 +58,7 @@ SECTIONS
         KEEP(*(.requests))
         KEEP(*(.requests_end_marker))
 
-        . = ALIGN(8);
+        . = ALIGN(16);
         section_oninit_f_begin = .;
         *(.oninit.initializers.base)
         *(.oninit.initializers)

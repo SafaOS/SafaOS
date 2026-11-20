@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::path::Path;
 
-use elf::abi;
+use elf::abi::{self, STT_NOTYPE};
 use object::build::elf::Builder;
 
 use crate::log;
@@ -41,7 +41,10 @@ pub fn parse_symbols(
         return Ok(());
     };
 
-    for sym in symbol_table.iter() {
+    for sym in symbol_table
+        .iter()
+        .filter(|s| ![STT_NOTYPE].contains(&s.st_symtype()))
+    {
         let name = str_table.get(sym.st_name as usize)?;
         with_sym(Symbol {
             addr: sym.st_value,

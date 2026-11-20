@@ -113,6 +113,7 @@ impl GICRDesc {
 
     /// Pointer to the GICR_ISPENDR<0> Register
     #[inline(always)]
+    #[allow(unused)]
     pub fn ispendr0(&self) -> *mut u32 {
         (self.sgi_base() + ISPENDR0_SGI_OFF).into_ptr::<u32>()
     }

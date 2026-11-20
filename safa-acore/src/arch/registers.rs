@@ -30,10 +30,10 @@ impl<'a> StackFrame<'a> {
         }
     }
 
-    /// Gets the return address from the Frame
     #[inline(always)]
-    pub fn return_ptr(&self) -> *mut u8 {
-        self.inner.return_ptr()
+    /// Like [`Self::return_ptr`] but returns a pointer to the calling instruction instead (or an aproximation)
+    pub fn call_ptr(&self) -> *mut u8 {
+        self.inner.call_ptr()
     }
 
     /// Gets the previous stack frame from this one

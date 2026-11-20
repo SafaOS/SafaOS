@@ -35,6 +35,7 @@ SECTIONS
     section_rodata_begin = .;
     .rodata : {
         *(.rodata .rodata.*)
+        . = ALIGN(16);
         section_per_cpu_init_begin = .;
         *(.percpu.initializers.base)
         *(.percpu.initializers)

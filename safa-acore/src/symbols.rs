@@ -1,4 +1,4 @@
-use core::ffi::CStr;
+use core::{ffi::CStr, fmt::Formatter};
 
 use crate::{
     bootloader,
@@ -6,7 +6,7 @@ use crate::{
     oninit,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 /// A .sym file
 pub struct SymFile<'a> {
     count: usize,
@@ -108,6 +108,23 @@ impl<'a> SymFile<'a> {
         }
 
         None
+    }
+}
+
+impl core::fmt::Debug for SymFile<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        for (addr, off) in self.addresses.iter().zip(self.offsets.iter()) {
+            let str = core::str::from_utf8(
+                CStr::from_bytes_until_nul(&self.sym_data[u64::from_le(*off) as usize..])
+                    .expect("No null terminator")
+                    .to_bytes(),
+            )
+            .expect("Invalid utf8");
+
+            writeln!(f, "{str} => {:#x}", u64::from_le(*addr))?;
+        }
+
+        Ok(())
     }
 }
 

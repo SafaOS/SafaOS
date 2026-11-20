@@ -1,4 +1,4 @@
 [toolchain]
 channel = "nightly-2026-11-12"
-targets = ["x86_64-unknown-none", "aarch64-unknown-none"]
+targets = ["x86_64-unknown-none", "aarch64-unknown-none-softfloat"]
 components = ["rust-src"]

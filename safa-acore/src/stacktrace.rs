@@ -27,13 +27,13 @@ impl<'a> Display for StackTrace<'a> {
             let mut fp = self.0;
             writeln!(f, "\x1B[34mStack trace:")?;
             for _ in 0..MAX_TRACES {
-                let return_address = fp.return_ptr();
+                let address = fp.call_ptr();
 
                 let name = KERNEL_SYMS
-                    .map(|syms| syms.get_name_of(return_address as u64))
+                    .map(|syms| syms.get_name_of(address as u64))
                     .flatten();
                 let name = name.unwrap_or("??");
-                writeln!(f, "  {:?} <{:#}>", return_address, name,)?;
+                writeln!(f, "  {:?} <{:#}>", address, name,)?;
 
                 let Some(frame) = fp.prev() else {
                     break;

@@ -21,7 +21,7 @@ impl RustcTarget {
             (Self::SafaOS, ArchTarget::X86_64) => "x86_64-unknown-safaos",
             (Self::SafaOS, ArchTarget::Arm64) => "aarch64-unknown-safaos",
             (Self::None, ArchTarget::X86_64) => "x86_64-unknown-none",
-            (Self::None, ArchTarget::Arm64) => "aarch64-unknown-none",
+            (Self::None, ArchTarget::Arm64) => "aarch64-unknown-none-softfloat",
         }
     }
 }

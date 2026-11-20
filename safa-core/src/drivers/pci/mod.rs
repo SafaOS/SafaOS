@@ -1,7 +1,7 @@
 use super::xhci::XHCI;
 use alloc::boxed::Box;
 use bitflags::bitflags;
-use core::{fmt::Debug, u32, u64};
+use core::fmt::Debug;
 use lazy_static::lazy_static;
 use msi::{MSIXCap, MSIXInfo};
 

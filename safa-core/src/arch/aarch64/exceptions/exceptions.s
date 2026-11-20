@@ -1,5 +1,6 @@
 .equ CONTEXT_SIZE, 16 * 50 + 8
 .global context_switch_and_return
+.arch_extension fp
 context_switch_and_return:
     sub sp, sp, #CONTEXT_SIZE + 16
 
