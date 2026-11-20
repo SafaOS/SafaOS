@@ -3,13 +3,17 @@ name = "libakernel"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-pin-project-lite = "0.2.17"
-macros = { path = "macros" }
-thiserror = { version = "2.0.21", default-features = false }
-heapless = { version = "0.9.3", features = [], default-features = false }
-bitflags = "2.13.2"
+[features]
+default = []
+custom_panic_handler = []
+kerneldep = ["custom_panic_handler"]
 
+[dependencies]
+bitflags = "2.13.2"
+heapless = { version = "0.9.3", default-features = false, features = [] }
+macros = { path = "macros" }
+pin-project-lite = "0.2.17"
+thiserror = { version = "2.0.21", default-features = false }
 
 [workspace]
 members = ["macros"]

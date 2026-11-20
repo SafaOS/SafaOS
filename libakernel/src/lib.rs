@@ -16,6 +16,7 @@ pub mod kalloc;
 pub mod logging;
 pub mod misc;
 pub mod paging;
+pub mod panic;
 pub mod percpu;
 pub mod pmm;
 pub mod rt;
