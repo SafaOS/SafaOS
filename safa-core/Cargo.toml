@@ -49,6 +49,8 @@ smallvec = { version = "1.15.1", features = ["const_generics", "const_new", "uni
 thiserror = { version = "2.0.12", default-features = false }
 
 [dev-dependencies]
+const-str = "1.1.0"
+time = { version = "0.3.55", default-features = false }
 
 [workspace]
 members = ["macros"]

@@ -25,3 +25,6 @@ panic = "abort"
 debug = 1
 overflow-checks = true
 panic = "abort"
+
+[dev-dependencies]
+const-str = "1.1.0"
