@@ -16,6 +16,24 @@ https://github.com/user-attachments/assets/4ce0ae55-b17b-42f5-9a1e-3b9653f758f0
 
 An open-source non-Unix-like OS, written from scratch in Rust for fun.
 
+This branch contains work-in-progress new kernel rewrite.
+
+## AI Statement
+See [CONTRIBUTING.md](/CONTRIBUTING.md) for Policy.
+
+>TLDR; Desipite the fact that this is written in rust by a young person, and the recent surge of AI-generated rust misuse, it is not and doesn't intend to be vibe-coded, I lean anti-AI, rust is art, and I will love ferris to the grave.
+
+This project contains AI generated code however most of it is annotated with comments for transparency, most of them are small functions but some parts are that I'm not proud of especially proc-macros.
+
+I also used AI for research, I am very bad at that and also very impatient, AI only amplifies that,
+
+
+And so because this is an unprofessional hobby project, and because of the moral and ethical questions regarding AI and AI-generated material, I have decided AI is negative, and I'll try my best to no longer use it myself in any future development, contributors is recommended to do the same therefore the [CONTRIBUTING.md](/CONTRIBUTING.md) Policy.
+
+However this doesn't extend to dependencies (or crates) (I'll try to figure out least AI usage stuff and do my own) and I may accept PRs containing AI-generated code/Text (if not vibecoded) especially since there are not many, the [CONTRIBUTING.md](/CONTRIBUTING.md) Policy should refelect that better.
+
+>^ This assumes AI-generated material =/= vibecoding, we have zero tolerance for anything vibecoded.
+
 ## Building
 You can use the `safa-helper` to build and run SafaOS.
 Running it is either through `./helper.sh [ARGS]` or just:
