@@ -15,6 +15,7 @@ pub mod io;
 pub mod kalloc;
 pub mod logging;
 pub mod misc;
+pub mod oninit;
 pub mod paging;
 pub mod panic;
 pub mod percpu;
